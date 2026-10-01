@@ -13,6 +13,8 @@ test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");
   assert.equal(normalizeHomeworkAnswer("✓"), "正确");
   assert.equal(isSimpleObjectiveAnswer("填空题", "-2.5"), true);
+  assert.equal(isSimpleObjectiveAnswer("填空题", "$5$"),true);
+  assert.equal(normalizeHomeworkAnswer("$5$"),"5");
   assert.equal(isSimpleObjectiveAnswer("填空题", "x²-1"), false);
 });
 

@@ -92,3 +92,33 @@ test('Sub2API JSON resource errors with SSE headers preserve classification with
  const {result,calls}=await mocked(()=>json({error:{code:404,status:'NOT_FOUND',message:'Requested entity was not found.'}},404,{'content-type':'text/event-stream'}),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));
  assert.equal(result.code,'UPSTREAM_NOT_FOUND');assert.equal(result.status,404);assert.equal(calls.length,1);
 });
+
+
+test('Gemini auto with missing metadata sends the full Studio schema; explicit preferences remain authoritative',async()=>{
+ const {studioRecognitionSchema}=await loadSource('lib/answer-studio-contract.ts');
+ for(const [strategy,advertised,wantsSchema] of [['auto',undefined,true],['auto',false,false],['json',undefined,false],['prompt',undefined,false]]){
+  const m=await setup('gemini_generate_content');m.runtime.provider.outputStrategy=strategy;m.runtime.model.metadata.apiCapabilities={};
+  if(advertised!==undefined)m.runtime.model.metadata.apiCapabilities.structured_outputs=advertised;
+  const {calls,result}=await mocked(()=>json(good('gemini_generate_content','{"records":[]}')),()=>m.engine.executeTargets(m.runtime,null,{...m.input,schema:studioRecognitionSchema}));
+  assert.equal(result.code,'OK');assert.equal(calls.length,1);
+  const config=calls[0].body.generationConfig;assert.equal(Boolean(config.responseSchema),wantsSchema);
+  if(wantsSchema){assert.deepEqual(config.responseSchema.properties.records.items.required,studioRecognitionSchema.properties.records.items.required);assert.equal(config.responseMimeType,'application/json');}
+ }
+});
+test('Gemini negotiates schema only after explicit unsupported rejection, keeping local validation',async()=>{
+ const m=await setup('gemini_generate_content');m.runtime.model.metadata.apiCapabilities={};
+ const {calls,result}=await mocked((_,n)=>n===1?json({error:{message:'Unsupported parameter responseSchema'}},400):json(good('gemini_generate_content','{"ok":"true"}')),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));
+ assert.equal(calls.length,2);assert.ok(calls[0].body.generationConfig.responseSchema);assert.equal(calls[1].body.generationConfig.responseSchema,undefined);assert.equal(calls[1].body.generationConfig.responseMimeType,'application/json');assert.equal(result.code,'OUTPUT_INVALID');assert.match(result.error,/\$\.ok/);
+});
+test('output diagnostics distinguish syntax from nested schema failures without exposing model data',async()=>{
+ const {studioRecognitionSchema}=await loadSource('lib/answer-studio-contract.ts');
+ for(const [text,expected] of [['{private-material',/有效 JSON/],['{"records":[{}]}',/\$\.records\[0\]\.lesson.*缺少必填字段/],['{"records":"private-material"}',/\$\.records.*array/],['{"records":[],"private-material":true}',/未定义字段/]]){
+  const m=await setup();const {calls,result}=await mocked(()=>json(good('responses',text)),()=>m.engine.executeTargets(m.runtime,m.runtime,{...m.input,schema:studioRecognitionSchema}));
+  assert.equal(result.code,'OUTPUT_INVALID');assert.match(result.error,expected);assert.ok(!result.error.includes('private-material'));assert.equal(calls.length,1);
+ }
+});
+
+test('throwing output postconditions remain terminal validation failures without leaking the exception',async()=>{
+ const m=await setup();const {result,calls}=await mocked(()=>json(good()),()=>m.engine.executeTargets(m.runtime,m.runtime,{...m.input,validateOutput:()=>{throw Error('private-material');}}));
+ assert.equal(result.code,'OUTPUT_INVALID');assert.match(result.error,/业务校验/);assert.ok(!result.error.includes('private-material'));assert.equal(calls.length,1);
+});

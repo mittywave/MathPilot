@@ -2,12 +2,12 @@
 
 /* eslint-disable @next/next/no-html-link-for-pages -- vinext beta currently breaks next/link RSC prefetch on these client-only pages. */
 
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MathText } from "../../components/MathText";
 import { studentHomeworkApi, uploadHomeworkAsset } from "../../../lib/homework-api-client";
 import { randomClientId } from "../../../lib/client-random-id.mjs";
-import type { Assignment, HomeworkSubmission, StudentAuth, StudentCapabilityProfile } from "../../../lib/types";
+import type { Assignment, HomeworkSubmission, StudentAuth } from "../../../lib/types";
 
-const CapabilityCloud = lazy(() => import("../../components/CapabilityCloud"));
 const STATUS: Record<string, string> = {
   draft: "待提交", submitted: "已提交", processing: "自动批改中", review_required: "老师处理中",
   ready: "等待发布", published: "结果已完成", returned: "请重新提交", failed: "处理失败",
@@ -24,7 +24,6 @@ export default function StudentPortalPage() {
   const [submissions, setSubmissions] = useState<HomeworkSubmission[]>([]);
   const [activeSubmission, setActiveSubmission] = useState<HomeworkSubmission | null>(null);
   const [resultSubmission, setResultSubmission] = useState<HomeworkSubmission | null>(null);
-  const [profile, setProfile] = useState<StudentCapabilityProfile | null>(null);
   const [photos, setPhotos] = useState<SelectedPhoto[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -89,7 +88,6 @@ export default function StudentPortalPage() {
     setAssignments([]);
     setSubmissions([]);
     setResultSubmission(null);
-    setProfile(null);
   }
 
   async function openAssignment(assignment: Assignment, existing?: HomeworkSubmission) {
@@ -97,12 +95,8 @@ export default function StudentPortalPage() {
     setMessage("");
     try {
       if (existing?.status === "published") {
-        const [result, capability] = await Promise.all([
-          studentHomeworkApi.submission(existing.id),
-          studentHomeworkApi.capabilityProfile(assignment.id),
-        ]);
+        const result = await studentHomeworkApi.submission(existing.id);
         setResultSubmission(result.submission);
-        setProfile(capability.profile);
         return;
       }
       const result = await studentHomeworkApi.createSubmission(assignment.id);
@@ -158,6 +152,11 @@ export default function StudentPortalPage() {
     } finally { setBusy(false); }
   }
 
+  async function openUploadedResult(submissionId:string) {
+    setBusy(true);
+    try{setResultSubmission((await studentHomeworkApi.submission(submissionId)).submission);}catch(error){setMessage(error instanceof Error?error.message:"批改记录读取失败");}finally{setBusy(false);}
+  }
+
   async function refresh() {
     setBusy(true);
     try { await loadPortal(); setMessage("状态已更新"); }
@@ -177,15 +176,15 @@ export default function StudentPortalPage() {
         const buttonText = submission?.status === "published" ? "查看结果" : submission?.status === "returned" ? "重新选择照片" : submission?.status === "draft" ? "继续选择照片" : submission ? STATUS[submission.status] : "选择照片提交";
         return <article key={assignment.id} className={`student-simple-task ${submission?.status ?? "new"}`}><div className="student-simple-task-head"><span>{submission ? STATUS[submission.status] : "待提交"}</span>{assignment.dueAt && <small>{new Date(assignment.dueAt).toLocaleString("zh-CN")} 截止</small>}</div><h2>{assignment.title}</h2><p>{assignment.instructions || "请选择完整、清晰的作业照片。"}</p>{submission?.failureReason && <p className="student-return-reason">{submission.failureReason}</p>}<button className="student-primary" disabled={busy || (!canSubmit && submission?.status !== "published")} onClick={() => openAssignment(assignment, submission)}>{buttonText}</button></article>;
       })}{!assignments.length && <div className="student-empty"><span>作</span><b>暂时没有新作业</b><p>老师布置后会显示在这里。</p></div>}</div>
+      {!!submissions.filter(s=>s.inputMode==="completed_homework").length && <details className="student-uploaded-records"><summary>老师上传的作业批改记录</summary>{submissions.filter(s=>s.inputMode==="completed_homework").map(s=><article key={s.id}><b>{s.assignmentTitle}</b><p>{STATUS[s.status]}</p><button className="student-primary" disabled={busy||s.status!=="published"} onClick={()=>openUploadedResult(s.id)}>查看结果</button></article>)}</details>}
     </section>
 
     {activeSubmission && <div className="student-simple-sheet"><section><div className="student-simple-sheet-head"><div><span>第 {activeSubmission.version} 次提交</span><h2>{activeSubmission.assignmentTitle}</h2><p>从相册选择完整答卷，确认后提交。</p></div><button onClick={() => { releasePhotos(); setActiveSubmission(null); }} aria-label="关闭">×</button></div><button className="student-photo-picker" onClick={() => fileInput.current?.click()} disabled={busy}>＋ 从相册选择照片</button><input ref={fileInput} hidden type="file" accept="image/*" multiple onChange={(event) => { addPhotos(event.target.files); event.target.value = ""; }} />{photos.length > 0 && <div className="student-photo-list">{photos.map((photo, index) => <figure key={photo.id}><img src={photo.url} alt={`待提交照片 ${index + 1}`} /><figcaption><span>第 {index + 1} 张</span><button onClick={() => removePhoto(photo.id)} disabled={busy}>删除</button></figcaption></figure>)}</div>}<p className="student-photo-hint">已选 {photos.length} 张。请确认每一页都完整、清晰。</p><div className="student-simple-sheet-actions"><button onClick={() => { releasePhotos(); setActiveSubmission(null); }} disabled={busy}>取消</button><button className="student-primary" disabled={busy || !photos.length} onClick={submitPhotos}>{busy ? "正在上传…" : `提交 ${photos.length} 张照片`}</button></div></section></div>}
 
-    {resultSubmission && <div className="student-result-sheet"><section><div className="student-result-head"><div><span>批改完成 · {resultSubmission.publishedAt ? new Date(resultSubmission.publishedAt).toLocaleString("zh-CN") : "刚刚更新"}</span><h2>{resultSubmission.assignmentTitle}</h2><p>{resultSubmission.report?.studentMessage || "查看本次总结和下一步建议。"}</p></div><button onClick={() => { setResultSubmission(null); setProfile(null); }} aria-label="关闭结果">×</button></div>
-      <article className="student-report-summary"><p>本次总结</p><h3>{resultSubmission.report?.overallSummary || "逐题批改已经完成"}</h3>{resultSubmission.report?.gaps.length ? <div>{resultSubmission.report.gaps.map((gap) => <span key={`${gap.title}-${gap.questionNumbers.join("-")}`}><b>{gap.title}</b><small>{gap.questionNumbers.map((number) => `第 ${number} 题`).join("、")}</small></span>)}</div> : <small>本次暂未发现需要优先改进的问题。</small>}</article>
+    {resultSubmission && <div className="student-result-sheet"><section><div className="student-result-head"><div><span>批改完成 · {resultSubmission.publishedAt ? new Date(resultSubmission.publishedAt).toLocaleString("zh-CN") : "刚刚更新"}</span><h2>{resultSubmission.assignmentTitle}</h2><p>{resultSubmission.report?.studentMessage || "查看本次总结和下一步建议。"}</p></div><button onClick={() => { setResultSubmission(null); }} aria-label="关闭结果">×</button></div>
+      <article className="student-report-summary"><p>本次总结</p><h3>{resultSubmission.report?.overallSummary || "逐题批改已经完成"}</h3>{resultSubmission.report?.gaps.length ? <div>{resultSubmission.report.gaps.map((gap) => <span key={`${gap.title}-${gap.questionNumbers.join("-")}`}><b>{gap.title}</b><small>{gap.questionNumbers.map((number) => `第 ${number} 题`).join("、")}</small></span>)}</div> : <small>查看逐题结果；待处理题请按提示补充材料。</small>}</article>
       {!!resultSubmission.report?.actions.length && <article className="student-next-actions"><b>下一步建议</b><ol>{resultSubmission.report.actions.map((action) => <li key={action}>{action}</li>)}</ol></article>}
-      {profile && <Suspense fallback={<div className="capability-cloud-loading">正在准备学习图谱…</div>}><CapabilityCloud profile={profile} title="我的学习图谱" compact /></Suspense>}
-      <section className="student-result-details"><div><h3>逐题结果</h3><span>{resultSubmission.gradingItems.filter((item) => item.verdict === "partial" || item.verdict === "incorrect").length} 道需要重做</span></div>{resultSubmission.gradingItems.map((item) => <details key={item.id} className={item.verdict}><summary><span>第 {item.questionNumber} 题</span><b>{VERDICT[item.verdict] ?? item.verdict}</b></summary><div><p>{item.feedback}</p>{item.stepAnalysis.length > 0 && <ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol>}<section><b>我的作答</b><p>{item.studentAnswer || "未识别到作答"}</p></section><section><b>标准答案</b><p>{item.standardAnswer}</p>{item.standardAnalysis && <small>{item.standardAnalysis}</small>}</section></div></details>)}</section>
+      <section className="student-result-details"><div><h3>逐题结果</h3><span>{resultSubmission.gradingItems.filter((item) => item.verdict === "partial" || item.verdict === "incorrect").length} 道需要重做</span></div>{resultSubmission.gradingItems.map((item) => <details key={item.id} className={item.verdict}><summary><span>第 {item.questionNumber} 题</span><b>{VERDICT[item.verdict] ?? item.verdict}</b></summary><div><p>{item.feedback}</p>{item.stepAnalysis.length > 0 && <ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol>}<section><b>我的作答</b><p>{item.studentAnswer || (item.errorType === "漏答" ? "空白（未作答）" : "未识别到作答")}</p></section><section><b>标准答案</b><p><MathText text={item.standardAnswer} /></p>{item.standardAnalysis && <small><MathText text={item.standardAnalysis} /></small>}</section></div></details>)}</section>
     </section></div>}
   </main>;
 }

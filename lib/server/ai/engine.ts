@@ -1,7 +1,7 @@
 import type { AiTaskRole, ProviderConfig, ProviderDiagnostic, ProviderModel } from '../../ai-provider-types';
 import { providerEndpoint } from '../../ai-provider-presets';
 import { aiFetch, AiTimeoutError, aiTimeoutMs, readAiBody, withAiDeadline } from '../ai-http';
-import { matchesAiSchema } from '../ai-schema';
+import { aiSchemaIssue } from '../ai-schema';
 import { setting } from './credentials';
 import { modelReasoningEffort, modelConfigurationFingerprint } from './model-options';
 import { assertTrustedDestination } from './endpoint-policy';
@@ -82,7 +82,10 @@ export function inferenceEndpoint(provider: ProviderConfig, protocol: ConcretePr
     return providerEndpoint(provider.baseUrl, path, modelId)!;
 }
 function initialOptions(provider: ProviderConfig, model: ProviderModel, protocol: ConcreteProtocol): AdapterOptions {
-    const native = model.metadata.apiCapabilities?.structured_outputs === true;
+    // Gemini's native protocol supports responseSchema. Gateways often omit
+    // capability metadata; absence must not silently disable that constraint.
+    const advertised = model.metadata.apiCapabilities?.structured_outputs;
+    const native = advertised === true || protocol === 'gemini_generate_content' && advertised !== false;
     let format: AdapterOptions['format'] = provider.outputStrategy === 'auto' ? native ? 'schema' : protocol === 'anthropic_messages' ? 'prompt' : 'json' : provider.outputStrategy;
     if (provider.kind === 'deepseek' && protocol === 'chat_completions' && format === 'schema')
         format = 'json';
@@ -168,12 +171,18 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
             let parsed: unknown;
             try {
                 parsed = JSON.parse(output.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
-                if (!matchesAiSchema(parsed, input.schema) || input.validateOutput?.(parsed) === false)
-                    throw new Error('schema');
             }
             catch {
-                return { ...failure('OUTPUT_INVALID', 422, budget.used), protocol, retryAfter };
+                return { ...failure('OUTPUT_INVALID', 422, budget.used), error: '上游正文不是有效 JSON（可能包含未转义的公式或额外说明），已拒绝使用', protocol, retryAfter };
             }
+            let issue = aiSchemaIssue(parsed, input.schema);
+            if (!issue) {
+                try {
+                    if (input.validateOutput?.(parsed) === false) issue = '结果未通过业务校验';
+                } catch { issue = '结果未通过业务校验'; }
+            }
+            if (issue)
+                return { ...failure('OUTPUT_INVALID', 422, budget.used), error: `上游正文结构校验失败：${issue}，已拒绝使用`, protocol, retryAfter };
             if (cache.size >= 64)
                 cache.delete(cache.keys().next().value!);
             cache.set(cacheKey, protocol);

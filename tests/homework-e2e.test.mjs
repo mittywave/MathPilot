@@ -79,7 +79,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failEnabled: true, failureCalls: 0, gradingCalls: 0, extractionCalls: 0, recoveryCalls: 0 };
+  const state = { failEnabled: true, failureCalls: 0, gradingCalls: 0, extractionCalls: 0, recoveryCalls: 0, extractionModels: [], supplementalReadable:false,multiPage:false,invalidPage:0,pageExtractionCalls:{} };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -108,12 +108,37 @@ function startMockModel(port) {
     }
     if (prompt.includes("作业模板录入助手")) {
       state.extractionCalls += 1;
+      state.extractionModels.push(payload.model);
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ output_text: JSON.stringify({ questions: [
         { question_number: "19", page_number: 1, type: "解答题", stem: "解方程 3x-1=5(x+1)", options: [], answer: "", analysis: "", bbox: null, confidence: .96, warnings: ["答案页未包含第19题的参考答案与解析"], knowledge_tags: ["一元一次方程"], capability_keys: ["skill:reasoning", "skill:expression"] },
         { question_number: "20", page_number: 1, type: "解答题", stem: "解下列方程", options: [], answer: "", analysis: "", bbox: null, confidence: .95, warnings: ["答案页未包含第20题的参考答案与解析"], knowledge_tags: ["一元一次方程"], capability_keys: ["skill:calculation"] },
       ] }) }));
       return;
+    }
+    if (prompt.includes("只识别学生已完成的数学作业")) {
+      const primary=Number(prompt.match(/本次仅处理 PDF 第 (\d+) 页/)?.[1]??1);
+      state.pageExtractionCalls[primary]=(state.pageExtractionCalls[primary]??0)+1;
+      const questions=(state.multiPage?[{question_number:`${primary}-1`,page_numbers:[primary],type:"填空题",stem:"计算 2+3",options:[],student_answer:"6",answer_state:"readable",question_complete:true}]:[
+        {question_number:"D1",page_numbers:[1],type:"填空题",stem:"计算 2+3",options:[],student_answer:"6",answer_state:"readable",question_complete:true},
+        {question_number:"D2",page_numbers:[1],type:"解答题",stem:"求解 x+1=3 并验算",options:[],student_answer:"移项到x=2",answer_state:"readable",question_complete:true},
+        {question_number:"D3",page_numbers:[1],type:"填空题",stem:"计算 3+3",options:[],student_answer:"",answer_state:"blank",question_complete:true},
+        {question_number:"D4",page_numbers:[1],type:"填空题",stem:"计算 4+4",options:[],student_answer:state.supplementalReadable?"8":"",answer_state:state.supplementalReadable?"readable":"unreadable",question_complete:true},
+        {question_number:"D5",page_numbers:[1],type:"解答题",stem:"条件不完整",options:[],student_answer:"10",answer_state:"readable",question_complete:false},
+      ]).map(q=>({...q,bbox:{x:90,y:100,width:700,height:100},knowledge_tags:["有理数运算"],capability_keys:["skill:calculation"]}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:state.invalidPage===primary?1:primary,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
+    }
+    if(prompt.includes("建立独立参考解答")) {
+      assert.doesNotMatch(prompt,/student_answer/);
+      const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];
+      const answers=numbers.map(n=>({question_number:n,answer:({D1:"5",D2:"x=2",D3:"6",D4:"8"}[n]??"5"),analysis:"独立验算推导",source:prompt.includes("提供的 0 张")?"agent":"provided"}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({answers})}));return;
+    }
+    if(prompt.includes("独立核验参考答案")) {
+      assert.doesNotMatch(prompt,/student_answer/);
+      const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];
+      const results=numbers.map(n=>({question_number:n,verified:true,reason:"已独立验算成立"}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({results})}));return;
     }
     if (prompt.includes("学习诊断助手")) {
       const corrected = prompt.includes('"question_number":"1","question_type":"单选题","verdict":"correct"');
@@ -137,8 +162,8 @@ function startMockModel(port) {
     const numbers = [...prompt.matchAll(/题号 ([^\n]+)/g)].map((match) => match[1].trim());
     const unreadable = prompt.includes("MOCK_UNREADABLE");
     const results = numbers.map((number, index) => ({
-      question_number: number, page_number: 1, student_answer: number === "2" ? "只写到 x=1" : "B",
-      verdict: unreadable ? "unreadable" : number === "2" ? "partial" : "incorrect",
+      question_number: number, page_number: 1, student_answer: /^(?:[1-5])-1$/.test(number) ? "6" : number === "D1" ? "6" : number === "D4" ? "8" : number === "D2" ? "移项到x=2" : number === "2" ? "只写到 x=1" : "B",
+      verdict: unreadable ? "unreadable" : (number === "2" || number === "D2") ? "partial" : "incorrect",
       feedback: unreadable ? "答卷照片无法与题目页面可靠匹配" : number === "2" ? "推导未完成" : "选择项与标准答案不同",
       error_type: unreadable ? "无法匹配" : number === "2" ? "步骤" : "审题", confidence: unreadable ? .15 : number === "2" ? .86 : .98,
       step_analysis: unreadable ? [] : number === "2" ? ["正确写出了部分移项过程", "缺少最终求解和验算"] : [],
@@ -186,13 +211,20 @@ async function uploadSubmissionPage(base, cookie, submissionId, bytes, prefix, q
   assert.equal(saved.response.status, 200); return { original: original.payload.asset, processed: processed.payload.asset };
 }
 
-test("homework flow auto-publishes readable work, auto-returns unreadable work, syncs corrections, isolates accounts, and retries failures", { timeout: 180_000 }, async () => {
+async function uploadSubmission(base,cookie,id,bytes){
+ const original=await upload(base,`/api/homework-assets?submissionId=${id}&role=submission_original&pageOrder=0`,cookie,bytes);
+ const processed=await upload(base,`/api/homework-assets?submissionId=${id}&role=submission_processed&pageOrder=0`,cookie,bytes);
+ assert.equal(original.response.status,201);assert.equal(processed.response.status,201);
+ return {originalAssetId:original.payload.asset.id,processedAssetId:processed.payload.asset.id};
+}
+
+test("homework flow publishes determined results, archives only incorrect work, preserves pending items and correction history, isolates accounts, and retries failures", { timeout: 180_000 }, async () => {
   const [port, modelPort] = await Promise.all([freePort(), freePort()]); const stateDir = await mkdtemp(join(tmpdir(), "zhiti-homework-e2e-"));
   command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
   const mock = await startMockModel(modelPort); const worker = startWorker(port, stateDir, {
     LOCAL_ADMIN_MODE: "false", AI_PROVIDER_LOCAL_HTTP: "true", AI_PROVIDER_ENCRYPTION_KEY: "synthetic-homework-v2-secret", HOMEWORK_GRADING_ENABLED: "true", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@homework.test",
     OPENAI_API_KEY: "mock-key", OPENAI_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, OPENAI_API_MODE: "responses",
-    HOMEWORK_GRADING_MODEL: "mock-homework", HOMEWORK_QUEUE_RETRY_BASE_SECONDS: "1", HOMEWORK_QUEUE_MAX_ATTEMPTS: "4", HOMEWORK_AUTO_PUBLISH_ENABLED: "true",
+    HOMEWORK_GRADING_MODEL: "mock-homework", OPENAI_VISION_MODEL: "mock-scanner", HOMEWORK_QUEUE_RETRY_BASE_SECONDS: "1", HOMEWORK_QUEUE_MAX_ATTEMPTS: "4", HOMEWORK_AUTO_PUBLISH_ENABLED: "true",
     STUDENT_PORTAL_ORIGIN: "http://192.168.50.10:3001",
   });
   const base = `http://localhost:${port}`; const bytes = testJpeg();
@@ -253,13 +285,14 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const extractedAssignment = await jsonRequest(base, `/api/assignments/${extractionId}/extract`, { cookie: teacherOne, method: "POST", body: {} });
     assert.equal(extractedAssignment.response.status, 200);
     assert.equal(mock.state.extractionCalls, 1);
+    assert.deepEqual(mock.state.extractionModels, ["mock-scanner"]);
     assert.equal(mock.state.recoveryCalls, 1);
     const recoveredQuestions = extractedAssignment.payload.assignment.questions;
     assert.deepEqual(recoveredQuestions.map((question) => question.questionNumber), ["19", "20"]);
     assert.equal(recoveredQuestions[0].answer, "x=-3");
     assert.equal(recoveredQuestions[1].answer, "x=1");
     assert.deepEqual(recoveredQuestions.flatMap((question) => question.warnings), []);
-    assert.ok(recoveredQuestions.every((question) => question.taxonomyKeys.includes("cn-math:topic:linear-equation")));
+    assert.ok(recoveredQuestions.every((question) => question.taxonomyKeys.length===0));
 
     const batchedDraft = await jsonRequest(base, "/api/assignments", { cookie: teacherOne, method: "POST", body: { assignment: { title: "答案分批补全回归" } } });
     assert.equal(batchedDraft.response.status, 201);
@@ -321,24 +354,19 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const publishedForStudent = await jsonRequest(base, `/api/student/submissions/${submissionOneId}`, { cookie: studentOneCookie });
     assert.equal(publishedForStudent.payload.submission.gradingItems.length, 2);
     assert.match(publishedForStudent.payload.submission.report.studentMessage, /重做第 1、2 题/);
-    const studentOneProfile = await jsonRequest(base, `/api/student/capability-profile?assignmentId=${prepared.assignmentId}`, { cookie: studentOneCookie });
-    assert.equal(studentOneProfile.response.status, 200);
-    assert.ok(studentOneProfile.payload.profile.nodes.some((node) => node.highlighted));
-    assert.equal(studentOneProfile.payload.profile.viewMode, "student");
-    assert.ok(studentOneProfile.payload.profile.nodes.some((node) => node.key === "cn-math:topic:linear-equation"));
-    assert.ok(studentOneProfile.payload.profile.edges.some((edge) => edge.targetKey === "cn-math:topic:linear-equation"));
-    assert.deepEqual(studentOneProfile.payload.profile.textbookEditions.map((edition) => edition.label), ["人教版", "北师大版", "苏教版"]);
-    const teacherProfile = await jsonRequest(base, `/api/students/${studentOneId}/capability-profile?assignmentId=${prepared.assignmentId}`, { cookie: teacherOne });
-    assert.equal(teacherProfile.payload.profile.viewMode, "teacher");
-    const teacherKnowledgeGraph = await jsonRequest(base, `/api/knowledge-graph?studentId=${studentOneId}`, { cookie: teacherOne });
-    assert.equal(teacherKnowledgeGraph.response.status, 200);
-    assert.equal(teacherKnowledgeGraph.payload.profile.nodes.filter((node) => node.dimension === "knowledge").length, 33);
-    assert.equal(teacherKnowledgeGraph.payload.profile.edges.filter((edge) => edge.sourceKey.startsWith("cn-math:")).length, 29);
-    assert.ok(teacherKnowledgeGraph.payload.profile.nodes.some((node) => node.evidenceCount > 0));
-    assert.equal((await jsonRequest(base, `/api/student/capability-profile?assignmentId=${prepared.assignmentId}`, { cookie: studentTwoCookie })).response.status, 404);
+    assert.equal(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=?",[submissionOneId])[0].count,0);
     assert.equal((await fetch(`${base}${prepared.answerAsset.url}`, { headers: { Cookie: studentOneCookie } })).status, 200);
     let wrongOne = await jsonRequest(base, "/api/student/wrong-questions", { cookie: studentOneCookie });
-    assert.equal(wrongOne.payload.entries.length, 2); assert.ok(wrongOne.payload.entries.every((entry) => entry.mistakeCount === 1));
+    assert.equal(wrongOne.payload.entries.length, 1); assert.ok(wrongOne.payload.entries.every((entry) => entry.mistakeCount === 1));
+    const choiceWrong = wrongOne.payload.entries.find((entry) => entry.question.type === "单选题");
+    assert.deepEqual(choiceWrong.question.options, ["2", "3"]);
+    assert.deepEqual(choiceWrong.question.tags, ["有理数运算"]);
+    assert.deepEqual(choiceWrong.question.taxonomyKeys,[]);
+    assert.equal(choiceWrong.question.originalImage, prepared.questionAsset.url);
+    assert.equal(choiceWrong.studentAnswer, "B");
+    assert.equal(choiceWrong.sourceKind, "assignment");
+    const teacherWrong = await jsonRequest(base, `/api/students/${studentOneId}/wrong-questions`, { cookie: teacherOne });
+    assert.deepEqual(teacherWrong.payload.entries, wrongOne.payload.entries);
     assert.ok(wrongOne.payload.entries.every((entry) => entry.answerCropAssetId));
     assert.equal((await fetch(`${base}/api/homework-assets/${wrongOne.payload.entries[0].answerCropAssetId}`, { headers: { Cookie: studentOneCookie } })).status, 200);
     await jsonRequest(base, `/api/submissions/${submissionOneId}`, { cookie: teacherOne, method: "PUT", body: { action: "publish" } });
@@ -353,11 +381,10 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const correctedForStudent = await jsonRequest(base, `/api/student/submissions/${submissionOneId}`, { cookie: studentOneCookie });
     assert.match(correctedForStudent.payload.submission.report.studentMessage, /重做第 2 题/);
     wrongOne = await jsonRequest(base, "/api/student/wrong-questions", { cookie: studentOneCookie });
-    assert.equal(wrongOne.payload.entries.length, 1);
+    assert.equal(wrongOne.payload.entries.length, 0);
     assert.equal(d1Rows(stateDir, `SELECT COUNT(*) AS count FROM grading_item_revisions WHERE submission_id = '${submissionOneId}'`)[0].count, 1);
     assert.equal(d1Rows(stateDir, `SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id = '${submissionOneId}' AND verdict = 'incorrect'`)[0].count, 0);
-    assert.equal(d1Rows(stateDir, `SELECT taxonomy_keys_json FROM assignment_questions WHERE assignment_id = '${prepared.assignmentId}' AND question_number = '2'`)[0].taxonomy_keys_json,
-      '["cn-math:topic:linear-equation"]');
+    assert.equal(d1Rows(stateDir, `SELECT taxonomy_keys_json FROM assignment_questions WHERE assignment_id = '${prepared.assignmentId}' AND question_number = '2'`)[0].taxonomy_keys_json, '[]');
 
     assert.equal((await jsonRequest(base, `/api/assignments/${prepared.assignmentId}`, { cookie: teacherTwo })).response.status, 404);
     assert.equal((await jsonRequest(base, `/api/submissions/${submissionOneId}`, { cookie: teacherTwo })).response.status, 404);
@@ -370,6 +397,93 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const classPublish = await jsonRequest(base, `/api/assignments/${prepared.assignmentId}/publish-results`, { cookie: teacherOne, method: "POST", body: {} });
     assert.deepEqual(classPublish.payload, { published: 0, total: 2 });
 
+    const direct = await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{inputMode:"completed_homework",studentId:studentOneId,title:"已完成作业直接批改"}});
+    assert.equal(direct.response.status,201,JSON.stringify(direct.payload));
+    const directId=direct.payload.submission.id,directAssignmentId=direct.payload.submission.assignmentId;
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo})).response.status,404);
+    const directAssets=await uploadSubmission(base,teacherOne,directId,bytes);
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"save-pages",pages:[{...directAssets,quality:{score:1,blocking:false,warnings:[]}}]}})).response.status,200);
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"submit"}})).response.status,200);
+    const directResult=await waitForSubmission(base,teacherOne,directId,["published"],worker);
+    assert.equal(directResult.gradingSummary.incorrect,2);assert.equal(directResult.gradingSummary.partial,1);assert.equal(directResult.gradingSummary.unresolved,2);assert.equal(directResult.gradingSummary.archived,2);
+    assert.ok(directResult.gradingItems.filter(i=>i.referenceVerified).every(i=>i.referenceSource==="agent"));
+    assert.equal((await jsonRequest(base,"/api/assignments",{cookie:teacherOne})).payload.assignments.some(a=>a.id===directAssignmentId),false);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne,method:"POST",body:{questionIds:["anything"]}})).response.status,410);
+    await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
+    assert.ok(d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? AND active=1",[directId]).every(o=>o.active===1));
+    await Promise.all([1,2].map(()=>jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}})));
+    const directWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries;
+    assert.equal(directWrong.filter(e=>e.assignmentId===directAssignmentId).length,2);
+    assert.ok(directWrong.filter(e=>e.assignmentId===directAssignmentId).every(e=>e.mistakeCount===1));
+    const d1=directResult.gradingItems.find(i=>i.questionNumber==="D1");
+    const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
+    assert.equal(correctedDirect.response.status,200,JSON.stringify(correctedDirect.payload));
+    assert.equal(correctedDirect.payload.submission.gradingSummary.archived,1);
+    const directHistory=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions?includeHistory=true`,{cookie:teacherOne})).payload.entries;
+    assert.ok(directHistory.some(e=>e.gradingItemId===d1.id&&e.archivedAt));
+    const badReferences=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:directResult.gradingItems.find(i=>i.questionNumber==="D5").id,verdict:"incorrect"}]}});
+    assert.equal(badReferences.response.status,400);
+    const oldPage=directResult.pages[0];
+    const supplemental=await uploadSubmission(base,teacherOne,directId,bytes);
+    mock.state.supplementalReadable=true;
+    const beforeKnown=d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND requires_review=0 ORDER BY id",[directId]);
+    const supplementalResult=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"reprocess-pending",pages:[{...supplemental,replacePageId:oldPage.id,quality:{score:1,warnings:[],blocking:false}}]}});
+    assert.equal(supplementalResult.response.status,200,JSON.stringify(supplementalResult.payload));
+    const reprocessed=await waitForSubmission(base,teacherOne,directId,["published"],worker);
+    assert.equal(reprocessed.gradingItems.find(i=>i.questionNumber==="D4").verdict,"correct");
+    assert.equal(reprocessed.gradingSummary.unresolved,1);
+    assert.equal(reprocessed.pageRevisions.length,1);
+    assert.equal(reprocessed.pageRevisions[0].originalUrl,oldPage.originalUrl);
+    assert.deepEqual(d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND id IN ("+beforeKnown.map(()=>"?").join(",")+") ORDER BY id",[directId,...beforeKnown.map(i=>i.id)]),beforeKnown);
+    assert.equal((await fetch(base+oldPage.originalUrl,{headers:{Cookie:studentOneCookie}})).status,200);
+    const withReference=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{inputMode:"completed_homework",studentId:studentTwoId,title:"直接批改参考答案验证"}});
+    const providedId=withReference.payload.submission.id;
+    const providedAssignment=withReference.payload.submission.assignmentId;
+    assert.equal((await upload(base,`/api/homework-assets?assignmentId=${providedAssignment}&role=answer&pageOrder=0`,teacherOne,bytes,"参考答案.jpg")).response.status,201);
+    const providedAssets=await uploadSubmission(base,teacherOne,providedId,bytes);
+    await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherOne,method:"PUT",body:{action:"save-pages",pages:[{...providedAssets,quality:{score:1,warnings:[]}}]}});
+    await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherOne,method:"PUT",body:{action:"submit"}});
+    const provided=await waitForSubmission(base,teacherOne,providedId,["published"],worker);
+    assert.ok(provided.gradingItems.filter(i=>i.referenceVerified).every(i=>i.referenceSource==="provided"));
+    const providedWrong=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===providedAssignment);
+    assert.equal(providedWrong.length,2);
+    const ownWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries;
+    assert.equal(ownWrong.some(e=>e.assignmentId===providedAssignment),false);
+    assert.equal((await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherTwo,method:"PUT",body:{action:"correct",items:[]}})).response.status,404);
+
+    const versions=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{assignmentId:directAssignmentId,studentId:studentOneId,newVersion:true}});
+    assert.equal(versions.response.status,201);assert.equal(versions.payload.submission.version,2);
+    const secondId=versions.payload.submission.id,secondAssets=await uploadSubmission(base,teacherOne,secondId,bytes);
+    await jsonRequest(base,`/api/submissions/${secondId}`,{cookie:teacherOne,method:"PUT",body:{action:"save-pages",pages:[{...secondAssets,quality:{score:1,warnings:[]}}]}});
+    await jsonRequest(base,`/api/submissions/${secondId}`,{cookie:teacherOne,method:"PUT",body:{action:"submit"}});
+    const secondResult=await waitForSubmission(base,teacherOne,secondId,["published"],worker);
+    let d3entry=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.find(e=>e.assignmentId===directAssignmentId&&e.question.stem.includes("3+3"));
+    assert.equal(d3entry.mistakeCount,2);
+    const secondD3=secondResult.gradingItems.find(i=>i.questionNumber==="D3");
+    await jsonRequest(base,`/api/submissions/${secondId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:secondD3.id,verdict:"correct",studentAnswer:"6"}]}});
+    d3entry=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.find(e=>e.assignmentId===directAssignmentId&&e.question.stem.includes("3+3"));
+    assert.equal(d3entry.mistakeCount,1);assert.equal(d3entry.submissionId,directId);
+
+    mock.state.multiPage=true;mock.state.invalidPage=4;mock.state.pageExtractionCalls={};
+    const multi=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{inputMode:"completed_homework",studentId:studentOneId,title:"多页完整性截断回归"}});
+    const multiId=multi.payload.submission.id,multiPages=[];
+    for(let page=0;page<5;page++){const original=await upload(base,`/api/homework-assets?submissionId=${multiId}&role=submission_original&pageOrder=${page}`,teacherOne,bytes);const processed=await upload(base,`/api/homework-assets?submissionId=${multiId}&role=submission_processed&pageOrder=${page}`,teacherOne,bytes);multiPages.push({originalAssetId:original.payload.asset.id,processedAssetId:processed.payload.asset.id,quality:{score:1,warnings:[]}});}
+    await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"save-pages",pages:multiPages}});
+    await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"submit"}});
+    const incomplete=await waitForSubmission(base,teacherOne,multiId,["failed"],worker);
+    assert.ok(incomplete.pageCoverage.processed<5);assert.ok(incomplete.pageCoverage.missing.includes(4));
+    assert.equal((await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}})).response.status,409);
+    const beforeCalls={...mock.state.pageExtractionCalls};mock.state.invalidPage=0;
+    await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"retry"}});
+    const recovered=await waitForSubmission(base,teacherOne,multiId,["published"],worker);
+    assert.equal(recovered.pageCoverage.processed,5);assert.equal(recovered.gradingItems.length,5);
+    assert.equal(mock.state.pageExtractionCalls[1],beforeCalls[1]);assert.equal(mock.state.pageExtractionCalls[4],beforeCalls[4]+1);
+    await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"rebuild-coverage"}});
+    const rebuilt=await waitForSubmission(base,teacherOne,multiId,["published"],worker);
+    assert.equal(rebuilt.processingProgress.graded,5,"historical grading rows must not falsely finish a new run");
+    assert.ok(d1Rows(stateDir,"SELECT g.updated_at>=s.submitted_at AS fresh FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?",[multiId]).every(g=>g.fresh===1));
+    mock.state.multiPage=false;
+
     const unreadableAssignment = await prepareAssignment(base, teacherOne, [studentTwoId], bytes, "自动退回答卷", [{
       questionNumber: "U", pageNumber: 1, type: "解答题", stem: "MOCK_UNREADABLE 页面匹配测试", options: [], answer: "完整过程", analysis: "按步骤推导", confidence: 1,
       warnings: [], knowledgeTags: ["一元一次方程"], capabilityKeys: ["skill:expression"], sortOrder: 0,
@@ -378,14 +492,14 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const unreadableId = unreadableDraft.payload.submission.id;
     await uploadSubmissionPage(base, studentTwoCookie, unreadableId, bytes, "无法匹配");
     await jsonRequest(base, `/api/student/submissions/${unreadableId}`, { cookie: studentTwoCookie, method: "PUT", body: { action: "submit" } });
-    const unreadable = await waitForSubmission(base, teacherOne, unreadableId, ["returned"], worker);
-    assert.match(unreadable.failureReason, /无法与题目页面可靠匹配/);
-    assert.equal(unreadable.report, null);
+    const unreadable = await waitForSubmission(base, teacherOne, unreadableId, ["published"], worker);
+    assert.ok(unreadable.gradingItems.every(i=>i.verdict=== "unreadable"));
+    assert.ok(unreadable.report);
     assert.equal(d1Rows(stateDir, `SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id = '${unreadableId}'`)[0].count, 0);
     const wrongTwoAfterReturn = await jsonRequest(base, "/api/student/wrong-questions", { cookie: studentTwoCookie });
-    assert.equal(wrongTwoAfterReturn.payload.entries.length, 2);
-    assert.equal((await jsonRequest(base, `/api/student/capability-profile?assignmentId=${unreadableAssignment.assignmentId}`, { cookie: studentTwoCookie })).response.status, 404);
-    const blockingDraft = await jsonRequest(base, "/api/student/submissions", { cookie: studentTwoCookie, method: "POST", body: { assignmentId: unreadableAssignment.assignmentId } });
+    assert.equal(wrongTwoAfterReturn.payload.entries.length, 3);
+
+    const blockingDraft = await jsonRequest(base, "/api/submissions", { cookie: teacherOne, method: "POST", body: { assignmentId: unreadableAssignment.assignmentId,newVersion:true,studentId:studentTwoId } });
     assert.equal(blockingDraft.payload.submission.version, 2);
     const blockingId = blockingDraft.payload.submission.id;
     await uploadSubmissionPage(base, studentTwoCookie, blockingId, bytes, "严重模糊", { score: .2, warnings: ["照片严重模糊"], blocking: true });

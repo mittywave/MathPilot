@@ -26,11 +26,11 @@ export const homeworkApi = {
   reorderAssignmentAssets: (id: string, role: "question" | "answer", assetIds: string[]) => request<{ ok: boolean }>(`/api/assignments/${id}/assets`, { method: "PUT", body: JSON.stringify({ role, assetIds }) }),
   deleteAssignmentAsset: (id: string, assetId: string) => request<{ ok: boolean }>(`/api/assignments/${id}/assets`, { method: "DELETE", body: JSON.stringify({ assetId }) }),
   submissions: (assignmentId: string) => request<{ submissions: HomeworkSubmission[] }>(`/api/submissions?assignmentId=${encodeURIComponent(assignmentId)}`),
-  createSubmission: (assignmentId: string, studentId: string) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ assignmentId, studentId }) }),
+  createCompletedSubmission: (studentId: string, title: string) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ inputMode: "completed_homework", studentId, title }) }),
+  createSubmission: (assignmentId: string, studentId: string, newVersion = false) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ assignmentId, studentId, newVersion }) }),
   submission: (id: string) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`),
-  updateSubmission: (id: string, body: { action: string; pages?: Array<{ originalAssetId: string; processedAssetId: string; quality?: unknown }>; items?: Array<Partial<GradingItem> & { id: string }>; reason?: string }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  updateSubmission: (id: string, body: { action: string; pages?: Array<{ originalAssetId: string; processedAssetId: string; quality?: unknown; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; reason?: string }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   capabilityProfile: (studentId: string, assignmentId = "") => request<{ profile: StudentCapabilityProfile }>(`/api/students/${studentId}/capability-profile${assignmentId ? `?assignmentId=${encodeURIComponent(assignmentId)}` : ""}`),
-  knowledgeGraph: (studentId = "") => request<{ profile: StudentCapabilityProfile }>(`/api/knowledge-graph${studentId ? `?studentId=${encodeURIComponent(studentId)}` : ""}`),
 };
 
 export async function uploadHomeworkAsset(input: { blob: Blob; fileName: string; role: HomeworkAsset["role"]; pageOrder: number; assignmentId?: string; submissionId?: string }) {

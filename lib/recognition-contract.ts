@@ -1,6 +1,7 @@
 import { mathOutputRequirements } from "./math-output-contract";
 import { normalizeDiagramRotation } from "./image-processing-rules.mjs";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "./recognition-cleanup.mjs";
+import { normalizeQuestionContent, questionContentSchema } from "./question-content";
 import type { DiagramCapture, DiagramKind, DiagramQuality, Difficulty, QuestionType } from "./types";
 
 export type RecognitionCategory = { id: string; path: string };
@@ -24,7 +25,6 @@ export type BatchRecognitionQuestionResult = RecognitionQuestionResult & { quest
 export type BatchRecognitionAnswerResult = { question_number: string; answer: string; analysis: string };
 export type BatchRecognitionResult = { questions: BatchRecognitionQuestionResult[]; answers: BatchRecognitionAnswerResult[] };
 
-const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const DIFFICULTIES: Difficulty[] = ["基础", "中等", "提高"];
 const DIAGRAM_KINDS: DiagramKind[] = ["geometry", "coordinate", "function", "unsupported"];
 const DIAGRAM_CAPTURES: DiagramCapture[] = ["digital", "scan", "photo"];
@@ -45,8 +45,8 @@ const diagramQualitySchema = {
   ],
 };
 const sharedQuestionProperties = {
-  type: { type: "string", enum: QUESTION_TYPES }, difficulty: { type: "string", enum: DIFFICULTIES }, stem: { type: "string" },
-  options: { type: "array", items: { type: "string" } }, answer: { type: "string" }, analysis: { type: "string" }, source: { type: "string" }, tags: { type: "array", items: { type: "string" } },
+  ...questionContentSchema, difficulty: { type: "string", enum: DIFFICULTIES },
+  source: { type: "string" }, tags: { type: "array", items: { type: "string" } },
   suggested_category_id: { type: ["string", "null"] }, diagram_bbox: diagramBoxSchema, diagram_quality: diagramQualitySchema,
   confidence: { type: "number" }, warnings: { type: "array", items: { type: "string" } },
 };
@@ -159,20 +159,13 @@ function normalizeQuality(value: unknown, hasDiagram: boolean): DiagramQuality |
 
 function normalizeQuestion(value: unknown, categoryIds: Set<string>) {
   const raw = record(value);
-  const type = QUESTION_TYPES.includes(raw.type as QuestionType) ? raw.type as QuestionType : "解答题";
+  const content = normalizeQuestionContent(raw);
   const difficulty = DIFFICULTIES.includes(raw.difficulty as Difficulty) ? raw.difficulty as Difficulty : "中等";
   const diagram_bbox = normalizeBox(raw.diagram_bbox);
   const suggestedCategory = text(raw.suggested_category_id, 200);
-  const options = type === "单选题" || type === "多选题"
-    ? uniqueStrings(raw.options, 12, 2_000).map((option) => option.replace(/^\s*[A-F][.．、:：]\s*/i, ""))
-    : [];
   return {
-    type,
+    ...content,
     difficulty,
-    stem: text(raw.stem),
-    options,
-    answer: cleanRecognizedAnswer(raw.answer),
-    analysis: cleanRecognizedAnalysis(raw.analysis),
     source: text(raw.source, 500),
     tags: uniqueStrings(raw.tags, 30, 80),
     suggested_category_id: suggestedCategory && categoryIds.has(suggestedCategory) ? suggestedCategory : null,

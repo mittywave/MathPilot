@@ -3,7 +3,7 @@ import { currentStudent } from "../../../lib/server/homework-auth";
 import { assertStudentUploadContext, assertTeacherUploadContext, attachAssignmentAsset, requireHomeworkEnabled, storeHomeworkAsset } from "../../../lib/server/homework-assets";
 import type { HomeworkAssetRole } from "../../../lib/types";
 
-const ROLES: HomeworkAssetRole[] = ["question", "answer", "submission_original", "submission_processed", "answer_crop"];
+const ROLES: HomeworkAssetRole[] = ["question", "answer", "submission_original", "submission_processed", "submission_document", "answer_crop"];
 
 function decodedFileName(request: Request) {
   const value = request.headers.get("X-File-Name") ?? "homework-page.jpg";
@@ -21,13 +21,13 @@ export async function POST(request: Request) {
     const user = await currentUser(request); const student = await currentStudent(request);
     if (!user && !student) return Response.json({ error: "请先登录" }, { status: 401 });
     let studentUpload = false;
-    if (student && submissionId && ["submission_original", "submission_processed"].includes(role)) {
+    if (student && submissionId && ["submission_original", "submission_processed", "submission_document"].includes(role)) {
       try { await assertStudentUploadContext(student, submissionId); studentUpload = true; }
       catch (error) { if (!user) throw error; }
     }
     if (!studentUpload) {
       if (!user) return Response.json({ error: "学生只能上传自己的答卷页面" }, { status: 403 });
-      if ((role === "question" || role === "answer") !== Boolean(assignmentId) || (role === "submission_original" || role === "submission_processed") !== Boolean(submissionId)) {
+      if ((role === "question" || role === "answer") !== Boolean(assignmentId) || (role === "submission_original" || role === "submission_processed" || role === "submission_document") !== Boolean(submissionId)) {
         return Response.json({ error: "图片类型与上传上下文不匹配" }, { status: 400 });
       }
       if (role === "answer_crop") return Response.json({ error: "错题截图只能由批改流程生成" }, { status: 403 });

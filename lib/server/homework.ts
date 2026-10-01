@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import type {
   Assignment, AssignmentQuestion, AuthUser, GradingItem, GradingVerdict, HomeworkAsset, HomeworkClass,
-  HomeworkSubmission, Question, QuestionType, StudentAuth, SubmissionPage, SubmissionStatus,
+  HomeworkSubmission, QuestionType, StudentAuth, SubmissionPage, SubmissionStatus,
 } from "../types";
 import type { ExtractedAssignmentQuestion } from "../homework-grading-contract";
 import {
@@ -11,9 +11,7 @@ import {
   mergeAssignmentAnswerRecovery,
   normalizeAssignmentAnswerRecovery,
 } from "../homework-answer-recovery.mjs";
-import { resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
-import { resolveLibraryContext } from "./library";
-import { homeworkAssetBytes, homeworkAssetsBucket, requireHomeworkEnabled, scheduleHomeworkAssetCleanup, storeHomeworkAsset } from "./homework-assets";
+import { homeworkAssetsBucket, requireHomeworkEnabled, scheduleHomeworkAssetCleanup } from "./homework-assets";
 
 type HomeworkQueueMessage =
   | { kind: "grade_submission"; submissionId: string }
@@ -126,6 +124,7 @@ function assignmentQuestion(row: Record<string, unknown>): AssignmentQuestion {
     bbox: parseJson(row.bbox_json, null), confidence: Number(row.confidence), warnings: parseJson<string[]>(row.warnings_json, []),
     knowledgeTags: parseJson<string[]>(row.knowledge_tags_json, []), taxonomyKeys: parseJson<string[]>(row.taxonomy_keys_json, []),
     capabilityKeys: parseJson<string[]>(row.capability_keys_json, []),
+    referenceSource: row.reference_source as AssignmentQuestion["referenceSource"], referenceVerified: Number(row.reference_verified) === 1, referenceEvidence: String(row.reference_evidence ?? ""),
     sortOrder: Number(row.sort_order), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
 }
@@ -144,6 +143,7 @@ async function assignmentDetails(row: Record<string, unknown>, includeAnswers = 
   const submissionCounts = Object.fromEntries([...SUBMISSION_STATUSES].map((status) => [status, 0])) as Record<SubmissionStatus, number>;
   for (const count of counts.results) submissionCounts[count.status] = Number(count.count);
   return {
+    inputMode: row.input_mode === "completed_homework" ? "completed_homework" : "template",
     id, title: String(row.title), instructions: String(row.instructions ?? ""), status: row.status as Assignment["status"],
     dueAt: row.due_at == null ? null : Number(row.due_at), templateConfirmed: Number(row.template_confirmed) === 1,
     targetStudentIds: targets.results.map((item) => item.student_id),
@@ -159,7 +159,7 @@ async function assignmentDetails(row: Record<string, unknown>, includeAnswers = 
 
 export async function readAssignments(user: AuthUser) {
   requireHomeworkEnabled();
-  const rows = await appEnv().DB.prepare("SELECT * FROM homework_assignments WHERE owner_user_id = ? ORDER BY updated_at DESC").bind(user.id).all<Record<string, unknown>>();
+  const rows = await appEnv().DB.prepare("SELECT * FROM homework_assignments WHERE owner_user_id = ? AND input_mode = 'template' ORDER BY updated_at DESC").bind(user.id).all<Record<string, unknown>>();
   return Promise.all(rows.results.map((row) => assignmentDetails(row)));
 }
 
@@ -201,14 +201,13 @@ export async function replaceAssignmentQuestions(assignmentId: string, questions
       confidence: Math.max(0, Math.min(1, Number(raw.confidence) || 0)), warnings: Array.isArray(raw.warnings) ? raw.warnings.map((item) => text(item, 300)).filter(Boolean).slice(0, 30) : [],
       knowledgeTags: Array.isArray(raw.knowledgeTags) ? [...new Set(raw.knowledgeTags.map((item) => text(item, 80)).filter(Boolean))].slice(0, 8) : [],
       taxonomyKeys: Array.isArray(raw.taxonomyKeys) && raw.taxonomyKeys.length
-        ? [...new Set(raw.taxonomyKeys.map((item) => text(item, 100)).filter((item) => item.startsWith("cn-math:")))].slice(0, 8)
+        ? [...new Set(raw.taxonomyKeys.map((item) => text(item, 120)).filter(Boolean))].slice(0, 8)
         : [],
       capabilityKeys: Array.isArray(raw.capabilityKeys) ? [...new Set(raw.capabilityKeys.map((item) => text(item, 80)).filter(Boolean))].slice(0, 5) : [],
       sortOrder: index,
     };
   });
   if (normalized.some((item) => !item.stem)) throw responseError("每道题都需要题干", 400);
-  for (const item of normalized) if (!item.taxonomyKeys.length) item.taxonomyKeys = resolveKnowledgeTaxonomyKeys(item.knowledgeTags, item.stem);
   await appEnv().DB.prepare("DELETE FROM assignment_questions WHERE assignment_id = ?").bind(assignmentId).run();
   for (const item of normalized) await appEnv().DB.prepare(`INSERT INTO assignment_questions
     (id, assignment_id, question_number, page_number, type, stem, options_json, answer, analysis, bbox_json, confidence, warnings_json,
@@ -284,6 +283,7 @@ function gradingItem(row: Record<string, unknown>): GradingItem {
   return {
     id: String(row.id), submissionId: String(row.submission_id), assignmentQuestionId: String(row.assignment_question_id),
     pageId: row.page_id == null ? null : String(row.page_id), questionNumber: String(row.question_number), questionType: row.question_type as QuestionType,
+    referenceSource: row.reference_source as GradingItem["referenceSource"], referenceVerified: Number(row.reference_verified) === 1, referenceEvidence: String(row.reference_evidence ?? ""),
     stem: String(row.stem), standardAnswer: String(row.standard_answer), standardAnalysis: String(row.standard_analysis),
     verdict: VERDICTS.includes(row.verdict as GradingVerdict) ? row.verdict as GradingVerdict : "review_required",
     studentAnswer: String(row.student_answer ?? ""), feedback: String(row.feedback ?? ""), errorType: String(row.error_type ?? ""),
@@ -298,29 +298,43 @@ function gradingItem(row: Record<string, unknown>): GradingItem {
 
 async function submissionDetails(row: Record<string, unknown>, includeAnswers = true): Promise<HomeworkSubmission> {
   const id = String(row.id);
-  const [pages, grading, report] = await Promise.all([
+  const [pages, grading, report, revisions, documents] = await Promise.all([
     appEnv().DB.prepare("SELECT * FROM submission_pages WHERE submission_id = ? ORDER BY page_order").bind(id).all<Record<string, unknown>>(),
     includeAnswers ? appEnv().DB.prepare(`SELECT grading_items.*, assignment_questions.question_number, assignment_questions.type AS question_type,
-        assignment_questions.stem, assignment_questions.answer AS standard_answer, assignment_questions.analysis AS standard_analysis
+        assignment_questions.stem, assignment_questions.answer AS standard_answer, assignment_questions.analysis AS standard_analysis, assignment_questions.reference_source, assignment_questions.reference_verified, assignment_questions.reference_evidence
       FROM grading_items JOIN assignment_questions ON assignment_questions.id = grading_items.assignment_question_id
       WHERE grading_items.submission_id = ? ORDER BY assignment_questions.sort_order`).bind(id).all<Record<string, unknown>>() : Promise.resolve({ results: [] as Record<string, unknown>[] }),
-    includeAnswers ? import("./homework-capabilities").then(({ readSubmissionReport }) => readSubmissionReport(id)) : Promise.resolve(null),
+    includeAnswers ? import("./homework-reports").then(({ readSubmissionReport }) => readSubmissionReport(id)) : Promise.resolve(null),
+    appEnv().DB.prepare("SELECT * FROM submission_page_revisions WHERE submission_id=? ORDER BY created_at").bind(id).all<Record<string,unknown>>(),
+    appEnv().DB.prepare("SELECT id,original_name FROM homework_assets WHERE upload_submission_id=? AND role='submission_original' AND content_type='application/pdf'").bind(id).all<{id:string;original_name:string}>(),
   ]);
+  const pageCoverage = row.input_mode === "completed_homework" ? await (await import("./homework-page-coverage")).readPageCoverage(id) : undefined;
+  const processingProgress = includeAnswers && row.input_mode === "completed_homework" ? await appEnv().DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=?) AS identified,
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (reference_fingerprint<>'' OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0)) AS referenceChecked,
+    (SELECT COUNT(*) FROM grading_items WHERE submission_id=? AND (updated_at>=? OR (reviewed_at IS NOT NULL AND requires_review=0))) AS graded`)
+    .bind(row.assignment_id,row.assignment_id,id,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() : undefined;
   const failureReason = includeAnswers || row.status === "returned"
     ? String(row.failure_reason ?? "")
     : row.status === "failed" ? "自动批改暂时失败，老师会处理或重新尝试" : "";
   return {
+    processingProgress,
+    pageCoverage,
+    inputMode: row.input_mode === "completed_homework" ? "completed_homework" : "template",
+    gradingSummary: includeAnswers ? { correct: grading.results.filter(i => i.verdict === "correct" && !Number(i.requires_review)).length, partial: grading.results.filter(i => i.verdict === "partial" && !Number(i.requires_review)).length, incorrect: grading.results.filter(i => i.verdict === "incorrect" && !Number(i.requires_review)).length, unresolved: grading.results.filter(i => ["unreadable", "review_required"].includes(String(i.verdict)) || Number(i.requires_review)).length, archived: grading.results.filter(i => i.verdict === "incorrect" && !Number(i.requires_review) && Number(i.reference_verified) && i.wrong_book_applied_at != null).length } : undefined,
     id, assignmentId: String(row.assignment_id), assignmentTitle: String(row.assignment_title), studentId: String(row.student_id), studentName: String(row.student_name),
     version: Number(row.version), status: row.status as SubmissionStatus, submittedByType: row.submitted_by_type as "teacher" | "student",
     submittedAt: row.submitted_at == null ? null : Number(row.submitted_at), publishedAt: row.published_at == null ? null : Number(row.published_at),
     returnedAt: row.returned_at == null ? null : Number(row.returned_at), failureReason,
+    originalDocuments: documents.results.map(d=>({name:d.original_name,url:`/api/homework-assets/${d.id}`})),
+    pageRevisions: revisions.results.map(r=>({pageId:String(r.page_id),originalUrl:`/api/homework-assets/${r.original_asset_id}`,processedUrl:`/api/homework-assets/${r.processed_asset_id}`,createdAt:Number(r.created_at)})),
     pages: pages.results.map(submissionPage), gradingItems: grading.results.map(gradingItem), report,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
 }
 
 const SUBMISSION_SELECT = `SELECT homework_submissions.*, homework_assignments.title AS assignment_title,
-  homework_assignments.owner_user_id AS owner_user_id, students.name AS student_name
+  homework_assignments.owner_user_id AS owner_user_id, homework_assignments.input_mode, students.name AS student_name
   FROM homework_submissions JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id
   JOIN students ON students.id = homework_submissions.student_id`;
 
@@ -337,9 +351,9 @@ async function studentSubmissionRow(id: string, student: StudentAuth) {
 }
 
 export async function readTeacherSubmissions(assignmentId: string, user: AuthUser) {
-  await ownedAssignment(assignmentId, user);
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_submissions.assignment_id = ? ORDER BY students.name, homework_submissions.version DESC`)
-    .bind(assignmentId).all<Record<string, unknown>>();
+  if (assignmentId) await ownedAssignment(assignmentId, user);
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_assignments.owner_user_id = ? ${assignmentId ? "AND homework_submissions.assignment_id = ?" : ""} ORDER BY homework_submissions.updated_at DESC`)
+    .bind(...(assignmentId ? [user.id, assignmentId] : [user.id])).all<Record<string, unknown>>();
   return Promise.all(rows.results.map((row) => submissionDetails(row)));
 }
 
@@ -353,24 +367,36 @@ export async function readStudentAssignments(student: StudentAuth) {
   requireHomeworkEnabled();
   const rows = await appEnv().DB.prepare(`SELECT homework_assignments.* FROM homework_assignments
     JOIN assignment_targets ON assignment_targets.assignment_id = homework_assignments.id
-    WHERE assignment_targets.student_id = ? AND homework_assignments.owner_user_id = ? AND homework_assignments.status IN ('published', 'closed')
+    WHERE assignment_targets.student_id = ? AND homework_assignments.owner_user_id = ? AND homework_assignments.status IN ('published', 'closed') AND homework_assignments.input_mode = 'template'
     ORDER BY homework_assignments.due_at IS NULL, homework_assignments.due_at, homework_assignments.updated_at DESC`)
     .bind(student.studentId, student.ownerUserId).all<Record<string, unknown>>();
   return Promise.all(rows.results.map((row) => assignmentDetails(row, false)));
 }
 
 export async function readStudentSubmissions(student: StudentAuth) {
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_submissions.student_id = ? ORDER BY homework_submissions.updated_at DESC`)
-    .bind(student.studentId).all<Record<string, unknown>>();
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_submissions.student_id = ? AND homework_assignments.owner_user_id = ? ORDER BY homework_submissions.updated_at DESC`)
+    .bind(student.studentId,student.ownerUserId).all<Record<string, unknown>>();
   return Promise.all(rows.results.map((row) => submissionDetails(row, row.status === "published")));
 }
 
-export async function createSubmission(input: { assignmentId: string; studentId?: string }, actor: AuthUser | StudentAuth) {
+export async function createCompletedSubmission(input: { studentId: string; title: string }, user: AuthUser) {
+  requireHomeworkEnabled(); await ownedStudent(input.studentId, user.id);
+  const title = text(input.title,120); if (!title) throw responseError("请填写作业名称",400);
+  const assignmentId=crypto.randomUUID(), id=crypto.randomUUID(), now=Date.now();
+  await appEnv().DB.batch([
+    appEnv().DB.prepare("INSERT INTO homework_assignments(id,owner_user_id,title,instructions,status,template_confirmed,created_at,updated_at,input_mode) VALUES(?,?,?,'','draft',0,?,?,'completed_homework')").bind(assignmentId,user.id,title,now,now),
+    appEnv().DB.prepare("INSERT INTO assignment_targets(assignment_id,student_id,assigned_at) VALUES(?,?,?)").bind(assignmentId,input.studentId,now),
+    appEnv().DB.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,?,?,1,'draft','teacher',?,?,?)").bind(id,assignmentId,input.studentId,user.id,now,now),
+  ]);
+  return readTeacherSubmission(id,user);
+}
+
+export async function createSubmission(input: { assignmentId: string; studentId?: string; newVersion?: boolean }, actor: AuthUser | StudentAuth) {
   const teacher = "role" in actor ? actor : null; const studentAuth = "studentId" in actor && !("role" in actor) ? actor : null;
   const studentId = teacher ? String(input.studentId ?? "") : studentAuth!.studentId;
   if (teacher) {
     const assignment = await ownedAssignment(input.assignmentId, teacher); await ownedStudent(studentId, teacher.id);
-    if (assignment.status !== "published") throw responseError("该作业当前不可提交", 409);
+    if (assignment.status !== "published" && !(assignment.input_mode === "completed_homework" && assignment.status === "closed")) throw responseError("该作业当前不可提交", 409);
     const target = await appEnv().DB.prepare("SELECT 1 FROM assignment_targets WHERE assignment_id = ? AND student_id = ?")
       .bind(input.assignmentId, studentId).first();
     if (!target) throw responseError("该学生不在作业布置范围内", 403);
@@ -382,7 +408,7 @@ export async function createSubmission(input: { assignmentId: string; studentId?
   const latest = await appEnv().DB.prepare(`SELECT id, version, status FROM homework_submissions
     WHERE assignment_id = ? AND student_id = ? ORDER BY version DESC LIMIT 1`).bind(input.assignmentId, studentId)
     .first<{ id: string; version: number; status: SubmissionStatus }>();
-  if (latest && latest.status !== "returned") {
+  if (latest && latest.status !== "returned" && !(teacher && input.newVersion && latest.status === "published")) {
     const row = teacher ? await teacherSubmissionRow(latest.id, teacher) : await studentSubmissionRow(latest.id, studentAuth!);
     return submissionDetails(row, latest.status === "published" || Boolean(teacher));
   }
@@ -431,6 +457,12 @@ export async function replaceSubmissionPages(id: string, pages: Array<{ original
 }
 
 async function dispatchSubmissionGrading(id: string, assignmentId: string) {
+  const mode = await appEnv().DB.prepare("SELECT input_mode FROM homework_assignments WHERE id=?").bind(assignmentId).first<{input_mode:string}>();
+  if (mode?.input_mode === "completed_homework") {
+    if (appEnv().HOMEWORK_GRADING_QUEUE) await appEnv().HOMEWORK_GRADING_QUEUE!.send({kind:"grade_submission",submissionId:id});
+    else await (await import("./homework-grading")).processHomeworkSubmission(id);
+    return;
+  }
   const pageRows = await appEnv().DB.prepare("SELECT DISTINCT page_number FROM assignment_questions WHERE assignment_id = ? ORDER BY page_number")
     .bind(assignmentId).all<{ page_number: number }>();
   const messages = pageRows.results.map((row) => ({ kind: "grade_submission_page" as const, submissionId: id, pageNumber: Number(row.page_number) }));
@@ -448,17 +480,19 @@ export async function submitHomeworkSubmission(id: string, actor: AuthUser | Stu
   const teacher = "role" in actor ? actor : null;
   const row = teacher ? await teacherSubmissionRow(id, teacher) : await studentSubmissionRow(id, actor as StudentAuth);
   if (row.status !== "draft") throw responseError("当前提交不能再次提交", 409);
-  const assignment = await appEnv().DB.prepare("SELECT status FROM homework_assignments WHERE id = ?").bind(String(row.assignment_id)).first<{ status: string }>();
-  if (assignment?.status !== "published") throw responseError("该作业已经关闭，不能继续提交", 409);
+  const assignment = await appEnv().DB.prepare("SELECT status,input_mode FROM homework_assignments WHERE id = ?").bind(String(row.assignment_id)).first<{ status: string; input_mode:string }>();
+  const completed = assignment?.input_mode === "completed_homework";
+  if (!completed && assignment?.status !== "published") throw responseError("该作业已经关闭，不能继续提交", 409);
   const pageRows = await appEnv().DB.prepare("SELECT page_order, quality_json FROM submission_pages WHERE submission_id = ? ORDER BY page_order")
     .bind(id).all<{ page_order: number; quality_json: string }>();
   if (!pageRows.results.length) throw responseError("请先上传答卷页面", 400);
   const questionCount = await appEnv().DB.prepare("SELECT COUNT(*) AS count FROM assignment_questions WHERE assignment_id = ?").bind(String(row.assignment_id)).first<{ count: number }>();
-  if (!Number(questionCount?.count ?? 0)) throw responseError("作业模板尚未完成", 409);
+  if (!completed && !Number(questionCount?.count ?? 0)) throw responseError("作业模板尚未完成", 409);
+  if (completed && pageRows.results.length > 30) throw responseError("直接批改单份作业最多 30 页",400);
   const now = Date.now();
   const blockingPages = pageRows.results.map((page) => ({ page, quality: parseJson<{ blocking?: boolean; warnings?: string[] }>(page.quality_json, {}) }))
     .filter((item) => item.quality.blocking);
-  if (blockingPages.length) {
+  if (blockingPages.length && !completed) {
     const detail = blockingPages.flatMap((item) => item.quality.warnings ?? []).filter(Boolean).slice(0, 3).join("；");
     const reason = `第 ${blockingPages.map((item) => Number(item.page.page_order) + 1).join("、")} 页照片质量不足${detail ? `：${detail}` : "，请重新拍摄完整清晰的答卷"}`;
     await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'returned', submitted_at = ?, returned_at = ?, failure_reason = ?, updated_at = ? WHERE id = ?")
@@ -466,6 +500,7 @@ export async function submitHomeworkSubmission(id: string, actor: AuthUser | Stu
     const returned = teacher ? await teacherSubmissionRow(id, teacher) : await studentSubmissionRow(id, actor as StudentAuth);
     return submissionDetails(returned, Boolean(teacher));
   }
+  if (completed) await appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=?").bind(row.assignment_id).run();
   await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, failure_reason = '', updated_at = ? WHERE id = ?")
     .bind(now, now, id).run();
   try { await dispatchSubmissionGrading(id, String(row.assignment_id)); }
@@ -520,9 +555,14 @@ export async function correctPublishedSubmission(id: string, items: Array<Partia
   if (!items.length || items.length > 200) throw responseError("请选择需要修正的题目", 400);
   const now = Date.now();
   for (const patch of items) {
-    if (!(["correct", "partial", "incorrect", "unreadable"] as GradingVerdict[]).includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
-    const existing = await appEnv().DB.prepare(`SELECT * FROM grading_items WHERE id = ? AND submission_id = ?`).bind(patch.id, id).first<Record<string, unknown>>();
+    if (!(["correct", "partial", "incorrect", "unreadable", "review_required"] as GradingVerdict[]).includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
+    const existing = await appEnv().DB.prepare(`SELECT g.*,q.answer AS standard_answer,q.analysis AS standard_analysis,q.reference_verified,q.stem FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.id = ? AND g.submission_id = ?`).bind(patch.id, id).first<Record<string, unknown>>();
     if (!existing) throw responseError("批改项不存在", 404);
+    if (patch.standardAnswer?.trim() && (patch.standardAnswer !== existing.standard_answer || patch.standardAnalysis !== existing.standard_analysis || (patch.referenceVerified === true && !Number(existing.reference_verified)))) await appEnv().DB.prepare("UPDATE assignment_questions SET answer=?,analysis=?,reference_source='provided',reference_verified=1,reference_evidence='教师补充并确认参考解答' WHERE id=? AND assignment_id=?")
+      .bind(text(patch.standardAnswer,100_000),text(patch.standardAnalysis,100_000),existing.assignment_question_id,row.assignment_id).run();
+    if(patch.stem?.trim() && patch.stem !== existing.stem) await appEnv().DB.prepare("UPDATE assignment_questions SET stem=? WHERE id=? AND assignment_id=?").bind(text(patch.stem,100_000),existing.assignment_question_id,row.assignment_id).run();
+    const reference = await appEnv().DB.prepare("SELECT reference_verified FROM assignment_questions WHERE id=?").bind(existing.assignment_question_id).first<{reference_verified:number}>();
+    if (["correct","partial","incorrect"].includes(String(patch.verdict)) && !reference?.reference_verified) throw responseError("请先补充并确认本题参考答案",400);
     const next = { verdict: patch.verdict, studentAnswer: text(patch.studentAnswer ?? existing.student_answer, 100_000),
       feedback: text(patch.feedback ?? existing.feedback, 4_000), errorType: text(patch.errorType ?? existing.error_type, 120),
       stepAnalysis: patch.stepAnalysis ?? parseJson<string[]>(existing.step_analysis_json, []), evidenceSummary: text(patch.evidenceSummary ?? existing.evidence_summary, 1_000),
@@ -531,105 +571,30 @@ export async function correctPublishedSubmission(id: string, items: Array<Partia
       appEnv().DB.prepare(`INSERT INTO grading_item_revisions (id, grading_item_id, submission_id, corrected_by, before_json, after_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(crypto.randomUUID(), patch.id, id, user.id, JSON.stringify(existing), JSON.stringify(next), now),
       appEnv().DB.prepare(`UPDATE grading_items SET verdict = ?, student_answer = ?, feedback = ?, error_type = ?, step_analysis_json = ?,
-        evidence_summary = ?, capability_keys_json = ?, confidence = ?, requires_review = 0, reviewed_by = ?, reviewed_at = ?, corrected_at = ?,
+        evidence_summary = ?, capability_keys_json = ?, confidence = ?, requires_review = ?, reviewed_by = ?, reviewed_at = ?, corrected_at = ?,
         wrong_book_applied_at = NULL, updated_at = ? WHERE id = ? AND submission_id = ?`)
         .bind(next.verdict, next.studentAnswer, next.feedback, next.errorType, JSON.stringify(next.stepAnalysis), next.evidenceSummary,
-          JSON.stringify(next.capabilityKeys), next.confidence, user.id, now, now, now, patch.id, id),
+          JSON.stringify(next.capabilityKeys), next.confidence, ["unreadable","review_required"].includes(String(next.verdict)) ? 1 : 0, user.id, now, now, now, patch.id, id),
     ]);
-    if (next.verdict === "correct" || next.verdict === "unreadable") {
-      const wrong = await appEnv().DB.prepare("SELECT id, answer_crop_asset_id FROM student_wrong_questions WHERE grading_item_id = ? AND owner_user_id = ?")
-        .bind(patch.id, user.id).first<{ id: string; answer_crop_asset_id: string | null }>();
-      if (wrong) {
-        await appEnv().DB.prepare("DELETE FROM student_wrong_questions WHERE id = ? AND owner_user_id = ?").bind(wrong.id, user.id).run();
-        if (wrong.answer_crop_asset_id) {
-          const asset = await appEnv().DB.prepare("SELECT id, r2_key FROM homework_assets WHERE id = ? AND owner_user_id = ?")
-            .bind(wrong.answer_crop_asset_id, user.id).first<{ id: string; r2_key: string }>();
-          if (asset) { await homeworkAssetsBucket().delete(asset.r2_key); await appEnv().DB.prepare("DELETE FROM homework_assets WHERE id = ?").bind(asset.id).run(); }
-        }
-      }
-    }
+
   }
   const { generateSubmissionReport } = await import("./homework-grading"); await generateSubmissionReport(id);
-  const submission = await readTeacherSubmission(id, user); await applySubmissionWrongBook(submission, user);
-  const { replaceSubmissionCapabilityEvidence } = await import("./homework-capabilities");
-  await replaceSubmissionCapabilityEvidence({ ownerUserId: user.id, studentId: submission.studentId, assignmentId: submission.assignmentId,
-    submissionId: submission.id, gradingItems: submission.gradingItems });
+  const submission = await readTeacherSubmission(id, user); await (await import("./homework-wrong-book")).syncSubmissionWrongBook(submission, user);
   return readTeacherSubmission(id, user);
 }
 
-async function applySubmissionWrongBook(submission: HomeworkSubmission, user: AuthUser) {
-  const context = await resolveLibraryContext(user, "mine"); const now = Date.now();
-  for (const item of submission.gradingItems) {
-    if (!(["incorrect", "partial"] as GradingVerdict[]).includes(item.verdict) || item.wrongBookAppliedAt) continue;
-    const question: Question = {
-      id: item.assignmentQuestionId, categoryId: "homework", type: item.questionType, difficulty: "中等", provenance: "来源待核实",
-      stem: item.stem, options: [], answer: item.standardAnswer, analysis: item.standardAnalysis, source: submission.assignmentTitle,
-      tags: item.errorType ? [item.errorType] : [], createdAt: submission.createdAt, updatedAt: now,
-    };
-    let answerCropAssetId: string | null = null;
-    if (item.pageId && item.bbox) {
-      const page = submission.pages.find((candidate) => candidate.id === item.pageId);
-      const processed = page ? await homeworkAssetBytes(page.processedAssetId) : null;
-      if (processed?.contentType === "image/jpeg") {
-        try {
-          const { cropHomeworkJpeg } = await import("./homework-crop");
-          const crop = cropHomeworkJpeg(processed.bytes, item.bbox);
-          const asset = await storeHomeworkAsset({ ownerUserId: user.id, bytes: crop, contentType: "image/jpeg",
-            originalName: `${submission.assignmentTitle}-${submission.studentName}-第${item.questionNumber}题.jpg`, role: "answer_crop",
-            pageOrder: 0, studentId: submission.studentId });
-          answerCropAssetId = asset.id;
-        } catch { /* 局部图生成失败不能阻止批改结果和错题文字发布 */ }
-      }
-    }
-    const existing = await appEnv().DB.prepare(`SELECT id, note, answer_crop_asset_id, grading_item_id FROM student_wrong_questions
-      WHERE student_id = ? AND source_library_id = ? AND source_question_id = ? AND owner_user_id = ?`)
-      .bind(submission.studentId, context.libraryId, item.assignmentQuestionId, user.id).first<{ id: string; note: string; answer_crop_asset_id: string | null; grading_item_id: string | null }>();
-    const note = item.feedback || (item.verdict === "partial" ? "本题部分正确，请补全步骤" : "本题作答错误");
-    if (existing) {
-      await appEnv().DB.batch([
-        appEnv().DB.prepare(`UPDATE student_wrong_questions SET source_scope = 'mine', source_path = ?, question_snapshot_json = ?,
-        mistake_count = mistake_count + ?, note = ?, mastered = 0, last_wrong_at = ?, updated_at = ?, source_kind = 'assignment',
-        assignment_id = ?, submission_id = ?, grading_item_id = ?, student_answer = ?, feedback = ?, answer_crop_asset_id = ? WHERE id = ? AND owner_user_id = ?`)
-        .bind(`作业 / ${submission.assignmentTitle}`, JSON.stringify(question), existing.grading_item_id === item.id ? 0 : 1, note, now, now, submission.assignmentId, submission.id, item.id,
-          item.studentAnswer, item.feedback, answerCropAssetId ?? existing.answer_crop_asset_id, existing.id, user.id),
-        appEnv().DB.prepare("UPDATE grading_items SET wrong_book_applied_at = ?, updated_at = ? WHERE id = ? AND wrong_book_applied_at IS NULL")
-          .bind(now, now, item.id),
-      ]);
-      if (answerCropAssetId && existing.answer_crop_asset_id && existing.answer_crop_asset_id !== answerCropAssetId) {
-        const oldCrop = await appEnv().DB.prepare("SELECT r2_key FROM homework_assets WHERE id = ? AND owner_user_id = ?")
-          .bind(existing.answer_crop_asset_id, user.id).first<{ r2_key: string }>();
-        if (oldCrop) { await homeworkAssetsBucket().delete(oldCrop.r2_key); await appEnv().DB.prepare("DELETE FROM homework_assets WHERE id = ?").bind(existing.answer_crop_asset_id).run(); }
-      }
-    } else {
-      await appEnv().DB.batch([
-        appEnv().DB.prepare(`INSERT INTO student_wrong_questions
-        (id, owner_user_id, student_id, source_scope, source_library_id, source_question_id, source_path, question_snapshot_json,
-         mistake_count, note, mastered, last_wrong_at, created_at, updated_at, source_kind, assignment_id, submission_id,
-         grading_item_id, student_answer, feedback, answer_crop_asset_id)
-        VALUES (?, ?, ?, 'mine', ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, 'assignment', ?, ?, ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), user.id, submission.studentId, context.libraryId, item.assignmentQuestionId,
-          `作业 / ${submission.assignmentTitle}`, JSON.stringify(question), note, now, now, now, submission.assignmentId, submission.id,
-          item.id, item.studentAnswer, item.feedback, answerCropAssetId),
-        appEnv().DB.prepare("UPDATE grading_items SET wrong_book_applied_at = ?, updated_at = ? WHERE id = ? AND wrong_book_applied_at IS NULL")
-          .bind(now, now, item.id),
-      ]);
-    }
-  }
-}
 
 export async function publishSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
-  if (row.status === "published") return readTeacherSubmission(id, user);
+  if(row.input_mode === "completed_homework") { try { await (await import("./homework-page-coverage")).assertCompletePageCoverage(id); } catch(error) { throw responseError(error instanceof Error?error.message:"页面尚未全部核验",409); } }
+  if (row.status === "published") { const submission = await readTeacherSubmission(id, user); await (await import("./homework-wrong-book")).syncSubmissionWrongBook(submission, user); return readTeacherSubmission(id, user); }
   if (row.status !== "ready") throw responseError("仍有题目需要复核，暂不能发布", 409);
   let submission = await submissionDetails(row);
   if (!submission.gradingItems.length) throw responseError("没有可发布的批改结果", 409);
   if (!submission.report) {
     const { generateSubmissionReport } = await import("./homework-grading"); await generateSubmissionReport(id); submission = await submissionDetails(row);
   }
-  await applySubmissionWrongBook(submission, user);
-  const { replaceSubmissionCapabilityEvidence } = await import("./homework-capabilities");
-  await replaceSubmissionCapabilityEvidence({ ownerUserId: user.id, studentId: submission.studentId, assignmentId: submission.assignmentId,
-    submissionId: submission.id, gradingItems: submission.gradingItems });
+  await (await import("./homework-wrong-book")).syncSubmissionWrongBook(submission, user);
   const now = Date.now();
   await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'published', published_at = ?, updated_at = ? WHERE id = ?")
     .bind(now, now, id).run();
@@ -645,9 +610,9 @@ export async function autoPublishSubmission(id: string) {
 }
 
 export async function publishReadyAssignmentSubmissions(assignmentId: string, user: AuthUser) {
-  await ownedAssignment(assignmentId, user);
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_submissions.assignment_id = ? ORDER BY students.name, homework_submissions.version DESC`)
-    .bind(assignmentId).all<Record<string, unknown>>();
+  if (assignmentId) await ownedAssignment(assignmentId, user);
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} WHERE homework_assignments.owner_user_id = ? ${assignmentId ? "AND homework_submissions.assignment_id = ?" : ""} ORDER BY homework_submissions.updated_at DESC`)
+    .bind(...(assignmentId ? [user.id, assignmentId] : [user.id])).all<Record<string, unknown>>();
   if (!rows.results.length) throw responseError("当前作业还没有可发布的提交", 409);
   const latest = new Map<string, Record<string, unknown>>();
   for (const row of rows.results) if (!latest.has(String(row.student_id))) latest.set(String(row.student_id), row);
@@ -667,11 +632,52 @@ export async function returnSubmission(id: string, reason: string, user: AuthUse
   return readTeacherSubmission(id, user);
 }
 
-export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ originalAssetId: string; processedAssetId: string; quality?: unknown }>; items?: Array<Partial<GradingItem> & { id: string }>; reason?: string }, actor: AuthUser | StudentAuth) {
+export async function reprocessPendingSubmission(id:string, replacements:Array<{replacePageId?:string;originalAssetId:string;processedAssetId:string;quality?:unknown}>,user:AuthUser) {
+  const row=await teacherSubmissionRow(id,user);
+  if(row.status!=="published") throw responseError("请等待本次批改完成后再补充",409);
+  const pending=await appEnv().DB.prepare("SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND (requires_review=1 OR verdict IN ('unreadable','review_required'))").bind(id).all<{assignment_question_id:string}>();
+  const coverage=row.input_mode === "completed_homework" ? await (await import("./homework-page-coverage")).readPageCoverage(id):null;
+  const pendingPages=coverage?.pages.filter(p=>p.kind==='unreadable').map(p=>`page:${p.pageNumber}`)??[];
+  if(!pending.results.length && !pendingPages.length)throw responseError("没有待处理的题目",409);
+  const changes:D1PreparedStatement[]=[]; const now=Date.now();
+  for(const replacement of replacements){
+    const page=await appEnv().DB.prepare('SELECT * FROM submission_pages WHERE id=? AND submission_id=?').bind(replacement.replacePageId,id).first<Record<string,unknown>>();
+    if(!page)throw responseError("补图对应的原页面不存在",400);
+    const assets=await appEnv().DB.prepare("SELECT id,role FROM homework_assets WHERE owner_user_id=? AND upload_submission_id=? AND id IN (?,?)")
+      .bind(user.id,id,replacement.originalAssetId,replacement.processedAssetId).all<{id:string;role:string}>();
+    if(!assets.results.some(a=>a.id===replacement.originalAssetId&&a.role==='submission_original')||!assets.results.some(a=>a.id===replacement.processedAssetId&&a.role==='submission_processed'))throw responseError("补图图片不存在或无权使用",400);
+    changes.push(appEnv().DB.prepare('INSERT INTO submission_page_revisions(id,submission_id,page_id,original_asset_id,processed_asset_id,created_at) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),id,page.id,page.original_asset_id,page.processed_asset_id,now));
+    changes.push(appEnv().DB.prepare('UPDATE submission_pages SET original_asset_id=?,processed_asset_id=?,quality_json=? WHERE id=? AND submission_id=?').bind(replacement.originalAssetId,replacement.processedAssetId,JSON.stringify(replacement.quality??{}),page.id,id));
+  }
+  changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
+  if(row.input_mode==='completed_homework')changes.push(appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id));
+  await appEnv().DB.batch(changes);
+  await dispatchSubmissionGrading(id,String(row.assignment_id));
+  return readTeacherSubmission(id,user);
+}
+
+export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
+  const row=await teacherSubmissionRow(id,user);
+  if(row.input_mode!=="completed_homework")throw responseError("此操作仅用于直接上传的作业",400);
+  if(!["published","ready","failed"].includes(String(row.status)))throw responseError("请等待当前批改完成",409);
+  const now=Date.now();
+  const claimed=await appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,reprocess_question_ids_json='[]',failure_reason='',updated_at=? WHERE id=? AND status IN ('published','ready','failed')").bind(now,now,id).run();
+  if(!claimed.meta.changes)return readTeacherSubmission(id,user);
+  const previous=await appEnv().DB.prepare('SELECT * FROM grading_items WHERE submission_id=?').bind(id).all<Record<string,unknown>>();
+  for(const item of previous.results)await appEnv().DB.prepare('INSERT INTO grading_item_revisions(id,grading_item_id,submission_id,corrected_by,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)')
+    .bind(crypto.randomUUID(),item.id,id,user.id,JSON.stringify(item),JSON.stringify({action:"rebuild-coverage",reason:"补全未处理页面，保留修复前记录"}),now).run();
+  await appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id).run();
+  try{await dispatchSubmissionGrading(id,String(row.assignment_id));}catch(error){await appEnv().DB.prepare("UPDATE homework_submissions SET status='failed',failure_reason=?,updated_at=? WHERE id=?").bind(error instanceof Error?error.message:'无法提交补全任务',Date.now(),id).run();throw error;}
+  return readTeacherSubmission(id,user);
+}
+
+export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ originalAssetId: string; processedAssetId: string; quality?: unknown; replacePageId?:string }>; items?: Array<Partial<GradingItem> & { id: string }>; reason?: string }, actor: AuthUser | StudentAuth) {
   if (body.action === "save-pages") return replaceSubmissionPages(id, body.pages ?? [], actor);
   if (body.action === "submit") return submitHomeworkSubmission(id, actor);
   if (body.action === "retry") return retryHomeworkSubmission(id, actor);
   if (!("role" in actor)) throw responseError("学生无权执行该操作", 403);
+  if (body.action === "rebuild-coverage") return rebuildSubmissionCoverage(id,actor);
+  if (body.action === "reprocess-pending") return reprocessPendingSubmission(id,body.pages??[],actor);
   if (body.action === "review") return reviewSubmission(id, body.items ?? [], actor);
   if (body.action === "correct") return correctPublishedSubmission(id, body.items ?? [], actor);
   if (body.action === "publish") return publishSubmission(id, actor);
@@ -686,12 +692,12 @@ export async function studentWrongBook(student: StudentAuth) {
 
 export async function deleteStudentHomeworkAssets(studentId: string, ownerUserId: string) {
   const rows = await appEnv().DB.prepare(`SELECT DISTINCT homework_assets.id, homework_assets.r2_key FROM homework_assets
-    WHERE homework_assets.owner_user_id = ? AND (homework_assets.upload_student_id = ? OR homework_assets.id IN (
+    WHERE homework_assets.owner_user_id = ? AND (homework_assets.upload_student_id = ? OR homework_assets.upload_submission_id IN (SELECT id FROM homework_submissions WHERE student_id=?) OR homework_assets.id IN (
       SELECT original_asset_id FROM submission_pages JOIN homework_submissions ON homework_submissions.id = submission_pages.submission_id WHERE homework_submissions.student_id = ?
       UNION SELECT processed_asset_id FROM submission_pages JOIN homework_submissions ON homework_submissions.id = submission_pages.submission_id WHERE homework_submissions.student_id = ?
       UNION SELECT answer_crop_asset_id FROM student_wrong_questions WHERE student_id = ? AND answer_crop_asset_id IS NOT NULL
     ))`)
-    .bind(ownerUserId, studentId, studentId, studentId, studentId).all<{ id: string; r2_key: string }>();
+    .bind(ownerUserId, studentId, studentId, studentId, studentId, studentId).all<{ id: string; r2_key: string }>();
   return rows.results;
 }
 
@@ -751,27 +757,28 @@ export async function extractAssignmentTemplate(id: string, user: AuthUser) {
   if (!questionAssets.length || !answerAssets.length) throw responseError("请先上传空白题目卷和答案解析", 400);
   if (questionAssets.length + answerAssets.length > 30) throw responseError("题目卷和答案解析合计不能超过 30 页", 400);
   const { assignmentExtractionSchema, buildAssignmentExtractionPrompt, normalizeAssignmentExtraction } = await import("../homework-grading-contract");
-  const { callHomeworkModel, parseHomeworkModelText } = await import("./homework-model");
+  const { callRecognitionModel, parseRecognitionModelText } = await import("./recognition-model");
   const { homeworkAssetDataUrl } = await import("./homework-assets");
   const images = await Promise.all([...questionAssets, ...answerAssets].map((asset) => homeworkAssetDataUrl(asset.id)));
-  const result = await callHomeworkModel({ images, prompt: buildAssignmentExtractionPrompt(questionAssets.length, answerAssets.length),
+  const result = await callRecognitionModel({ images, prompt: buildAssignmentExtractionPrompt(questionAssets.length, answerAssets.length),
     schema: assignmentExtractionSchema, schemaName: "homework_assignment_extraction" });
   if (!result.text) throw responseError(result.error || "模板识别没有返回可用结果", result.status >= 400 ? result.status : 502);
-  let extracted = normalizeAssignmentExtraction(parseHomeworkModelText(result.text));
+  let extracted = normalizeAssignmentExtraction(parseRecognitionModelText(result.text));
   if (!extracted.length) throw responseError("没有从题目卷中识别到试题", 422);
   if (incompleteAssignmentAnswers(extracted).length) {
     extracted = await recoverAssignmentAnswers({
       extracted,
       answerImages: images.slice(questionAssets.length),
-      callModel: callHomeworkModel,
-      parseModelText: parseHomeworkModelText,
+      callModel: callRecognitionModel,
+      parseModelText: parseRecognitionModelText,
     });
   }
   await replaceAssignmentQuestions(id, extracted.map((question, index) => ({
     id: crypto.randomUUID(), assignmentId: id, questionNumber: question.question_number, pageNumber: question.page_number,
     type: question.type, stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
     bbox: question.bbox, confidence: question.confidence, warnings: question.warnings, knowledgeTags: question.knowledge_tags,
-    taxonomyKeys: resolveKnowledgeTaxonomyKeys(question.knowledge_tags, question.stem), capabilityKeys: question.capability_keys, sortOrder: index,
+    // Resolved against the published graph inside replaceAssignmentQuestions.
+    taxonomyKeys: [], capabilityKeys: question.capability_keys, sortOrder: index,
   })), user);
   return readAssignment(id, user);
 }

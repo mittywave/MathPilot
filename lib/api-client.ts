@@ -28,8 +28,8 @@ export function fetchStudents() { return request<{ students: StudentSummary[] }>
 export function createStudent(student: Pick<Student, "name" | "className" | "notes">) { return request<{ student: Student }>("/api/students", { method: "POST", body: JSON.stringify({ student }) }); }
 export function updateStudent(student: Student) { return request<{ student: Student }>(`/api/students/${encodeURIComponent(student.id)}`, { method: "PUT", body: JSON.stringify({ student }) }); }
 export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQuestionCount: number }>(`/api/students/${encodeURIComponent(id)}`, { method: "DELETE" }); }
-export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions`); }
-export function recordWrongQuestions(studentId: string, scope: LibraryScope, questionIds: string[], note = "") { return request<{ recorded: number; created: number; updated: number }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions`, { method: "POST", body: JSON.stringify({ scope, questionIds, note }) }); }
+export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions?includeHistory=true`); }
+
 export function updateWrongQuestion(studentId: string, entryId: string, entry: Partial<Pick<WrongQuestionEntry, "mistakeCount" | "note" | "mastered">>) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PUT", body: JSON.stringify({ entry }) }); }
 export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
 export type PublicationProgress = {
@@ -43,6 +43,7 @@ type PublicationResult = {
   publicationId: string;
   publishedAt: number;
   diff: { modules: Record<string, number>; categories: Record<string, number>; questions: Record<string, number>; missingAssets: number };
+  knowledgeGraph?: { changed: boolean; version: number } | null;
 };
 export async function publishPublicLibrary(onProgress?: (progress: PublicationProgress) => void) {
   const response = await fetch("/api/publications", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "publish-local-stream" }) });

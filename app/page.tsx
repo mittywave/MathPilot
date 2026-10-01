@@ -4,6 +4,10 @@ import { ChangeEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, use
 import { DocxContent, DocxOptions } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
+import { PaperMoreMenu } from "./components/PaperMoreMenu";
+import { StudentArchiveTabs } from "./components/StudentArchiveTabs";
+import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
+import { moveBasketQuestion, orderedBasketQuestions } from "../lib/paper-basket";
 import { exportQuestionsToWord } from "../lib/export-word";
 import { renderImportFile } from "../lib/file-import";
 import { orderedImportTimestamp } from "../lib/question-order-rules.mjs";
@@ -14,7 +18,7 @@ import type { BatchRecognitionResult, RecognitionQuestionResult } from "../lib/r
 import { renderVectorDiagramPlan, VectorDiagramFitError } from "../lib/vector-diagram-renderer";
 import { isCompactConclusionQuestion, isGeometryQuestion, questionImages, resolveQuestionImageLayout } from "../lib/question-layout";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recognition-cleanup.mjs";
-import { authorizeDownload, copyPublicQuestions, createCloudCategory, createCloudModule, createCloudQuestion, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, publishPublicLibrary, recordWrongQuestions, register, reorderCloudModules, updateCloudModule, updateCloudQuestion, updateStudent as updateStudentProfile, updateWrongQuestion, type PublicationProgress } from "../lib/api-client";
+import { authorizeDownload, copyPublicQuestions, createCloudCategory, createCloudModule, createCloudQuestion, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, publishPublicLibrary, register, reorderCloudModules, updateCloudModule, updateCloudQuestion, updateStudent as updateStudentProfile, updateWrongQuestion, type PublicationProgress } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, alevelTagVersions, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
 import { normalizeQuestionProvenance, QUESTION_PROVENANCES } from "../lib/exam-modules.mjs";
 import type { AuthUser, Category, DiagramQuality, Difficulty, ImageLayout, LibraryData, LibraryModule, LibraryScope, Question, QuestionProvenance, QuestionType, Student, StudentSummary, VectorDiagramPlan, WrongQuestionEntry } from "../lib/types";
@@ -104,6 +108,7 @@ export default function Home() {
   const [categoryName, setCategoryName] = useState("");
   const [categoryParent, setCategoryParent] = useState<string>("");
   const [exportDialog, setExportDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [paperTitle, setPaperTitle] = useState("专项练习");
   const [includeAnswers, setIncludeAnswers] = useState(true);
@@ -160,11 +165,6 @@ export default function Home() {
   const [studentName, setStudentName] = useState("");
   const [studentClassName, setStudentClassName] = useState("");
   const [studentNotes, setStudentNotes] = useState("");
-  const [recordWrongDialog, setRecordWrongDialog] = useState(false);
-  const [recordQuestionIds, setRecordQuestionIds] = useState<string[]>([]);
-  const [recordStudentId, setRecordStudentId] = useState("");
-  const [recordNote, setRecordNote] = useState("");
-  const [recordSubmitting, setRecordSubmitting] = useState(false);
   const [wrongEntryDraft, setWrongEntryDraft] = useState<WrongQuestionEntry | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const questionImageRef = useRef<HTMLInputElement>(null);
@@ -218,7 +218,7 @@ export default function Home() {
     const nextModule = sortedModules.find((item) => item.id === activeModuleId) ?? sortedModules[0] ?? null;
     setActiveModuleId(nextModule?.id ?? "");
     setActiveCategory((current) => preserveCategory && current && availableIds.has(current) ? current : nextModule?.id ?? null);
-    if (nextModule) setPaperTitle(`${nextModule.name}专项练习`);
+    if (nextModule && !selectedIds.length) setPaperTitle(`${nextModule.name}专项练习`);
   }
 
   async function refreshLibrary(preserveCategory = true, scope = libraryScope) {
@@ -236,7 +236,7 @@ export default function Home() {
         setAuthUser(auth.user); setLibraryScope(requestedScope); applyLibrary(data, false);
         if (auth.user && params.get("view") === "wrong-book") {
           setShowWrongBook(true); setWrongBookLoading(true);
-          try { await loadStudents(""); } finally { setWrongBookLoading(false); }
+          try { await loadStudents(params.get("studentId") ?? ""); } finally { setWrongBookLoading(false); }
         } else if (auth.user && params.get("view") === "selected") setShowSelected(true);
       } catch { setNotice("云端题库读取失败，请刷新页面重试"); }
       finally { setAuthLoading(false); }
@@ -277,7 +277,7 @@ export default function Home() {
     const targetModule = modules.find((item) => item.id === moduleId); if (!targetModule) return;
     setActiveModuleId(targetModule.id);
     setActiveCategory(targetModule.id);
-    setPaperTitle(`${targetModule.name}专项练习`);
+    if (!selectedIds.length) setPaperTitle(`${targetModule.name}专项练习`);
     setProvenanceFilter("全部");
     setTypeFilter("全部");
     setQuery("");
@@ -285,10 +285,11 @@ export default function Home() {
     setShowWrongBook(false);
   }
 
+  const selectedQuestions = orderedBasketQuestions(questions, selectedIds);
   const filteredQuestions = useMemo(() => {
+    if (showSelected) return orderedBasketQuestions(questions, selectedIds);
     let result = questions;
-    if (showSelected) result = result.filter((item) => selectedIds.includes(item.id));
-    else if (activeCategory) { const allowed = descendantsOf(activeCategory); result = result.filter((item) => allowed.includes(item.categoryId)); }
+    if (activeCategory) { const allowed = descendantsOf(activeCategory); result = result.filter((item) => allowed.includes(item.categoryId)); }
     if (provenanceFilter !== "全部") result = result.filter((item) => normalizeQuestionProvenance(item.provenance) === provenanceFilter);
     if (typeFilter !== "全部") result = result.filter((item) => item.type === typeFilter);
     const keyword = query.trim().toLowerCase();
@@ -297,13 +298,14 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, categories, activeCategory, showSelected, provenanceFilter, typeFilter, query, selectedIds]);
 
-  const selectedQuestions = selectedIds.map((id) => questions.find((item) => item.id === id)).filter(Boolean) as Question[];
   const allFilteredSelected = filteredQuestions.length > 0 && filteredQuestions.every((item) => selectedIds.includes(item.id));
   const activeName = showSelected ? "我的组卷" : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
+  const activeWrongEntries = wrongEntries.filter(entry => entry.archivedAt == null);
+  const historicalWrongEntries = wrongEntries.filter(entry => entry.archivedAt != null);
   const filteredWrongEntries = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    if (!keyword) return wrongEntries;
-    return wrongEntries.filter((entry) => `${entry.question.stem} ${entry.question.answer} ${entry.question.analysis} ${entry.question.source} ${entry.sourcePath} ${entry.note}`.toLowerCase().includes(keyword));
+    if (!keyword) return wrongEntries.filter(entry => entry.archivedAt == null);
+    return wrongEntries.filter(entry => entry.archivedAt == null).filter((entry) => `${entry.question.stem} ${entry.question.answer} ${entry.question.analysis} ${entry.question.source} ${entry.sourcePath} ${entry.note}`.toLowerCase().includes(keyword));
   }, [query, wrongEntries]);
 
   const requireLogin = () => { if (authUser) return true; setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
@@ -355,7 +357,7 @@ export default function Home() {
       const result = studentDraft
         ? await updateStudentProfile({ ...studentDraft, ...payload })
         : await createStudentProfile(payload);
-      setStudentDialog(false); await loadStudents(result.student.id); setRecordStudentId(result.student.id);
+      setStudentDialog(false); await loadStudents(result.student.id);
       setNotice(studentDraft ? "学生档案已更新" : `已创建学生档案：${result.student.name}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案保存失败"); }
   }
@@ -368,30 +370,10 @@ export default function Home() {
     } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案删除失败"); }
   }
 
-  async function openRecordWrong(ids: string[]) {
-    if (!requireLogin() || !ids.length) return;
-    try {
-      const result = await fetchStudents(); setStudents(result.students); setRecordQuestionIds(ids); setRecordNote("");
-      setRecordStudentId(result.students.some((item) => item.id === activeStudentId) ? activeStudentId : result.students[0]?.id ?? "");
-      setRecordWrongDialog(true);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案读取失败"); }
-  }
-
-  async function submitWrongQuestions() {
-    if (!recordStudentId) { setNotice("请先选择或新建学生"); return; }
-    setRecordSubmitting(true);
-    try {
-      const result = await recordWrongQuestions(recordStudentId, libraryScope, recordQuestionIds, recordNote);
-      setRecordWrongDialog(false); await loadStudents(showWrongBook ? activeStudentId : recordStudentId);
-      setNotice(result.updated ? `已记录 ${result.recorded} 道错题，其中 ${result.updated} 道累计错题次数` : `已记入 ${result.recorded} 道错题`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "错题记录失败"); }
-    finally { setRecordSubmitting(false); }
-  }
-
   async function saveWrongEntry() {
     if (!wrongEntryDraft) return;
     try {
-      await updateWrongQuestion(wrongEntryDraft.studentId, wrongEntryDraft.id, { mistakeCount: wrongEntryDraft.mistakeCount, note: wrongEntryDraft.note, mastered: wrongEntryDraft.mastered });
+      await updateWrongQuestion(wrongEntryDraft.studentId, wrongEntryDraft.id, { note: wrongEntryDraft.note, mastered: wrongEntryDraft.mastered });
       setWrongEntryDraft(null); await loadStudents(wrongEntryDraft.studentId); setNotice("错题复习记录已更新");
     } catch (error) { setNotice(error instanceof Error ? error.message : "错题记录更新失败"); }
   }
@@ -403,11 +385,7 @@ export default function Home() {
     } catch (error) { setNotice(error instanceof Error ? error.message : "错题状态更新失败"); }
   }
 
-  async function removeWrongEntry(entry: WrongQuestionEntry) {
-    if (!window.confirm("确定从该学生的错题本移除这道题吗？")) return;
-    try { await deleteWrongQuestion(entry.studentId, entry.id); await loadStudents(entry.studentId); setNotice("错题记录已移除"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "错题记录移除失败"); }
-  }
+
   const toggleSelected = (id: string) => { if (!requireLogin()) return; setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); };
   const toggleAllFiltered = () => {
     if (!requireLogin()) return;
@@ -820,9 +798,11 @@ export default function Home() {
   }
 
   async function generateWord() {
-    if (!selectedQuestions.length) return;
-    try { await authorizeDownload(libraryScope, selectedIds); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers); setExportDialog(false); setNotice("Word 练习已生成"); }
+    if (!selectedQuestions.length || isExporting) return;
+    setIsExporting(true);
+    try { await authorizeDownload(libraryScope, selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); setExportDialog(false); setNotice("Word 练习已生成"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "下载失败"); }
+    finally { setIsExporting(false); }
   }
 
   function openNewModule() {
@@ -911,7 +891,7 @@ export default function Home() {
       const changed = result.diff.modules.added + result.diff.modules.updated + result.diff.modules.deleted
         + result.diff.categories.added + result.diff.categories.updated + result.diff.categories.deleted
         + result.diff.questions.added + result.diff.questions.updated + result.diff.questions.deleted;
-      setNotice(`发布完成：${changed} 项内容变更，${result.diff.missingAssets} 个新资源`);
+      setNotice(`发布完成：${changed} 项内容变更，${result.diff.missingAssets} 个新资源${result.knowledgeGraph?.changed ? `；知识图谱已同步为线上 v${result.knowledgeGraph.version}` : ""}`);
     } catch (error) { setPublicationFailed(true); setNotice(error instanceof Error ? error.message : "公共资源库发布失败"); }
     finally { setIsPublishing(false); }
   }
@@ -941,15 +921,15 @@ export default function Home() {
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
       <header className="topbar">
         <div className="brand"><span className="brand-mark">题</span><div><strong>Mitty</strong><span>{pageCopy.brandSubtitle}</span></div></div>
-        <nav className="library-entries" aria-label="题库入口"><button className={`nav-item ${libraryScope === "public" && !showSelected && !showWrongBook ? "active" : ""}`} onClick={() => switchLibraryScope("public")}>{pageCopy.navPublic}</button><button className={`nav-item ${libraryScope === "mine" && !showSelected && !showWrongBook ? "active" : ""}`} onClick={() => switchLibraryScope("mine")}>{pageCopy.navMine}</button><button className={`nav-item ${showWrongBook ? "active" : ""}`} onClick={openWrongBook}>{pageCopy.navWrong}</button>{authUser && <><a className="nav-item" href="/homework">{pageCopy.navHomework}</a><button className={`nav-item ${showSelected && !showWrongBook ? "active" : ""}`} onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket}{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button><a className="nav-item" href="/knowledge-graph">{pageCopy.navKnowledge}</a><a className="nav-item" href="/answer-studio">手写转录</a></>}</nav>
-        <div className="account-area"><div className="theme-switch" role="group" aria-label={pageCopy.displayMode}><button className={colorTheme === "light" ? "active" : ""} aria-label={pageCopy.light} aria-pressed={colorTheme === "light"} onClick={() => chooseColorTheme("light")}><span aria-hidden="true">☀</span><b>{pageCopy.light}</b></button><button className={colorTheme === "dark" ? "active" : ""} aria-label={pageCopy.dark} aria-pressed={colorTheme === "dark"} onClick={() => chooseColorTheme("dark")}><span aria-hidden="true">☾</span><b>{pageCopy.dark}</b></button></div>{authLoading ? <span className="guest-badge">{pageCopy.connecting}</span> : authUser ? <><span className="user-chip"><b>{authUser.local ? pageCopy.localAdmin : authUser.role === "admin" ? pageCopy.admin : pageCopy.member}</b>{authUser.local ? pageCopy.noLogin : authUser.email}</span>{!authUser.local && <button className="account-button" onClick={signOut}>{pageCopy.signOut}</button>}{canManageLibrary && !showWrongBook && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button>}</> : <><span className="guest-badge">{pageCopy.guestBrowse}</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button></>}</div>
+        <nav className="library-entries" aria-label="题库入口"><button className={`nav-item ${libraryScope === "public" && !showSelected && !showWrongBook ? "active" : ""}`} onClick={() => switchLibraryScope("public")}>{pageCopy.navPublic}</button><button className={`nav-item ${showWrongBook ? "active" : ""}`} onClick={openWrongBook}>{pageCopy.navStudents}</button>{authUser && <><button className={`nav-item ${showSelected && !showWrongBook ? "active" : ""}`} onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket}{selectedIds.length ? <i>{selectedIds.length}</i> : null}</button><a className="nav-item" href="/knowledge-graph">{pageCopy.navKnowledge}</a><a className="nav-item" href="/tools">{pageCopy.navTools}</a></>}</nav>
+        <div className="account-area"><div className="theme-switch" role="group" aria-label={pageCopy.displayMode}><button className={colorTheme === "light" ? "active" : ""} aria-label={pageCopy.light} aria-pressed={colorTheme === "light"} onClick={() => chooseColorTheme("light")}><span aria-hidden="true">☀</span><b>{pageCopy.light}</b></button><button className={colorTheme === "dark" ? "active" : ""} aria-label={pageCopy.dark} aria-pressed={colorTheme === "dark"} onClick={() => chooseColorTheme("dark")}><span aria-hidden="true">☾</span><b>{pageCopy.dark}</b></button></div>{authLoading ? <span className="guest-badge">{pageCopy.connecting}</span> : authUser ? <><span className="user-chip"><b>{authUser.local ? pageCopy.localAdmin : authUser.role === "admin" ? pageCopy.admin : pageCopy.member}</b>{authUser.local ? pageCopy.noLogin : authUser.email}</span>{!authUser.local && <button className="account-button" onClick={signOut}>{pageCopy.signOut}</button>}{canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button>}</> : <><span className="guest-badge">{pageCopy.guestBrowse}</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button></>}</div>
       </header>
 
-      <section className="workspace">
-        <aside className="sidebar">
+      <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : ""}`}>
+        {(!showSelected || showWrongBook) && <aside className="sidebar">
           {showWrongBook ? <>
             <div className="sidebar-heading"><div><span className="eyebrow">学生专属空间</span><h2>学生档案</h2></div><button className="icon-button" aria-label="新建学生" title="新建学生" onClick={() => openStudentDialog()}>＋</button></div>
-            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}</b><small>{student.className || "未填写班级"}</small></div><em>{student.wrongCount}</em></button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再为他记录专属错题。</p></div>}</div>
+            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}</b><small>{student.className || "未填写班级"}</small></div><em>{student.wrongCount}</em></button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
             <button className="manage-button" onClick={() => openStudentDialog()}>＋ 新建学生档案</button>
             {activeStudent && <div className="student-profile-actions"><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><button className="danger-text" onClick={() => removeStudent(activeStudent)}>删除</button></div>}
           </> : <>
@@ -957,17 +937,18 @@ export default function Home() {
           <div className="tree">{renderModuleTree()}</div>
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : !authUser ? <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button> : <span className="sidebar-readonly">{pageCopy.maintainedByAdmin}</span>}
           </>}
-        </aside>
+        </aside>}
 
         <section className="content">
           {showWrongBook ? <>
+            <div className="student-archive-heading"><h1>学生档案</h1><StudentArchiveTabs active="wrong-book" /></div>
             <div className="library-context-bar wrong-book-context"><div><b>学生专属错题本</b><span>不同学生的错题、次数和复习状态彼此独立</span></div><small>{students.length} 位学生 · {students.reduce((total, student) => total + student.wrongCount, 0)} 道错题记录</small><button className="secondary" onClick={() => openStudentDialog()}>新建学生</button></div>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => selectStudent(event.target.value)}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}</select></label>}
             {activeStudent ? <>
               <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}的错题本</h1><p className="subtext">{activeStudent.notes || "记录易错点，复习后可标记为已掌握"}</p></div><div className="wrong-book-stats"><span><b>{activeStudent.wrongCount}</b>全部错题</span><span><b>{activeStudent.reviewingCount}</b>复习中</span><span><b>{activeStudent.masteredCount}</b>已掌握</span></div></div>
-              <div className="content-head wrong-book-head"><div><p className="breadcrumb">学习记录</p><h2>{wrongEntries.length ? "错题清单" : "开始建立错题本"}</h2><p className="subtext">从公共资源库或我的题库选择试题，点击“记入错题本”。</p></div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干、来源或备注…" /></label></div>
+              <div className="content-head wrong-book-head"><div><p className="breadcrumb">学习记录</p><h2>{activeWrongEntries.length ? "作业错题清单" : "开始建立错题本"}</h2><p className="subtext">错题来自学生作业自动批改，仅记录完全错误的题目。</p>{!!activeWrongEntries.length && <a className="wrong-upload-link" href={`/homework/upload?studentId=${encodeURIComponent(activeStudent.id)}`}>上传作业并批改</a>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干、来源或备注…" /></label></div>
               <div className="question-list wrong-question-list">
-                {wrongBookLoading ? <div className="wrong-book-loading"><i></i><span>正在读取错题记录…</span></div> : !filteredWrongEntries.length ? <div className="empty-state"><div>错</div><h3>{wrongEntries.length ? "没有符合搜索的错题" : "还没有错题记录"}</h3><p>{wrongEntries.length ? "换一个关键词继续查找" : "回到题库选择一道题，为这位学生建立第一条错题记录"}</p><button onClick={() => switchLibraryScope("public")}>去公共资源库选题</button></div> : filteredWrongEntries.map((entry, index) => {
+                {wrongBookLoading ? <div className="wrong-book-loading"><i></i><span>正在读取错题记录…</span></div> : !filteredWrongEntries.length ? <div className="empty-state"><div>错</div><h3>{activeWrongEntries.length ? "没有符合搜索的错题" : "还没有错题记录"}</h3><p>{activeWrongEntries.length ? "换一个关键词继续查找" : "上传学生作业，批改后自动建立错题记录"}</p><a className="wrong-upload-link" href={`/homework/upload?studentId=${encodeURIComponent(activeStudent.id)}`}>上传作业并批改</a></div> : filteredWrongEntries.map((entry, index) => {
                   const question = entry.question; const answerKey = `wrong-${entry.id}`; const answerOpen = expandedAnswers.includes(answerKey); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question);
                   return <article className={`question-card wrong-question-card ${entry.mastered ? "mastered" : ""}`} key={entry.id}>
                     <div className={`wrong-status ${entry.mastered ? "mastered" : "reviewing"}`}>{entry.mastered ? "已掌握" : "复习中"}</div>
@@ -982,13 +963,28 @@ export default function Home() {
                         {!!question.options.length && compactConclusion && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
                       </div>
                       {entry.note && <div className="wrong-note"><b>学生错因 / 复习备注</b><p>{entry.note}</p></div>}
+                      <WrongQuestionEvidence entry={entry} />
                       {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
-                      <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(answerKey) ? current.filter((id) => id !== answerKey) : [...current, answerKey])}>{answerOpen ? "收起解析" : "查看解析"}</button><small>最近记录 {new Date(entry.lastWrongAt).toLocaleDateString("zh-CN")}</small><span></span><button onClick={() => setWrongEntryDraft(entry)}>编辑记录</button><button onClick={() => toggleWrongMastery(entry)}>{entry.mastered ? "继续复习" : "标为掌握"}</button><button className="danger-text" onClick={() => removeWrongEntry(entry)}>移除</button></div>
+                      <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(answerKey) ? current.filter((id) => id !== answerKey) : [...current, answerKey])}>{answerOpen ? "收起解析" : "查看解析"}</button><small>最近记录 {new Date(entry.lastWrongAt).toLocaleDateString("zh-CN")}</small><span></span><button onClick={() => setWrongEntryDraft(entry)}>编辑记录</button><button onClick={() => toggleWrongMastery(entry)}>{entry.mastered ? "继续复习" : "标为掌握"}</button>{entry.submissionId ? <a href={`/homework/submissions/${entry.submissionId}`}>修正批改</a> : null}</div>
                     </div>
                   </article>;
                 })}
               </div>
+              {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>旧手动记录、部分正确及已修正的记录保留在此，不计入当前错题统计。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small><WrongQuestionEvidence entry={entry} /></article>)}</details>}
             </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立错题本"}</h3><p>每位学生都有独立的错题、错误次数、复习备注和掌握状态。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
+          </> : <>
+          {showSelected ? <>
+            <div className="basket-heading">
+              <div><p className="breadcrumb">选题完成后，在这里整理练习</p><h1>组卷篮 <span>{selectedQuestions.length} 题</span></h1><p className="subtext">题目按下方顺序生成 Word，可随时继续选题。</p></div>
+              {!!selectedQuestions.length && <button className="secondary" onClick={() => setShowSelected(false)}>继续选题</button>}
+            </div>
+            {!!selectedQuestions.length && <>
+              <div className="basket-settings">
+                <label className="basket-title">练习标题<input value={paperTitle} disabled={isExporting} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
+                <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={isExporting} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
+              </div>
+              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><PaperMoreMenu>{libraryScope === "public" && <button disabled={isExporting} onClick={openCopyDialog}>复制到私人题库</button>}<button disabled={isExporting} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu><button className="primary-button" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button></div>
+            </>}
           </> : <>
           <div className="library-context-bar"><div><b>{libraryScope === "public" ? pageCopy.publicLibrary : pageCopy.myLibrary}</b><span>{libraryScope === "public" ? authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess : pageCopy.privateAccess}</span>{authUser?.local && libraryScope === "public" && publicationProgress && <span className={`publication-progress ${publicationFailed ? "failed" : ""}`}><i><em style={{ width: `${publicationProgress.total ? Math.max(publicationProgress.phase === "complete" ? 100 : 8, publicationProgress.current / publicationProgress.total * 100) : 8}%` }} /></i>{publicationFailed ? `${pageCopy.publishFailed} · ${publicationProgress.label}` : publicationProgress.label}</span>}</div>{libraryScope === "public" && publishedAt && <small>{pageCopy.recentlyPublished} {new Date(publishedAt).toLocaleString(pageLocale === "en" ? "en-GB" : "zh-CN")}</small>}{authUser?.local && libraryScope === "public" && <button className="secondary" disabled={isPublishing} onClick={publishLibrary}>{isPublishing ? pageCopy.publishing : publicationFailed ? pageCopy.retryPublish : pageCopy.publishLibrary}</button>}{canManageLibrary && <button className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
           <div className="module-switcher" aria-label={pageCopy.moduleSwitcher}>
@@ -1011,12 +1007,13 @@ export default function Home() {
             {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(showSelected ? selectedQuestions : categoryQuestions).filter((item) => item.type === type).length}</span></button>)}
             {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? pageCopy.clearSelection : pageCopy.selectResults}</button>}
           </div>
+          </>}
           <div className="question-list">
-            {!filteredQuestions.length && <div className="empty-state"><div>{pageCopy.empty}</div><h3>{showSelected ? "还没有勾选试题" : !activeModule ? libraryScope === "mine" ? "创建你的第一个模块" : "公共资源库尚无模块" : `${activeModule.name}${pageLocale === "en" ? " " : ""}${pageCopy.noQuestions}`}</h3><p>{showSelected ? "回到任一模块勾选需要组卷的题目" : !activeModule ? libraryScope === "mine" ? "模块可以是考试、学科或你习惯的任意分组" : "等待本地管理员发布内容" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected && activeModule ? <button onClick={() => switchExamModule(activeModule.id)}>返回题库</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
+            {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? libraryScope === "mine" ? "创建你的第一个模块" : "我的题库尚无模块" : `${activeModule.name}${pageLocale === "en" ? " " : ""}${pageCopy.noQuestions}`}</h3><p>{showSelected ? "到我的题库勾选题目，再回来调整顺序并生成练习。" : !activeModule ? libraryScope === "mine" ? "模块可以是考试、学科或你习惯的任意分组" : "等待本地管理员发布内容" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
             {filteredQuestions.map((question, index) => {
               const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question); const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
               return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
-                {authUser && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
+                {authUser && !showSelected && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
                 <div className="question-main">
                   <div className="meta"><span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><span className={`provenance-badge provenance-${normalizeQuestionProvenance(question.provenance) === "真题" ? "real" : normalizeQuestionProvenance(question.provenance) === "风格题" ? "style" : "pending"}`}>{alevelPageLabel(normalizeQuestionProvenance(question.provenance), pageLocale)}{question.examYear ? ` · ${question.examYear}` : ""}</span>{question.diagramSource === "svg-ai" ? <span className="geogebra-badge">{pageCopy.imageRedraw}</span> : question.diagramSource === "geogebra-ai" ? <span className="geogebra-badge">{pageCopy.legacyRedraw}</span> : question.originalImage ? <span className="image-badge">{pageCopy.imageCapture}</span> : images.length ? <span className="image-badge">{pageCopy.figure}</span> : null}{question.optimizedAt && <span className="optimized-badge">{pageCopy.aiEnhanced}</span>}<em>{pathOf(question.categoryId)}</em></div>
                   <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}${compactConclusion ? " compact-conclusion" : ""}` : ""}`}>
@@ -1029,7 +1026,7 @@ export default function Home() {
                   </div>
                   {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
                   {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
-                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{authUser && <button onClick={() => openRecordWrong([question.id])}>{pageCopy.addWrong}</button>}{question.createdByEmail && <small>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</small>}<span></span>{question.canEdit && <><button onClick={() => openEditQuestion(question)}>{pageCopy.edit}</button><button className="danger-text" onClick={() => deleteQuestion(question)}>{pageCopy.delete}</button></>}</div>
+                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{question.createdByEmail && <small>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</small>}<span></span>{!showSelected && question.canEdit && <><button onClick={() => openEditQuestion(question)}>{pageCopy.edit}</button><button className="danger-text" onClick={() => deleteQuestion(question)}>{pageCopy.delete}</button></>}{showSelected && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => moveBasketQuestion(ids, question.id, -1))}>↑ 上移</button><button disabled={index === filteredQuestions.length - 1 || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => moveBasketQuestion(ids, question.id, 1))}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => ids.filter((id) => id !== question.id))}>移除</button></div>}</div>
                 </div>
               </article>;
             })}
@@ -1038,7 +1035,7 @@ export default function Home() {
         </section>
       </section>
 
-      {authUser && !showWrongBook && <aside className={`paper-dock ${selectedIds.length ? "visible" : ""}`}><div className="dock-count"><strong>{selectedIds.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><span>{libraryScope === "public" ? pageCopy.publicPractice : pageCopy.privatePractice}</span><b>{isAlevelPage && pageLocale === "en" ? `${activeModule?.name} ${pageCopy.practiceSet}` : paperTitle}</b></div><button className="ghost-button" onClick={() => openRecordWrong(selectedIds)}>{pageCopy.addWrong}</button>{libraryScope === "public" && <button className="ghost-button" onClick={openCopyDialog}>{pageCopy.copyToMine}</button>}{selectedIds.some((id) => questions.find((item) => item.id === id)?.canEdit) && <button className="dock-delete-button" onClick={() => setBatchDeleteOpen(true)}>{pageCopy.deleteManaged}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clear}</button><button className="export-button" onClick={() => setExportDialog(true)}>{pageCopy.exportWord} <span>→</span></button></aside>}
+      {authUser && !showWrongBook && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>已选试题</span></div><div className="dock-title"><b>选好题目后，进入组卷篮整理</b></div><PaperMoreMenu className="dock-more">{libraryScope === "public" && <button onClick={openCopyDialog}>复制到私人题库</button>}{selectedIds.some((id) => questions.find((item) => item.id === id)?.canEdit) && <button onClick={() => setBatchDeleteOpen(true)}>删除题库原题</button>}<button onClick={() => setSelectedIds([])}>取消全部勾选</button></PaperMoreMenu><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>整理组卷 <span>→</span></button></aside>}
 
       {questionDraft && <div className="modal-backdrop">
         <section className="modal question-modal" role="dialog" aria-modal="true" aria-label="试题编辑" onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); if (entryMode === "screenshot") handleQuestionImage(file); else handleManualImages([file]); } }}>
@@ -1138,7 +1135,7 @@ export default function Home() {
       </section></div>}
 
       {moduleDialog && <div className="modal-backdrop"><section className="modal module-modal" role="dialog" aria-modal="true" aria-label="模块管理">
-        <div className="modal-head"><div><span className="eyebrow">{libraryScope === "public" ? "公共资源库" : "我的题库"}</span><h2>{moduleDialog === "new" ? moduleDraft ? "编辑模块" : "新建模块" : "模块管理"}</h2></div><button className="close" onClick={() => { setModuleDialog(null); setModuleDraft(null); }}>×</button></div>
+        <div className="modal-head"><div><span className="eyebrow">{libraryScope === "public" ? pageCopy.publicLibrary : pageCopy.myLibrary}</span><h2>{moduleDialog === "new" ? moduleDraft ? "编辑模块" : "新建模块" : "模块管理"}</h2></div><button className="close" onClick={() => { setModuleDialog(null); setModuleDraft(null); }}>×</button></div>
         {moduleDialog === "new" ? <>
           <label className="field">模块名称<input value={moduleName} onChange={(event) => setModuleName(event.target.value)} placeholder="例如：深圳中考" /></label>
           <label className="field">副标题<input value={moduleSubtitle} onChange={(event) => setModuleSubtitle(event.target.value)} placeholder="例如：数学真题与专题训练" /></label>
@@ -1158,17 +1155,7 @@ export default function Home() {
         <div className="modal-actions"><button className="secondary" onClick={() => setDeleteModuleTarget(null)}>取消</button><button className="danger-button" disabled={deleteModuleConfirmation !== deleteModuleTarget.name} onClick={confirmDeleteModule}>确认删除</button></div>
       </section></div>}
 
-      {recordWrongDialog && <div className="modal-backdrop"><section className="modal wrong-record-modal" role="dialog" aria-modal="true" aria-label="记入学生错题本">
-        <div className="modal-head"><div><span className="eyebrow">学生专属错题本</span><h2>记录 {recordQuestionIds.length} 道错题</h2></div><button className="close" onClick={() => setRecordWrongDialog(false)}>×</button></div>
-        {students.length ? <>
-          <label className="field">选择学生<select value={recordStudentId} onChange={(event) => setRecordStudentId(event.target.value)}>{students.map((student) => <option value={student.id} key={student.id}>{student.name}{student.className ? ` · ${student.className}` : ""}（已有 {student.wrongCount} 道）</option>)}</select></label>
-          <label className="field">错因 / 复习备注（选填）<textarea rows={4} value={recordNote} onChange={(event) => setRecordNote(event.target.value)} placeholder="例如：审题时漏看取值范围；下次先圈出条件" /></label>
-          <p className="wrong-record-tip">同一道题再次记给同一位学生时，会自动累计错题次数，并恢复为“复习中”。</p>
-          <div className="modal-actions"><button className="secondary" onClick={() => openStudentDialog()}>＋ 新建学生</button><button className="secondary" onClick={() => setRecordWrongDialog(false)}>取消</button><button className="primary-button" disabled={recordSubmitting || !recordStudentId} onClick={submitWrongQuestions}>{recordSubmitting ? "正在记录…" : "确认记入错题本"}</button></div>
-        </> : <div className="copy-empty"><b>还没有学生档案</b><p>先创建一位学生，当前选择的题目会继续保留。</p><button className="primary-button" onClick={() => openStudentDialog()}>创建第一位学生</button></div>}
-      </section></div>}
-
-      {studentDialog && <div className={`modal-backdrop ${recordWrongDialog ? "modal-backdrop-raised" : ""}`}><section className="modal student-modal" role="dialog" aria-modal="true" aria-label={studentDraft ? "编辑学生档案" : "新建学生档案"}>
+      {studentDialog && <div className="modal-backdrop"><section className="modal student-modal" role="dialog" aria-modal="true" aria-label={studentDraft ? "编辑学生档案" : "新建学生档案"}>
         <div className="modal-head"><div><span className="eyebrow">学生专属空间</span><h2>{studentDraft ? "编辑学生档案" : "新建学生档案"}</h2></div><button className="close" onClick={() => setStudentDialog(false)}>×</button></div>
         <label className="field">学生姓名或昵称<input value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="例如：小宇" /></label>
         <label className="field">班级 / 年级（选填）<input value={studentClassName} onChange={(event) => setStudentClassName(event.target.value)} placeholder="例如：初三（2）班" /></label>
@@ -1179,18 +1166,18 @@ export default function Home() {
       {wrongEntryDraft && <div className="modal-backdrop"><section className="modal wrong-entry-modal" role="dialog" aria-modal="true" aria-label="编辑错题记录">
         <div className="modal-head"><div><span className="eyebrow">{activeStudent?.name ?? "学生"}的错题</span><h2>编辑复习记录</h2></div><button className="close" onClick={() => setWrongEntryDraft(null)}>×</button></div>
         <div className="wrong-entry-preview"><span>{wrongEntryDraft.question.type}</span><p>{wrongEntryDraft.question.stem.replace(/\s+/g, " ").slice(0, 120)}</p></div>
-        <label className="field">累计错题次数<input type="number" min={1} max={999} value={wrongEntryDraft.mistakeCount} onChange={(event) => setWrongEntryDraft({ ...wrongEntryDraft, mistakeCount: Math.max(1, Number(event.target.value) || 1) })} /></label>
+
         <label className="field">错因 / 复习备注<textarea rows={5} value={wrongEntryDraft.note} onChange={(event) => setWrongEntryDraft({ ...wrongEntryDraft, note: event.target.value })} placeholder="记录学生当时的错误原因或下次复习重点" /></label>
         <label className="toggle-row" aria-label="错题掌握状态"><input type="checkbox" checked={wrongEntryDraft.mastered} onChange={(event) => setWrongEntryDraft({ ...wrongEntryDraft, mastered: event.target.checked })} /><span><b>这道题已掌握</b><small>取消勾选后会回到“复习中”</small></span></label>
         <div className="modal-actions"><button className="secondary" onClick={() => setWrongEntryDraft(null)}>取消</button><button className="primary-button" onClick={saveWrongEntry}>保存记录</button></div>
       </section></div>}
 
       {copyDialog && <div className="modal-backdrop"><section className="modal copy-modal" role="dialog" aria-modal="true" aria-label="复制公共题目">
-        <div className="modal-head"><div><span className="eyebrow">复制 {selectedIds.length} 道公共题目</span><h2>存入我的题库</h2></div><button className="close" onClick={() => setCopyDialog(false)}>×</button></div>
-        {copyTargetData?.modules.length ? <><label className="field">目标模块<select value={copyTargetModule} onChange={(event) => { setCopyTargetModule(event.target.value); setCopyTargetCategory(event.target.value); }}>{copyTargetData.modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field">目标分类<select value={copyTargetCategory} onChange={(event) => setCopyTargetCategory(event.target.value)}><option value={copyTargetModule}>{copyTargetData.modules.find((item) => item.id === copyTargetModule)?.name}（模块根目录）</option>{copyTargetData.categories.filter((item) => item.moduleId === copyTargetModule).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCopyDialog(false)}>取消</button><button className="primary-button" onClick={confirmCopyQuestions}>创建独立副本</button></div></> : <div className="copy-empty"><b>私人题库还没有模块</b><p>先切换到“我的题库”创建模块，再回来复制题目。</p><button className="primary-button" onClick={async () => { setCopyDialog(false); await switchLibraryScope("mine"); openNewModule(); }}>创建私人模块</button></div>}
+        <div className="modal-head"><div><span className="eyebrow">复制 {selectedIds.length} 道公共题目</span><h2>存入私人题库</h2></div><button className="close" onClick={() => setCopyDialog(false)}>×</button></div>
+        {copyTargetData?.modules.length ? <><label className="field">目标模块<select value={copyTargetModule} onChange={(event) => { setCopyTargetModule(event.target.value); setCopyTargetCategory(event.target.value); }}>{copyTargetData.modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field">目标分类<select value={copyTargetCategory} onChange={(event) => setCopyTargetCategory(event.target.value)}><option value={copyTargetModule}>{copyTargetData.modules.find((item) => item.id === copyTargetModule)?.name}（模块根目录）</option>{copyTargetData.categories.filter((item) => item.moduleId === copyTargetModule).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="modal-actions"><button className="secondary" onClick={() => setCopyDialog(false)}>取消</button><button className="primary-button" onClick={confirmCopyQuestions}>创建独立副本</button></div></> : <div className="copy-empty"><b>私人题库还没有模块</b><p>先创建私人模块，再回来复制题目。</p><button className="primary-button" onClick={async () => { setCopyDialog(false); await switchLibraryScope("mine"); openNewModule(); }}>创建私人模块</button></div>}
       </section></div>}
 
-      {exportDialog && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="生成 Word"><div className="modal-head"><div><span className="eyebrow">Word 组卷</span><h2>生成练习题</h2></div><button className="close" onClick={() => setExportDialog(false)}>×</button></div><div className="export-summary"><strong>{selectedIds.length}</strong><span>道试题将按勾选顺序排入文档</span></div><label className="field">练习标题<input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} /></label><label className="toggle-row" aria-label="答案设置"><input type="checkbox" checked={includeAnswers} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label><div className="modal-actions"><button className="secondary" onClick={() => setExportDialog(false)}>取消</button><button className="primary-button" onClick={generateWord}>下载 .docx</button></div></section></div>}
+      {exportDialog && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="生成 Word"><div className="modal-head"><div><span className="eyebrow">Word 组卷</span><h2>生成练习题</h2></div><button className="close" onClick={() => setExportDialog(false)}>×</button></div><div className="export-summary"><strong>{selectedIds.length}</strong><span>道试题将按组卷篮顺序排入文档</span></div><label className="field">练习标题<input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} /></label><label className="toggle-row" aria-label="答案设置"><input type="checkbox" checked={includeAnswers} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label><div className="modal-actions"><button className="secondary" onClick={() => setExportDialog(false)}>取消</button><button className="primary-button" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "下载 .docx"}</button></div></section></div>}
 
       {batchDeleteOpen && <div className="modal-backdrop"><section className="modal delete-modal" role="dialog" aria-modal="true" aria-label="批量删除试题"><div className="modal-head"><div><span className="eyebrow">危险操作</span><h2>批量删除试题</h2></div><button className="close" onClick={() => setBatchDeleteOpen(false)}>×</button></div><div className="delete-summary"><strong>{selectedIds.length}</strong><div><b>道已选试题将从题库中删除</b><p>已导出的 Word 不受影响，但题库中的数据删除后无法恢复。需要保留时，请先导出题库备份。</p></div></div><div className="modal-actions"><button className="secondary" onClick={() => setBatchDeleteOpen(false)}>取消</button><button className="danger-button" onClick={deleteSelectedQuestions}>确认删除 {selectedIds.length} 道</button></div></section></div>}
       {authDialog && <div className="modal-backdrop"><section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === "login" ? "登录" : "注册"}>

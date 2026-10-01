@@ -1,5 +1,7 @@
 import type { GradingItem, GradingVerdict, QuestionType, SubmissionReport } from "./types";
 import { normalizeSubmissionReport } from "./homework-report.mjs";
+import { normalizeQuestionContent, questionContentSchema } from "./question-content";
+import { mathOutputRequirements } from "./math-output-contract";
 
 export type HomeworkBox = { x: number; y: number; width: number; height: number };
 export type ExtractedAssignmentQuestion = {
@@ -13,7 +15,6 @@ export type ExtractedGradingItem = {
   confidence: number; bbox: HomeworkBox | null; warnings: string[];
 };
 
-const TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const VERDICTS: GradingVerdict[] = ["correct", "partial", "incorrect", "unreadable", "review_required"];
 const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: {
   x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" },
@@ -22,9 +23,8 @@ const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: 
 export const assignmentExtractionSchema: Record<string, unknown> = {
   type: "object", additionalProperties: false, properties: {
     questions: { type: "array", items: { type: "object", additionalProperties: false, properties: {
-      question_number: { type: "string" }, page_number: { type: "integer" }, type: { type: "string", enum: TYPES },
-      stem: { type: "string" }, options: { type: "array", items: { type: "string" } }, answer: { type: "string" },
-      analysis: { type: "string" }, bbox: box, confidence: { type: "number" }, warnings: { type: "array", items: { type: "string" } },
+      ...questionContentSchema, question_number: { type: "string" }, page_number: { type: "integer" },
+      bbox: box, confidence: { type: "number" }, warnings: { type: "array", items: { type: "string" } },
       knowledge_tags: { type: "array", items: { type: "string" } }, capability_keys: { type: "array", items: { type: "string" } },
     }, required: ["question_number", "page_number", "type", "stem", "options", "answer", "analysis", "bbox", "confidence", "warnings", "knowledge_tags", "capability_keys"] } },
   }, required: ["questions"],
@@ -72,10 +72,10 @@ function normalizedBox(value: unknown): HomeworkBox | null {
 export function normalizeAssignmentExtraction(value: unknown): ExtractedAssignmentQuestion[] {
   const raw = record(value); const questions = Array.isArray(raw.questions) ? raw.questions : [];
   return questions.map((item, index) => {
-    const question = record(item); const type = TYPES.includes(question.type as QuestionType) ? question.type as QuestionType : "解答题";
+    const question = record(item);
     return {
       question_number: text(question.question_number, 80) || String(index + 1), page_number: Math.max(1, Math.floor(clamp(question.page_number, 1, 200, 1))),
-      type, stem: text(question.stem), options: list(question.options, 12), answer: text(question.answer), analysis: text(question.analysis),
+      ...normalizeQuestionContent(question),
       bbox: normalizedBox(question.bbox), confidence: clamp(question.confidence, 0, 1), warnings: list(question.warnings),
       knowledge_tags: list(question.knowledge_tags, 8), capability_keys: list(question.capability_keys, 5),
     };
@@ -100,7 +100,9 @@ export function buildAssignmentExtractionPrompt(questionPages: number, answerPag
 
 逐题提取题号、完整题干、选项、标准答案与解析，并把答案页内容按题号合并到题目。page_number 是题目卷页码；bbox 用该题在题目卷页面上的 0—1000 归一化坐标。不得自行解题或补写答案；答案页没有明确内容时 answer/analysis 留空并加入 warnings。无法可靠对应题号、题目跨页或公式不清时必须警告。题型只能是单选题、多选题、填空题、判断题、解答题。
 
-knowledge_tags 提取 1—4 个简短数学知识点；capability_keys 只能选 skill:calculation、skill:concept、skill:reasoning、skill:modeling、skill:expression。`;
+knowledge_tags 提取 1—4 个简短数学知识点；capability_keys 只能选 skill:calculation、skill:concept、skill:reasoning、skill:modeling、skill:expression。
+
+${mathOutputRequirements.map((requirement, index) => `${index + 1}. ${requirement}`).join("\n")}`;
 }
 
 export function buildHomeworkGradingPrompt(pageNumber: number, questions: Array<{ questionNumber: string; type: QuestionType; stem: string; answer: string; analysis: string }>) {

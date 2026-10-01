@@ -1,31 +1,13 @@
 import { env } from "cloudflare:workers";
 import { buildCapabilityProfile, capabilityNodeFor, inferKnowledgeTags, normalizeCapabilityKeys, resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
-import { normalizeSubmissionReport } from "../homework-report.mjs";
-import type { AuthUser, CapabilityDimension, CapabilityEvidence, GradingItem, StudentAuth, StudentCapabilityProfile, SubmissionReport } from "../types";
+import type { AuthUser, CapabilityDimension, CapabilityEvidence, GradingItem, StudentAuth, StudentCapabilityProfile } from "../types";
+import { loadPublishedKnowledgeGraph, type LoadedKnowledgeGraph } from "./knowledge-graph";
 
 type AppEnv = { DB: D1Database };
 function appEnv(): AppEnv { return env as unknown as AppEnv; }
 function parseJson<T>(value: unknown, fallback: T): T { try { return value == null ? fallback : JSON.parse(String(value)) as T; } catch { return fallback; } }
 
-export async function readSubmissionReport(submissionId: string): Promise<SubmissionReport | null> {
-  const row = await appEnv().DB.prepare("SELECT * FROM submission_reports WHERE submission_id = ?").bind(submissionId).first<Record<string, unknown>>();
-  if (!row) return null;
-  return normalizeSubmissionReport({ overallSummary: row.overall_summary, studentMessage: row.student_message,
-    strengths: parseJson(row.strengths_json, []), gaps: parseJson(row.gaps_json, []), actions: parseJson(row.actions_json, []),
-    warnings: parseJson(row.warnings_json, []), generatedAt: Number(row.generated_at), updatedAt: Number(row.updated_at) }, Number(row.updated_at));
-}
-
-export async function saveSubmissionReport(submissionId: string, ownerUserId: string, report: SubmissionReport, frameworkVersion: string) {
-  const normalized = normalizeSubmissionReport(report); const now = Date.now();
-  await appEnv().DB.prepare(`INSERT INTO submission_reports
-    (submission_id, owner_user_id, framework_version, overall_summary, student_message, strengths_json, gaps_json, actions_json, warnings_json, generated_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(submission_id) DO UPDATE SET framework_version = excluded.framework_version, overall_summary = excluded.overall_summary,
-      student_message = excluded.student_message, strengths_json = excluded.strengths_json, gaps_json = excluded.gaps_json,
-      actions_json = excluded.actions_json, warnings_json = excluded.warnings_json, generated_at = excluded.generated_at, updated_at = excluded.updated_at`)
-    .bind(submissionId, ownerUserId, frameworkVersion, normalized.overallSummary, normalized.studentMessage, JSON.stringify(normalized.strengths),
-      JSON.stringify(normalized.gaps), JSON.stringify(normalized.actions), JSON.stringify(normalized.warnings), normalized.generatedAt || now, now).run();
-}
+export { readSubmissionReport, saveSubmissionReport } from "./homework-reports";
 
 export async function replaceSubmissionCapabilityEvidence(input: {
   ownerUserId: string; studentId: string; assignmentId: string; submissionId: string; gradingItems: GradingItem[];
@@ -35,21 +17,24 @@ export async function replaceSubmissionCapabilityEvidence(input: {
   const questions = await appEnv().DB.prepare(`SELECT id, stem, type, knowledge_tags_json, taxonomy_keys_json, capability_keys_json
     FROM assignment_questions WHERE assignment_id = ?`).bind(input.assignmentId).all<Record<string, unknown>>();
   const questionById = new Map(questions.results.map((row) => [String(row.id), row])); const now = Date.now();
+  const { index: graph } = await loadPublishedKnowledgeGraph();
   for (const item of input.gradingItems) {
+    if (item.requiresReview || item.referenceVerified === false) continue;
     if (!(item.verdict === "correct" || item.verdict === "partial" || item.verdict === "incorrect")) continue;
     const question = questionById.get(item.assignmentQuestionId); if (!question) continue;
     const tags = parseJson<string[]>(question.knowledge_tags_json, []); const knowledgeTags = tags.length ? tags : inferKnowledgeTags(String(question.stem ?? ""));
     const storedTaxonomyKeys = parseJson<string[]>(question.taxonomy_keys_json, []);
-    const taxonomyKeys = storedTaxonomyKeys.length ? storedTaxonomyKeys : resolveKnowledgeTaxonomyKeys(knowledgeTags, String(question.stem ?? ""));
+    const taxonomyKeys = storedTaxonomyKeys.length ? storedTaxonomyKeys : resolveKnowledgeTaxonomyKeys(knowledgeTags, String(question.stem ?? ""), graph);
     const questionSkills = parseJson<string[]>(question.capability_keys_json, []);
     const skillKeys = normalizeCapabilityKeys([...questionSkills, ...item.capabilityKeys], { errorType: item.errorType, questionType: item.questionType });
     const nodes = new Map<string, { label: string; dimension: CapabilityDimension }>();
     for (const key of taxonomyKeys) {
-      const node = capabilityNodeFor(key); if (!node) continue;
+      const node = capabilityNodeFor(key, "", graph); if (!node) continue;
       nodes.set(node.key, { label: node.label, dimension: "knowledge" });
-      const domain = capabilityNodeFor(node.domainKey); if (domain) nodes.set(domain.key, { label: domain.label, dimension: "knowledge" });
+      // Evidence on a fine-grained point also counts for its topic and domain.
+      for (const parentKey of graph.hierarchy(node.key)) { const parent = graph.node(parentKey); if (parent) nodes.set(parent.key, { label: parent.label, dimension: "knowledge" }); }
     }
-    for (const key of skillKeys) { const node = capabilityNodeFor(key); if (node) nodes.set(key, { label: node.label, dimension: "skill" }); }
+    for (const key of skillKeys) { const node = capabilityNodeFor(key, "", graph); if (node) nodes.set(key, { label: node.label, dimension: "skill" }); }
     for (const [key, node] of nodes) await appEnv().DB.prepare(`INSERT INTO student_capability_evidence
       (id, owner_user_id, student_id, assignment_id, submission_id, grading_item_id, capability_key, capability_label, dimension,
        verdict, confidence, diagnosis, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -75,14 +60,16 @@ async function profileEvidence(ownerUserId: string, studentId: string) {
 export async function readTeacherCapabilityProfile(studentId: string, user: AuthUser, assignmentId = ""): Promise<StudentCapabilityProfile> {
   const student = await appEnv().DB.prepare("SELECT id FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first();
   if (!student) throw new Response(JSON.stringify({ error: "学生档案不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, assignmentId, viewMode: "teacher" });
+  const { index: graph } = await loadPublishedKnowledgeGraph();
+  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, assignmentId, viewMode: "teacher", graph });
 }
 
-export async function readTeacherKnowledgeGraph(user: AuthUser, studentId = ""): Promise<StudentCapabilityProfile> {
-  if (!studentId) return buildCapabilityProfile([], { viewMode: "teacher", includeAllKnowledge: true });
+export async function readTeacherKnowledgeGraph(user: AuthUser, studentId = "", published?: LoadedKnowledgeGraph): Promise<StudentCapabilityProfile> {
+  const { index: graph } = published ?? await loadPublishedKnowledgeGraph();
+  if (!studentId) return buildCapabilityProfile([], { viewMode: "teacher", includeAllKnowledge: true, graph });
   const student = await appEnv().DB.prepare("SELECT id FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first();
   if (!student) throw new Response(JSON.stringify({ error: "学生档案不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, viewMode: "teacher", includeAllKnowledge: true });
+  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, viewMode: "teacher", includeAllKnowledge: true, graph });
 }
 
 export async function readStudentCapabilityProfile(student: StudentAuth, assignmentId = ""): Promise<StudentCapabilityProfile> {
@@ -96,5 +83,6 @@ export async function readStudentCapabilityProfile(student: StudentAuth, assignm
       .bind(assignmentId, student.studentId, student.ownerUserId).first();
     if (!allowed) throw new Response(JSON.stringify({ error: "结果尚未发布" }), { status: 404, headers: { "Content-Type": "application/json" } });
   }
-  return buildCapabilityProfile(await profileEvidence(student.ownerUserId, student.studentId), { studentId: student.studentId, assignmentId, viewMode: "student" });
+  const { index: graph } = await loadPublishedKnowledgeGraph();
+  return buildCapabilityProfile(await profileEvidence(student.ownerUserId, student.studentId), { studentId: student.studentId, assignmentId, viewMode: "student", graph });
 }

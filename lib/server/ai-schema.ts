@@ -11,6 +11,34 @@ const supported = new Set([
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+/** Report schema-owned paths only: never echo model text, values or extra keys. */
+export function aiSchemaIssue(value: unknown, schema: unknown, path = '$', depth = 0): string | null {
+  if (matchesAiSchema(value, schema, depth)) return null;
+  if (!object(schema) || depth > 64) return `${path}：结构约束无效`;
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (types.length && !matchesAiSchema(value, {type: schema.type})) return `${path}：类型应为 ${types.join(' / ')}`;
+  if (object(value)) {
+    const properties = object(schema.properties) ? schema.properties : {};
+    if (Array.isArray(schema.required)) {
+      for (const key of schema.required) {
+        if (typeof key === 'string' && !Object.hasOwn(value, key)) return `${path}.${key}：缺少必填字段`;
+      }
+    }
+    for (const [key, child] of Object.entries(properties)) {
+      if (!Object.hasOwn(value, key)) continue;
+      const issue = aiSchemaIssue(value[key], child, `${path}.${key}`, depth + 1);
+      if (issue) return issue;
+    }
+    if (schema.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(properties, key))) return `${path}：包含未定义字段`;
+  }
+  if (Array.isArray(value) && schema.items !== undefined) {
+    for (let i = 0; i < value.length; i++) {
+      const issue = aiSchemaIssue(value[i], schema.items, `${path}[${i}]`, depth + 1);
+      if (issue) return issue;
+    }
+  }
+  return `${path}：不符合字段约束`;
+}
 export function matchesAiSchema(value: unknown, schema: unknown, depth = 0): boolean {
   if (schema === true) return true;
   if (schema === false || !object(schema) || depth > 64) return false;

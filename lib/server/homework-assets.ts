@@ -41,15 +41,21 @@ function safeName(value: string) {
 
 export async function assertTeacherUploadContext(user: AuthUser, input: { assignmentId?: string; submissionId?: string }) {
   if (input.assignmentId) {
-    const row = await appEnv().DB.prepare("SELECT id FROM homework_assignments WHERE id = ? AND owner_user_id = ? AND status = 'draft'")
+    const row = await appEnv().DB.prepare(`SELECT id FROM homework_assignments a WHERE id = ? AND owner_user_id = ? AND
+      (status='draft' OR (input_mode='completed_homework' AND EXISTS(SELECT 1 FROM homework_submissions s WHERE s.assignment_id=a.id AND
+        (s.status='draft' OR (s.status='published' AND (EXISTS(SELECT 1 FROM grading_items g WHERE g.submission_id=s.id AND g.requires_review=1)
+          OR EXISTS(SELECT 1 FROM submission_page_extractions e WHERE e.submission_id=s.id AND e.status='complete' AND json_extract(e.result_json,'$.kind')='unreadable')))))))`)
       .bind(input.assignmentId, user.id).first();
     if (!row) throw new Response(JSON.stringify({ error: "作业不存在或题目模板已经锁定" }), { status: 404, headers: { "Content-Type": "application/json" } });
     return;
   }
   if (input.submissionId) {
     const row = await appEnv().DB.prepare(`SELECT homework_submissions.id FROM homework_submissions
-      JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id
-      WHERE homework_submissions.id = ? AND homework_assignments.owner_user_id = ? AND homework_submissions.status = 'draft'`)
+      JOIN homework_assignments ON homework_assignments.id=homework_submissions.assignment_id
+      WHERE homework_submissions.id=? AND homework_assignments.owner_user_id=? AND
+      (homework_submissions.status='draft' OR (homework_submissions.status='published' AND
+        (EXISTS(SELECT 1 FROM grading_items WHERE grading_items.submission_id=homework_submissions.id AND grading_items.requires_review=1)
+        OR EXISTS(SELECT 1 FROM submission_page_extractions e WHERE e.submission_id=homework_submissions.id AND e.status='complete' AND json_extract(e.result_json,'$.kind')='unreadable'))))`)
       .bind(input.submissionId, user.id).first();
     if (!row) throw new Response(JSON.stringify({ error: "提交记录不存在或当前不可修改" }), { status: 404, headers: { "Content-Type": "application/json" } });
     return;
@@ -75,10 +81,10 @@ export async function storeHomeworkAsset(input: {
   studentId?: string;
 }) {
   requireHomeworkEnabled();
-  if (!input.contentType.startsWith("image/")) throw new Response(JSON.stringify({ error: "作业页面必须是图片" }), { status: 415, headers: { "Content-Type": "application/json" } });
+  if (!(input.contentType.startsWith("image/") || (input.role === "submission_document" && input.contentType === "application/pdf"))) throw new Response(JSON.stringify({ error: "作业页面必须是图片" }), { status: 415, headers: { "Content-Type": "application/json" } });
   if (!input.bytes.byteLength || input.bytes.byteLength > 15 * 1024 * 1024) throw new Response(JSON.stringify({ error: "单页图片需小于 15MB" }), { status: 413, headers: { "Content-Type": "application/json" } });
   const id = crypto.randomUUID(); const now = Date.now(); const hash = await sha256(input.bytes);
-  const extension = input.contentType.includes("png") ? "png" : input.contentType.includes("webp") ? "webp" : "jpg";
+  const extension = input.contentType === "application/pdf" ? "pdf" : input.contentType.includes("png") ? "png" : input.contentType.includes("webp") ? "webp" : "jpg";
   const key = `${input.ownerUserId}/${new Date(now).toISOString().slice(0, 10)}/${id}.${extension}`;
   await requireBucket().put(key, input.bytes, { httpMetadata: { contentType: input.contentType }, customMetadata: { hash, role: input.role } });
   try {
@@ -87,7 +93,7 @@ export async function storeHomeworkAsset(input: {
        role, upload_assignment_id, upload_submission_id, upload_student_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(id, input.ownerUserId, key, input.contentType, input.bytes.byteLength, hash, safeName(input.originalName), now,
-        input.role, input.assignmentId ?? null, input.submissionId ?? null, input.studentId ?? null).run();
+        input.role === "submission_document" ? "submission_original" : input.role, input.assignmentId ?? null, input.submissionId ?? null, input.studentId ?? null).run();
   } catch (error) {
     await requireBucket().delete(key);
     throw error;
@@ -218,6 +224,10 @@ export async function canStudentReadAsset(assetId: string, student: StudentAuth)
     ORDER BY homework_submissions.version DESC LIMIT 1`).bind(assetId, student.studentId).first<{ role: string; submission_status: string | null }>();
   if (assignmentAsset?.role === "question") return true;
   if (assignmentAsset?.role === "answer" && assignmentAsset.submission_status === "published") return true;
+  const document = await appEnv().DB.prepare("SELECT 1 FROM homework_assets a JOIN homework_submissions s ON s.id=a.upload_submission_id WHERE a.id=? AND a.role='submission_original' AND a.content_type='application/pdf' AND s.student_id=?").bind(assetId,student.studentId).first();
+  if(document) return true;
+  const revision = await appEnv().DB.prepare(`SELECT 1 FROM submission_page_revisions r JOIN homework_submissions s ON s.id=r.submission_id WHERE s.student_id=? AND (r.original_asset_id=? OR r.processed_asset_id=?)`).bind(student.studentId,assetId,assetId).first();
+  if (revision) return true;
   const crop = await appEnv().DB.prepare(`SELECT 1 FROM student_wrong_questions
     WHERE student_id = ? AND answer_crop_asset_id = ? AND source_kind = 'assignment'`).bind(student.studentId, assetId).first();
   return Boolean(crop);

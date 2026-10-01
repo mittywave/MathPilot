@@ -186,7 +186,7 @@ async function imageParagraphFromSource(source: string, resolveImage: (source: s
   return new Paragraph({ alignment, spacing: { lineRule: LineRuleType.AUTO, line: 240, before, after }, children: [new ImageRun({ data, type, transformation: { width, height } })] });
 }
 
-export async function buildQuestionsWordBlob(questions: Question[], title: string, includeAnswers: boolean) {
+export async function buildQuestionsWordBlob(questions: Question[], title: string, includeAnswers: boolean, order: "type" | "basket" = "type") {
   const imageCache = new Map<string, Promise<ResolvedWordImage>>();
   const resolveImage = (source: string) => {
     let pending = imageCache.get(source);
@@ -203,10 +203,10 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
   let number = 1;
   let sectionIndex = 0;
   const renderedQuestions: Question[] = [];
-  for (const type of typeOrder) {
-    const group = questions.filter((question) => question.type === type);
+  const groups = order === "basket" ? [{ type: null, questions }] : typeOrder.map((type) => ({ type, questions: questions.filter((question) => question.type === type) }));
+  for (const { type, questions: group } of groups) {
     if (!group.length) continue;
-    children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, before: 180, after: 120 }, children: textRuns(`${sectionNumbers[sectionIndex]}、${typeNames[type]}（共${group.length}题）`, BODY_SIZE, { bold: true }) }));
+    children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, before: 180, after: 120 }, children: textRuns(type ? `${sectionNumbers[sectionIndex]}、${typeNames[type]}（共${group.length}题）` : `试题（共${group.length}题）`, BODY_SIZE, { bold: true }) }));
     sectionIndex += 1;
     for (const question of group) {
       renderedQuestions.push(question);
@@ -317,8 +317,8 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
   return blob;
 }
 
-export async function exportQuestionsToWord(questions: Question[], title: string, includeAnswers: boolean) {
-  const blob = await buildQuestionsWordBlob(questions, title, includeAnswers);
+export async function exportQuestionsToWord(questions: Question[], title: string, includeAnswers: boolean, order: "type" | "basket" = "type") {
+  const blob = await buildQuestionsWordBlob(questions, title, includeAnswers, order);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = url; link.download = `${title || "练习题"}.docx`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);

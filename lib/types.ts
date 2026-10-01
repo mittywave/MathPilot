@@ -223,6 +223,8 @@ export type WrongQuestionEntry = {
   lastWrongAt: number;
   createdAt: number;
   updatedAt: number;
+  archivedAt?: number | null;
+  archiveReason?: string;
   sourceKind?: "library" | "assignment";
   assignmentId?: string | null;
   submissionId?: string | null;
@@ -261,7 +263,7 @@ export type StudentAuth = {
 export type AssignmentStatus = "draft" | "published" | "closed" | "archived";
 export type SubmissionStatus = "draft" | "submitted" | "processing" | "review_required" | "ready" | "published" | "returned" | "failed";
 export type GradingVerdict = "correct" | "partial" | "incorrect" | "unreadable" | "review_required";
-export type HomeworkAssetRole = "question" | "answer" | "submission_original" | "submission_processed" | "answer_crop";
+export type HomeworkAssetRole = "question" | "answer" | "submission_original" | "submission_processed" | "submission_document" | "answer_crop";
 
 export type HomeworkAsset = {
   id: string;
@@ -285,6 +287,9 @@ export type AssignmentQuestion = {
   answer: string;
   analysis: string;
   bbox: { x: number; y: number; width: number; height: number } | null;
+  referenceSource?: "provided" | "agent" | "unresolved";
+  referenceVerified?: boolean;
+  referenceEvidence?: string;
   confidence: number;
   warnings: string[];
   knowledgeTags: string[];
@@ -296,6 +301,7 @@ export type AssignmentQuestion = {
 };
 
 export type Assignment = {
+  inputMode?: "template" | "completed_homework";
   id: string;
   title: string;
   instructions: string;
@@ -332,6 +338,9 @@ export type GradingItem = {
   stem: string;
   standardAnswer: string;
   standardAnalysis: string;
+  referenceSource?: "provided" | "agent" | "unresolved";
+  referenceVerified?: boolean;
+  referenceEvidence?: string;
   verdict: GradingVerdict;
   studentAnswer: string;
   feedback: string;
@@ -375,11 +384,13 @@ export type CapabilityNode = {
   label: string;
   dimension: CapabilityDimension;
   description: string;
-  level: "domain" | "topic" | "micro" | "capability";
+  level: "domain" | "topic" | "point" | "micro" | "capability";
   parentKey?: string;
   domainKey: string;
   stage: number;
   aliases?: string[];
+  color?: string;
+  order?: number;
 };
 
 export type CapabilityEdge = {
@@ -440,7 +451,73 @@ export type StudentCapabilityProfile = {
   updatedAt: number;
 };
 
+export type KnowledgeGraphLevel = "domain" | "topic" | "point";
+export type KnowledgeGraphStage = { value: number; label: string };
+
+export type KnowledgeGraphNode = {
+  key: string;
+  label: string;
+  level: KnowledgeGraphLevel;
+  parentKey?: string;
+  domainKey: string;
+  stage: number;
+  description: string;
+  mastery?: string;
+  aliases: string[];
+  order: number;
+  status: "active" | "archived";
+  color?: string;
+  mergedInto?: string;
+};
+
+export type KnowledgeGraphDocument = {
+  schemaVersion: 2;
+  graphId: string;
+  title: string;
+  scope: string;
+  status: "foundation" | "verified";
+  stages: KnowledgeGraphStage[];
+  nodes: KnowledgeGraphNode[];
+  edges: CapabilityEdge[];
+  editions: TextbookEdition[];
+  mappings: TextbookTopicMapping[];
+};
+
+export type KnowledgeGraphIssue = { code: string; message: string; nodeKey?: string; sourceKey?: string; targetKey?: string; cycle?: string[] };
+
+export type KnowledgeGraphChangeSummary = {
+  nodesAdded: number; nodesUpdated: number; nodesArchived: number; nodesRemoved: number;
+  edgesAdded: number; edgesUpdated: number; edgesRemoved: number; meta: number;
+};
+
+export type PublishedKnowledgeGraph = {
+  graphId: string;
+  version: number;
+  frameworkVersion: string;
+  publishedAt: number | null;
+  note: string;
+  document: KnowledgeGraphDocument;
+};
+
+export type KnowledgeGraphDraft = { document: KnowledgeGraphDocument; baseVersion: number; updatedAt: number; issues: KnowledgeGraphIssue[] };
+export type KnowledgeGraphEditorState = { published: PublishedKnowledgeGraph; draft: KnowledgeGraphDraft | null; revision: number };
+export type KnowledgeGraphVersion = { version: number; frameworkVersion: string; publishedAt: number | null; note: string; summary: KnowledgeGraphChangeSummary | null };
+export type KnowledgeGraphCoverage = { public: Record<string, number>; mine: Record<string, number> };
+
+export type KnowledgeGraphOverview = {
+  profile: StudentCapabilityProfile;
+  graph: PublishedKnowledgeGraph;
+  coverage: KnowledgeGraphCoverage;
+  permissions: { canEdit: boolean };
+};
+
 export type HomeworkSubmission = {
+  processingProgress?: {identified:number;referenceChecked:number;graded:number};
+  pageCoverage?: {total:number;processed:number;unreadable:number;missing:number[];pages:Array<{pageNumber:number;valid:boolean;kind:string|null;reason:string}>};
+  inputMode?: "template" | "completed_homework";
+  originalDocuments?: Array<{name:string;url:string}>;
+  pageRevisions?: Array<{ pageId:string; originalUrl:string; processedUrl:string; createdAt:number }>;
+  gradingSummary?: { correct: number; partial: number; incorrect: number; unresolved: number; archived: number };
   id: string;
   assignmentId: string;
   assignmentTitle: string;

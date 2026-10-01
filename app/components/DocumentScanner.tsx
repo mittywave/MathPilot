@@ -11,7 +11,7 @@ export type ScannedHomeworkPage = {
 };
 
 type WorkerResponse = { id: string; ok: boolean; width?: number; height?: number; data?: ArrayBuffer; corners?: ScannerPoint[]; fingerprint?: string; quality?: ScannedHomeworkPage["quality"]; error?: string };
-type Props = { pages: ScannedHomeworkPage[]; onChange(pages: ScannedHomeworkPage[]): void; disabled?: boolean };
+type Props = { pages: ScannedHomeworkPage[]; onChange(pages: ScannedHomeworkPage[]): void; disabled?: boolean; allowPdf?: boolean; defaultEnhance?:boolean; onBusyChange?(busy:boolean):void; onSourceFile?(file:File):void };
 
 function fileToImageData(file: Blob) {
   return createImageBitmap(file).then((bitmap) => {
@@ -30,7 +30,7 @@ function imageDataBlob(data: Uint8ClampedArray, width: number, height: number) {
 
 function revokePage(page: ScannedHomeworkPage) { URL.revokeObjectURL(page.originalUrl); URL.revokeObjectURL(page.processedUrl); }
 
-export default function DocumentScanner({ pages, onChange, disabled = false }: Props) {
+export default function DocumentScanner({ pages, onChange, disabled = false, allowPdf = false, defaultEnhance = !allowPdf, onBusyChange, onSourceFile }: Props) {
   const workerRef = useRef<Worker | null>(null); const videoRef = useRef<HTMLVideoElement>(null); const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null); const stageRef = useRef<HTMLDivElement>(null); const pagesRef = useRef(pages);
   const [cameraOpen, setCameraOpen] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -39,6 +39,7 @@ export default function DocumentScanner({ pages, onChange, disabled = false }: P
 
   useEffect(() => () => { streamRef.current?.getTracks().forEach((track) => track.stop()); workerRef.current?.terminate(); }, []);
   useEffect(() => { pagesRef.current = pages; }, [pages]);
+  useEffect(() => { onBusyChange?.(busy); }, [busy,onBusyChange]);
 
   function worker() {
     if (!workerRef.current) workerRef.current = new Worker("/document-scanner-worker.js", { type: "classic" });
@@ -64,7 +65,7 @@ export default function DocumentScanner({ pages, onChange, disabled = false }: P
     if (pagesRef.current.length >= 100) { setError("每次提交最多 100 页"); return; }
     setBusy(true); setError("");
     try {
-      const result = await process(blob); const currentPages = pagesRef.current; const duplicate = currentPages.some((page) => page.fingerprint && page.fingerprint === result.fingerprint);
+      const result = await process(blob,{enhance:defaultEnhance}); const currentPages = pagesRef.current; const duplicate = currentPages.some((page) => page.fingerprint && page.fingerprint === result.fingerprint);
       const page: ScannedHomeworkPage = { id: randomClientId(), original: blob, processed: result.processed,
         originalUrl: URL.createObjectURL(blob), processedUrl: URL.createObjectURL(result.processed), ...result,
         quality: duplicate ? { ...result.quality, blocking: true, warnings: [...result.quality.warnings, "疑似重复页面，请核对"] } : result.quality };
@@ -73,7 +74,21 @@ export default function DocumentScanner({ pages, onChange, disabled = false }: P
     finally { setBusy(false); }
   }
 
-  async function addFiles(files: FileList | null) { for (const file of [...(files ?? [])]) if (file.type.startsWith("image/")) await addBlob(file); }
+  async function addFiles(files: FileList | null) {
+    for(const file of [...(files??[])]) {
+      if(file.type.startsWith("image/")) await addBlob(file);
+      else if(allowPdf && (file.type==="application/pdf" || /\.pdf$/i.test(file.name))) {
+        setBusy(true); setError("");
+        try {
+          const {renderImportFile}=await import("../../lib/file-import");
+          const rendered=await renderImportFile(file,()=>{});
+          for(const page of rendered) await addBlob(await (await fetch(page.image)).blob());
+          onSourceFile?.(file);
+        } catch(caught) {setError(caught instanceof Error?caught.message:"PDF读取失败");}
+        finally {setBusy(false);}
+      } else setError(allowPdf?"请选择图片或 PDF 文件":"请选择图片文件");
+    }
+  }
 
   async function startCamera() {
     setError("");
@@ -115,7 +130,7 @@ export default function DocumentScanner({ pages, onChange, disabled = false }: P
   function move(page: ScannedHomeworkPage, offset: number) { const currentPages = pagesRef.current; const index = currentPages.findIndex((candidate) => candidate.id === page.id); const target = index + offset; if (target < 0 || target >= currentPages.length) return; const next = [...currentPages]; [next[index], next[target]] = [next[target], next[index]]; pagesRef.current = next; onChange(next); }
 
   return <section className="document-scanner" aria-label="作业扫描器">
-    <div className="scanner-actions"><button type="button" onClick={startCamera} disabled={disabled || busy}>打开摄像头</button><button type="button" onClick={() => fileRef.current?.click()} disabled={disabled || busy}>从相册选择</button><input ref={fileRef} hidden type="file" accept="image/*" capture="environment" multiple onChange={(event) => { void addFiles(event.target.files); event.target.value = ""; }} /><span>{busy ? "正在检测纸张并校准…" : `已准备 ${pages.length} 页`}</span></div>
+    <div className="scanner-actions"><button type="button" onClick={startCamera} disabled={disabled || busy}>打开摄像头</button><button type="button" onClick={() => fileRef.current?.click()} disabled={disabled || busy}>{allowPdf ? "选择图片或 PDF" : "从相册选择"}</button><input ref={fileRef} hidden type="file" accept={allowPdf ? "image/*,application/pdf" : "image/*"} capture={allowPdf ? undefined : "environment"} multiple onChange={(event) => { void addFiles(event.target.files); event.target.value = ""; }} /><span>{busy ? "正在检测纸张并校准…" : `已准备 ${pages.length} 页`}</span></div>
     {error && <p className="scanner-error">{error}</p>}
     {cameraOpen && <div className="camera-sheet"><video ref={videoRef} autoPlay playsInline muted /><div><button type="button" onClick={capture} disabled={busy}>拍摄本页</button><button type="button" onClick={stopCamera}>完成拍摄</button></div></div>}
     {!!pages.length && <div className="scanner-workspace">

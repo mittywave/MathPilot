@@ -42,8 +42,9 @@ test("server-renders the cloud question-bank guest shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
   assert.match(html, /全部试题/);
-  assert.match(html, /公共资源库/);
-  assert.match(html, /我的题库/);
+  const navigation = html.match(/<nav[^>]*aria-label="题库入口"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? "";
+  assert.equal((navigation.match(/我的题库/g) ?? []).length, 1);
+  assert.doesNotMatch(navigation, /公共资源库/);
   assert.match(html, /题目属性/);
   assert.match(html, /登录后可下载/);
   assert.doesNotMatch(html, /新建试题/);
