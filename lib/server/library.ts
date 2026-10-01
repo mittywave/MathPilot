@@ -3,6 +3,7 @@ import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Ques
 import { retainedQuestionCreatedAt } from "../../lib/question-order-rules.mjs";
 import { normalizeQuestionProvenance } from "../../lib/exam-modules.mjs";
 import { resolveKnowledgeTaxonomyKeys } from "../../lib/homework-capability-framework.mjs";
+import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
 
 type AppEnv = { DB: D1Database };
 
@@ -258,6 +259,7 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
   if (Array.isArray(raw.tagsEn)) sanitized.tagsEn = normalizedQuestionTags(raw.tagsEn);
   else delete sanitized.tagsEn;
   const mediaSafe = await uploadMediaValue(sanitized, context) as Question;
+  const { index: graph } = await loadPublishedKnowledgeGraph();
   return {
     ...mediaSafe,
     id: raw.id || crypto.randomUUID(),
@@ -266,7 +268,7 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
     categoryId: String(raw.categoryId ?? raw.moduleId ?? ""),
     provenance: normalizeQuestionProvenance(raw.provenance),
     examYear: String(raw.examYear ?? "").trim().slice(0, 40),
-    taxonomyKeys: resolveKnowledgeTaxonomyKeys(sanitized.tagsZh?.length ? sanitized.tagsZh : sanitized.tags ?? [], raw.stem),
+    taxonomyKeys: resolveKnowledgeTaxonomyKeys(sanitized.tagsZh?.length ? sanitized.tagsZh : sanitized.tags ?? [], raw.stem, graph),
     createdAt: existing?.createdAt ?? retainedQuestionCreatedAt(raw.createdAt, now),
     updatedAt: now,
     createdBy: existing?.createdBy ?? user.id,

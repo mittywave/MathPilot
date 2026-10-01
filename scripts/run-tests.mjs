@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const ROOT=process.cwd();
 const TEST_DIR=join(ROOT,'tests');
-const E2E=new Set(['homework-e2e.test.mjs','scoped-library-e2e.test.mjs']);
+const E2E=new Set(['homework-e2e.test.mjs','scoped-library-e2e.test.mjs','knowledge-graph-e2e.test.mjs']);
 const WRANGLER_RETRY=pathToFileURL(join(ROOT,'scripts','local-wrangler-fetch-retry.mjs')).href;
 
 function run(args,{label,retries=0}={}){
