@@ -15,11 +15,11 @@ async function fixture(t){
   // Seed component state, but render the actual page JSX. No browser storage
   // or AI services are touched by these presentation-only regression cases.
   await build({
-    stdin:{contents:"export {default as Page} from './app/answer-studio/page'; export {seed} from 'studio-test-hooks';",resolveDir:process.cwd()},
+    stdin:{contents:"export {default as Page} from './app/tools/answer-studio/page'; export {seed} from 'studio-test-hooks';",resolveDir:process.cwd()},
     bundle:true,format:'cjs',platform:'node',jsx:'automatic',outfile:join(dir,'ui.cjs'),loader:{'.css':'empty'},logLevel:'silent',
     plugins:[{name:'page-hook-seeds',setup(build){
       build.onResolve({filter:/^studio-test-hooks$/},()=>({path:'hooks',namespace:'test'}));
-      build.onResolve({filter:/^react$/},args=>args.importer.endsWith('/answer-studio/page.tsx')?{path:'hooks',namespace:'test'}:undefined);
+      build.onResolve({filter:/^react$/},args=>args.importer.endsWith('/tools/answer-studio/page.tsx')?{path:'hooks',namespace:'test'}:undefined);
       build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'let values=[]; export function seed(state){values=[...state]} export function useState(){if(!values.length)throw Error("Missing page state seed"); return [values.shift(),()=>{}]} export function useEffect(){} export function useRef(value){return {current:value}}',loader:'js'}));
     }}],
   });

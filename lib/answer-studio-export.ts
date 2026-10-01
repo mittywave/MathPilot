@@ -18,7 +18,7 @@ import { studioFiguresReady, studioIncludesQuestionFigures, studioOutputBlocker,
 export function assertStudioMathSupported(text:string,allowBlockArrays=true) {
   text=repairMathSource(text);
   const issues=scanMathSource(text).issues;
-  if(issues.length)throw new Error(`Math delimiter is incomplete at character ${issues[0].offset+1}`);
+  if(issues.length)throw new Error(`公式分隔符不完整（位置 ${issues[0].offset+1}）`);
   for(const [lineIndex,line] of splitMathParagraphs(text).entries()){
     const ruled=allowBlockArrays?ruledArrayLine(line):null;
     const expressions=ruled?ruled.rows.flat():splitMathText(line).filter(s=>s.kind==='math').map(s=>s.value);
