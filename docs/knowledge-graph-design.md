@@ -79,7 +79,7 @@
 ```
 
 - **自动打标签**：题目保存时用**已发布图谱**的名称和别名自动打标签，所以在图谱里补充别名会立刻改善打标签。下一步是让题目编辑器直接从图谱选择知识点，显式选择的 key 优先于自动识别。
-- **学生证据**：学情叠加和“建议先补”读取 `student_capability_evidence`。当前阶段作业批改不写入图谱证据（见 `docs/homework-product-design.md`）。按知识点、主题、领域记账的 `replaceSubmissionCapabilityEvidence` 仍然保留，重新接入后叠加即可使用。
+- **学生证据**：学情叠加和“建议先补”读取 `student_capability_evidence`。作业批改只在上传时选择“整合到学生画像”时，经 `replaceSubmissionCapabilityEvidence` 按知识点、主题、领域写入证据（见 `docs/homework-product-design.md`）。
 - **错题来源**：
   - 已收录题：错题本保存题库题目快照并记住来源题号，不复制进题库。
   - 未收录题：用题目收录的 OCR 能力生成快照，**只写入该学生的 `student_wrong_questions`**，绝不进入公共题库或“我的题库”。精选题库只由教师主动录入或发布维护。

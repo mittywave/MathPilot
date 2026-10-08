@@ -1,4 +1,5 @@
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "./recognition-cleanup.mjs";
+import { bareOptionLabels } from "./homework-figures";
 import type { AssignmentQuestion, Question, QuestionType } from "./types";
 
 export const QUESTION_CONTENT_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
@@ -29,8 +30,16 @@ export function normalizeQuestionContent(raw: Record<string, unknown>): Pick<Que
 }
 
 export function assignmentQuestionToQuestion(template: AssignmentQuestion, source: { title: string; createdAt: number; updatedAt: number; originalImage?: string }): Question {
+  const content = normalizeQuestionContent(template); const figures = template.figures ?? [];
+  // Option graphs are one figure carrying their letters, shown where the options go, so bare letters are not repeated
+  // as text options. Wide figures (number lines, long grids) sit under the stem, as on the page, instead of beside it.
+  const optionFigure = figures.find((figure) => figure.kind === "options"); const stemFigures = figures.filter((figure) => figure !== optionFigure);
+  const below = stemFigures.some((figure) => figure.width && figure.height && figure.width / figure.height >= 2.2);
   return {
-    ...normalizeQuestionContent(template), id: template.id, categoryId: "homework", difficulty: "中等", provenance: "来源待核实",
+    ...content, options: optionFigure && bareOptionLabels(content.options) ? [] : content.options,
+    ...(optionFigure ? { optionsImage: optionFigure.url } : {}),
+    ...(stemFigures.length ? { contentImages: stemFigures.map((figure) => figure.url), imageLayout: below ? "below" as const : undefined } : {}),
+    id: template.id, categoryId: "homework", difficulty: "中等", provenance: "来源待核实",
     source: source.title, tags: [...template.knowledgeTags], taxonomyKeys: [...template.taxonomyKeys],
     sourcePage: template.pageNumber, originalImage: source.originalImage,
     recognitionConfidence: template.confidence, recognitionWarnings: [...template.warnings],

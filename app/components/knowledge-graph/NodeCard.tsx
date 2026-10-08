@@ -2,6 +2,7 @@
 
 import type { KnowledgeGraphIndex } from "../../../lib/knowledge-graph-core.mjs";
 import type { CapabilityEdge, CapabilityProfileNode, KnowledgeGraphCoverage } from "../../../lib/types";
+import { homeworkQuestionLabel } from "../../../lib/homework-grading-rules.mjs";
 import { LEVEL_LABEL, STATUS_META, learningStatus, stageName } from "./graph-model";
 
 type Props = {
@@ -67,7 +68,7 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
   const untested = status && status !== "unassessed" && status !== "stable"
     ? incoming.map((edge) => edge.sourceKey).filter((key) => learningStatus(profile?.get(key)) === "unassessed").map((key) => index.nodeByKey.get(key)?.label).filter(Boolean) : [];
   const mappings = index.mappingsFor(node.key);
-  const publicCount = questionCount(index, coverage?.public, node.key); const mineCount = questionCount(index, coverage?.mine, node.key);
+  const libraryCount = questionCount(index, coverage?.public, node.key);
   return <aside className="kg-card" aria-label={`${node.label}的详情`} data-inset="auto">
     <div className="kg-card-nav">
       {canGoBack ? <button type="button" className="kg-card-back" onClick={onBack}>← 返回</button> : <span />}
@@ -94,7 +95,7 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
         {profileNode?.recentEvidence.length ? <ul className="kg-card-evidence">
           {profileNode.recentEvidence.slice(0, 4).map((item, itemIndex) => <li key={`${item.assignmentId}-${item.questionNumber}-${itemIndex}`}>
             <span className={`verdict ${item.verdict}`}>{VERDICT_LABEL[item.verdict]}</span>
-            <b>第 {item.questionNumber || "?"} 题</b><small>{new Date(item.createdAt).toLocaleDateString("zh-CN")}</small>
+            <b>{homeworkQuestionLabel(item.questionNumber || "?")}</b><small>{new Date(item.createdAt).toLocaleDateString("zh-CN")}</small>
             {item.diagnosis && <p>{item.diagnosis}</p>}
           </li>)}
         </ul> : null}
@@ -117,8 +118,7 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
       <details className="kg-card-more">
         <summary>题库与教材</summary>
         <dl className="kg-card-facts">
-          <div><dt>公共题库</dt><dd>{publicCount} 题</dd></div>
-          <div><dt>我的题库</dt><dd>{mineCount} 题</dd></div>
+          <div><dt>题库</dt><dd>{libraryCount} 题</dd></div>
         </dl>
         <ul className="kg-card-mappings">{mappings.map((mapping) => <li key={mapping.editionKey}>
           <b>{mapping.editionLabel}</b><span>{mapping.volume === "待校准" ? "尚未对应章节" : [mapping.volume, mapping.unitLabel].filter(Boolean).join(" · ") || "未设置"}</span>

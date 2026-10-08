@@ -15,7 +15,7 @@ export function WrongQuestionEvidence({ entry }: { entry: WrongQuestionEntry }) 
         // eslint-disable-next-line @next/next/no-img-element
         <img src={`/api/homework-assets/${entry.answerCropAssetId}`} alt="学生原卷中的作答" loading="lazy" />}
       <div className="wrong-evidence-links">
-        {entry.submissionId && <a href={`/homework/submissions/${entry.submissionId}`}>查看整份批改</a>}
+        {entry.submissionId && <a href={`/tools/homework/submissions/${entry.submissionId}`}>查看整份批改</a>}
         {entry.question.originalImage && <a href={entry.question.originalImage} target="_blank" rel="noreferrer">查看原卷页面</a>}
       </div>
     </div>

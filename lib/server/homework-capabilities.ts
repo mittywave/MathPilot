@@ -1,13 +1,11 @@
 import { env } from "cloudflare:workers";
 import { buildCapabilityProfile, capabilityNodeFor, inferKnowledgeTags, normalizeCapabilityKeys, resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
-import type { AuthUser, CapabilityDimension, CapabilityEvidence, GradingItem, StudentAuth, StudentCapabilityProfile } from "../types";
+import type { AuthUser, CapabilityDimension, CapabilityEvidence, GradingItem, StudentCapabilityProfile } from "../types";
 import { loadPublishedKnowledgeGraph, type LoadedKnowledgeGraph } from "./knowledge-graph";
 
 type AppEnv = { DB: D1Database };
 function appEnv(): AppEnv { return env as unknown as AppEnv; }
 function parseJson<T>(value: unknown, fallback: T): T { try { return value == null ? fallback : JSON.parse(String(value)) as T; } catch { return fallback; } }
-
-export { readSubmissionReport, saveSubmissionReport } from "./homework-reports";
 
 export async function replaceSubmissionCapabilityEvidence(input: {
   ownerUserId: string; studentId: string; assignmentId: string; submissionId: string; gradingItems: GradingItem[];
@@ -57,32 +55,10 @@ async function profileEvidence(ownerUserId: string, studentId: string) {
     gradingItemId: String(row.grading_item_id), questionNumber: String(row.question_number), createdAt: Number(row.created_at) }));
 }
 
-export async function readTeacherCapabilityProfile(studentId: string, user: AuthUser, assignmentId = ""): Promise<StudentCapabilityProfile> {
-  const student = await appEnv().DB.prepare("SELECT id FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first();
-  if (!student) throw new Response(JSON.stringify({ error: "学生档案不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  const { index: graph } = await loadPublishedKnowledgeGraph();
-  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, assignmentId, viewMode: "teacher", graph });
-}
-
 export async function readTeacherKnowledgeGraph(user: AuthUser, studentId = "", published?: LoadedKnowledgeGraph): Promise<StudentCapabilityProfile> {
   const { index: graph } = published ?? await loadPublishedKnowledgeGraph();
-  if (!studentId) return buildCapabilityProfile([], { viewMode: "teacher", includeAllKnowledge: true, graph });
+  if (!studentId) return buildCapabilityProfile([], { includeAllKnowledge: true, graph });
   const student = await appEnv().DB.prepare("SELECT id FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first();
   if (!student) throw new Response(JSON.stringify({ error: "学生档案不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, viewMode: "teacher", includeAllKnowledge: true, graph });
-}
-
-export async function readStudentCapabilityProfile(student: StudentAuth, assignmentId = ""): Promise<StudentCapabilityProfile> {
-  if (assignmentId) {
-    const allowed = await appEnv().DB.prepare(`SELECT 1 FROM assignment_targets
-      JOIN homework_assignments ON homework_assignments.id = assignment_targets.assignment_id
-      JOIN homework_submissions ON homework_submissions.assignment_id = assignment_targets.assignment_id
-        AND homework_submissions.student_id = assignment_targets.student_id
-      WHERE assignment_targets.assignment_id = ? AND assignment_targets.student_id = ? AND homework_assignments.owner_user_id = ?
-        AND homework_submissions.status = 'published'`)
-      .bind(assignmentId, student.studentId, student.ownerUserId).first();
-    if (!allowed) throw new Response(JSON.stringify({ error: "结果尚未发布" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  }
-  const { index: graph } = await loadPublishedKnowledgeGraph();
-  return buildCapabilityProfile(await profileEvidence(student.ownerUserId, student.studentId), { studentId: student.studentId, assignmentId, viewMode: "student", graph });
+  return buildCapabilityProfile(await profileEvidence(user.id, studentId), { studentId, includeAllKnowledge: true, graph });
 }

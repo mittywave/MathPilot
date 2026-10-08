@@ -154,6 +154,8 @@ export type Question = {
   optimizedAt?: number;
   originalImage?: string;
   diagramImage?: string;
+  /** Options printed as drawings: one picture of all of them with their letters, shown where the options go. */
+  optionsImage?: string;
   diagramOriginalImage?: string;
   diagramSource?: DiagramSource;
   diagramQuality?: DiagramQuality;
@@ -187,6 +189,37 @@ export type LibraryData = {
   publishedAt?: number | null;
 };
 
+// A handout only references library questions; replacing one swaps the reference in place.
+// A section is a knowledge module (title + 知识点); each question sits in one of its bands.
+export type HandoutBand = "example" | "practice" | "variant";
+export type HandoutItem =
+  | { id: string; kind: "question"; scope: LibraryScope; questionId: string; band: HandoutBand }
+  | { id: string; kind: "section"; title: string; note: string };
+
+// 初一至初三记为 7–9；一学年依次是暑假、秋季、寒假、春季。
+export type HandoutGrade = 7 | 8 | 9;
+export type HandoutTerm = "summer" | "autumn" | "winter" | "spring";
+export type HandoutPlacement = { grade: HandoutGrade; term: HandoutTerm };
+
+export type Handout = {
+  id: string;
+  title: string;
+  items: HandoutItem[];
+  // null grade/term = 未归类. position orders the 课次 within a term.
+  grade: HandoutGrade | null;
+  term: HandoutTerm | null;
+  position: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type HandoutSummary = Omit<Handout, "items"> & { questionCount: number };
+
+// 共享办公 · 成员。停用的账号保留数据但不能登录。
+export type TeamMember = { id: string; email: string; role: "admin" | "member"; createdAt: number; disabledAt: number | null; lastLoginAt: number | null };
+// code: 页面生成的邀请码；config: 沿用配置文件里的邀请码；closed: 已关闭注册；none: 还没有邀请码。
+export type TeamInvite = { mode: "code" | "config" | "closed" | "none"; code: string | null };
+
 export type AuthUser = {
   id: string;
   email: string;
@@ -204,11 +237,11 @@ export type Student = {
 };
 
 export type StudentSummary = Student & {
-  loginId: string;
   wrongCount: number;
-  reviewingCount: number;
-  masteredCount: number;
 };
+
+/** archiveReason of a wrong question the teacher deleted. It waits in 历史记录 and can be restored; other archived entries follow grading. */
+export const WRONG_QUESTION_DELETED = "老师删除";
 
 export type WrongQuestionEntry = {
   id: string;
@@ -218,8 +251,6 @@ export type WrongQuestionEntry = {
   sourcePath: string;
   question: Question;
   mistakeCount: number;
-  note: string;
-  mastered: boolean;
   lastWrongAt: number;
   createdAt: number;
   updatedAt: number;
@@ -234,36 +265,15 @@ export type WrongQuestionEntry = {
   answerCropAssetId?: string | null;
 };
 
-export type HomeworkClass = {
-  id: string;
-  name: string;
-  studentIds: string[];
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type StudentAccount = {
-  studentId: string;
-  loginId: string;
-  mustChangePassword: boolean;
-  lastLoginAt: number | null;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type StudentAuth = {
-  studentId: string;
-  ownerUserId: string;
-  name: string;
-  loginId: string;
-  teacherCode: string;
-  mustChangePassword: boolean;
-};
-
-export type AssignmentStatus = "draft" | "published" | "closed" | "archived";
-export type SubmissionStatus = "draft" | "submitted" | "processing" | "review_required" | "ready" | "published" | "returned" | "failed";
+export type SubmissionStatus = "draft" | "submitted" | "processing" | "review_required" | "ready" | "published" | "failed";
+/** What a graded homework feeds besides its own grading record; chosen per homework at upload. */
+export type HomeworkOutputs = { wrongBook: boolean; report: boolean; profile: boolean };
+/** school: 校内数学, graded per printed question; international: IGCSE / A Level, graded per sub-part against a mark scheme. */
+export type HomeworkCurriculum = "school" | "international";
 export type GradingVerdict = "correct" | "partial" | "incorrect" | "unreadable" | "review_required";
-export type HomeworkAssetRole = "question" | "answer" | "submission_original" | "submission_processed" | "submission_document" | "answer_crop";
+export type HomeworkAssetRole = "answer" | "submission_original" | "submission_document" | "answer_crop";
+/** A printed figure cut from the homework page; options figures hold every option graph with its letter. */
+export type HomeworkQuestionFigure = { url: string; kind: "stem" | "options"; width?: number; height?: number };
 
 export type HomeworkAsset = {
   id: string;
@@ -272,7 +282,6 @@ export type HomeworkAsset = {
   contentType: string;
   byteSize: number;
   originalName: string;
-  pageOrder: number;
   createdAt: number;
 };
 
@@ -295,23 +304,8 @@ export type AssignmentQuestion = {
   knowledgeTags: string[];
   taxonomyKeys: string[];
   capabilityKeys: string[];
+  figures?: HomeworkQuestionFigure[];
   sortOrder: number;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type Assignment = {
-  inputMode?: "template" | "completed_homework";
-  id: string;
-  title: string;
-  instructions: string;
-  status: AssignmentStatus;
-  dueAt: number | null;
-  templateConfirmed: boolean;
-  targetStudentIds: string[];
-  questions: AssignmentQuestion[];
-  assets: HomeworkAsset[];
-  submissionCounts: Record<SubmissionStatus, number>;
   createdAt: number;
   updatedAt: number;
 };
@@ -324,7 +318,6 @@ export type SubmissionPage = {
   processedAssetId: string;
   originalUrl: string;
   processedUrl: string;
-  quality: { score: number; warnings: string[]; corners?: Array<{ x: number; y: number }> };
   createdAt: number;
 };
 
@@ -336,12 +329,17 @@ export type GradingItem = {
   questionNumber: string;
   questionType: QuestionType;
   stem: string;
+  figures?: HomeworkQuestionFigure[];
   standardAnswer: string;
   standardAnalysis: string;
   referenceSource?: "provided" | "agent" | "unresolved";
   referenceVerified?: boolean;
   referenceEvidence?: string;
+  /** The tick, half tick or cross the teacher had already put beside this answer; such an item is judged by it. */
+  teacherMark?: "correct" | "partial" | "incorrect" | null;
   verdict: GradingVerdict;
+  score: number | null;
+  maxScore: number | null;
   studentAnswer: string;
   feedback: string;
   errorType: string;
@@ -358,6 +356,9 @@ export type GradingItem = {
   updatedAt: number;
 };
 
+/** Marks of one homework: the denominator is the whole paper, so pending questions keep the percentage open. */
+export type HomeworkScoreSummary = { score: number; maxScore: number; pending: number; percentage: number | null };
+
 export type SubmissionReportPoint = {
   title: string;
   detail: string;
@@ -365,7 +366,18 @@ export type SubmissionReportPoint = {
   capabilityKey: string | null;
 };
 
+/** IGCSE / A Level report, read by parents and students together; marks always come from the grading items. */
+export type InternationalReport = {
+  overview: string;
+  priorities: string[];
+  topics: Array<{ question: string; topic: string; note: string }>;
+  losses: Array<{ section: string; questionNumbers: string[]; title: string; fact: string; knowledge: string; method: string; action: string }>;
+  practice: Array<{ focus: string; action: string; standard: string }>;
+  checklist: string;
+};
+
 export type SubmissionReport = {
+  details?: InternationalReport | null;
   overallSummary: string;
   studentMessage: string;
   strengths: SubmissionReportPoint[];
@@ -433,8 +445,6 @@ export type CapabilityEvidence = {
 export type CapabilityProfileNode = CapabilityNode & {
   status: CapabilityStatus;
   evidenceCount: number;
-  currentEvidenceCount: number;
-  highlighted: boolean;
   summary: string;
   textbookMappings: Array<TextbookTopicMapping & { editionLabel: string }>;
   recentEvidence: Array<{ questionNumber: string; verdict: CapabilityEvidence["verdict"]; diagnosis: string; assignmentId: string; createdAt: number }>;
@@ -443,11 +453,9 @@ export type CapabilityProfileNode = CapabilityNode & {
 export type StudentCapabilityProfile = {
   frameworkVersion: string;
   studentId: string;
-  assignmentId: string | null;
   nodes: CapabilityProfileNode[];
   edges: CapabilityEdge[];
   textbookEditions: TextbookEdition[];
-  viewMode: "teacher" | "student";
   updatedAt: number;
 };
 
@@ -502,7 +510,7 @@ export type PublishedKnowledgeGraph = {
 export type KnowledgeGraphDraft = { document: KnowledgeGraphDocument; baseVersion: number; updatedAt: number; issues: KnowledgeGraphIssue[] };
 export type KnowledgeGraphEditorState = { published: PublishedKnowledgeGraph; draft: KnowledgeGraphDraft | null; revision: number };
 export type KnowledgeGraphVersion = { version: number; frameworkVersion: string; publishedAt: number | null; note: string; summary: KnowledgeGraphChangeSummary | null };
-export type KnowledgeGraphCoverage = { public: Record<string, number>; mine: Record<string, number> };
+export type KnowledgeGraphCoverage = { public: Record<string, number> };
 
 export type KnowledgeGraphOverview = {
   profile: StudentCapabilityProfile;
@@ -514,10 +522,12 @@ export type KnowledgeGraphOverview = {
 export type HomeworkSubmission = {
   processingProgress?: {identified:number;referenceChecked:number;graded:number};
   pageCoverage?: {total:number;processed:number;unreadable:number;missing:number[];pages:Array<{pageNumber:number;valid:boolean;kind:string|null;reason:string}>};
-  inputMode?: "template" | "completed_homework";
+  figuresPending?: number;
+  outputs: HomeworkOutputs;
+  curriculum: HomeworkCurriculum;
   originalDocuments?: Array<{name:string;url:string}>;
   pageRevisions?: Array<{ pageId:string; originalUrl:string; processedUrl:string; createdAt:number }>;
-  gradingSummary?: { correct: number; partial: number; incorrect: number; unresolved: number; archived: number };
+  gradingSummary?: { correct: number; partial: number; incorrect: number; unresolved: number; archived: number; marks: HomeworkScoreSummary | null };
   id: string;
   assignmentId: string;
   assignmentTitle: string;
@@ -525,10 +535,8 @@ export type HomeworkSubmission = {
   studentName: string;
   version: number;
   status: SubmissionStatus;
-  submittedByType: "teacher" | "student";
   submittedAt: number | null;
   publishedAt: number | null;
-  returnedAt: number | null;
   failureReason: string;
   pages: SubmissionPage[];
   gradingItems: GradingItem[];

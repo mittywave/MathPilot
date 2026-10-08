@@ -10,4 +10,4 @@ export function resolveKnowledgeTaxonomyKeys(labels: unknown, stem?: string, gra
 export function inferKnowledgeTags(stem: string): string[];
 export function normalizeCapabilityKeys(value: unknown, input?: { errorType?: string; questionType?: string }): string[];
 export function capabilityNodeFor(key: string, label?: string, graph?: KnowledgeGraphIndex): CapabilityNode | null;
-export function buildCapabilityProfile(evidence: Array<CapabilityEvidence & { questionNumber?: string }>, options?: { now?: number; assignmentId?: string; studentId?: string; viewMode?: "teacher" | "student"; includeAllKnowledge?: boolean; graph?: KnowledgeGraphIndex }): StudentCapabilityProfile;
+export function buildCapabilityProfile(evidence: Array<CapabilityEvidence & { questionNumber?: string }>, options?: { now?: number; studentId?: string; includeAllKnowledge?: boolean; graph?: KnowledgeGraphIndex }): StudentCapabilityProfile;

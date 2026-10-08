@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadSource} from './load-source.mjs';
-const {normalizePageExtraction,mergePageExtractions,requireExactQuestionNumbers,boundedMap}=await loadSource('lib/completed-homework-coverage.ts');
+const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap}=await loadSource('lib/completed-homework-coverage.ts');
 const question=(number,pages)=>({question_number:number,page_numbers:pages,type:'解答题',stem:'完整题干',options:[],student_answer:'作答',answer_state:'readable',question_complete:true,bbox:null,knowledge_tags:[],capability_keys:[]});
 const receipt=(number,questions,kind='questions',reason='')=>({page:{page_number:number,kind,reason,question_numbers:questions.map(q=>q.question_number)},questions});
 test('a partial multi-page response cannot acknowledge an unprocessed page',()=>{
@@ -30,4 +30,40 @@ test('bounded workers wait for in-flight work on failure and never start the rem
  let release;const pending=new Promise(resolve=>release=resolve);const started=[];
  const run=boundedMap([1,2,3],2,async value=>{started.push(value);if(value===1)throw new Error('truncated');await pending;return value;});
  let finished=false;run.catch(()=>{finished=true;});await new Promise(r=>setTimeout(r,1));assert.equal(finished,false);release();await assert.rejects(run,/truncated/);assert.deepEqual(started,[1,2]);
+});
+test('each page contributes the figures printed on it, and a continuation keeps both pages\' figures and notes',()=>{
+ const figure=(x)=>({kind:'stem',bbox:{x,y:100,width:200,height:150}});
+ const first=normalizePageExtraction(receipt(3,[{...question('3-12',[3,4]),figures:[figure(700)],figure_notes:'第一幅图'}]),3,[2,3,4],27);
+ const second=normalizePageExtraction(receipt(4,[{...question('3-12',[3,4]),figures:[figure(100)],figure_notes:'第二幅图'}]),4,[3,4,5],27);
+ assert.deepEqual(first.questions[0].figures.map(f=>f.page),[3]);
+ const [merged]=mergePageExtractions([second,first]);
+ assert.deepEqual(merged.figures.map(f=>[f.page,f.bbox.x]),[[3,700],[4,100]]);assert.equal(merged.figure_notes,'第一幅图\n第二幅图');
+ const old=normalizePageExtraction(receipt(4,[question('3-12',[3,4])]),4,[3,4,5],27);
+ assert.equal(mergePageExtractions([first,old])[0].figures,undefined);
+});
+test('IGCSE / A Level keeps printed sub-part numbers, and pages that disagree on a start page are read again',()=>{
+ const intl=(page,questions)=>normalizePageExtraction(receipt(page,questions),page,[page-1,page,page+1].filter(n=>n>0),27,'international');
+ const first=intl(1,[{...question('1(a)',[1]),max_score:2},{...question('1(b)',[1,2]),max_score:5,student_answer:'第一页'}]);
+ const continued=intl(2,[{...question('1(b)',[1,2]),max_score:5,student_answer:'第二页'},{...question('2',[2]),max_score:4}]);
+ const merged=mergePageExtractions([first,continued]);
+ assert.deepEqual(merged.map(q=>[q.question_number,q.page_numbers,q.max_score]),[['1(a)',[1],2],['1(b)',[1,2],5],['2',[2],4]]);
+ assert.match(merged[1].student_answer,/第一页[\s\S]*第二页/);
+ assert.deepEqual(conflictingPages([first,continued]),[]);
+ // Page 3 described page 2's content again, so question 2 seems to start on two pages.
+ const misread=intl(3,[{...question('2',[3]),max_score:4}]);
+ assert.throws(()=>mergePageExtractions([first,continued,misread]),/起始页不一致/);
+ assert.deepEqual(conflictingPages([first,continued,misread]),[2,3]);
+});
+test('school sub-questions get their own page-prefixed identity and keep the teacher\'s mark; an exam paper never trusts marks',()=>{
+ const page=normalizePageExtraction(receipt(5,[{...question('3（1）',[5]),teacher_mark:'correct'},{...question('3(2)',[5]),teacher_mark:'incorrect'},question('5-4',[5])]),5,[4,5,6],27);
+ assert.deepEqual(page.questions.map(q=>[q.question_number,q.teacher_mark]),[['5-3(1)','correct'],['5-3(2)','incorrect'],['5-4','none']]);
+ const paper=normalizePageExtraction(receipt(1,[{...question('1(a)',[1]),teacher_mark:'incorrect'}]),1,[1,2],2,'international');
+ assert.deepEqual(paper.questions.map(q=>[q.question_number,q.teacher_mark]),[['1(a)','none']]);
+});
+test('a question split across pages carries the strictest teacher mark any part received',()=>{
+ const first=normalizePageExtraction(receipt(3,[{...question('3-12',[3,4]),teacher_mark:'correct'}]),3,[2,3,4],27);
+ const second=normalizePageExtraction(receipt(4,[{...question('3-12',[3,4]),teacher_mark:'incorrect'}]),4,[3,4,5],27);
+ const unmarked=normalizePageExtraction(receipt(4,[question('3-12',[3,4])]),4,[3,4,5],27);
+ assert.equal(mergePageExtractions([first,second])[0].teacher_mark,'incorrect');
+ assert.equal(mergePageExtractions([first,unmarked])[0].teacher_mark,'correct');
 });

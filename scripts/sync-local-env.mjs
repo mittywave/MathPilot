@@ -1,5 +1,4 @@
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { networkInterfaces } from "node:os";
 import { resolve } from "node:path";
 
 const localPath = resolve(".env.local");
@@ -15,29 +14,10 @@ function readEnvironment(path) {
   return values;
 }
 
-function localNetworkAddress() {
-  const entries = Object.entries(networkInterfaces()).sort(([left], [right]) => {
-    const priority = (name) => name === "en0" ? 0 : name === "en1" ? 1 : 2;
-    return priority(left) - priority(right);
-  });
-  for (const [, addresses] of entries) for (const item of addresses ?? []) {
-    if (item.family !== "IPv4" || item.internal) continue;
-    const parts = item.address.split(".").map(Number);
-    const isPrivate = parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168);
-    if (isPrivate) return item.address;
-  }
-  return "";
-}
-
 const workerValues = readEnvironment(workerPath);
 const localValues = readEnvironment(localPath);
 const merged = new Map([...workerValues, ...localValues]);
 merged.set("LOCAL_ADMIN_MODE", "true");
-const explicitStudentOrigin = localValues.get("STUDENT_PORTAL_ORIGIN")?.trim();
-const localAddress = localNetworkAddress();
-if (explicitStudentOrigin) merged.set("STUDENT_PORTAL_ORIGIN", explicitStudentOrigin);
-else if (localAddress) merged.set("STUDENT_PORTAL_ORIGIN", `http://${localAddress}:3001`);
-else merged.delete("STUDENT_PORTAL_ORIGIN");
 if (!merged.size) process.exit(0);
 
 const temporaryPath = `${workerPath}.tmp-${process.pid}`;

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { AuthUser, Question, Student, StudentSummary, WrongQuestionEntry } from "../types";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Question, type Student, type StudentSummary, type WrongQuestionEntry } from "../types";
 
 type AppEnv = { DB: D1Database };
 
@@ -41,24 +41,17 @@ function toStudent(row: Record<string, unknown>): Student {
 
 export async function readStudents(user: AuthUser): Promise<StudentSummary[]> {
   const result = await appEnv().DB.prepare(`SELECT students.id, students.name, students.class_name, students.notes,
-      students.created_at, students.updated_at, student_accounts.login_id,
-      COUNT(student_wrong_questions.id) AS wrong_count,
-      SUM(CASE WHEN student_wrong_questions.mastered = 0 THEN 1 ELSE 0 END) AS reviewing_count,
-      SUM(CASE WHEN student_wrong_questions.mastered = 1 THEN 1 ELSE 0 END) AS mastered_count
+      students.created_at, students.updated_at,
+      COUNT(student_wrong_questions.id) AS wrong_count
     FROM students
-    LEFT JOIN student_accounts ON student_accounts.student_id = students.id
-      AND student_accounts.owner_user_id = students.owner_user_id
     LEFT JOIN student_wrong_questions ON student_wrong_questions.student_id = students.id
       AND student_wrong_questions.owner_user_id = students.owner_user_id AND student_wrong_questions.archived_at IS NULL
     WHERE students.owner_user_id = ?
-    GROUP BY students.id, student_accounts.login_id
+    GROUP BY students.id
     ORDER BY students.updated_at DESC, students.created_at DESC`).bind(user.id).all<Record<string, unknown>>();
   return result.results.map((row: Record<string, unknown>) => ({
     ...toStudent(row),
-    loginId: String(row.login_id ?? ""),
     wrongCount: Number(row.wrong_count ?? 0),
-    reviewingCount: Number(row.reviewing_count ?? 0),
-    masteredCount: Number(row.mastered_count ?? 0),
   }));
 }
 
@@ -113,8 +106,6 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
     sourcePath: String(row.source_path ?? ""),
     question: cleanQuestionSnapshot(question),
     mistakeCount: Number(row.mistake_count),
-    note: String(row.note ?? ""),
-    mastered: Number(row.mastered) === 1,
     lastWrongAt: Number(row.last_wrong_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
@@ -132,31 +123,25 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
 export async function readWrongQuestions(studentId: string, user: AuthUser, includeHistory = false): Promise<WrongQuestionEntry[]> {
   await ownedStudent(studentId, user);
   const result = await appEnv().DB.prepare(`SELECT id, student_id, source_scope, source_question_id, source_path,
-      question_snapshot_json, mistake_count, note, mastered, last_wrong_at, created_at, updated_at,
+      question_snapshot_json, mistake_count, last_wrong_at, created_at, updated_at,
       source_kind, assignment_id, submission_id, grading_item_id, student_answer, feedback, answer_crop_asset_id, archived_at, archive_reason
     FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ? ${includeHistory ? "" : "AND archived_at IS NULL"}
-    ORDER BY mastered ASC, last_wrong_at DESC, created_at DESC`).bind(studentId, user.id).all<Record<string, unknown>>();
+    ORDER BY last_wrong_at DESC, created_at DESC`).bind(studentId, user.id).all<Record<string, unknown>>();
   return result.results.map(toWrongQuestion);
 }
 
-export async function updateWrongQuestion(studentId: string, entryId: string, raw: Partial<WrongQuestionEntry>, user: AuthUser) {
-  await ownedStudent(studentId, user);
-  const existing = await appEnv().DB.prepare(`SELECT id, mistake_count, note, mastered FROM student_wrong_questions
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(entryId, studentId, user.id)
-    .first<{ id: string; mistake_count: number; note: string; mastered: number }>();
-  if (!existing) throw responseError("错题记录不存在", 404);
-  const mistakeCount = Number(existing.mistake_count);
-  const note = raw.note == null ? existing.note : String(raw.note).trim().slice(0, 1000);
-  const mastered = raw.mastered == null ? Number(existing.mastered) : raw.mastered ? 1 : 0;
-  await appEnv().DB.prepare(`UPDATE student_wrong_questions SET mistake_count = ?, note = ?, mastered = ?, updated_at = ?
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(mistakeCount, note, mastered, Date.now(), entryId, studentId, user.id).run();
-}
-
+/** 删除只是移入“历史记录”，可以恢复；之后学生再次做错这道题时，它会重新回到错题本。 */
 export async function deleteWrongQuestion(studentId: string, entryId: string, user: AuthUser) {
   await ownedStudent(studentId, user);
-  const entry=await appEnv().DB.prepare("SELECT source_kind FROM student_wrong_questions WHERE id=? AND student_id=? AND owner_user_id=?").bind(entryId,studentId,user.id).first<{source_kind:string}>();
-  if(entry?.source_kind === "assignment") throw responseError("作业错题请从原作业修正批改结论",409);
-  const result = await appEnv().DB.prepare(`DELETE FROM student_wrong_questions
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(entryId, studentId, user.id).run();
+  const now = Date.now();
+  const result = await appEnv().DB.prepare(`UPDATE student_wrong_questions SET archived_at = ?, archive_reason = ?, updated_at = ?
+    WHERE id = ? AND student_id = ? AND owner_user_id = ? AND archived_at IS NULL`).bind(now, WRONG_QUESTION_DELETED, now, entryId, studentId, user.id).run();
   if (!result.meta.changes) throw responseError("错题记录不存在", 404);
+}
+
+export async function restoreWrongQuestion(studentId: string, entryId: string, user: AuthUser) {
+  await ownedStudent(studentId, user);
+  const result = await appEnv().DB.prepare(`UPDATE student_wrong_questions SET archived_at = NULL, archive_reason = '', updated_at = ?
+    WHERE id = ? AND student_id = ? AND owner_user_id = ? AND archive_reason = ?`).bind(Date.now(), entryId, studentId, user.id, WRONG_QUESTION_DELETED).run();
+  if (!result.meta.changes) throw responseError("历史记录中没有这道被删除的错题", 404);
 }
