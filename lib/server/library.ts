@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question } from "../../lib/types";
 import { retainedQuestionCreatedAt } from "../../lib/question-order-rules.mjs";
+import { questionCreationContent } from "../../lib/question-create-rules.mjs";
 import { normalizeQuestionProvenance } from "../../lib/exam-modules.mjs";
 import { resolveKnowledgeTaxonomyKeys } from "../../lib/homework-capability-framework.mjs";
 import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
@@ -18,6 +19,7 @@ export type LibraryContext = {
 
 type StoredAsset = { id: string; content_type: string; byte_size: number; content_hash: string | null };
 
+// 机构版只有一个共用题库：library_id = "public" 的当前版本。
 const PUBLIC_LIBRARY_ID = "public";
 const PERSONAL_PREFIX = "personal:";
 const ASSET_URL = /\/api\/assets\/([0-9a-f-]{36})/gi;
@@ -90,7 +92,7 @@ async function grantAssetAccess(assetId: string, context: Pick<LibraryContext, "
 }
 
 export async function retainQuestionAssetsForUser(question: Question, user: AuthUser) {
-  const context = await resolveLibraryContext(user, "mine");
+  const context = await resolveLibraryContext(user);
   for (const id of assetIds(question)) await grantAssetAccess(id, context);
 }
 
@@ -118,7 +120,26 @@ async function ensureLegacyAssetAccess() {
     .bind(String(Date.now())).run();
 }
 
-async function ensurePersonalLibrary(user: AuthUser) {
+// Every teacher reads and writes the one shared library; only deleting needs an administrator.
+export async function resolveLibraryContext(user: AuthUser | null): Promise<LibraryContext> {
+  const db = appEnv().DB;
+  const row = await db.prepare("SELECT active_publication_id, published_at FROM libraries_v2 WHERE id = ?")
+    .bind(PUBLIC_LIBRARY_ID).first<{ active_publication_id: string | null; published_at: number | null }>();
+  if (!row) throw new Error("公共题库尚未初始化");
+  return {
+    libraryId: PUBLIC_LIBRARY_ID,
+    scope: "public",
+    publicationId: row.active_publication_id,
+    ownerUserId: null,
+    writable: Boolean(user),
+    publishedAt: row.published_at,
+  };
+}
+
+// Students and their wrong books stay with each teacher. Those rows key on the teacher's own
+// libraries_v2 entry ("personal:<id>", empty since the libraries merged): existing rows already
+// use it, and student_wrong_questions.source_library_id needs it to exist.
+export async function teacherNamespaceId(user: AuthUser) {
   const id = `${PERSONAL_PREFIX}${user.id}`;
   await appEnv().DB.prepare(`INSERT OR IGNORE INTO libraries_v2
     (id, kind, owner_user_id, active_publication_id, published_at, created_at)
@@ -127,38 +148,19 @@ async function ensurePersonalLibrary(user: AuthUser) {
   return id;
 }
 
-export async function resolveLibraryContext(user: AuthUser | null, scope: LibraryScope): Promise<LibraryContext> {
-  const db = appEnv().DB;
-  if (scope === "mine") {
-    if (!user) throw new Response(JSON.stringify({ error: "请先登录" }), { status: 401, headers: { "Content-Type": "application/json" } });
-    const libraryId = await ensurePersonalLibrary(user);
-    return { libraryId, scope, publicationId: null, ownerUserId: user.id, writable: true, publishedAt: null };
-  }
-  const row = await db.prepare("SELECT active_publication_id, published_at FROM libraries_v2 WHERE id = ?")
-    .bind(PUBLIC_LIBRARY_ID).first<{ active_publication_id: string | null; published_at: number | null }>();
-  if (!row) throw new Error("公共题库尚未初始化");
-  return {
-    libraryId: PUBLIC_LIBRARY_ID,
-    scope,
-    publicationId: row.active_publication_id,
-    ownerUserId: null,
-    writable: Boolean(user?.local),
-    publishedAt: row.published_at,
-  };
-}
-
 export function requireWritable(context: LibraryContext) {
   if (!context.writable) {
-    throw new Response(JSON.stringify({ error: context.scope === "public" ? "线上公共资源库只读，请在 localhost 维护并发布" : "无权修改该题库" }), {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-    });
+    throw new Response(JSON.stringify({ error: "请先登录" }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
 }
 
-export async function readLibrary(user: AuthUser | null, scope: LibraryScope = "public"): Promise<LibraryData> {
+export function requireAdmin(user: AuthUser | null) {
+  if (user?.role !== "admin") throw new Response(JSON.stringify({ error: "只有管理员可以删除" }), { status: 403, headers: { "Content-Type": "application/json" } });
+}
+
+export async function readLibrary(user: AuthUser | null): Promise<LibraryData> {
   await ensureLegacyAssetAccess();
-  const context = await resolveLibraryContext(user, scope);
+  const context = await resolveLibraryContext(user);
   const db = appEnv().DB;
   const version = versionWhere(context.publicationId);
   const bindings = versionBindings(context.publicationId);
@@ -173,7 +175,7 @@ export async function readLibrary(user: AuthUser | null, scope: LibraryScope = "
         library_questions_v2.category_source_id, library_questions_v2.payload_json,
         library_questions_v2.created_by, users.email AS created_by_email
       FROM library_questions_v2 LEFT JOIN users ON users.id = library_questions_v2.created_by
-      WHERE library_questions_v2.library_id = ? AND library_questions_v2.${version}
+      WHERE library_questions_v2.library_id = ? AND library_questions_v2.${version} AND library_questions_v2.deleted_at IS NULL
       ORDER BY library_questions_v2.created_at DESC`).bind(context.libraryId, ...bindings),
   ]);
   const modules = (moduleResult.results as Array<Record<string, unknown>>).map<LibraryModule>((row) => ({
@@ -195,11 +197,11 @@ export async function readLibrary(user: AuthUser | null, scope: LibraryScope = "
       moduleId,
       categoryId: row.category_source_id == null ? moduleId : String(row.category_source_id),
       createdBy,
-      createdByEmail: scope === "public" && !context.writable ? null : row.created_by_email == null ? null : String(row.created_by_email),
-      canEdit: context.writable && Boolean(user && (scope === "mine" || user.local)),
+      createdByEmail: !user || row.created_by_email == null ? null : String(row.created_by_email),
+      canEdit: context.writable,
     };
   });
-  return { scope, modules, categories, questions, publishedAt: context.publishedAt };
+  return { scope: "public", modules, categories, questions, publishedAt: context.publishedAt };
 }
 
 function dataUrlBytes(value: string) {
@@ -216,16 +218,22 @@ async function storeAsset(contentType: string, bytes: Uint8Array, context: Libra
     .bind(contentHash).first<StoredAsset>();
   if (!asset) {
     const id = crypto.randomUUID();
-    await db.prepare("INSERT INTO question_assets (id, content_type, byte_size, created_at, content_hash) VALUES (?, ?, ?, ?, ?)")
-      .bind(id, contentType, bytes.byteLength, Date.now(), contentHash).run();
-    const statements: D1PreparedStatement[] = [];
+    const statements: D1PreparedStatement[] = [db.prepare(`INSERT INTO question_assets
+      (id, content_type, byte_size, created_at, content_hash) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(content_hash) WHERE content_hash IS NOT NULL DO NOTHING`).bind(id, contentType, bytes.byteLength, Date.now(), contentHash)];
     const chunkSize = 500_000;
     for (let offset = 0, index = 0; offset < bytes.byteLength; offset += chunkSize, index += 1) {
       const chunk = bytes.slice(offset, Math.min(offset + chunkSize, bytes.byteLength));
-      statements.push(db.prepare("INSERT INTO question_asset_chunks (asset_id, chunk_index, data) VALUES (?, ?, ?)").bind(id, index, chunk.buffer));
+      statements.push(db.prepare(`INSERT INTO question_asset_chunks (asset_id, chunk_index, data)
+        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM question_assets WHERE id = ?)`)
+        .bind(id, index, chunk.buffer, id));
     }
-    for (let index = 0; index < statements.length; index += 80) await db.batch(statements.slice(index, index + 80));
-    asset = { id, content_type: contentType, byte_size: bytes.byteLength, content_hash: contentHash };
+    // The winning uploader commits metadata and all bytes together. Losing
+    // concurrent uploads skip their chunks and reuse that complete asset.
+    await db.batch(statements);
+    asset = await db.prepare("SELECT id, content_type, byte_size, content_hash FROM question_assets WHERE content_hash = ?")
+      .bind(contentHash).first<StoredAsset>();
+    if (!asset) throw new Error("配图保存结果无法确认，请重试");
   }
   await grantAssetAccess(asset.id, context);
   return `/api/assets/${asset.id}`;
@@ -293,27 +301,52 @@ async function validateCategory(context: LibraryContext, moduleId: string, categ
   return categoryId;
 }
 
-export async function createScopedQuestion(raw: Question, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+export async function createScopedQuestion(raw: Question, user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const moduleId = String(raw.moduleId || raw.categoryId || "");
   await validateModule(context, moduleId);
   const categoryId = await validateCategory(context, moduleId, String(raw.categoryId || moduleId));
   const question = await prepareQuestion({ ...raw, moduleId, categoryId: categoryId ?? moduleId }, user, context);
   const payload = JSON.stringify(question);
-  await appEnv().DB.prepare(`INSERT INTO library_questions_v2
+  const db = appEnv().DB;
+  const result = await db.prepare(`INSERT INTO library_questions_v2
     (row_id, source_id, library_id, publication_id, module_source_id, category_source_id,
      payload_json, content_hash, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
     .bind(rowId(context, "question", question.id), question.id, context.libraryId, context.publicationId,
       moduleId, categoryId, payload, await sha256Text(payload), user.id, question.createdAt, question.updatedAt).run();
+  if (!result.meta.changes) {
+    const existing = await db.prepare(`SELECT payload_json FROM library_questions_v2
+      WHERE library_id = ? AND ${versionWhere(context.publicationId)} AND source_id = ?`)
+      .bind(context.libraryId, ...versionBindings(context.publicationId), question.id).first<{ payload_json: string }>();
+    if (!existing) throw new Error("试题保存结果无法确认，请重试");
+    const stored = JSON.parse(existing.payload_json) as Question;
+    let identical = questionCreationContent(stored) === questionCreationContent(question);
+    if (!identical) {
+      // Concurrent uploads can give identical image bytes different storage IDs.
+      const ids = [...new Set([...assetIds(stored), ...assetIds(question)])];
+      const hashes = new Map<string, string>();
+      for (let index = 0; index < ids.length; index += 80) {
+        const chunk = ids.slice(index, index + 80);
+        const assets = await db.prepare(`SELECT id, content_hash FROM question_assets
+          WHERE id IN (${chunk.map(() => "?").join(",")})`).bind(...chunk).all<{ id: string; content_hash: string | null }>();
+        for (const asset of assets.results) if (asset.content_hash) hashes.set(asset.id, asset.content_hash);
+      }
+      identical = questionCreationContent(stored, hashes) === questionCreationContent(question, hashes);
+    }
+    if (!identical) throw new Response(JSON.stringify({ error: "这道题已经保存，但提交内容不同。请刷新题库后编辑已保存的题目。" }), {
+      status: 409, headers: { "Content-Type": "application/json" },
+    });
+    return { ...stored, createdByEmail: user.email, canEdit: true };
+  }
   return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: user.id, createdByEmail: user.email, canEdit: true };
 }
 
-export async function updateScopedQuestion(id: string, raw: Question, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+export async function updateScopedQuestion(id: string, raw: Question, user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const version = versionWhere(context.publicationId);
   const existing = await appEnv().DB.prepare(`SELECT created_by, created_at FROM library_questions_v2
-    WHERE library_id = ? AND ${version} AND source_id = ?`)
+    WHERE library_id = ? AND ${version} AND source_id = ? AND deleted_at IS NULL`)
     .bind(context.libraryId, ...versionBindings(context.publicationId), id).first<{ created_by: string | null; created_at: number }>();
   if (!existing) throw new Response(JSON.stringify({ error: "试题不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
   const moduleId = String(raw.moduleId || raw.categoryId || "");
@@ -328,17 +361,45 @@ export async function updateScopedQuestion(id: string, raw: Question, user: Auth
   return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: existing.created_by, createdByEmail: user.email, canEdit: true };
 }
 
-export async function deleteScopedQuestion(id: string, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+/** 删除只是移入回收站；删除模块时其中的试题才会被彻底删除。 */
+export async function deleteScopedQuestion(id: string, user: AuthUser) {
+  requireAdmin(user);
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const version = versionWhere(context.publicationId);
-  const result = await appEnv().DB.prepare(`DELETE FROM library_questions_v2
-    WHERE library_id = ? AND ${version} AND source_id = ?`)
-    .bind(context.libraryId, ...versionBindings(context.publicationId), id).run();
+  const result = await appEnv().DB.prepare(`UPDATE library_questions_v2 SET deleted_at = ?
+    WHERE library_id = ? AND ${version} AND source_id = ? AND deleted_at IS NULL`)
+    .bind(Date.now(), context.libraryId, ...versionBindings(context.publicationId), id).run();
   if (!result.meta.changes) throw new Response(JSON.stringify({ error: "试题不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
 }
 
-export async function createScopedCategory(raw: Category, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+export async function readDeletedQuestions(user: AuthUser) {
+  requireAdmin(user);
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const rows = await appEnv().DB.prepare(`SELECT source_id, module_source_id, category_source_id, payload_json, deleted_at
+    FROM library_questions_v2 WHERE library_id = ? AND ${versionWhere(context.publicationId)} AND deleted_at IS NOT NULL
+    ORDER BY deleted_at DESC`).bind(context.libraryId, ...versionBindings(context.publicationId)).all<Record<string, unknown>>();
+  return rows.results.map((row: Record<string, unknown>) => {
+    const moduleId = String(row.module_source_id);
+    return { ...JSON.parse(String(row.payload_json)) as Question, id: String(row.source_id), moduleId,
+      categoryId: row.category_source_id == null ? moduleId : String(row.category_source_id), deletedAt: Number(row.deleted_at) };
+  });
+}
+
+/** 恢复到原分类；原分类已被删除时回到模块根目录。 */
+export async function restoreScopedQuestion(id: string, user: AuthUser) {
+  requireAdmin(user);
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const version = versionWhere(context.publicationId); const bindings = versionBindings(context.publicationId);
+  const result = await appEnv().DB.prepare(`UPDATE library_questions_v2 SET deleted_at = NULL,
+      category_source_id = CASE WHEN EXISTS (SELECT 1 FROM library_categories_v2 AS categories WHERE categories.library_id = library_questions_v2.library_id
+        AND categories.${version} AND categories.source_id = library_questions_v2.category_source_id) THEN category_source_id ELSE NULL END
+    WHERE library_id = ? AND ${version} AND source_id = ? AND deleted_at IS NOT NULL`)
+    .bind(...bindings, context.libraryId, ...bindings, id).run();
+  if (!result.meta.changes) throw new Response(JSON.stringify({ error: "回收站中没有这道试题" }), { status: 404, headers: { "Content-Type": "application/json" } });
+}
+
+export async function createScopedCategory(raw: Category, user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const name = String(raw.name ?? "").trim().slice(0, 100);
   const moduleId = String(raw.moduleId || raw.parentId || "");
   if (!name) throw new Response(JSON.stringify({ error: "请填写分类名称" }), { status: 400, headers: { "Content-Type": "application/json" } });
@@ -360,9 +421,10 @@ export async function createScopedCategory(raw: Category, user: AuthUser, scope:
   return category;
 }
 
-export async function deleteScopedCategory(id: string, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
-  const data = await readLibrary(user, scope);
+export async function deleteScopedCategory(id: string, user: AuthUser) {
+  requireAdmin(user);
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const data = await readLibrary(user);
   const category = data.categories.find((item) => item.id === id);
   if (!category) throw new Response(JSON.stringify({ error: "分类不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
   const ids = new Set<string>([id]);
@@ -375,16 +437,16 @@ export async function deleteScopedCategory(id: string, user: AuthUser, scope: Li
   const idList = [...ids];
   const placeholders = idList.map(() => "?").join(",");
   await appEnv().DB.batch([
-    appEnv().DB.prepare(`DELETE FROM library_questions_v2 WHERE library_id = ? AND ${version}
-      AND category_source_id IN (${placeholders})`).bind(context.libraryId, ...versionBindings(context.publicationId), ...idList),
+    appEnv().DB.prepare(`UPDATE library_questions_v2 SET deleted_at = ? WHERE library_id = ? AND ${version}
+      AND category_source_id IN (${placeholders}) AND deleted_at IS NULL`).bind(Date.now(), context.libraryId, ...versionBindings(context.publicationId), ...idList),
     appEnv().DB.prepare(`DELETE FROM library_categories_v2 WHERE library_id = ? AND ${version}
       AND source_id IN (${placeholders})`).bind(context.libraryId, ...versionBindings(context.publicationId), ...idList),
   ]);
   return { categoryIds: idList };
 }
 
-export async function createScopedModule(raw: Partial<LibraryModule>, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+export async function createScopedModule(raw: Partial<LibraryModule>, user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const name = String(raw.name ?? "").trim().slice(0, 100);
   const subtitle = String(raw.subtitle ?? "").trim().slice(0, 160);
   if (!name) throw new Response(JSON.stringify({ error: "请填写模块名称" }), { status: 400, headers: { "Content-Type": "application/json" } });
@@ -402,8 +464,8 @@ export async function createScopedModule(raw: Partial<LibraryModule>, user: Auth
   return createdModule;
 }
 
-export async function updateScopedModule(id: string, raw: Partial<LibraryModule>, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
+export async function updateScopedModule(id: string, raw: Partial<LibraryModule>, user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
   const name = String(raw.name ?? "").trim().slice(0, 100);
   const subtitle = String(raw.subtitle ?? "").trim().slice(0, 160);
   if (!name) throw new Response(JSON.stringify({ error: "请填写模块名称" }), { status: 400, headers: { "Content-Type": "application/json" } });
@@ -419,9 +481,9 @@ export async function updateScopedModule(id: string, raw: Partial<LibraryModule>
   return { id, name, subtitle, sortOrder: existing.sort_order, createdAt: existing.created_at, updatedAt: now } satisfies LibraryModule;
 }
 
-export async function reorderScopedModules(ids: string[], user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
-  const data = await readLibrary(user, scope);
+export async function reorderScopedModules(ids: string[], user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const data = await readLibrary(user);
   if (ids.length !== data.modules.length || new Set(ids).size !== ids.length || ids.some((id) => !data.modules.some((item) => item.id === id))) {
     throw new Response(JSON.stringify({ error: "模块排序数据不完整" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
@@ -432,9 +494,10 @@ export async function reorderScopedModules(ids: string[], user: AuthUser, scope:
   if (statements.length) await appEnv().DB.batch(statements);
 }
 
-export async function deleteScopedModule(id: string, confirmation: string, user: AuthUser, scope: LibraryScope) {
-  const context = await resolveLibraryContext(user, scope); requireWritable(context);
-  const data = await readLibrary(user, scope);
+export async function deleteScopedModule(id: string, confirmation: string, user: AuthUser) {
+  requireAdmin(user);
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const data = await readLibrary(user);
   const targetModule = data.modules.find((item) => item.id === id);
   if (!targetModule) throw new Response(JSON.stringify({ error: "模块不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
   if (confirmation !== targetModule.name) throw new Response(JSON.stringify({ error: "请输入完整模块名称确认删除" }), { status: 400, headers: { "Content-Type": "application/json" } });
@@ -457,24 +520,6 @@ export async function deleteScopedModule(id: string, confirmation: string, user:
       .bind(index, now, context.libraryId, ...versionBindings(context.publicationId), item.id)));
   }
   return { questionCount, categoryCount };
-}
-
-export async function copyPublicQuestions(questionIds: string[], targetModuleId: string, targetCategoryId: string, user: AuthUser) {
-  const source = await readLibrary(user, "public");
-  const targetContext = await resolveLibraryContext(user, "mine");
-  await validateModule(targetContext, targetModuleId);
-  const categoryId = await validateCategory(targetContext, targetModuleId, targetCategoryId || targetModuleId);
-  const selected = questionIds.map((id) => source.questions.find((item) => item.id === id)).filter(Boolean) as Question[];
-  if (!selected.length || selected.length !== new Set(questionIds).size) {
-    throw new Response(JSON.stringify({ error: "所选公共题目已不存在" }), { status: 400, headers: { "Content-Type": "application/json" } });
-  }
-  const copied: Question[] = [];
-  for (const sourceQuestion of selected) {
-    const raw = { ...sourceQuestion, id: crypto.randomUUID(), moduleId: targetModuleId, categoryId: categoryId ?? targetModuleId, createdAt: 0, updatedAt: 0 };
-    delete raw.canEdit; delete raw.createdBy; delete raw.createdByEmail;
-    copied.push(await createScopedQuestion(raw, user, "mine"));
-  }
-  return copied;
 }
 
 export async function readRawAsset(id: string) {
@@ -508,10 +553,27 @@ export async function readAssetForUser(id: string, user: AuthUser | null) {
   return personalRow ? { ...asset, public: false } : null;
 }
 
-export async function authorizeQuestionDownload(user: AuthUser, scope: LibraryScope, questionIds: string[]) {
-  const data = await readLibrary(user, scope);
+export async function authorizeQuestionDownload(user: AuthUser, questionIds: string[]) {
+  const data = await readLibrary(user);
   const available = new Set(data.questions.map((item) => item.id));
+  // 学生错题本里的题目是快照、不在题库中；属于本人学生档案的同样可以组卷导出。
+  const outside = questionIds.filter((id) => !available.has(id));
+  if (outside.length) {
+    const owned = await appEnv().DB.prepare(`SELECT DISTINCT json_extract(question_snapshot_json, '$.id') AS id FROM student_wrong_questions
+      WHERE owner_user_id = ? AND json_extract(question_snapshot_json, '$.id') IN (SELECT value FROM json_each(?))`)
+      .bind(user.id, JSON.stringify(outside)).all<{ id: string }>();
+    for (const row of owned.results) available.add(String(row.id));
+  }
   return questionIds.length > 0 && questionIds.every((id) => available.has(id));
+}
+
+// 讲义说明里的配图：存进共用题库的素材，读取权限与题目配图相同。
+const NOTE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+export async function storeUserImage(dataUrl: string, user: AuthUser) {
+  const decoded = dataUrlBytes(dataUrl);
+  if (!decoded || !NOTE_IMAGE_TYPES.has(decoded.contentType)) throw new Response(JSON.stringify({ error: "只能上传 PNG、JPEG、WebP 或 GIF 图片" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  if (decoded.bytes.byteLength > 8 * 1024 * 1024) throw new Response(JSON.stringify({ error: "图片超过 8MB，请裁剪后重试" }), { status: 413, headers: { "Content-Type": "application/json" } });
+  return storeAsset(decoded.contentType, decoded.bytes, await resolveLibraryContext(user));
 }
 
 export function libraryBindings() { return appEnv(); }

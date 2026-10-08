@@ -1,0 +1,204 @@
+import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
+
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
+const CONFIG = join(ROOT, "dist", "server", "wrangler.json");
+const INVITE = "shared-e2e-invite";
+const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function command(args) {
+  const result = spawnSync(WRANGLER, args, { cwd: ROOT, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
+  if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
+}
+
+async function freePort() {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close((error) => error ? reject(error) : resolvePort(port));
+    });
+  });
+}
+
+function startWorker(port, persistTo, vars) {
+  const args = [join(ROOT, "scripts/start-local-test-worker.mjs"), CONFIG, String(port), persistTo, JSON.stringify(vars)];
+  const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { output += chunk; });
+  return { child, output: () => output };
+}
+
+async function waitForServer(url, worker) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (worker.child.exitCode != null) throw new Error(`Worker 提前退出\n${worker.output()}`);
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+    } catch { /* 等待监听端口 */ }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 120));
+  }
+  throw new Error(`Worker 启动超时\n${worker.output()}`);
+}
+
+async function stopWorker(worker) {
+  if (worker.child.exitCode != null) return;
+  worker.child.kill("SIGINT");
+  await Promise.race([
+    new Promise((resolveExit) => worker.child.once("exit", resolveExit)),
+    new Promise((resolveWait) => setTimeout(resolveWait, 3_000)),
+  ]);
+  if (worker.child.exitCode == null) worker.child.kill("SIGKILL");
+}
+
+async function jsonRequest(base, path, { cookie = "", method = "GET", body, headers = {} } = {}) {
+  const requestHeaders = { ...headers };
+  if (cookie) requestHeaders.Cookie = cookie;
+  if (body !== undefined) {
+    requestHeaders["Content-Type"] = "application/json";
+    requestHeaders.Origin = base;
+  }
+  const response = await fetch(`${base}${path}`, { method, headers: requestHeaders, body: body === undefined ? undefined : JSON.stringify(body) });
+  const payload = await response.json().catch(() => ({}));
+  return { response, payload };
+}
+
+function sessionCookie(response) {
+  return (response.headers.get("set-cookie") ?? "").split(";", 1)[0];
+}
+
+function question(id, moduleId, categoryId, stem, image = false) {
+  return {
+    id, moduleId, categoryId, type: "解答题", difficulty: "中等", provenance: "来源待核实",
+    stem, stemDocxXml: ["<w:p><w:r><w:t>结构化题干</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"],
+    options: [], answer: "2", analysis: "因为 x=1，所以 x²+1=2。", source: "双实例回归",
+    contentImages: image ? [PIXEL] : [], createdAt: 1, updatedAt: 1,
+  };
+}
+
+test("one shared library: every teacher reads and edits it, only administrators delete", { timeout: 180_000 }, async () => {
+  const port = await freePort();
+  const state = await mkdtemp(join(tmpdir(), "zhiti-shared-"));
+  command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "--config", join(ROOT, "wrangler.jsonc")]);
+  const worker = startWorker(port, state, { LOCAL_ADMIN_MODE: "false", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@shared.test" });
+  const base = `http://public.localtest.me:${port}`;
+  try {
+    await waitForServer(`${base}/api/library`, worker);
+    const forgedAdmin = await jsonRequest(base, "/api/auth/me", { headers: { "X-Forwarded-Host": "localhost", "CF-Connecting-IP": "127.0.0.1" } });
+    assert.equal(forgedAdmin.payload.user, null, "production mode must reject forged local headers");
+
+    assert.equal((await jsonRequest(base, "/api/library")).response.status, 200, "guests can still browse");
+    assert.equal((await jsonRequest(base, "/api/download", { method: "POST", body: { questionIds: ["missing"] } })).response.status, 401);
+    assert.equal((await jsonRequest(base, "/api/modules", { method: "POST", body: { module: { name: "访客写入", subtitle: "" } } })).response.status, 401);
+
+    const cookies = {};
+    for (const name of ["one", "two", "admin"]) {
+      const registration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: `${name}@shared.test`, password: "password123", inviteCode: INVITE } });
+      assert.equal(registration.response.status, 201);
+      const setCookie = registration.response.headers.get("set-cookie") ?? "";
+      assert.match(setCookie, /HttpOnly; SameSite=Lax/);
+      assert.doesNotMatch(setCookie, /;\s*Secure\b/i, "browsers drop Secure cookies over the plain-http LAN address");
+      cookies[name] = sessionCookie(registration.response);
+    }
+    const { one, two, admin } = cookies;
+
+    // Students stay with the teacher who created them.
+    const studentOne = await jsonRequest(base, "/api/students", { cookie: one, method: "POST", body: { student: { name: "小宇", className: "初三（2）班", notes: "" } } });
+    assert.equal(studentOne.response.status, 201);
+    assert.equal((await jsonRequest(base, `/api/students/${studentOne.payload.student.id}/wrong-questions`, { cookie: two })).response.status, 404);
+    assert.deepEqual((await jsonRequest(base, "/api/students", { cookie: two })).payload.students, []);
+
+    const createdModule = await jsonRequest(base, "/api/modules", { cookie: one, method: "POST", body: { module: { name: "初二几何", subtitle: "共用" } } });
+    assert.equal(createdModule.response.status, 201);
+    const moduleId = createdModule.payload.module.id;
+    const category = await jsonRequest(base, "/api/categories", { cookie: one, method: "POST", body: { category: { id: "shared-category", name: "平行四边形", moduleId, parentId: moduleId, createdAt: 1 } } });
+    assert.equal(category.response.status, 201);
+    const saved = await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "公式 x²+1 与表格图片题", true) } });
+    assert.equal(saved.response.status, 201);
+    const asset = saved.payload.question.contentImages[0];
+    const retry = await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "公式 x²+1 与表格图片题", true) } });
+    assert.equal(retry.response.status, 201, "retry after a lost response must return the already saved question");
+    assert.equal(retry.payload.question.updatedAt, saved.payload.question.updatedAt);
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "不应覆盖原题", true) } })).response.status, 409);
+
+    const concurrentBody = { question: question("concurrent-import-question", moduleId, "shared-category", "并发创建同一道配图题", true) };
+    const freshImage = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path d="M1 1L19 19" stroke="black"/></svg>').toString('base64')}`;
+    concurrentBody.question.contentImages = [freshImage, freshImage];
+    concurrentBody.question.stemDocxAssets = { rId1: { dataUrl: freshImage, contentType: "image/svg+xml" } };
+    const concurrentCreates = await Promise.all(Array.from({ length: 3 }, () => jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: concurrentBody })));
+    assert.deepEqual(concurrentCreates.map(x => x.response.status), [201, 201, 201]);
+    const sharedImage = concurrentCreates[0].payload.question.contentImages[0];
+    assert.ok(concurrentCreates.every(x => x.payload.question.contentImages.every(url => url === sharedImage)), "all repeated image references must reuse one complete asset");
+    const storedImage = await fetch(`${base}${sharedImage}`, { headers: { Cookie: two } });
+    assert.equal(storedImage.status, 200);
+    assert.equal(await storedImage.text(), Buffer.from(freshImage.split(",")[1], "base64").toString(), "deduplicated asset must contain every original byte");
+
+    // The second teacher sees, uses and edits the first teacher's work.
+    const seenByTwo = await jsonRequest(base, "/api/library", { cookie: two });
+    const sharedQuestion = seenByTwo.payload.questions.find((item) => item.id === "shared-question");
+    assert.equal(seenByTwo.payload.scope, "public");
+    assert.ok(seenByTwo.payload.modules.some((item) => item.id === moduleId));
+    assert.equal(sharedQuestion.canEdit, true);
+    assert.equal(sharedQuestion.createdByEmail, "one@shared.test");
+    assert.equal((await jsonRequest(base, "/api/library?scope=mine", { cookie: two })).payload.questions.length, seenByTwo.payload.questions.length, "the legacy scope parameter reads the same library");
+    assert.equal((await fetch(`${base}${asset}`, { headers: { Cookie: two } })).status, 200);
+    assert.equal((await jsonRequest(base, "/api/download", { cookie: two, method: "POST", body: { questionIds: ["shared-question"] } })).response.status, 200);
+    const edited = await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "PUT", body: { question: { ...sharedQuestion, stem: "第二位老师修改后的题干" } } });
+    assert.equal(edited.response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find((item) => item.id === "shared-question").stem, "第二位老师修改后的题干");
+    const second = await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { module: { name: "待删模块", subtitle: "" } } });
+    const tempId = second.payload.module.id;
+    await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { category: { id: "temp-category", name: "待删分类", moduleId: tempId, parentId: tempId, createdAt: 1 } } });
+    await jsonRequest(base, "/api/questions", { cookie: two, method: "POST", body: { question: question("temp-question", tempId, "temp-category", "待删除题") } });
+    const order = (await jsonRequest(base, "/api/library", { cookie: two })).payload.modules.map((item) => item.id).filter((id) => id !== tempId);
+    assert.equal((await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { order: [tempId, ...order] } })).response.status, 200);
+
+    // Deleting is reserved for administrators.
+    assert.equal((await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "DELETE" })).response.status, 403);
+    assert.equal((await jsonRequest(base, "/api/categories/shared-category", { cookie: one, method: "DELETE" })).response.status, 403);
+    assert.equal((await jsonRequest(base, `/api/modules/${tempId}`, { cookie: two, method: "DELETE", body: { confirmation: "待删模块" } })).response.status, 403);
+    assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "DELETE" })).response.status, 200);
+    // A deleted question waits in the recycle bin, which only administrators open, and comes back unchanged.
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: two })).response.status, 403);
+    assert.deepEqual((await jsonRequest(base, "/api/questions", { cookie: admin })).payload.questions.map((item) => item.id), ["concurrent-import-question"]);
+    assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((item) => item.id === "concurrent-import-question"), false);
+    assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: two, method: "PATCH" })).response.status, 403);
+    assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "PATCH" })).response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((item) => item.id === "concurrent-import-question"), true);
+    assert.deepEqual((await jsonRequest(base, "/api/questions", { cookie: admin })).payload.questions, []);
+    assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "DELETE" })).response.status, 200);
+    assert.equal((await jsonRequest(base, `/api/modules/${tempId}`, { cookie: admin, method: "DELETE", body: { confirmation: "错误名称" } })).response.status, 400);
+    const deletedModule = await jsonRequest(base, `/api/modules/${tempId}`, { cookie: admin, method: "DELETE", body: { confirmation: "待删模块" } });
+    assert.deepEqual({ questions: deletedModule.payload.questionCount, categories: deletedModule.payload.categoryCount }, { questions: 1, categories: 1 });
+    const after = await jsonRequest(base, "/api/library", { cookie: one });
+    assert.deepEqual(after.payload.questions.map((item) => item.id), ["shared-question"]);
+    assert.deepEqual(after.payload.modules.map((item) => item.sortOrder), after.payload.modules.map((_, index) => index), "module order closes the gap");
+
+    // Handouts are shared the same way.
+    const handout = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "第1讲", items: [{ id: "i1", kind: "question", scope: "public", questionId: "shared-question" }], grade: 8, term: "autumn" } } });
+    assert.equal(handout.response.status, 201);
+    const handoutId = handout.payload.handout.id;
+    assert.deepEqual((await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.map((item) => item.id), [handoutId]);
+    assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: two, method: "PUT", body: { handout: { title: "第1讲 平行四边形", items: [] } } })).response.status, 200);
+    assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: one })).payload.handout.title, "第1讲 平行四边形");
+    assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: two, method: "DELETE", body: {} })).response.status, 403);
+    assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
+  } catch (error) {
+    console.error(worker.output());
+    throw error;
+  } finally {
+    await stopWorker(worker);
+  }
+});

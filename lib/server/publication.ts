@@ -76,7 +76,7 @@ function replaceAssetIds<T>(value: T, hashes: Map<string, string>): T {
 }
 
 async function buildSnapshot(user: AuthUser): Promise<Snapshot> {
-  const data = await readLibrary(user, "public");
+  const data = await readLibrary(user);
   const ids = new Set<string>();
   for (const question of data.questions) for (const id of assetIds(question)) ids.add(id);
   const assets: AssetManifest[] = [];

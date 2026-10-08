@@ -236,7 +236,7 @@ async function coverageFor(libraryId: string, publicationId: string | null, grap
   try {
     const rows = await db().prepare(`SELECT taxonomy.value AS node_key, COUNT(DISTINCT questions.source_id) AS total
       FROM library_questions_v2 AS questions, json_each(questions.payload_json, '$.taxonomyKeys') AS taxonomy
-      WHERE questions.library_id = ? AND questions.${versionWhere(publicationId)} GROUP BY taxonomy.value`)
+      WHERE questions.library_id = ? AND questions.${versionWhere(publicationId)} AND questions.deleted_at IS NULL GROUP BY taxonomy.value`)
       .bind(libraryId, ...(publicationId == null ? [] : [publicationId])).all<{ node_key: string; total: number }>();
     for (const row of rows.results) {
       const key = graph.resolveKey(String(row.node_key));
@@ -249,13 +249,9 @@ async function coverageFor(libraryId: string, publicationId: string | null, grap
   return counts;
 }
 
-export async function readKnowledgeGraphCoverage(user: AuthUser, graph: LoadedKnowledgeGraph): Promise<KnowledgeGraphCoverage> {
+export async function readKnowledgeGraphCoverage(graph: LoadedKnowledgeGraph): Promise<KnowledgeGraphCoverage> {
   const library = await db().prepare("SELECT active_publication_id FROM libraries_v2 WHERE id = 'public'").first<{ active_publication_id: string | null }>();
-  const [publicCounts, mine] = await Promise.all([
-    library ? coverageFor("public", library.active_publication_id, graph.index) : Promise.resolve({}),
-    coverageFor(`personal:${user.id}`, null, graph.index),
-  ]);
-  return { public: publicCounts, mine };
+  return { public: library ? await coverageFor("public", library.active_publication_id, graph.index) : {} };
 }
 
 export async function knowledgeGraphForSync() {

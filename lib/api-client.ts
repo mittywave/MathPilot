@@ -1,4 +1,4 @@
-import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question, Student, StudentSummary, WrongQuestionEntry } from "./types";
+import type { AuthUser, Category, Handout, HandoutPlacement, HandoutSummary, LibraryData, LibraryModule, Question, Student, StudentSummary, TeamInvite, TeamMember, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -7,31 +7,39 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-export function fetchLibrary(scope: LibraryScope = "public") { return request<LibraryData>(`/api/library?scope=${scope}`); }
+export function fetchLibrary() { return request<LibraryData>("/api/library"); }
 export function fetchMe() { return request<{ user: AuthUser | null }>("/api/auth/me"); }
 export function register(email: string, password: string, inviteCode: string) { return request<{ user: AuthUser }>("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password, inviteCode }) }); }
 export function login(email: string, password: string) { return request<{ user: AuthUser }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); }
 export function logout() { return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }); }
-export function createCloudQuestion(question: Question, scope: LibraryScope) { return request<{ question: Question }>("/api/questions", { method: "POST", body: JSON.stringify({ question, scope }) }); }
-export function updateCloudQuestion(question: Question, scope: LibraryScope) { return request<{ question: Question }>(`/api/questions/${encodeURIComponent(question.id)}`, { method: "PUT", body: JSON.stringify({ question, scope }) }); }
-export function deleteCloudQuestion(id: string, scope: LibraryScope) { return request<{ ok: boolean }>(`/api/questions/${encodeURIComponent(id)}?scope=${scope}`, { method: "DELETE" }); }
-export function createCloudCategory(category: Category, scope: LibraryScope) { return request<{ category: Category }>("/api/categories", { method: "POST", body: JSON.stringify({ category, scope }) }); }
-export function deleteCloudCategory(id: string, scope: LibraryScope) { return request<{ ok: boolean; categoryIds: string[] }>(`/api/categories/${encodeURIComponent(id)}?scope=${scope}`, { method: "DELETE" }); }
-export function createCloudModule(module: Pick<LibraryModule, "name" | "subtitle">, scope: LibraryScope) { return request<{ module: LibraryModule }>("/api/modules", { method: "POST", body: JSON.stringify({ module, scope }) }); }
-export function updateCloudModule(module: LibraryModule, scope: LibraryScope) { return request<{ module: LibraryModule }>(`/api/modules/${encodeURIComponent(module.id)}`, { method: "PUT", body: JSON.stringify({ module, scope }) }); }
-export function reorderCloudModules(order: string[], scope: LibraryScope) { return request<{ ok: boolean }>("/api/modules", { method: "POST", body: JSON.stringify({ order, scope }) }); }
-export function deleteCloudModule(id: string, confirmation: string, scope: LibraryScope) { return request<{ ok: boolean; questionCount: number; categoryCount: number }>(`/api/modules/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ confirmation, scope }) }); }
-export function copyPublicQuestions(questionIds: string[], targetModuleId: string, targetCategoryId: string) { return request<{ questions: Question[]; copied: number }>("/api/library/copy", { method: "POST", body: JSON.stringify({ questionIds, targetModuleId, targetCategoryId }) }); }
-export function importCloudLibrary(data: LibraryData, targetScope: LibraryScope) { return request<{ imported: number; modules: number; categories: number }>("/api/library/import", { method: "POST", body: JSON.stringify({ ...data, targetScope }) }); }
-export function authorizeDownload(scope: LibraryScope, questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ scope, questionIds }) }); }
+export function createCloudQuestion(question: Question) { return request<{ question: Question }>("/api/questions", { method: "POST", body: JSON.stringify({ question }) }); }
+export function updateCloudQuestion(question: Question) { return request<{ question: Question }>(`/api/questions/${encodeURIComponent(question.id)}`, { method: "PUT", body: JSON.stringify({ question }) }); }
+export function deleteCloudQuestion(id: string) { return request<{ ok: boolean }>(`/api/questions/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function fetchDeletedQuestions() { return request<{ questions: Array<Question & { deletedAt: number }> }>("/api/questions"); }
+export function restoreCloudQuestion(id: string) { return request<{ ok: boolean }>(`/api/questions/${encodeURIComponent(id)}`, { method: "PATCH" }); }
+export function createCloudCategory(category: Category) { return request<{ category: Category }>("/api/categories", { method: "POST", body: JSON.stringify({ category }) }); }
+export function deleteCloudCategory(id: string) { return request<{ ok: boolean; categoryIds: string[] }>(`/api/categories/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function createCloudModule(module: Pick<LibraryModule, "name" | "subtitle">) { return request<{ module: LibraryModule }>("/api/modules", { method: "POST", body: JSON.stringify({ module }) }); }
+export function updateCloudModule(module: LibraryModule) { return request<{ module: LibraryModule }>(`/api/modules/${encodeURIComponent(module.id)}`, { method: "PUT", body: JSON.stringify({ module }) }); }
+export function reorderCloudModules(order: string[]) { return request<{ ok: boolean }>("/api/modules", { method: "POST", body: JSON.stringify({ order }) }); }
+export function deleteCloudModule(id: string, confirmation: string) { return request<{ ok: boolean; questionCount: number; categoryCount: number }>(`/api/modules/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ confirmation }) }); }
+export function importCloudLibrary(data: LibraryData) { return request<{ imported: number; modules: number; categories: number }>("/api/library/import", { method: "POST", body: JSON.stringify(data) }); }
+export function authorizeDownload(questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ questionIds }) }); }
+export function fetchHandouts() { return request<{ handouts: HandoutSummary[] }>("/api/handouts"); }
+export function fetchHandout(id: string) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(id)}`); }
+export function createHandout(handout: Pick<Handout, "title" | "items"> & Partial<HandoutPlacement>) { return request<{ handout: Handout }>("/api/handouts", { method: "POST", body: JSON.stringify({ handout }) }); }
+export function arrangeHandouts(placement: HandoutPlacement, ids: string[]) { return request<HandoutPlacement & { ids: string[] }>("/api/handouts", { method: "PATCH", body: JSON.stringify({ ...placement, ids }) }); }
+export function updateHandout(handout: Pick<Handout, "id" | "title" | "items">) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(handout.id)}`, { method: "PUT", body: JSON.stringify({ handout }) }); }
+export function deleteHandout(id: string) { return request<{ ok: boolean }>(`/api/handouts/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function uploadHandoutImage(image: string) { return request<{ url: string }>("/api/handout-images", { method: "POST", body: JSON.stringify({ image }) }); }
 export function fetchStudents() { return request<{ students: StudentSummary[] }>("/api/students"); }
 export function createStudent(student: Pick<Student, "name" | "className" | "notes">) { return request<{ student: Student }>("/api/students", { method: "POST", body: JSON.stringify({ student }) }); }
 export function updateStudent(student: Student) { return request<{ student: Student }>(`/api/students/${encodeURIComponent(student.id)}`, { method: "PUT", body: JSON.stringify({ student }) }); }
 export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQuestionCount: number }>(`/api/students/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
+export function restoreWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PATCH" }); }
 export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions?includeHistory=true`); }
 
-export function updateWrongQuestion(studentId: string, entryId: string, entry: Partial<Pick<WrongQuestionEntry, "mistakeCount" | "note" | "mastered">>) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PUT", body: JSON.stringify({ entry }) }); }
-export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
 export type PublicationProgress = {
   phase: "snapshot" | "compare" | "assets" | "commit" | "complete";
   current: number;
@@ -72,3 +80,7 @@ export async function publishPublicLibrary(onProgress?: (progress: PublicationPr
   if (!result) throw new Error("发布服务未返回完成结果");
   return result;
 }
+export function fetchTeam() { return request<{ members: TeamMember[]; invite: TeamInvite; me: string }>("/api/admin/members"); }
+export function updateTeamMember(id: string, changes: { role?: TeamMember["role"]; disabled?: boolean }) { return request<{ member: TeamMember }>(`/api/admin/members/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }); }
+export function resetTeamPassword(id: string) { return request<{ password: string }>(`/api/admin/members/${encodeURIComponent(id)}/password`, { method: "POST" }); }
+export function changeTeamInvite(action: "rotate" | "close") { return request<{ invite: TeamInvite }>("/api/admin/invite", { method: "POST", body: JSON.stringify({ action }) }); }
