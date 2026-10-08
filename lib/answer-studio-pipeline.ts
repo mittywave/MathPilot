@@ -1,4 +1,5 @@
 import { studioSnapshot } from './answer-studio-snapshot';
+import { randomClientId } from './client-random-id.mjs';
 import {
   attachAnswerOnlyRecords, matchStudioAnswers, mergeStudioRecords, sameStudioStem, studioKey,
   type StudioBox, type StudioDiagram, type StudioDraft, type StudioPage, type StudioQuestion,
@@ -107,7 +108,7 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
             const questionDiagramSources=r.diagramBoxes.map(box=>({pageId:page.id,box:studioPaddedDiagramBox(box)}));
             if(r.continuation&&candidates.length===1) {
               const q=candidates[0];q.stem+='\n'+r.stem;q.questionSources.push(r.source);q.questionDiagramSources=[...(q.questionDiagramSources||[]),...questionDiagramSources];q.tables=[...(q.tables||[]),...(r.tables||[])];q.drawingsChecked=false;q.warnings.push(...r.warnings);
-            } else next.questions.push({id:crypto.randomUUID(),lesson:r.lesson,section:r.section,number:r.number,stem:r.stem,analysis:'',questionSources:[r.source],questionDiagramSources,answerIds:[],diagrams:[],tables:r.tables||[],warnings:[...r.warnings,...(r.continuation?['原题续页归属不明确，已独立保留']:[])],resolutions:{},reviewed:false});
+            } else next.questions.push({id:randomClientId(),lesson:r.lesson,section:r.section,number:r.number,stem:r.stem,analysis:'',questionSources:[r.source],questionDiagramSources,answerIds:[],diagrams:[],tables:r.tables||[],warnings:[...r.warnings,...(r.continuation?['原题续页归属不明确，已独立保留']:[])],resolutions:{},reviewed:false});
           }
         }
         page.processed=true;
@@ -151,7 +152,7 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
       const page=next.pages.find(p=>p.id===source.pageId);
       if(!page)throw new Error('缺少原题配图来源页，请恢复包含原件的项目备份');
       const crop=await service.crop(page.image,source.box);
-      q.diagrams.push({id:crypto.randomUUID(),caption:'',baseImage:crop.image,baseSource:source,width:crop.width,height:crop.height,shapes:[],warnings:[]});
+      q.diagrams.push({id:randomClientId(),caption:'',baseImage:crop.image,baseSource:source,width:crop.width,height:crop.height,shapes:[],warnings:[]});
     }
     // Always inspect answer evidence, including questions whose text pass missed
     // diagramBoxes. Empty diagrams is a model decision, never an omitted call.
@@ -185,7 +186,7 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
       // Apply atomically, so a failed request can be retried without duplicate shapes.
       const diagrams=structuredClone(bases);
       for(const d of result.diagrams) {
-        if(d.baseIndex===-1)diagrams.push({id:crypto.randomUUID(),caption:d.caption,baseImage:'',width:500,height:400,shapes:d.shapes,warnings:d.warnings});
+        if(d.baseIndex===-1)diagrams.push({id:randomClientId(),caption:d.caption,baseImage:'',width:500,height:400,shapes:d.shapes,warnings:d.warnings});
         else {const base=diagrams[d.baseIndex];if(!base)throw new Error('配图底图关系无效');base.shapes.push(...d.shapes);base.warnings.push(...d.warnings);base.caption=d.caption;}
       }
       q.diagrams=diagrams;q.warnings.push(...result.warnings);

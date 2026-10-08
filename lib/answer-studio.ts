@@ -1,3 +1,5 @@
+import { randomClientId } from "./client-random-id.mjs";
+
 /** Independent transcription model. Never use ordinary question cleanup on teacher answers. */
 export type StudioBox = { x: number; y: number; width: number; height: number };
 export type StudioPage = { id: string; role: "question" | "answer"; name: string; page: number; image: string; hash: string; selected: boolean; processed?: boolean };
@@ -90,7 +92,7 @@ export function attachAnswerOnlyRecords(draft: StudioDraft): StudioQuestion[] {
       q.warnings = [...new Set([...q.warnings, ...a.warnings])]; q.reviewed = false;
     } else {
       const warning = a.continuation ? [stemConflict ? "续页题干与前题不一致，已分开保留，请人工确认是否为不同版本" : "续页起始题不明确，请人工确认归属"] : candidates.length ? ["同栏目题号重复，请人工确认边界"] : [];
-      questions.push({id:crypto.randomUUID(),answerOnly:true,lesson:a.lesson,section:a.section,number:a.number,stem:a.stem,analysis:a.analysis,questionSources:[],answerIds:[a.id],diagrams:[],tables:a.tables||[],warnings:[...a.warnings,...warning,"尚未检查解答图与辅助线","仅答案材料：请确认未补写原件没有的步骤"],resolutions:{},reviewed:false});
+      questions.push({id:randomClientId(),answerOnly:true,lesson:a.lesson,section:a.section,number:a.number,stem:a.stem,analysis:a.analysis,questionSources:[],answerIds:[a.id],diagrams:[],tables:a.tables||[],warnings:[...a.warnings,...warning,"尚未检查解答图与辅助线","仅答案材料：请确认未补写原件没有的步骤"],resolutions:{},reviewed:false});
     }
     used.add(a.id);
   }
