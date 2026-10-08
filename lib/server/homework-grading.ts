@@ -77,23 +77,21 @@ async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
   return true;
 }
 
-async function processHomeworkSubmissionPage(submissionId: string, pageNumberValue: number, upperAttempt = 1) {
+async function processHomeworkSubmissionQuestions(submissionId: string, upperAttempt = 1) {
   const submission = await processingSubmission(submissionId);
   if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission); return; }
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
-  const pageNumber = Math.max(1, Math.min(200, Math.floor(Number(pageNumberValue) || 1)));
   await homeworkDb().prepare("UPDATE homework_submissions SET status = 'processing', failure_reason = '', updated_at = ? WHERE id = ?")
     .bind(Date.now(), submissionId).run();
 
   const questionsResult = await homeworkDb().prepare(`SELECT id, question_number, page_number, type, stem, answer, analysis, reference_verified, input_evidence_json
-    FROM assignment_questions WHERE assignment_id = ? AND page_number = ? ORDER BY sort_order`)
-    .bind(submission.assignment_id, pageNumber).all<QuestionRow>();
+    FROM assignment_questions WHERE assignment_id = ? ORDER BY sort_order`)
+    .bind(submission.assignment_id).all<QuestionRow>();
   const pendingIds = JSON.parse(submission.reprocess_question_ids_json || "[]") as string[];
   const prior=await homeworkDb().prepare('SELECT g.assignment_question_id,g.updated_at,g.reviewed_at,g.requires_review,s.submitted_at FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?').bind(submissionId).all<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>();
   const done=new Set((prior.results as Array<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>).filter(g=>(g.reviewed_at && !g.requires_review)||g.updated_at>=(g.submitted_at??0)).map(g=>g.assignment_question_id));
   const questions = questionsResult.results.filter(q => (!pendingIds.length || pendingIds.includes(q.id))&&!done.has(q.id));
   await (await import("./completed-homework-grading")).gradeCompletedQuestions(submissionId, questions, upperAttempt);
-  await finalizeSubmissionIfComplete(submission);
 }
 
 export async function processHomeworkSubmission(submissionId: string, upperAttempt = 1) {
@@ -103,9 +101,8 @@ export async function processHomeworkSubmission(submissionId: string, upperAttem
   // Failures are recorded by the caller: only it knows whether the queue will retry or this was the last attempt.
   await homeworkDb().prepare("UPDATE homework_submissions SET status='processing',failure_reason='',updated_at=? WHERE id=? AND status IN ('submitted','failed')").bind(Date.now(),submissionId).run();
   await (await import("./completed-homework")).prepareCompletedHomework(submissionId,submission.assignment_id,upperAttempt);
-  const pages = await homeworkDb().prepare("SELECT DISTINCT page_number FROM assignment_questions WHERE assignment_id = ? ORDER BY page_number")
-    .bind(submission.assignment_id).all<{ page_number: number }>();
-  for (const page of pages.results) await processHomeworkSubmissionPage(submissionId, Number(page.page_number), upperAttempt);
+  // Batch all pending questions together so sparse pages can fill the same four worker slots.
+  await processHomeworkSubmissionQuestions(submissionId, upperAttempt);
   await finalizeSubmissionIfComplete(submission);
 }
 

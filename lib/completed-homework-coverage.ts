@@ -3,7 +3,7 @@ import { homeworkFigureRules, mergeHomeworkFigures } from './homework-figures';
 import type { HomeworkCurriculum } from './types';
 
 export const HOMEWORK_PAGE_CONTRACT = 'completed-homework-pages-v1';
-export const HOMEWORK_AI_CONCURRENCY = 2;
+export const HOMEWORK_AI_CONCURRENCY = 4;
 export const HOMEWORK_QUESTION_BATCH = 6;
 export type PageExtraction = { pageNumber:number; kind:'questions'|'continuation'|'blank'|'unreadable'; reason:string; questions:CompletedQuestion[] };
 export const completedPageExtractionSchema = {
