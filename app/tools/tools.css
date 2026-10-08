@@ -1,18 +1,18 @@
 .toolbox{max-width:880px;margin:0 auto;padding:28px 24px 80px;color:var(--ink,#24352f);font-size:15px;line-height:1.6}
 .toolbox *{box-sizing:border-box;min-width:0}
 .tool-icon{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.toolbox-back{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:8px 13px;border:1px solid var(--line,#e4e9e6);border-radius:10px;background:var(--surface,#fff);color:var(--green,#2f6b53);font-size:14px;font-weight:600;text-decoration:none;white-space:nowrap}
+.toolbox-back{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:8px 13px;border:1px solid var(--line,#e4e9e6);border-radius:calc(10px*var(--radius-scale));background:var(--surface,#fff);color:var(--green,#2f6b53);font-size:14px;font-weight:600;text-decoration:none;white-space:nowrap}
 .toolbox-back:hover{background:var(--green-soft,#edf5f0);border-color:var(--green,#2f6b53)}
 .toolbox-head{display:flex;align-items:center;gap:14px;margin:22px 0 26px}
-.toolbox-mark{display:grid;place-items:center;flex:none;width:46px;height:46px;border-radius:14px;background:var(--green-soft,#edf5f0);color:var(--green,#2f6b53)}
+.toolbox-mark{display:grid;place-items:center;flex:none;width:46px;height:46px;border-radius:calc(14px*var(--radius-scale));background:var(--green-soft,#edf5f0);color:var(--green,#2f6b53)}
 .toolbox-mark .tool-icon{width:24px;height:24px}
 .toolbox-head h1{margin:0;font-size:28px;line-height:1.2}
 .toolbox-head p{margin:4px 0 0;color:color-mix(in srgb,var(--ink,#24352f) 70%,var(--surface,#fff))}
 .toolbox-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin:0;padding:0;list-style:none}
-.tool-card{display:flex;align-items:flex-start;gap:14px;height:100%;padding:18px;border:1px solid var(--line,#e4e9e6);border-radius:14px;background:var(--surface,#fff);color:inherit;text-decoration:none;box-shadow:0 6px 18px rgba(25,55,52,.05);transition:border-color .15s,background .15s,transform .15s}
+.tool-card{display:flex;align-items:flex-start;gap:14px;height:100%;padding:18px;border:1px solid var(--line,#e4e9e6);border-radius:calc(14px*var(--radius-scale));background:var(--surface,#fff);color:inherit;text-decoration:none;box-shadow:0 6px 18px color-mix(in srgb, color-mix(in srgb, var(--shadow-tint) 41%, var(--inverse)) 5%, transparent);transition:border-color .15s,background .15s,transform .15s}
 .tool-card:hover{border-color:var(--green,#2f6b53);background:color-mix(in srgb,var(--surface,#fff) 90%,var(--green-soft,#edf5f0));transform:translateY(-1px)}
 .tool-card:focus-visible{outline:2px solid var(--green,#2f6b53);outline-offset:3px}
-.tool-card-icon{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:12px;background:var(--green-soft,#edf5f0);color:var(--green,#2f6b53)}
+.tool-card-icon{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:calc(12px*var(--radius-scale));background:var(--green-soft,#edf5f0);color:var(--green,#2f6b53)}
 .tool-card-copy{display:grid;gap:4px;flex:1}
 .tool-card-copy strong{font-size:17px}
 .tool-card-copy>span{color:color-mix(in srgb,var(--ink,#24352f) 72%,var(--surface,#fff));font-size:13.5px;line-height:1.55}
