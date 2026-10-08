@@ -100,3 +100,11 @@ test("centers only formula-only fallback lines and keeps prose controls left ali
     { value: "继续说明", align: "left" },
   ]);
 });
+
+test("a line of inline formulas stays in the running text; a fraction in it is printed full size", async () => {
+  const stem = "把下列各数填入相应的集合中：\n$+6$, $0.75$, $-3$, $\\frac{24}{5}$, $-\\frac{1}{3}$, $9\\%$.\n$$x^{2}=4$$";
+  assert.deepEqual(plainTextWebLines(stem).map((line) => line.align), ["left", "left", "center"]);
+  const { renderKatex } = await loadSource("lib/math-render.ts");
+  assert.match(renderKatex("-\\frac{1}{3}").html, /\\displaystyle -\\frac\{1\}\{3\}/);
+  assert.doesNotMatch(renderKatex("x^{2}").html, /\\displaystyle/);
+});

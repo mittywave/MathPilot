@@ -95,6 +95,11 @@ test('PDF worker preparation serves exactly the package bytes under a versioned 
   const actual=await readFile(join(dir,'public',url));
   const original=await readFile(require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'));
   assert.deepEqual(actual,original);assert.doesNotMatch(actual.toString(),/dev-error-overlay|\/@vite\/client/);
+  // Every PDF reader uses this copy: a ?url worker gets Vite's page-only client injected in development.
+  for(const file of ['lib/answer-studio-images.ts','lib/file-import.ts']){
+    const source=await readFile(file,'utf8');
+    assert.doesNotMatch(source,/pdf\.worker\.min\.mjs\?url/,file);assert.match(source,/workerSrc\s*=\s*`\/pdfjs\/\$\{pdfjs\.version\}\/pdf\.worker\.min\.mjs`/,file);
+  }
 });
 test('JSON control escapes are repaired only for known commands inside explicit math',async t=>{
   const {normalizeStudioTextFields,normalizeStudioMathEscapes}=await moduleFixture(t);

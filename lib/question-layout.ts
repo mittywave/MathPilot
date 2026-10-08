@@ -22,12 +22,25 @@ export function isCompactConclusionQuestion(question: Question) {
   });
 }
 
+// A screenshot question keeps its figure where the original printed it: beside the text when the figure starts in the
+// right half of the screenshot, otherwise under the text, at the same share of the line width.
+function screenshotFigureBox(question: Question) {
+  return question.originalImage && question.diagramBox && questionImages(question).length === 1 ? question.diagramBox : null;
+}
+
+export function sourceFigureWidth(question: Question) {
+  const box = screenshotFigureBox(question);
+  return box ? Math.min(1, Math.max(.12, box.width / 1000)) : null;
+}
+
 export function resolveQuestionImageLayout(question: Question): ImageLayout {
   const imageCount = questionImages(question).length;
   const paragraphCount = question.stemParagraphs?.filter((paragraph) => paragraph.trim()).length ?? question.stem.split(/\r?\n/).filter((paragraph) => paragraph.trim()).length;
   const compactConclusion = isCompactConclusionQuestion(question);
   const automaticLayout = automaticQuestionImageLayout({ imageCount, stemLength: question.stem.length, paragraphCount, type: question.type, stem: question.stem, optionCount: question.options.length });
   if (compactConclusion) return "below";
+  const screenshotFigure = screenshotFigureBox(question);
+  if (screenshotFigure) return screenshotFigure.x < 450 ? "below" : "right";
   if (automaticLayout && (question.stemDocxXml?.length || !question.imageLayout)) return automaticLayout;
   if (isGeometryQuestion(question)) return "right";
   return question.imageLayout ?? automaticLayout ?? "right";

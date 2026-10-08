@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-export function PaperMoreMenu({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function PaperMoreMenu({ children, className = "", label = "组卷更多操作" }: { children: ReactNode; className?: string; label?: string }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +37,6 @@ export function PaperMoreMenu({ children, className = "" }: { children: ReactNod
 
   return <div ref={menuRef} className={`basket-more ${className}`.trim()}>
     <button className="more-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>更多</button>
-    {open && <div className="more-panel" role="group" aria-label="组卷更多操作">{children}</div>}
+    {open && <div className="more-panel" role="group" aria-label={label}>{children}</div>}
   </div>;
 }

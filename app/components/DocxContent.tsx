@@ -3,6 +3,7 @@
 import { Fragment, useMemo } from "react";
 import { parseDocxWebContent, parseDocxWebOptions, type DocxWebBlock, type DocxWebInline } from "../../lib/docx-web-content";
 import { plainTextWebLines } from "../../lib/math-text";
+import { optionColumnCount } from "../../lib/question-presentation-rules.mjs";
 import { MathText } from "./MathText";
 
 function InlineContent({ inlines }: { inlines: DocxWebInline[] }) {
@@ -46,7 +47,7 @@ export function DocxOptions({ xml, fallback }: { xml?: string[]; fallback: strin
   const count = Math.max(fallback.length, parsed.length);
   const hasLongFormula = parsed.some((option) => option.inlines.some((inline) => inline.type === "math" && ((inline.latex.match(/\\frac/g) ?? []).length >= 2 || inline.latex.length > 48)));
   if (!count) return null;
-  return <div className={`options docx-web-options ${hasLongFormula ? "long-formula" : "compact-options"}`} data-option-count={count}>{Array.from({ length: count }, (_, index) => {
+  return <div className={`options docx-web-options ${hasLongFormula || optionColumnCount(fallback) === 2 ? "long-formula" : "compact-options"}`} data-option-count={count}>{Array.from({ length: count }, (_, index) => {
     const label = String.fromCharCode(65 + index);
     const option = parsedByLabel.get(label);
     return <div className="docx-web-option" key={label}><span className="docx-web-option-label">{label}.</span><span className="docx-web-option-content">{option ? <InlineContent inlines={option.inlines} /> : <MathText text={fallback[index] ?? ""} />}</span></div>;
