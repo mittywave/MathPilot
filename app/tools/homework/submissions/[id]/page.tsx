@@ -63,9 +63,9 @@ function LiveBoard({ submission, international, busy, onRetry }: { submission: H
   const recent = [...fresh].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
   const failures = coverage ? pageFailures(coverage) : [];
   return <section className={`live-board${failed ? " failed" : retrying ? " retrying" : ""}`} aria-label="批改进度">
-    <header><div><h2>{failed ? "自动批改遇到问题" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div>{failed && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</header>
+    <header><div><h2>{failed ? "自动批改遇到问题" : current === 2 && graded > 0 ? "正在准备参考答案并批改" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div>{failed && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</header>
     <ol className="live-stages">{STAGES.map((label, index) => {
-      const [value, max] = stages[index], state = index < current ? "done" : index > current ? "waiting" : failed ? "stalled" : "active";
+      const [value, max] = stages[index], state = index < current ? "done" : index > current && !(index === 3 && graded > 0) ? "waiting" : failed ? "stalled" : "active";
       const fill = max ? Math.min(1, value / max) : index < current ? 1 : 0;
       return <li key={label} className={state}><span>{label}</span><b>{state === "waiting" && !value ? "—" : <>{value}<small>{max == null ? " 道" : ` / ${max}`}</small></>}</b><i><em style={{ width: `${fill * 100}%` }} /></i></li>;
     })}</ol>
@@ -83,7 +83,7 @@ function LiveBoard({ submission, international, busy, onRetry }: { submission: H
           <h3>已批改 <b>{fresh.length}</b>{identified > 0 && <small> / {identified} 道</small>}</h3>
           <VerdictTally items={fresh} total={identified} />
           {recent.length ? <ol className="live-feed">{recent.map((item) => <li key={item.id} className={bucket(item)}><b>{homeworkQuestionLabel(item.questionNumber)}</b><span>{verdictLabel(item, international)}</span>{item.errorType && <small>{item.errorType}</small>}</li>)}</ol> : <p className="live-empty">批改完成的题目会逐一出现在这里。</p>}
-        </> : <div className="live-waiting"><h3>逐题批改还没开始</h3><p>{current === 2 ? `AI 正在为每道题准备参考答案（${referenceChecked} / ${identified} 道），全部完成后才开始逐题批改。` : "读取页面、识别题目之后，AI 会先为每道题准备参考答案，再开始逐题批改。"}批改结果会实时出现在这里。</p></div>}
+        </> : <div className="live-waiting"><h3>逐题批改还没开始</h3><p>{current === 2 ? `AI 正在为每道题准备参考答案（${referenceChecked} / ${identified} 道），每批准备好后立即批改。` : "读取页面、识别题目之后，AI 会分批准备参考答案，每批核验完成后立即批改。"}批改结果会实时出现在这里。</p></div>}
         {failures.map((line) => <p key={line} className="live-failure">{line}</p>)}
       </aside>
     </div>

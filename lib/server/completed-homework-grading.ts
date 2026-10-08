@@ -1,7 +1,7 @@
 import type { GradingVerdict, QuestionType } from '../types';
 import type { CompletedQuestion } from '../completed-homework-contract';
 import { buildHomeworkGradingPrompt, homeworkGradingSchema, INTERNATIONAL_GRADING_RULES, normalizeHomeworkGrading } from '../homework-grading-contract';
-import { boundedMap, HOMEWORK_AI_CONCURRENCY, HOMEWORK_QUESTION_BATCH, requireExactQuestionNumbers } from '../completed-homework-coverage';
+import { boundedMap, HOMEWORK_AI_CONCURRENCY, homeworkQuestionBatches, requireExactQuestionNumbers } from '../completed-homework-coverage';
 import { finalizeHomeworkVerdict, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, normalizeMaxScore, reconcileHomeworkScore } from '../homework-grading-rules.mjs';
 import type { HomeworkCurriculum } from '../types';
 import { homeworkCurriculum, homeworkDb } from './homework';
@@ -13,11 +13,11 @@ import { upsertResult } from './homework-grading';
 const VERDICT_ONLY_RULES='本作业只判对错：verdict 照常判定；feedback、error_type、evidence_summary 返回空字符串，step_analysis 返回空数组，不写解析、步骤分析和订正建议。';
 const TEACHER_MARK_EVIDENCE={correct:'老师已打勾',partial:'老师判为半对',incorrect:'老师已打叉或圈出答案'};
 type Row={id:string;question_number:string;page_number:number;type:QuestionType;stem:string;answer:string;analysis:string;reference_verified:number;input_evidence_json:string};
-export async function gradeCompletedQuestions(submissionId:string,questions:Row[],upperAttempt:number){
-  const batches:Row[][]=[];for(let i=0;i<questions.length;i+=HOMEWORK_QUESTION_BATCH)batches.push(questions.slice(i,i+HOMEWORK_QUESTION_BATCH));
+export async function gradeCompletedQuestions(submissionId:string,questions:Row[],upperAttempt:number,concurrency=HOMEWORK_AI_CONCURRENCY){
+  const batches=homeworkQuestionBatches(questions,upperAttempt,concurrency);
   const assignment=await homeworkDb().prepare('SELECT a.curriculum FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=?').bind(submissionId).first<{curriculum:string}>();
   const curriculum=homeworkCurriculum(assignment?.curriculum);
-  await boundedMap(batches,HOMEWORK_AI_CONCURRENCY,batch=>gradeBatch(submissionId,batch,upperAttempt,curriculum));
+  await boundedMap(batches,concurrency,batch=>gradeBatch(submissionId,batch,upperAttempt,curriculum),true);
 }
 async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:number,curriculum:HomeworkCurriculum){
   if(!questions.length)return;

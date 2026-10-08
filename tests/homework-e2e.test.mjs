@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,invalidPage:0,pageExtractionCalls:{},locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -94,13 +94,19 @@ function startMockModel(port) {
       if (stage) {
         const metrics = state.concurrency;
         if (stage === "reference") assert.equal(metrics.finished.pages, 5, "references wait for all page receipts");
-        if (stage === "grading") assert.equal(metrics.finished.verification, 5, "grading waits for all verified batches");
+        const numbers = stage === "grading" ? [...prompt.matchAll(/题号 ([^\n]+)/g)].map(m=>m[1].trim())
+          : [...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];
+        if (stage === "grading") {
+          assert.ok(numbers.every(number=>metrics.verified.has(number)), "only verified questions enter grading");
+          if(metrics.verified.size<25)metrics.earlyGrading=true;
+        }
         metrics.active[stage] = (metrics.active[stage] ?? 0) + 1;
         metrics.peak[stage] = Math.max(metrics.peak[stage] ?? 0, metrics.active[stage]);
         metrics.total += 1; metrics.totalPeak = Math.max(metrics.totalPeak, metrics.total);
         response.once("finish", () => {
           metrics.active[stage] -= 1; metrics.total -= 1;
           metrics.finished[stage] = (metrics.finished[stage] ?? 0) + 1;
+          if(stage === "verification" && response.statusCode === 200)numbers.forEach(number=>metrics.verified.add(number));
         });
         // Keep requests in flight long enough to observe the actual queue's worker slots.
         await new Promise(resolveDelay => setTimeout(resolveDelay, 1000));
@@ -147,6 +153,15 @@ function startMockModel(port) {
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({answers})}));return;
     }
     if(prompt.includes("独立核验参考答案")) {
+      const gate=state.verificationGate;
+      if(gate&&prompt.includes('"question_number":"1-1"')){
+        gate.sizes.push([...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))].length);
+        if(!gate.entered){
+          gate.entered=true;
+          await new Promise(resolveGate=>{gate.release=resolveGate;});
+          response.writeHead(503,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"verification fixture interruption"}}));return;
+        }
+      }
       assert.doesNotMatch(prompt,/student_answer/);
       const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];
       const results=numbers.map(n=>({question_number:n,verified:true,reason:"已独立验算成立"}));
@@ -173,7 +188,7 @@ function startMockModel(port) {
     const numbers = [...prompt.matchAll(/题号 ([^\n]+)/g)].map((match) => match[1].trim());
     state.gradedNumbers.push(...numbers); if (prompt.includes("本作业只判对错")) state.verdictOnlyPrompts += 1;
     if (prompt.includes("本作业为 IGCSE / A Level")) {
-      assert.match(prompt, /题号 1\(b\)\n题型：解答题\n满分：3/); assert.match(prompt, /结果分（A）只在对应方法分已得时才给/);
+      if(numbers.includes("1(b)"))assert.match(prompt, /题号 1\(b\)\n题型：解答题\n满分：3/); assert.match(prompt, /结果分（A）只在对应方法分已得时才给/);
       const results = numbers.map((number) => ({ question_number: number, page_number: 1, student_answer: number === "1(a)" ? "x=2" : "x^2=2", verdict: number === "1(a)" ? "correct" : "partial", score: number === "1(a)" ? 2 : 1,
         feedback: number === "1(a)" ? "" : "方法分已得，结果算错。", error_type: number === "1(a)" ? "" : "计算", step_analysis: number === "1(a)" ? ["M1 ✓", "A1 ✓"] : ["M1 ✓", "A1 ✗", "A1 ✗"], evidence_summary: "", capability_keys: [], confidence: .9, bbox: null, warnings: [] }));
       response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ output_text: JSON.stringify({ results }) })); return;
@@ -401,14 +416,15 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(d1Rows(stateDir,"SELECT g.updated_at>=s.submitted_at AS fresh FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?",[multiId]).every(g=>g.fresh===1));
     // Five pages and 25 questions exercise four slots plus queued work in every AI stage.
     mock.state.pageQuestionCount=5;
-    mock.state.concurrency={active:{},peak:{},finished:{},total:0,totalPeak:0};
+    mock.state.concurrency={active:{},peak:{},finished:{},total:0,totalPeak:0,verified:new Set(),earlyGrading:false};
     const parallel=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"四路并发回归",outputs:{wrongBook:true,report:false,profile:false}}});
     const parallelId=parallel.payload.submission.id,parallelPages=[];
     for(let page=0;page<5;page++)parallelPages.push(await uploadPage(base,teacherOne,parallelId,bytes));
     await submitPages(base,teacherOne,parallelId,parallelPages);
     const parallelResult=await waitForSubmission(base,teacherOne,parallelId,["published"],worker);
     assert.deepEqual(mock.state.concurrency.peak,{pages:4,reference:4,verification:4,grading:4});
-    assert.equal(mock.state.concurrency.totalPeak,4,"reference and verification share four worker slots");
+    assert.equal(mock.state.concurrency.totalPeak,4,"solve, verification and grading share four worker slots");
+    assert.equal(mock.state.concurrency.earlyGrading,true,"a ready batch is graded before the final reference batch");
     assert.deepEqual(mock.state.concurrency.finished,{pages:5,reference:5,verification:5,grading:5});
     assert.equal(parallelResult.pageCoverage.processed,5);
     assert.equal(parallelResult.gradingItems.length,25);
@@ -416,6 +432,38 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(new Set(parallelResult.gradingItems.map(item=>item.questionNumber)).size,25);
     assert.ok(parallelResult.gradingItems.every(item=>item.verdict==="incorrect"));
     console.log("Homework concurrency peaks:",mock.state.concurrency.peak,"; saved and archived:",parallelResult.gradingItems.length);
+    // Hold one verification open: the other 20 questions must finish, while five drafts cannot count as checked.
+    mock.state.concurrency={active:{},peak:{},finished:{},total:0,totalPeak:0,verified:new Set(),earlyGrading:false};
+    mock.state.verificationGate={entered:false,release:null,sizes:[]};
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];mock.state.pageExtractionCalls={};
+    const resumed=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"核验中断续跑",outputs:{wrongBook:true,report:false,profile:false}}});
+    const resumedId=resumed.payload.submission.id,resumedPages=[];
+    for(let page=0;page<5;page++)resumedPages.push(await uploadPage(base,teacherOne,resumedId,bytes));
+    await submitPages(base,teacherOne,resumedId,resumedPages);
+    let partial;const partialDeadline=Date.now()+20_000;
+    while(Date.now()<partialDeadline){
+      partial=(await jsonRequest(base,`/api/submissions/${resumedId}`,{cookie:teacherOne})).payload.submission;
+      if(partial.processingProgress.graded===20)break;
+      await new Promise(resolveWait=>setTimeout(resolveWait,150));
+    }
+    assert.equal(partial.status,"processing");
+    assert.equal(partial.processingProgress.referenceChecked,20,"generated but unverified drafts are not counted as ready");
+    assert.equal(partial.processingProgress.graded,20,"the slow first batch does not block queued batches");
+    assert.equal(partial.gradingSummary.archived,0,"partial processing must not publish the paper early");
+    const savedBefore=new Map(partial.gradingItems.map(item=>[item.id,item.updatedAt]));
+    assert.equal(d1Rows(stateDir,"SELECT count(*) n FROM assignment_questions WHERE assignment_id=? AND reference_fingerprint LIKE 'pending:%' AND reference_verified=0",[partial.assignmentId])[0].n,5);
+    mock.state.verificationGate.release();
+    const resumedResult=await waitForSubmission(base,teacherOne,resumedId,["published"],worker);
+    assert.deepEqual(mock.state.verificationGate.sizes,[5,2],"the failed five-question batch is split on the next queue attempt");
+    assert.equal(mock.state.referenceNumbers.length,25,"verification retry reuses generated answers");
+    assert.equal(new Set(mock.state.referenceNumbers).size,25);
+    assert.equal(mock.state.gradedNumbers.length,25,"saved verdicts are never graded twice");
+    assert.equal(mock.state.concurrency.totalPeak,4);
+    assert.equal(resumedResult.processingProgress.referenceChecked,25);
+    assert.equal(resumedResult.gradingSummary.archived,25);
+    assert.ok(resumedResult.gradingItems.every(item=>!savedBefore.has(item.id)||savedBefore.get(item.id)===item.updatedAt));
+    assert.deepEqual(Object.values(mock.state.pageExtractionCalls),[1,1,1,1,1],"successful page reads survive the retry");
+    mock.state.verificationGate=null;
     mock.state.concurrency=null;mock.state.pageQuestionCount=1;
     mock.state.multiPage=false;
 

@@ -113,7 +113,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   const pageCoverage = await (await import("./homework-page-coverage")).readPageCoverage(id);
   const processingProgress = await appEnv().DB.prepare(`SELECT
     (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=?) AS identified,
-    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (reference_fingerprint<>'' OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR json_extract(input_evidence_json,'$.teacher_mark') IN ('correct','partial','incorrect'))) AS referenceChecked,
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR json_extract(input_evidence_json,'$.teacher_mark') IN ('correct','partial','incorrect'))) AS referenceChecked,
     (SELECT COUNT(*) FROM grading_items WHERE submission_id=? AND (updated_at>=? OR (reviewed_at IS NOT NULL AND requires_review=0))) AS graded`)
     .bind(row.assignment_id,row.assignment_id,id,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
   // Questions read before figures were located; their figures can be filled in from the submission page.

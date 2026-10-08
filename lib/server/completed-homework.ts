@@ -1,5 +1,5 @@
 import { completedReferencePrompt, completedReferenceSchema, completedVerificationPrompt, completedVerificationSchema, normalizeCompletedReferences, normalizeCompletedVerification, type CompletedQuestion } from '../completed-homework-contract';
-import { boundedMap, completedPageExtractionPrompt, conflictingPages, completedPageExtractionSchema, HOMEWORK_AI_CONCURRENCY, HOMEWORK_QUESTION_BATCH, mergePageExtractions, normalizePageExtraction, requireExactQuestionNumbers, type PageExtraction } from '../completed-homework-coverage';
+import { boundedMap, completedPageExtractionPrompt, conflictingPages, completedPageExtractionSchema, HOMEWORK_AI_CONCURRENCY, homeworkQuestionBatches, mergePageExtractions, normalizePageExtraction, requireExactQuestionNumbers, type PageExtraction } from '../completed-homework-coverage';
 import { AiQueueFailure } from './ai/queue-policy';
 import { homeworkCurriculum, homeworkDb } from './homework';
 import { homeworkAssetDataUrl } from './homework-assets';
@@ -14,7 +14,7 @@ async function model(input: Parameters<typeof callHomeworkModel>[0]) {
 function invalid(error:unknown):never{throw error instanceof AiQueueFailure?error:new AiQueueFailure({code:'OUTPUT_INVALID',status:422,error:error instanceof Error?error.message:'作业处理结果不完整'});}
 async function hash(value:unknown){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value))))].map(b=>b.toString(16).padStart(2,'0')).join('');}
 
-export async function prepareCompletedHomework(submissionId:string,assignmentId:string,upperAttempt:number) {
+export async function prepareCompletedHomework(submissionId:string,assignmentId:string,upperAttempt:number,onReady:(questionIds:string[])=>Promise<void>) {
   const db=homeworkDb();
   const submission=await db.prepare('SELECT reprocess_question_ids_json FROM homework_submissions WHERE id=?').bind(submissionId).first<{reprocess_question_ids_json:string}>();
   const pendingIds=JSON.parse(submission?.reprocess_question_ids_json??'[]') as string[];
@@ -25,8 +25,8 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const curriculum=homeworkCurriculum(assignment?.curriculum);
   // An old template flag is never proof that every uploaded page was examined.
   if(assignment?.template_confirmed){try{await assertCompletePageCoverage(submissionId);return;}catch{ /* Backfill missing coverage rather than accepting an old partial extraction. */ }}
-  const storedResult=await db.prepare('SELECT id,question_number,input_evidence_json,reference_fingerprint,reference_evidence,reference_source FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<{id:string;question_number:string;input_evidence_json:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>();
-  const stored=storedResult.results as Array<{id:string;question_number:string;input_evidence_json:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>;
+  const storedResult=await db.prepare('SELECT id,question_number,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<{id:string;question_number:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>();
+  const stored=storedResult.results as Array<{id:string;question_number:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>;
   const oldByNumber=new Map(stored.map(q=>[q.question_number,q]));
   const extracted=await boundedMap(pages,HOMEWORK_AI_CONCURRENCY,async(page,index):Promise<PageExtraction>=>{
     const fingerprint=await coverageFingerprint(pages,index);
@@ -82,36 +82,51 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map((q,index)=>db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,knowledge_tags_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,input_evidence_json)
       VALUES(?,?,?,?,?,?,?,'','',?,0,'[]',?,?,?,?,?,'unresolved',0,?) ON CONFLICT(id) DO UPDATE SET question_number=excluded.question_number,${pendingIds.length?'':'sort_order=excluded.sort_order,'}stem=excluded.stem,options_json=excluded.options_json,type=excluded.type,page_number=excluded.page_number,bbox_json=excluded.bbox_json,input_evidence_json=excluded.input_evidence_json,updated_at=excluded.updated_at`)
       .bind(ids.get(q.question_number),assignmentId,q.question_number,q.page_numbers[0],q.type,q.stem,JSON.stringify(q.options),q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q.knowledge_tags),JSON.stringify(q.capability_keys),start+index,now,now,JSON.stringify(q))));
+  // These verdicts need no model request and must not wait behind slow reference batches.
+  for(const q of questions.filter(q=>!q.question_complete))await db.prepare("UPDATE assignment_questions SET reference_verified=0,reference_source='unresolved',reference_evidence='题意不完整或页面无法辨认',reference_fingerprint='' WHERE id=? AND assignment_id=?").bind(ids.get(q.question_number),assignmentId).run();
+  await onReady(questions.filter(q=>!q.question_complete||(q.teacher_mark??'none')!=='none').map(q=>ids.get(q.question_number)!));
   const refs=await db.prepare("SELECT asset_id FROM assignment_assets WHERE assignment_id=? AND role='answer' ORDER BY page_order").bind(assignmentId).all<{asset_id:string}>();
   const referenceIds=(refs.results as Array<{asset_id:string}>).map(r=>r.asset_id);
   if(referenceIds.length>30)throw new Error('参考答案最多30页');
   const answerImages=await Promise.all(referenceIds.map(id=>homeworkAssetDataUrl(id)));
-  // A question the teacher already marked is judged by that mark, so it needs no reference answer.
   const readable=questions.filter(q=>q.question_complete&&(q.teacher_mark??'none')==='none');
-  const pendingReferences:CompletedQuestion[]=[];
+  const pendingReferences:CompletedQuestion[]=[],ready:CompletedQuestion[]=[];
   const keys=new Map<string,string>();
   for(const q of readable){
     const key=await hash({contract:'reference-batch-v1',stem:q.stem,type:q.type,options:q.options,figure_notes:q.figure_notes||undefined,referenceIds,...(curriculum==='international'?{curriculum,max_score:q.max_score}:{})});keys.set(q.question_number,key);
     const old=oldByNumber.get(q.question_number);
-    if(old?.reference_fingerprint!==key && !old?.reference_evidence.startsWith('教师补充并确认'))pendingReferences.push(q);
+    if(old?.reference_fingerprint===key || old?.reference_evidence.startsWith('教师补充并确认'))ready.push(q);
+    else pendingReferences.push(q);
   }
-  const batches:CompletedQuestion[][]=[];for(let i=0;i<pendingReferences.length;i+=HOMEWORK_QUESTION_BATCH)batches.push(pendingReferences.slice(i,i+HOMEWORK_QUESTION_BATCH));
+  // Each slot owns its entire solve → verify → grade chain, so stages together never exceed four requests.
+  const pendingNumbers=new Set(pendingReferences.map(q=>q.question_number));
+  const batches=[...homeworkQuestionBatches(ready,upperAttempt),...homeworkQuestionBatches(pendingReferences,upperAttempt)];
   await boundedMap(batches,HOMEWORK_AI_CONCURRENCY,async batch=>{
     try{
-      const numbers=batch.map(q=>q.question_number);
-      const answers=normalizeCompletedReferences(await model({images:answerImages,prompt:completedReferencePrompt(batch,answerImages.length,curriculum),schema:completedReferenceSchema,schemaName:'completed_homework_reference',upperAttempt}));
-      requireExactQuestionNumbers(numbers,answers.map(a=>a.question_number),'参考解答');
-      const checks=normalizeCompletedVerification(await model({images:[],prompt:completedVerificationPrompt(batch,answers,curriculum),schema:completedVerificationSchema,schemaName:'completed_homework_verification',upperAttempt}));
-      requireExactQuestionNumbers(numbers,checks.map(a=>a.question_number),'参考解答核验');
-      await db.batch(batch.map(q=>{
-        const answer=answers.find(a=>a.question_number===q.question_number)!,check=checks.find(c=>c.question_number===q.question_number)!;
-        const verified=Boolean(answer.answer&&answer.source!=='unresolved'&&check.verified);
-        return db.prepare('UPDATE assignment_questions SET answer=?,analysis=?,reference_source=?,reference_verified=?,reference_evidence=?,reference_fingerprint=?,updated_at=? WHERE id=? AND assignment_id=?')
-          .bind(answer.answer,curriculum==='international'?answer.analysis:'',verified?(answer.source==='provided'&&answerImages.length?'provided':'agent'):'unresolved',verified?1:0,check.reason||'参考答案无法核验',keys.get(q.question_number),Date.now(),ids.get(q.question_number),assignmentId);
-      }));
+      if(batch.some(q=>pendingNumbers.has(q.question_number))){
+        // A pending: fingerprint stores a generated answer, never a completed verification.
+        const unsolved=batch.filter(q=>oldByNumber.get(q.question_number)?.reference_fingerprint!==`pending:${keys.get(q.question_number)}`);
+        const answers=normalizeCompletedReferences({answers:batch.filter(q=>!unsolved.includes(q)).map(q=>{const old=oldByNumber.get(q.question_number)!;return {question_number:q.question_number,answer:old.answer,analysis:old.analysis,source:old.reference_source};})});
+        if(unsolved.length){
+          const generated=normalizeCompletedReferences(await model({images:answerImages,prompt:completedReferencePrompt(unsolved,answerImages.length,curriculum),schema:completedReferenceSchema,schemaName:'completed_homework_reference',upperAttempt}));
+          requireExactQuestionNumbers(unsolved.map(q=>q.question_number),generated.map(a=>a.question_number),'参考解答');
+          answers.push(...generated);
+          await db.batch(generated.map(answer=>db.prepare("UPDATE assignment_questions SET answer=?,analysis=?,reference_source=?,reference_verified=0,reference_evidence='',reference_fingerprint=?,updated_at=? WHERE id=? AND assignment_id=?")
+            .bind(answer.answer,curriculum==='international'?answer.analysis:'',answer.source==='provided'&&!answerImages.length?'agent':answer.source,`pending:${keys.get(answer.question_number)}`,Date.now(),ids.get(answer.question_number),assignmentId)));
+        }
+        const checks=normalizeCompletedVerification(await model({images:[],prompt:completedVerificationPrompt(batch,answers,curriculum),schema:completedVerificationSchema,schemaName:'completed_homework_verification',upperAttempt}));
+        requireExactQuestionNumbers(batch.map(q=>q.question_number),checks.map(a=>a.question_number),'参考解答核验');
+        await db.batch(batch.map(q=>{
+          const answer=answers.find(a=>a.question_number===q.question_number)!,check=checks.find(c=>c.question_number===q.question_number)!;
+          const verified=Boolean(answer.answer&&answer.source!=='unresolved'&&check.verified);
+          return db.prepare('UPDATE assignment_questions SET reference_source=?,reference_verified=?,reference_evidence=?,reference_fingerprint=?,updated_at=? WHERE id=? AND assignment_id=?')
+            .bind(verified?(answer.source==='provided'&&answerImages.length?'provided':'agent'):'unresolved',verified?1:0,check.reason||'参考答案无法核验',keys.get(q.question_number),Date.now(),ids.get(q.question_number),assignmentId);
+        }));
+      }
+      // The callback uses one worker inside this slot and skips verdicts already saved in this run.
+      await onReady(batch.map(q=>ids.get(q.question_number)!));
     }catch(error){invalid(error);}
-  });
-  for(const q of questions.filter(q=>!q.question_complete))await db.prepare("UPDATE assignment_questions SET reference_verified=0,reference_source='unresolved',reference_evidence='题意不完整或页面无法辨认',reference_fingerprint='' WHERE id=? AND assignment_id=?").bind(ids.get(q.question_number),assignmentId).run();
+  },true);
   await assertCompletePageCoverage(submissionId);
   await db.prepare('UPDATE homework_assignments SET template_confirmed=1,updated_at=? WHERE id=?').bind(Date.now(),assignmentId).run();
 }

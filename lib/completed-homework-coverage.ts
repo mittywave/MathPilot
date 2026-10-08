@@ -73,11 +73,19 @@ export function requireExactQuestionNumbers(expected:string[],returned:string[],
   const missing=expected.filter(n=>!returned.includes(n));
   if(new Set(returned).size!==returned.length || returned.some(n=>!expected.includes(n)) || missing.length)throw new Error(`${stage}未完整返回本批次题目${missing.length?`，缺少：${missing.join('、')}`:''}`);
 }
-export async function boundedMap<T,R>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<R>):Promise<R[]>{
+// Balance a short tail across the available slots; queue retries shrink only unfinished batches.
+export function homeworkQuestionBatches<T>(items:T[],attempt=1,concurrency=HOMEWORK_AI_CONCURRENCY):T[][] {
+  const maxSize=Math.max(1,Math.floor(HOMEWORK_QUESTION_BATCH/2**Math.min(3,Math.max(0,attempt-1))));
+  const count=Math.max(Math.ceil(items.length/maxSize),Math.min(concurrency,items.length));
+  const batches:T[][]=[];let cursor=0;
+  for(let i=0;i<count;i++){const size=Math.floor(items.length/count)+(i<items.length%count?1:0);batches.push(items.slice(cursor,cursor+size));cursor+=size;}
+  return batches;
+}
+export async function boundedMap<T,R>(items:T[],limit:number,fn:(item:T,index:number)=>Promise<R>,continueOnError=false):Promise<R[]>{
   const results:R[]=new Array(items.length);let cursor=0;let stopped=false;
   let failure:unknown;
   await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{
-    while(!stopped){const index=cursor++;if(index>=items.length)return;try{results[index]=await fn(items[index],index);}catch(error){stopped=true;failure??=error;}}
+    while(!stopped){const index=cursor++;if(index>=items.length)return;try{results[index]=await fn(items[index],index);}catch(error){if(!continueOnError)stopped=true;failure??=error;}}
   }));
   if(failure)throw failure;
   return results;

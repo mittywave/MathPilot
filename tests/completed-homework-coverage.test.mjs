@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadSource} from './load-source.mjs';
-const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap}=await loadSource('lib/completed-homework-coverage.ts');
+const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap,homeworkQuestionBatches}=await loadSource('lib/completed-homework-coverage.ts');
 const question=(number,pages)=>({question_number:number,page_numbers:pages,type:'解答题',stem:'完整题干',options:[],student_answer:'作答',answer_state:'readable',question_complete:true,bbox:null,knowledge_tags:[],capability_keys:[]});
 const receipt=(number,questions,kind='questions',reason='')=>({page:{page_number:number,kind,reason,question_numbers:questions.map(q=>q.question_number)},questions});
 test('a partial multi-page response cannot acknowledge an unprocessed page',()=>{
@@ -66,4 +66,22 @@ test('a question split across pages carries the strictest teacher mark any part 
  const unmarked=normalizePageExtraction(receipt(4,[question('3-12',[3,4])]),4,[3,4,5],27);
  assert.equal(mergePageExtractions([first,second])[0].teacher_mark,'incorrect');
  assert.equal(mergePageExtractions([first,unmarked])[0].teacher_mark,'correct');
+});
+
+test('question batches fill four slots for a short tail and shrink on retries without losing order',()=>{
+ assert.deepEqual(homeworkQuestionBatches([1,2,3,4,5,6]).map(b=>b.length),[2,2,1,1]);
+ for(const length of [0,1,2,6,25,200])for(const attempt of [1,2,3,4]){
+  const items=Array.from({length},(_,i)=>i),batches=homeworkQuestionBatches(items,attempt);
+  assert.deepEqual(batches.flat(),items);
+  assert.ok(batches.every(b=>b.length>0&&b.length<=Math.max(1,Math.floor(6/2**(attempt-1)))));
+ }
+ assert.deepEqual(homeworkQuestionBatches([1,2],1,1),[[1,2]],'a pipeline slot must not launch nested workers');
+});
+test('independent batches finish after another batch fails, and the failure still reaches the queue',async()=>{
+ const finished=[];
+ await assert.rejects(boundedMap([1,2,3,4,5],2,async value=>{
+  if(value===1)throw new Error('retry this batch');
+  await new Promise(resolve=>setTimeout(resolve,1));finished.push(value);
+ },true),/retry this batch/);
+ assert.deepEqual(finished.sort(),[2,3,4,5]);
 });
