@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import katex from 'katex';
+import { normalizeProseLineBreaks } from '../lib/math-source.mjs';
 import { splitMathText, splitMathLines, plainTextWebLines, toReadableNestedFractionLatex, toLatexMath, latexFractionDepth } from '../lib/math-text-core.mjs';
 import { fullSizeInlineFractions, wordMathFractionDepth, ensureWordMathSettings } from '../lib/word-math-sizing.mjs';
 
@@ -95,4 +97,36 @@ test('Word math settings are still present and idempotent', () => {
 });
 test('legacy undelimited formulas never swallow physical line breaks', () => {
   assert.deepEqual(splitMathText('x=1\ny=2').filter(s=>s.kind==='math').map(s=>s.value), ['x=1','y=2']);
+});
+
+test('saved homework prose with escaped newlines renders without becoming a formula', () => {
+  const source = String.raw`点$A$与点$B$关于直线$l$对称.\n（2）点$C$的坐标为$(6, 0)$，满足$S_{\triangle POA}=S_{\triangle PBC}$`;
+  const expected = source.replace('\\n', '\n');
+  assert.deepEqual(splitMathText(source), splitMathText(expected));
+  assert.deepEqual(splitMathLines(source), splitMathLines(expected));
+  for (const segment of splitMathText(source).filter(s => s.kind === 'math')) {
+    assert.doesNotThrow(() => katex.renderToString(toLatexMath(segment.value), { throwOnError: true, strict: 'ignore' }));
+    assert.doesNotMatch(segment.value, /对称|点/);
+  }
+});
+
+test('prose newline recovery handles CRLF, consecutive lines and remains idempotent', () => {
+  const source = String.raw`条件。\r\n（1）求值。\n\n（2）证明。`;
+  const expected = '条件。\n（1）求值。\n\n（2）证明。';
+  assert.equal(normalizeProseLineBreaks(source), expected);
+  assert.equal(normalizeProseLineBreaks(expected), expected);
+  assert.deepEqual(splitMathText(source, { autoDetect: false }), [{ kind: 'text', value: source }]);
+});
+
+test('newline recovery leaves explicit math, commands, literals and paths intact', () => {
+  for (const source of [
+    String.raw`$\n$`, String.raw`\(\n\)`, String.raw`\[\n\]`,
+    String.raw`$$\begin{aligned}a&=1\\n&=2\end{aligned}$$`,
+    String.raw`\neq \nabla \nu \notin \newcommand`,
+    '`\\n`', '```text\n\\n\n```', String.raw`\text{换行\n示例}`,
+    String.raw`\verb|\n|`, String.raw`C:\n\file`, String.raw`C:\notes\n.txt`,
+    String.raw`\\n`, String.raw`\\r\\n`,
+  ]) assert.equal(normalizeProseLineBreaks(source), source, source);
+  const source = String.raw`$\n$之后。\n（2）$a\neq b$`;
+  assert.equal(normalizeProseLineBreaks(source), '$\\n$之后。\n（2）$a\\neq b$');
 });

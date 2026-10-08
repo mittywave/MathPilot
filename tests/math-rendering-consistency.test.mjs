@@ -34,6 +34,11 @@ test('both web renderers share explicit math styles and expose parse failures', 
     assert.match(broken,/math-render-error/);
     assert.match(broken,/math-error-label/);
     assert.ok(broken.includes('frac'), 'failed source is retained for correction');
+    const recovered = renderToStaticMarkup(createElement(MainMath,{text:String.raw`关于直线$l$对称.\n（2）点$C$的坐标为$(6,0)$，满足$S_{\triangle POA}=S_{\triangle PBC}$`}));
+    assert.doesNotMatch(recovered,/math-render-error|公式待核对|\\n/);
+    assert.match(recovered.replace(/<[^>]*>/g,''),/对称\.\n（2）点/);
+    assert.match(recovered,/katex/);
+    assert.match(renderToStaticMarkup(createElement(MainMath,{text:String.raw`$\n$`})),/math-render-error/);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
