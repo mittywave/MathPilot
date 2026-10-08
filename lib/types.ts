@@ -273,7 +273,7 @@ export type HomeworkCurriculum = "school" | "international";
 export type GradingVerdict = "correct" | "partial" | "incorrect" | "unreadable" | "review_required";
 export type HomeworkAssetRole = "answer" | "submission_original" | "submission_document" | "answer_crop";
 /** A printed figure cut from the homework page; options figures hold every option graph with its letter. */
-export type HomeworkQuestionFigure = { url: string; kind: "stem" | "options"; width?: number; height?: number };
+export type HomeworkQuestionFigure = { url: string; kind: "stem" | "options"; width?: number; height?: number; hasHandwriting?: boolean };
 
 export type HomeworkAsset = {
   id: string;

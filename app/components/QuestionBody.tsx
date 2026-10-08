@@ -18,5 +18,6 @@ export function QuestionBody({ question, number, figureAlt = "题目配图" }: {
     )}</div>}
     {!!question.options.length && optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
     {question.optionsImage && <img className="question-options-figure" src={question.optionsImage} alt={`${figureAlt}（选项）`} />}
+    {question.recognitionWarnings?.filter(note=>note.startsWith("配图说明：")).map(note=><small key={note} style={{gridColumn:"1 / -1"}}>{note}</small>)}
   </div>;
 }

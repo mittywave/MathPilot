@@ -1,5 +1,7 @@
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "./recognition-cleanup.mjs";
 import { bareOptionLabels } from "./homework-figures";
+import { repairMathSource } from './math-source.mjs';
+import { normalizeMathNotation } from './math-notation.mjs';
 import type { AssignmentQuestion, Question, QuestionType } from "./types";
 
 export const QUESTION_CONTENT_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
@@ -30,7 +32,12 @@ export function normalizeQuestionContent(raw: Record<string, unknown>): Pick<Que
 }
 
 export function assignmentQuestionToQuestion(template: AssignmentQuestion, source: { title: string; createdAt: number; updatedAt: number; originalImage?: string }): Question {
-  const content = normalizeQuestionContent(template); const figures = template.figures ?? [];
+  const content = normalizeQuestionContent({...template,stem:normalizeMathNotation(repairMathSource(template.stem))}); const figures = template.figures ?? [];
+  // Section headings and the printed major number are provenance, not the stem
+  // of the individually collected sub-question. Its own (1)/(2) stays editable.
+  content.stem = content.stem.replace(/^\s*[A-DＡ-Ｄ]\s*组\s*(?:基础夯实|基础巩固|思想方法|综合提升|能力提升)(?:\s*\r?\n|\s+(?=\d{1,3}[.．、]))/, "");
+  const printed = template.questionNumber?.match(/^(?:\d+-)?(\d+)(?:\(|$)/)?.[1];
+  if (printed) content.stem = content.stem.replace(new RegExp(`^\\s*${printed}[.．、]\\s*`), "");
   // Option graphs are one figure carrying their letters, shown where the options go, so bare letters are not repeated
   // as text options. Wide figures (number lines, long grids) sit under the stem, as on the page, instead of beside it.
   const optionFigure = figures.find((figure) => figure.kind === "options"); const stemFigures = figures.filter((figure) => figure !== optionFigure);
@@ -42,7 +49,7 @@ export function assignmentQuestionToQuestion(template: AssignmentQuestion, sourc
     id: template.id, categoryId: "homework", difficulty: "中等", provenance: "来源待核实",
     source: source.title, tags: [...template.knowledgeTags], taxonomyKeys: [...template.taxonomyKeys],
     sourcePage: template.pageNumber, originalImage: source.originalImage,
-    recognitionConfidence: template.confidence, recognitionWarnings: [...template.warnings],
+    recognitionConfidence: template.confidence, recognitionWarnings: [...template.warnings, ...(figures.some(figure=>figure.hasHandwriting) ? ["配图说明：原卷图内含手写标注，已忠实保留，请结合原卷核对。"] : [])],
     createdAt: source.createdAt, updatedAt: source.updatedAt,
   };
 }

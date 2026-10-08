@@ -144,7 +144,7 @@ function startMockModel(port) {
         {question_number:"D4",page_numbers:[1],type:"填空题",stem:"计算 4+4",options:[],student_answer:state.supplementalReadable?"8":"",answer_state:state.supplementalReadable?"readable":"unreadable",question_complete:true},
         {question_number:"D5",page_numbers:[1],type:"解答题",stem:"条件不完整",options:[],student_answer:"10",answer_state:"readable",question_complete:false},
       ]).map(q=>({teacher_mark:"none",...q,max_score:({D1:2,D2:4,D3:1,D4:1,D5:3}[q.question_number]??null),bbox:{x:90,y:100,width:700,height:100},knowledge_tags:["有理数运算"],capability_keys:["skill:calculation"],
-        figures:q.question_number==="D1"?[{kind:"stem",bbox:{x:660,y:240,width:180,height:50}}]:[],figure_notes:q.question_number==="D1"?"坐标轴":""}));
+        figures:q.question_number==="D1"?[{kind:"stem",bbox:{x:660,y:240,width:180,height:50},hasHandwriting:false}]:[],figure_notes:q.question_number==="D1"?"坐标轴":""}));
       if(state.contextProbe && primary===3){
         if(context){questions[0].bbox={x:700,y:800,width:100,height:100};questions[0].teacher_mark='correct';questions[0].student_answer='邻页答案';}
         else questions[0].question_complete=false;
@@ -152,7 +152,7 @@ function startMockModel(port) {
       if(state.renumberPage===primary)questions[0].question_number=`${primary}-2`;
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:state.invalidPage===primary?1:primary,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
-    if(prompt.includes("作业配图定位助手")) {state.locatorCalls+=1;response.writeHead(500,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"homework read with figures needs no locator"}}));return;}
+    if(prompt.includes("作业配图定位助手")) {state.locatorCalls+=1;const numbers=[...prompt.matchAll(/^([^\n：]+)：/gm)].map(m=>m[1]).filter(n=>/^D\d$/.test(n));response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions:numbers.map(question_number=>({question_number,figures:question_number==='D1'?[{kind:'stem',bbox:{x:660,y:240,width:180,height:50},hasHandwriting:true}]:[],added_texts:[]}))})}));return;}
     if(prompt.includes("建立独立参考解答")) {
       assert.doesNotMatch(prompt,/student_answer/);
       const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];state.referenceNumbers.push(...numbers);
@@ -359,11 +359,14 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=?",[providedId])[0].count>0);
     const overlay=(await jsonRequest(base,`/api/knowledge-graph?studentId=${studentTwoId}`,{cookie:teacherOne})).payload.profile;
     assert.ok(overlay.nodes.some(node=>node.evidenceCount>0),"the knowledge-graph overlay shows the integrated homework");
-    // Homework read with figures has nothing to fill in; the action belongs to the owning teacher only.
+    // Existing figures can be independently relocated; only the owning teacher can do so.
     assert.equal(provided.figuresPending,0);
     assert.equal((await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherTwo,method:"PUT",body:{action:"attach-figures"}})).response.status,404);
     const filled=await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherOne,method:"PUT",body:{action:"attach-figures"}});
-    assert.equal(filled.response.status,200,JSON.stringify(filled.payload));assert.equal(mock.state.locatorCalls,0);
+    assert.equal(filled.response.status,200,JSON.stringify(filled.payload));assert.equal(mock.state.locatorCalls,1);
+    assert.equal(filled.payload.submission.gradingItems.find(i=>i.questionNumber==='D1').figures[0].hasHandwriting,true);
+    const locatedCache=JSON.parse(d1Rows(stateDir,'SELECT result_json FROM submission_page_extractions WHERE submission_id=?',[providedId])[0].result_json).questions.find(q=>q.question_number==='D1');
+    assert.equal(locatedCache.figures[0].hasHandwriting,true);assert.equal(locatedCache.figures[0].sourceAssetId,provided.pages[0].processedAssetId);
     const ownWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries;
     assert.equal(ownWrong.some(e=>e.assignmentId===providedAssignment),false);
     assert.equal((await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherTwo,method:"PUT",body:{action:"correct",items:[]}})).response.status,404);

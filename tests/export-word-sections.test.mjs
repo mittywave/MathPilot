@@ -1,9 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import JSZip from "jszip";
+import { XMLValidator } from 'fast-xml-parser';
 import { loadSource } from "./load-source.mjs";
 
 const { buildWordBlob, handoutWordSections } = await loadSource("lib/export-word.ts");
+test('native piecewise equations escape comparison signs and text entities in valid Word XML', async()=>{
+  const note=String.raw`$y=\begin{cases}2x(x\ge -2),\\-\frac{1}{2}x+1(x<-2)\end{cases}$，$\underline{\text{A\&B}}$`;
+  const blob=await buildWordBlob({title:'公式转录回归',answers:'none',sections:[{note,questions:[]}]});
+  const xml=await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string');
+  assert.equal(XMLValidator.validate(xml),true);
+  assert.match(xml,/&lt;/);assert.match(xml,/&amp;/);assert.match(xml,/<m:oMath/);
+  assert.doesNotMatch(xml,/m:val="undefined"/);
+});
+test('indexed roots retain their degree as editable Word radical structure',async()=>{
+  const blob=await buildWordBlob({title:'根指数回归',answers:'none',sections:[{note:String.raw`$\sqrt[3]{8-1}+\sqrt[4]{x+1}$`,questions:[]}]});
+  const xml=await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string');
+  assert.equal(XMLValidator.validate(xml),true);
+  assert.match(xml,/<m:deg>[\s\S]*?<m:t[^>]*>3<\/m:t>[\s\S]*?<\/m:deg>/);
+  assert.match(xml,/<m:deg>[\s\S]*?<m:t[^>]*>4<\/m:t>[\s\S]*?<\/m:deg>/);
+  assert.doesNotMatch(xml,/\[3\]|\[4\]/);
+});
 const base = { categoryId: "one", difficulty: "基础", tags: [], analysis: "" };
 const questions = [
   { ...base, id: "a", type: "解答题", stem: "ALPHAQUESTION", options: [], answer: "ALPHAANSWER", analysis: "ALPHAANALYSIS" },

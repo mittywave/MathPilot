@@ -4,20 +4,22 @@ import type { HomeworkBox } from "./homework-grading-contract";
 // 作业题目的配图：模型给出每幅印刷配图在页面上的框，本地按完整笔画裁出。框外伸出一截的坐标轴、
 // 曲线收回来；贴着框边的题干、选项文字和别处的作答抹成白色，纸面底色提成纯白。
 export type HomeworkFigureKind = "stem" | "options";
-export type HomeworkFigure = { page: number; kind: HomeworkFigureKind; bbox: HomeworkBox; assetId?: string; width?: number; height?: number };
+export type HomeworkFigure = { page: number; kind: HomeworkFigureKind; bbox: HomeworkBox; hasHandwriting?: boolean; sourceAssetId?: string; assetId?: string; width?: number; height?: number };
 type Rect = { minX: number; minY: number; maxX: number; maxY: number };
 
 const box = { type: "object", additionalProperties: false, properties: {
   x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" },
 }, required: ["x", "y", "width", "height"] };
 export const homeworkFigureSchema = { type: "array", items: { type: "object", additionalProperties: false, properties: {
-  kind: { type: "string", enum: ["stem", "options"] }, bbox: box,
-}, required: ["kind", "bbox"] } };
+  kind: { type: "string", enum: ["stem", "options"] }, bbox: box, hasHandwriting: { type: "boolean" },
+}, required: ["kind", "bbox", "hasHandwriting"] } };
 
 export const homeworkFigureRules = [
   "配图指印刷的函数图象、几何图形、数轴、坐标系、网格图和示意图；表格、算式按文字转录，不算配图。",
   "bbox 用该页图片的 0—1000 归一化坐标 {x,y,width,height}，框住完整图形以及图上的字母、数字、刻度和箭头标注，不要框进题干、选项文字和学生的解答过程。",
   "kind=stem 是题干配图；选项本身是图形时，用一个 kind=options 的框把全部选项图连同 A、B、C、D 标号一起框住。",
+  "题组共用的印刷配图必须给每个需要它的小问提供；只在某一小问出现、其他小问不需要的图不得混用。严格从当前页定位，不能用另一题或另一页的图替代。",
+  "hasHandwriting 表示图内是否有学生添加的坐标、辅助线、答案或老师批改。框外独立的手写计算应排除；与图形交叠、无法安全分离的笔迹如实保留并标记 true，禁止猜测擦除、补画或重绘。图中的点名、刻度、箭头和图号不能因去除笔迹而被删掉。",
 ];
 
 const MAX_FIGURES = 6;
@@ -51,6 +53,8 @@ export function normalizeHomeworkFigures(value: unknown, page: number): Homework
     const raw = item as Record<string, unknown>; const bbox = figureBox(raw.bbox);
     if (!bbox) continue;
     const figure: HomeworkFigure = { page, kind: raw.kind === "options" ? "options" : "stem", bbox };
+    if (typeof raw.hasHandwriting === "boolean") figure.hasHandwriting = raw.hasHandwriting;
+    if (typeof raw.sourceAssetId === "string" && /^[0-9a-f-]{36}$/i.test(raw.sourceAssetId)) figure.sourceAssetId = raw.sourceAssetId;
     if (typeof raw.assetId === "string" && /^[0-9a-f-]{36}$/i.test(raw.assetId)) figure.assetId = raw.assetId;
     if (Number(raw.width) > 0 && Number(raw.height) > 0) { figure.width = Number(raw.width); figure.height = Number(raw.height); }
     figures.push(figure);
@@ -64,7 +68,7 @@ function uniqueFigures(figures: HomeworkFigure[]) {
   for (const figure of figures) {
     const rect = toRect(figure.bbox);
     const duplicate = kept.find((other) => other.page === figure.page && overlap(rect, toRect(other.bbox)) > .6 * Math.min(area(rect), area(toRect(other.bbox))));
-    if (duplicate) { if (!duplicate.assetId && figure.assetId) Object.assign(duplicate, { assetId: figure.assetId, width: figure.width, height: figure.height }); continue; }
+    if (duplicate) { if (!duplicate.assetId && figure.assetId) Object.assign(duplicate, { assetId: figure.assetId, sourceAssetId: figure.sourceAssetId, width: figure.width, height: figure.height }); if (figure.hasHandwriting) duplicate.hasHandwriting = true; continue; }
     kept.push({ ...figure });
   }
   return kept.slice(0, MAX_FIGURES);
@@ -150,6 +154,17 @@ export function cutHomeworkFigure(page: Pixels, figureBox: HomeworkBox): Pixels 
     const cx = (component.minX + component.maxX) / 2; const cy = (component.minY + component.maxY) / 2;
     return (cx >= core.minX && cx < core.maxX && cy >= core.minY && cy < core.maxY) || overlap(component, inner) >= area(component) * .5;
   });
+  // Ink alone is not evidence of a diagram: a crop of neighbouring prose has
+  // many small glyphs but no extended graphic stroke. Leave it pending instead.
+  const strokeLength = Math.min(Math.max(modelWidth, modelHeight) * .15, Math.min(modelWidth, modelHeight) * .5);
+  const longStroke = components.some((component, index) => own[index] && component.count >= 12 &&
+    Math.max(component.maxX - component.minX, component.maxY - component.minY) >= strokeLength);
+  const dashes = components.filter((component,index) => own[index] && component.count >= 3 &&
+    Math.max(component.maxX-component.minX,component.maxY-component.minY) >= 3 * Math.max(1,Math.min(component.maxX-component.minX,component.maxY-component.minY)));
+  // A dashed grid has no long connected stroke. Repeated horizontal AND vertical
+  // dashes still provide graphic structure, unlike separate ordinary glyphs.
+  const dashedGrid = dashes.filter(c=>c.maxX-c.minX>c.maxY-c.minY).length>=6 && dashes.filter(c=>c.maxY-c.minY>c.maxX-c.minX).length>=6;
+  if (!longStroke && !dashedGrid) return null;
   let extent: Rect | null = null;
   components.forEach((component, index) => {
     if (!own[index] || component.count < 4) return;
@@ -210,7 +225,7 @@ export function normalizeFigureLocator(value: unknown, page: number, expected: s
   for (const item of questions) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const raw = item as Record<string, unknown>; const questionNumber = String(raw.question_number ?? "").trim();
-    if (!expected.includes(questionNumber) || located.has(questionNumber)) continue;
+    if (!expected.includes(questionNumber) || located.has(questionNumber)) throw new Error(`配图定位返回了重复或非本页题号：${questionNumber}`);
     const addedTexts = Array.isArray(raw.added_texts) ? raw.added_texts.map((text) => String(text ?? "").trim()).filter((text) => text.length >= 4) : [];
     located.set(questionNumber, { questionNumber, figures: normalizeHomeworkFigures(raw.figures, page) ?? [], addedTexts });
   }

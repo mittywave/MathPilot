@@ -176,12 +176,17 @@ function mathComponents(source: string): MathComponent[] {
 // Commands the small converter above understands. A formula using anything else — cases, arrays, underlines,
 // bold — goes through KaTeX's MathML and becomes a native Word equation instead (see richEquation).
 const SIMPLE_COMMANDS = new Set([...Object.keys(latexSymbols), "frac", "sqrt", "left", "right", "mathrm", "text", "operatorname", "mathbf", "mathit", "textrm"]);
-const needsRichEquation = (source: string) => [...normalizeMathNotation(source).matchAll(/\\([A-Za-z]+)/g)].some((match) => !SIMPLE_COMMANDS.has(match[1]));
+const needsRichEquation = (source: string) => /\\sqrt\s*\[/.test(source) || [...normalizeMathNotation(source).matchAll(/\\([A-Za-z]+)/g)].some((match) => !SIMPLE_COMMANDS.has(match[1]));
 
 // OMML written for Word, which is stricter than other readers: no repeated argument properties, math run
 // properties before Word run properties, and a brace written in front of a matrix becomes one that stretches.
 export function tidyOmml(omml: string) {
   return omml
+    // mathml2omml decodes entities in math text without escaping them again.
+    // A comparison such as x<−2 must remain text, not break document.xml.
+    .replace(/(<m:t(?:\s[^>]*)?>)([\s\S]*?)(<\/m:t>)/g, (_, open: string, text: string, close: string) => open + text
+      .replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);)/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + close)
+    .replace(/<m:sty m:val="undefined"\/>/g, "")
     // Text that mixes Chinese with digits or spaces is split by script, so each part is measured with its own font.
     .replace(/<m:r>(<m:rPr>(?:(?!<\/m:rPr>)[\s\S])*<\/m:rPr>)((?:<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<\/w:rPr>)?)<m:t xml:space="preserve">([^<]*)<\/m:t><\/m:r>/g,
       (whole, math: string, word: string, text: string) => {
@@ -502,6 +507,7 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
         for (const image of images) children.push(figureWidth ? await imageParagraph(image, Math.round(650 * figureWidth), 900, 140, AlignmentType.LEFT) : await imageParagraph(image, 300, 210));
       }
       if (question.optionsImage) children.push(await imageParagraph(question.optionsImage, 650, 320, 120, AlignmentType.LEFT));
+      for (const note of question.recognitionWarnings?.filter(note=>note.startsWith("配图说明：")) ?? []) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: 80 }, children: textRuns(note, 18, { color: "6F7D76" }) }));
       if (question.optionsDocxXml?.length) {
         question.optionsDocxXml.forEach((xml) => {
           const token = `__ZHITI_RAW_OPTIONS_${rawParagraphs.length}__`;

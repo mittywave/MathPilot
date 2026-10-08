@@ -6,9 +6,10 @@ import { cutHomeworkFigure, figureLocatorPrompt, figureLocatorSchema, normalizeF
 import { homeworkAssetBytes, storeHomeworkAsset } from "./homework-assets";
 import { callHomeworkModel, parseHomeworkModelText } from "./homework-model";
 import { homeworkDb } from "./homework";
+import { readRecognizedQuestionNumbers } from './homework-page-coverage';
 
 type FigureOwner = { ownerUserId: string; submissionId: string; assignmentId: string };
-type PageImage = { dataUrl: string; pixels: { data: Uint8ClampedArray; width: number; height: number } | null };
+type PageImage = { assetId: string; dataUrl: string; pixels: { data: Uint8ClampedArray; width: number; height: number } | null };
 
 const LOCATOR_CONCURRENCY = 3;
 
@@ -28,11 +29,11 @@ async function readPage(assetId: string): Promise<PageImage> {
     const decoded = jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 12 });
     pixels = { data: new Uint8ClampedArray(decoded.data.buffer, decoded.data.byteOffset, decoded.data.byteLength), width: decoded.width, height: decoded.height };
   }
-  return { dataUrl: `data:${asset.contentType};base64,${btoa(binary)}`, pixels };
+  return { assetId, dataUrl: `data:${asset.contentType};base64,${btoa(binary)}`, pixels };
 }
 
 async function storeFigure(page: PageImage, figure: HomeworkFigure, questionNumber: string, owner: FigureOwner): Promise<HomeworkFigure | null> {
-  if (figure.assetId) return figure;
+  if (figure.assetId && figure.sourceAssetId === page.assetId) return figure;
   if (!page.pixels) return null;
   const cut = cutHomeworkFigure(page.pixels, figure.bbox);
   if (!cut) return null;
@@ -43,7 +44,7 @@ async function storeFigure(page: PageImage, figure: HomeworkFigure, questionNumb
     contentType: "image/jpeg", originalName: `第${questionNumber}题配图.jpg`, role: "answer_crop",
     submissionId: owner.submissionId, assignmentId: owner.assignmentId,
   });
-  return { ...figure, assetId: asset.id, width: cut.width, height: cut.height };
+  return { ...figure, sourceAssetId: page.assetId, assetId: asset.id, width: cut.width, height: cut.height };
 }
 
 /**
@@ -51,14 +52,14 @@ async function storeFigure(page: PageImage, figure: HomeworkFigure, questionNumb
  * if the page cannot be cut at all, its figures stay unlocated so they can be filled in later.
  */
 export async function storeExtractedFigures(pageNumber: number, processedAssetId: string, questions: CompletedQuestion[], owner: FigureOwner) {
-  if (!questions.some((question) => question.figures?.some((figure) => figure.page === pageNumber && !figure.assetId))) return questions;
+  if (!questions.some((question) => question.figures?.some((figure) => figure.page === pageNumber && (!figure.assetId || figure.sourceAssetId !== processedAssetId)))) return questions;
   try {
     const page = await readPage(processedAssetId);
     if (!page.pixels) throw new Error("校准图无法解码");
     return await Promise.all(questions.map(async (question) => {
       if (!question.figures) return question;
       const figures = await Promise.all(question.figures.map((figure) => figure.page === pageNumber ? storeFigure(page, figure, question.question_number, owner) : figure));
-      return { ...question, figures: figures.filter((figure): figure is HomeworkFigure => Boolean(figure)) };
+      return { ...question, figures: figures.some(figure=>!figure) ? undefined : figures as HomeworkFigure[] };
     }));
   } catch (error) {
     console.error("作业配图裁剪失败", error);
@@ -83,18 +84,26 @@ export async function attachMissingFigures(submissionId: string, user: AuthUser)
   const pageRows = await db.prepare("SELECT page_order,processed_asset_id FROM submission_pages WHERE submission_id=? ORDER BY page_order").bind(submissionId).all<{ page_order: number; processed_asset_id: string }>();
   const pages = pageRows.results as Array<{ page_order: number; processed_asset_id: string }>;
   const rows = (await db.prepare("SELECT id,question_number,stem,options_json,input_evidence_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order").bind(row.assignment_id).all<PendingRow>()).results as PendingRow[];
+  const recognized=await readRecognizedQuestionNumbers(submissionId);
+  if(!recognized)throw responseError("请先完成页面识别，不能根据过期题号定位配图",409);
   const pending = rows.map((question) => ({ row: question, evidence: JSON.parse(question.input_evidence_json || "{}") as CompletedQuestion }))
-    .filter(({ evidence }) => evidence.figures === undefined && Array.isArray(evidence.page_numbers) && evidence.page_numbers.every((page) => page >= 1 && page <= pages.length));
+    .filter(({ row:question,evidence }) => recognized.has(question.question_number) && Array.isArray(evidence.page_numbers) && evidence.page_numbers.every((page) => page >= 1 && page <= pages.length));
   const byPage = new Map<number, typeof pending>();
   for (const question of pending) for (const page of question.evidence.page_numbers) byPage.set(page, [...(byPage.get(page) ?? []), question]);
 
   const located = new Map<string, Map<number, { figures: HomeworkFigure[]; addedTexts: string[] }>>();
   let updated = 0;
+  const failedPages=new Map<number,string>();
   // A question is written once every page it spans has been searched, so an interrupted run loses nothing finished.
   async function finish(question: (typeof pending)[number]) {
     const saved = withLocatedFigures({ stem: question.row.stem, options: JSON.parse(question.row.options_json || "[]") as string[] }, question.evidence, [...located.get(question.row.id)!.values()]);
     await db.prepare("UPDATE assignment_questions SET stem=?,options_json=?,input_evidence_json=?,updated_at=? WHERE id=? AND assignment_id=?")
       .bind(saved.stem, JSON.stringify(saved.options), JSON.stringify(saved.evidence), Date.now(), question.row.id, owner.assignmentId).run();
+    // The same corrected figures must survive a later grading retry using the page cache.
+    const cached=await db.prepare("SELECT e.page_id,j.key FROM submission_page_extractions e,json_each(e.result_json,'$.questions') j WHERE e.submission_id=? AND json_extract(j.value,'$.question_number')=?")
+      .bind(submissionId,question.row.question_number).all<{page_id:string;key:number}>();
+    for(const cachedQuestion of cached.results)await db.prepare("UPDATE submission_page_extractions SET result_json=json_set(result_json,?,json(?),?,?),updated_at=? WHERE submission_id=? AND page_id=?")
+      .bind(`$.questions[${cachedQuestion.key}].figures`,JSON.stringify(saved.evidence.figures),`$.questions[${cachedQuestion.key}].stem`,saved.evidence.stem,Date.now(),submissionId,cachedQuestion.page_id).run();
     updated += 1;
   }
   await boundedMap([...byPage.entries()].sort((a, b) => a[0] - b[0]), LOCATOR_CONCURRENCY, async ([pageNumber, questions]) => {
@@ -107,15 +116,18 @@ export async function attachMissingFigures(submissionId: string, user: AuthUser)
       const answers = normalizeFigureLocator(parseHomeworkModelText(result.text), pageNumber, questions.map(({ row: question }) => question.question_number));
       for (const [index, answer] of answers.entries()) {
         const question = questions[index];
-        const figures = (await Promise.all(answer.figures.map((figure) => storeFigure(page, figure, answer.questionNumber, owner)))).filter((figure): figure is HomeworkFigure => Boolean(figure));
+        const cuts = await Promise.all(answer.figures.map((figure) => storeFigure(page, figure, answer.questionNumber, owner)));
+        if(cuts.some(figure=>!figure))throw new Error(`第${answer.questionNumber}题候选区域没有可靠图形，未替换已有配图`);
+        const figures = cuts as HomeworkFigure[];
         const parts = located.get(question.row.id) ?? new Map(); parts.set(pageNumber, { figures, addedTexts: answer.addedTexts }); located.set(question.row.id, parts);
         if (question.evidence.page_numbers.every((page) => parts.has(page))) await finish(question);
       }
     // A failed page leaves its questions pending; running the action again retries only those.
-    } catch (error) { console.error("作业配图定位失败", pageNumber, error); }
+    } catch (error) { failedPages.set(pageNumber,error instanceof Error?error.message:'定位请求失败'); console.error("作业配图定位失败", pageNumber, error); }
   });
   if (updated && row.status === "published") {
     const { readTeacherSubmission } = await import("./homework");
     await (await import("./homework-outputs")).applySubmissionOutputs(await readTeacherSubmission(submissionId, user), user);
   }
+  if(failedPages.size)throw responseError(`已校对 ${updated} 道题；${[...failedPages].sort(([a],[b])=>a-b).map(([page,reason])=>`第 ${page} 页：${reason}`).join('；')}。未通过的题目保留原记录，请重试核对。`,422);
 }

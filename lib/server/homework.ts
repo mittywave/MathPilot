@@ -31,9 +31,9 @@ function text(value: unknown, limit: number) { return String(value ?? "").trim()
 export function homeworkCurriculum(value: unknown): HomeworkCurriculum { return value === "international" ? "international" : "school"; }
 // Figures cut from the homework page when the question was read; only stored crops are shown.
 function questionFigures(evidence: unknown) {
-  const figures = parseJson<{ figures?: Array<{ kind?: string; assetId?: unknown; width?: number; height?: number }> }>(evidence, {}).figures;
+  const figures = parseJson<{ figures?: Array<{ kind?: string; assetId?: unknown; width?: number; height?: number; hasHandwriting?: boolean }> }>(evidence, {}).figures;
   return Array.isArray(figures) ? figures.filter((figure) => typeof figure.assetId === "string")
-    .map((figure) => ({ url: `/api/homework-assets/${figure.assetId}`, kind: figure.kind === "options" ? "options" as const : "stem" as const, width: figure.width, height: figure.height })) : [];
+    .map((figure) => ({ url: `/api/homework-assets/${figure.assetId}`, kind: figure.kind === "options" ? "options" as const : "stem" as const, width: figure.width, height: figure.height, hasHandwriting: figure.hasHandwriting })) : [];
 }
 
 async function ownedStudent(studentId: string, ownerUserId: string) {

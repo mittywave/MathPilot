@@ -92,9 +92,34 @@ test("the figure locator must answer for every transcribed question on the page"
   assert.throws(() => normalizeFigureLocator({ questions: [{ question_number: "27-5", figures: [], added_texts: [] }] }, 27, ["27-5", "27-6"]), /27-6/);
   const located = normalizeFigureLocator({ questions: [
     { question_number: "27-5", figures: [{ kind: "stem", bbox: { x: 788, y: 454, width: 141, height: 110 } }], added_texts: ["（注：图象为直线）", "注"] },
-    { question_number: "99-1", figures: [], added_texts: [] },
   ] }, 27, ["27-5"]);
   assert.deepEqual(located, [{ questionNumber: "27-5", figures: [{ page: 27, kind: "stem", bbox: { x: 788, y: 454, width: 141, height: 110 } }], addedTexts: ["（注：图象为直线）"] }]);
+  assert.throws(()=>normalizeFigureLocator({questions:[{question_number:'99-1',figures:[],added_texts:[]}]},27,['27-5']),/非本页题号/);
+  assert.throws(()=>normalizeFigureLocator({questions:[{question_number:'27-5',figures:[],added_texts:[]},{question_number:'27-5',figures:[],added_texts:[]}]},27,['27-5']),/重复/);
+});
+
+test('a crop of unrelated text is not accepted merely because it contains ink',()=>{
+  const width=600,height=400,data=new Uint8ClampedArray(width*height*4).fill(255);
+  for(let y=40;y<350;y+=35)for(let x=20;x<570;x+=20)for(let dy=0;dy<10;dy++)for(let dx=0;dx<9;dx++){
+    const i=((y+dy)*width+x+dx)*4;data[i]=data[i+1]=data[i+2]=30;
+  }
+  assert.equal(cutHomeworkFigure({data,width,height},{x:0,y:0,width:1000,height:1000}),null);
+});
+
+test('figure provenance and handwriting survive normalization',()=>{
+  const id='6f1d3c1a-7b5e-4a49-9b5c-1d2e3f4a5b6c';
+  const [figure]=normalizeHomeworkFigures([{kind:'stem',bbox:{x:100,y:200,width:400,height:200},sourceAssetId:id,hasHandwriting:true}],12);
+  assert.equal(figure.sourceAssetId,id);assert.equal(figure.hasHandwriting,true);assert.equal(figure.page,12);
+});
+
+test('dashed grids and wide rows of small option graphs are valid graphic crops',()=>{
+  const width=1000,height=400,data=new Uint8ClampedArray(width*height*4).fill(255);
+  const ink=(x,y,w,h)=>{for(let j=y;j<y+h;j++)for(let i=x;i<x+w;i++){const p=(j*width+i)*4;data[p]=data[p+1]=data[p+2]=25;}};
+  for(let line=20;line<=140;line+=40)for(let p=20;p<140;p+=10){ink(p,line,4,1);ink(line,p,1,4);}
+  assert.ok(cutHomeworkFigure({data,width,height},{x:10,y:25,width:145,height:350}),'dashed grid remains intact');
+  data.fill(255);
+  for(let x=40;x<950;x+=240){ink(x,260,100,2);ink(x+50,210,2,100);}
+  assert.ok(cutHomeworkFigure({data,width,height},{x:20,y:500,width:960,height:300}),'four small option axes remain intact');
 });
 
 test("wrong-book snapshots carry the cut figures; option graphs replace bare option letters", () => {
