@@ -270,6 +270,7 @@ export default function KnowledgeGraphPage() {
   const nextVersion = (editor.session?.published.version ?? version) + 1;
   const publishBlocked = !diff?.changed ? "还没有改动" : issues.length ? `还有 ${issues.length} 个问题` : "";
   const title = index?.document.title.replace(/\s*V\d+$/i, "") ?? "知识图谱";
+  const heroName = title.replace(/知识图谱$/, "");
   const pointCount = index?.activeNodes.filter((node) => node.level === "point").length ?? 0;
   const topicCount = index?.activeNodes.filter((node) => node.level === "topic").length ?? 0;
   const sizeLabel = pointCount ? `${pointCount} 个知识点` : `${topicCount} 个主题`;
@@ -283,8 +284,8 @@ export default function KnowledgeGraphPage() {
 
     <header className="kg-top" data-inset="auto">
       <div className="kg-top-left">
-        <a className="kg-brand" href="/" aria-label="返回题库首页"><span>题</span></a>
-        <div className="kg-top-title"><b>{title}</b><small>{editing ? `编辑草稿 · 基于 v${version}` : `v${version} · ${sizeLabel}`}</small></div>
+        <a className="kg-brand" href="/" title="返回题库" aria-label="返回题库"><i aria-hidden="true">‹</i><span>题</span></a>
+        <div className="kg-top-title"><b>{title}</b><small>{editing ? `编辑草稿 · 基于 v${version}` : sizeLabel}</small></div>
       </div>
       {!editing && index && <GraphSearch index={index} colorOf={colorOf} onPick={(key) => openNode(key)} onPreview={setMarked} />}
       <div className="kg-top-actions">
@@ -317,15 +318,14 @@ export default function KnowledgeGraphPage() {
           </div>
           <button type="button" className="kg-button primary" disabled={Boolean(publishBlocked)} title={publishBlocked || undefined} onClick={() => setDialog("publish")}>发布 v{nextVersion}</button>
         </>}
-        <a className="kg-back" href="/">返回题库</a>
       </div>
     </header>
 
     {mode === "edit" && !editor.session && <div className="kg-edit-loading" role="status">{editor.loadError || "正在打开编辑草稿…"}</div>}
 
     {mode === "explore" && index && !studentId && !cardOpen && <section className="kg-hero" data-inset="auto">
-      <h1>{title.replace(/知识图谱$/, "")}的全部知识点<span className="kg-red" aria-hidden="true">。</span></h1>
-      <p className="kg-hero-lede">{sizeLabel}、{prerequisiteCount} 条前置关系，按年级从下往上生长。点任意一个圆点，看它建立在什么之上、又解锁了什么。</p>
+      <h1>{heroName && <span>{heroName}</span>}<span>知识全景<span className="kg-red" aria-hidden="true">。</span></span></h1>
+      <p className="kg-hero-lede"><span>{sizeLabel}按年级自下而上排列，</span><span>{prerequisiteCount} 条连线标出学习先后。</span><span>点任一圆点，看它要先学什么、接着能学什么。</span></p>
       <p className="kg-hero-meta">v{version} · {published?.publishedAt ? `发布于 ${new Date(published.publishedAt).toLocaleDateString("zh-CN")}` : "初始课程骨架"}</p>
     </section>}
 

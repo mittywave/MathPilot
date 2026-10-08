@@ -39,9 +39,11 @@
 .kg-top { position:absolute; top:0; left:0; right:0; z-index:20; height:64px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,420px) minmax(0,1fr); align-items:center; gap:16px; padding:0 22px;
   background:linear-gradient(180deg,rgba(10,12,20,.9) 0%,rgba(10,12,20,.55) 70%,rgba(10,12,20,0) 100%); }
 .kg-top-left { min-width:0; display:flex; align-items:center; gap:12px; }
-.kg-brand { flex:0 0 auto; text-decoration:none; }
-.kg-brand span { width:34px; height:34px; display:grid; place-items:center; border:1px solid var(--stroke-strong); border-radius:10px 10px 10px 3px; background:var(--raise); font:600 16px var(--serif); }
-.kg-brand:hover span { border-color:var(--focus); }
+.kg-brand { flex:0 0 auto; height:38px; display:flex; align-items:center; gap:2px; padding:0 3px 0 8px; border:1px solid var(--stroke-strong); border-radius:12px; background:var(--raise); color:var(--ink); text-decoration:none; transition:border-color .15s,background .15s; }
+.kg-brand i { color:var(--mut); font:400 22px/1 var(--sans); font-style:normal; transform:translateY(-1px); transition:transform .15s,color .15s; }
+.kg-brand span { width:30px; height:30px; display:grid; place-items:center; border-radius:8px 8px 8px 3px; background:var(--raise-strong); font:600 15px var(--serif); }
+.kg-brand:hover { border-color:var(--focus); background:var(--raise-strong); }
+.kg-brand:hover i { color:var(--ink); transform:translate(-2px,-1px); }
 .kg-top-title { min-width:0; display:grid; }
 .kg-top-title b { overflow:hidden; font:600 15px var(--serif); text-overflow:ellipsis; white-space:nowrap; }
 .kg-top-title small { overflow:hidden; color:var(--faint); font:11px var(--mono); text-overflow:ellipsis; white-space:nowrap; }
@@ -51,8 +53,6 @@
 .kg-segment button.active { background:var(--raise-strong); color:var(--ink); font-weight:600; }
 .kg-student { flex:0 1 auto; min-width:0; display:flex; align-items:center; gap:8px; color:var(--mut); font-size:12px; }
 .kg-student select { width:190px; min-width:0; height:34px; padding:0 10px; border:1px solid var(--stroke); border-radius:10px; background:var(--panel-solid); color:var(--ink); }
-.kg-back { flex:0 0 auto; color:var(--mut); font-size:12px; text-decoration:none; }
-.kg-back:hover { color:var(--ink); }
 .kg-save-state { min-width:0; display:flex; align-items:center; gap:6px; overflow:hidden; color:var(--mut); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .kg-save-state i { width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:var(--faint); }
 .kg-save-state.saved i { background:var(--ok); }
@@ -81,7 +81,10 @@
 /* Hero (Marble's serif title with a red full stop) */
 .kg-hero { --kg-inset:1; position:absolute; z-index:4; left:clamp(22px,4vw,64px); top:50%; width:min(440px,32vw); transform:translateY(-50%); pointer-events:none; }
 .kg-hero h1 { margin:0; font:600 clamp(34px,3.5vw,54px)/1.16 var(--serif); letter-spacing:-.01em; text-shadow:0 2px 24px rgba(10,12,20,.8); }
+.kg-hero h1 > span { display:block; white-space:nowrap; }
 .kg-hero-lede { margin:20px 0 0; color:var(--mut); font-size:15px; line-height:1.8; text-shadow:0 1px 12px rgba(10,12,20,.9); }
+.kg-hero-lede > span { display:inline-block; }
+.kg-hero-lede > span:last-child { display:block; }
 .kg-hero-meta { margin:16px 0 0; color:var(--faint); font:12px var(--mono); letter-spacing:.04em; }
 
 /* Glass panels */
@@ -391,7 +394,7 @@
 .kg-toast button { width:26px; height:26px; flex:0 0 auto; border:0; border-radius:50%; background:var(--raise-strong); color:var(--ink); }
 
 @media (max-width:1280px) {
-  .kg-top-title small,.kg-back { display:none; }
+  .kg-top-title small { display:none; }
   .is-editing .kg-top-title { display:none; }
   .kg-outline-panel { width:270px; }
   .kg-editor-panel { width:330px; }
@@ -409,7 +412,7 @@
 }
 @media (max-width:720px) {
   .kg-top { height:auto; min-height:58px; display:flex; gap:8px; padding:10px 12px; }
-  .kg-segment,.kg-student span,.kg-top-title,.kg-back { display:none; }
+  .kg-segment,.kg-student span,.kg-top-title { display:none; }
   .kg-search { min-width:0; flex:1; height:38px; padding:0 12px; }
   .kg-top-actions { flex:0 0 auto; gap:6px; }
   .kg-student select { width:96px; height:38px; padding:0 8px; font-size:12.5px; }
