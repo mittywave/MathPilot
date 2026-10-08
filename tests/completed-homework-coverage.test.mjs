@@ -1,9 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadSource} from './load-source.mjs';
-const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap,homeworkQuestionBatches}=await loadSource('lib/completed-homework-coverage.ts');
+const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap,homeworkQuestionBatches,completedPageExtractionPrompt}=await loadSource('lib/completed-homework-coverage.ts');
 const question=(number,pages)=>({question_number:number,page_numbers:pages,type:'解答题',stem:'完整题干',options:[],student_answer:'作答',answer_state:'readable',question_complete:true,bbox:null,knowledge_tags:[],capability_keys:[]});
 const receipt=(number,questions,kind='questions',reason='')=>({page:{page_number:number,kind,reason,question_numbers:questions.map(q=>q.question_number)},questions});
+test('page identity comes from the supplied primary image, not a neighbouring worksheet',()=>{
+ const prompt=completedPageExtractionPrompt(13,[13],27);
+ assert.match(prompt,/输入按顺序有 1 页/);assert.match(prompt,/整份 PDF 共 27 页/);
+ assert.throws(()=>normalizePageExtraction(receipt(13,[question('12-15',[12])]),13,[13],27),/页面归属/);
+ assert.throws(()=>normalizePageExtraction(receipt(13,[question('12-15',[13])]),13,[13],27),/页码前缀/);
+ assert.throws(()=>normalizePageExtraction(receipt(12,[question('13-14(3)',[12,13])]),12,[12,13],27),/页码前缀/);
+ const part=normalizePageExtraction(receipt(12,[{...question('(3)',[12]),question_complete:false}]),12,[12],27);
+ assert.equal(part.questions[0].question_number,'12-(3)');
+ assert.equal(part.questions[0].question_complete,false);
+});
 test('a partial multi-page response cannot acknowledge an unprocessed page',()=>{
  assert.throws(()=>normalizePageExtraction({questions:[question('1-1',[1])]},4,[3,4,5],27),/回执/);
  assert.throws(()=>normalizePageExtraction(receipt(1,[question('1-1',[1])]),4,[3,4,5],27),/第 4 页/);

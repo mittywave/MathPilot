@@ -9,6 +9,16 @@ export async function syncSubmissionWrongBook(submission: HomeworkSubmission, us
   const db = homeworkDb();
   const questions = await readAssignmentQuestions(submission.assignmentId, user);
   const sourceLibraryId = await teacherNamespaceId(user);
+  // A corrected page inventory can withdraw misidentified questions. Keep their
+  // evidence/history, but never leave them active just because the new loop omits them.
+  await db.batch([
+    db.prepare("UPDATE student_wrong_occurrences SET active=0,updated_at=? WHERE submission_id=? AND owner_user_id=? AND grading_item_id NOT IN (SELECT value FROM json_each(?))")
+      .bind(Date.now(),submission.id,user.id,JSON.stringify(submission.gradingItems.map(item=>item.id))),
+    db.prepare(`UPDATE student_wrong_questions SET archived_at=?,archive_reason='重新识别后题目已撤回',updated_at=?
+      WHERE assignment_id=? AND student_id=? AND owner_user_id=? AND source_kind='assignment' AND archived_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM student_wrong_occurrences o WHERE o.assignment_question_id=student_wrong_questions.source_question_id AND o.student_id=student_wrong_questions.student_id AND o.owner_user_id=student_wrong_questions.owner_user_id AND o.active=1)`)
+      .bind(Date.now(),Date.now(),submission.assignmentId,submission.studentId,user.id),
+  ]);
   for (const item of submission.gradingItems) {
     const template = questions.find(q => q.id === item.assignmentQuestionId);
     if (!template) throw new Error('批改对应的题目记录不存在');

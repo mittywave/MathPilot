@@ -32,10 +32,26 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
     const fingerprint=await coverageFingerprint(pages,index);
     const cached=await db.prepare('SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND page_id=? AND fingerprint=? AND status=\'complete\'').bind(submissionId,page.id,fingerprint).first<{result_json:string}>();
     if(cached)return JSON.parse(cached.result_json) as PageExtraction;
-    const context=pages.slice(Math.max(0,index-1),index+2),contextNumbers=context.map(p=>p.page_order+1);
+    // A worksheet's inventory and coordinates must come from one physical image.
+    // Neighbours may supply missing conditions later, never the questions on this page.
+    const context=curriculum==='school'?[page]:pages.slice(Math.max(0,index-1),index+2),contextNumbers=context.map(p=>p.page_order+1);
     try{
       const images=await Promise.all(context.map(p=>homeworkAssetDataUrl(p.processed_asset_id)));
       const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum);
+      const incomplete=read.questions.filter(q=>!q.question_complete);
+      if(curriculum==='school' && incomplete.length && pages.length>1){
+        const neighbours=pages.slice(Math.max(0,index-1),index+2).filter(p=>p.id!==page.id);
+        const supplemented=normalizePageExtraction(await model({
+          images:[...images,...await Promise.all(neighbours.map(p=>homeworkAssetDataUrl(p.processed_asset_id)))],
+          prompt:completedPageExtractionPrompt(page.page_order+1,[page.page_order+1,...neighbours.map(p=>p.page_order+1)],pages.length,curriculum)+`\n当前任务只补全已独立识别的下列题目缺失的印刷条件，不重新识别题目清单。第1张图是目标 PDF 第${page.page_order+1}页，后续图片仅作条件参考。PDF可能乱序，不能假定前一张就是题目的前半页。只有能在原图确认属于同一题的条件才可补入 stem、options、figure_notes；无法确认仍 question_complete=false。不得补写其他小问或学生解答。question_number、page_numbers、bbox、figures、teacher_mark、student_answer、answer_state 必须沿用下列目标页记录，不得采用参考页的题号或坐标。page.question_numbers只列下列题号：\n${JSON.stringify(incomplete)}`,
+          schema:completedPageExtractionSchema,schemaName:'completed_homework_page_context',upperAttempt,
+        }),page.page_order+1,[page.page_order+1],pages.length,curriculum);
+        requireExactQuestionNumbers(incomplete.map(q=>q.question_number),supplemented.questions.map(q=>q.question_number),'跨页条件补全');
+        read.questions=read.questions.map(q=>{
+          const extra=supplemented.questions.find(item=>item.question_number===q.question_number);
+          return extra?{...q,stem:extra.stem,options:extra.options,figure_notes:extra.figure_notes,question_complete:extra.question_complete}:q;
+        });
+      }
       // Figures are cut once here; the cached extraction keeps their stored images for every later run.
       const {storeExtractedFigures}=await import('./homework-figures');
       const result={...read,questions:await storeExtractedFigures(read.pageNumber,page.processed_asset_id,read.questions,{ownerUserId:String(assignment?.owner_user_id),submissionId,assignmentId})};
@@ -67,10 +83,8 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
     if(first)inherited.set(first.question_number,old.id);
   }
   const recordId=(number:string)=>oldByNumber.get(number)?.id??inherited.get(number);
-  // Existing questions that disappeared remain unresolved instead of silently disappearing from the record.
-  for(const old of stored)if(!numbers.has(old.question_number)&&![...inherited.values()].includes(old.id)){
-    const q=JSON.parse(old.input_evidence_json) as CompletedQuestion;questions.push({...q,answer_state:'unreadable',question_complete:false,teacher_mark:'none'});
-  }
+  // Old rows remain as history, but a successful reread must not resurrect
+  // questions absent from its inventory (including misattributed neighbour pages).
   questions.sort((a,b)=>a.page_numbers[0]-b.page_numbers[0]||a.question_number.localeCompare(b.question_number,undefined,{numeric:true}));
   if(!questions.length)throw new Error('全部页面已检查，但没有可识别的题目，请核对原件');
   if(questions.length>200)throw new Error('每份作业最多200道题，当前未标记完成，请分份上传');

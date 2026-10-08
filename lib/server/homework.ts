@@ -111,14 +111,17 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
     appEnv().DB.prepare("SELECT id,original_name FROM homework_assets WHERE upload_submission_id=? AND role='submission_original' AND content_type='application/pdf'").bind(id).all<{id:string;original_name:string}>(),
   ]);
   const pageCoverage = await (await import("./homework-page-coverage")).readPageCoverage(id);
+  const recognized=await (await import("./homework-page-coverage")).readRecognizedQuestionNumbers(id);
+  if(recognized)grading.results=grading.results.filter(item=>recognized.has(String(item.question_number)) || [...recognized].some(number=>String(item.question_number).startsWith(`${number}(`)));
+  const inventory=recognized?JSON.stringify([...recognized]):null;
   const processingProgress = await appEnv().DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=?) AS identified,
-    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR (json_extract(input_evidence_json,'$.teacher_mark')='correct' AND NOT EXISTS (SELECT 1 FROM grading_items g WHERE g.assignment_question_id=assignment_questions.id AND g.submission_id=? AND g.verdict IN ('incorrect','partial'))))) AS referenceChecked,
-    (SELECT COUNT(*) FROM grading_items WHERE submission_id=? AND (updated_at>=? OR (reviewed_at IS NOT NULL AND requires_review=0))) AS graded`)
-    .bind(row.assignment_id,row.assignment_id,id,id,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?)))) AS identified,
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR (json_extract(input_evidence_json,'$.teacher_mark')='correct' AND NOT EXISTS (SELECT 1 FROM grading_items g WHERE g.assignment_question_id=assignment_questions.id AND g.submission_id=? AND g.verdict IN ('incorrect','partial'))))) AS referenceChecked,
+    (SELECT COUNT(*) FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id=? AND (? IS NULL OR q.question_number IN (SELECT value FROM json_each(?))) AND (g.updated_at>=? OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))) AS graded`)
+    .bind(row.assignment_id,inventory,inventory,row.assignment_id,inventory,inventory,id,id,inventory,inventory,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
   // Questions read before figures were located; their figures can be filled in from the submission page.
   const figuresPending = Number((await appEnv().DB.prepare(`SELECT COUNT(*) AS count FROM assignment_questions
-    WHERE assignment_id=? AND json_type(input_evidence_json,'$.page_numbers')='array' AND json_type(input_evidence_json,'$.figures') IS NULL`).bind(row.assignment_id).first<{count:number}>())?.count ?? 0);
+    WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND json_type(input_evidence_json,'$.page_numbers')='array' AND json_type(input_evidence_json,'$.figures') IS NULL`).bind(row.assignment_id,inventory,inventory).first<{count:number}>())?.count ?? 0);
   const gradingItems = grading.results.map(gradingItem);
   return {
     outputs: normalizeHomeworkOutputs(parseJson(row.outputs_json, {})),

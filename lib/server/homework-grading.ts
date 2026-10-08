@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import type { GradingVerdict, QuestionType } from "../types";
 import { processHomeworkAssetCleanup, recordHomeworkAssetCleanupFailure } from "./homework-assets";
 import { homeworkDb } from "./homework";
+import { readRecognizedQuestionNumbers } from './homework-page-coverage';
 
 type AppEnv = {
   DB: D1Database;
@@ -55,11 +56,13 @@ async function processingSubmission(submissionId: string) {
 async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
   const scope=await homeworkDb().prepare('SELECT reprocess_question_ids_json FROM homework_submissions WHERE id=?').bind(submission.id).first<{reprocess_question_ids_json:string}>();
   const pendingIds = JSON.parse(scope?.reprocess_question_ids_json || "[]") as string[];
+  const recognized=await readRecognizedQuestionNumbers(submission.id);
+  const inventory=JSON.stringify(recognized?[...recognized]:[]);
   const counts = await homeworkDb().prepare(`SELECT
-      (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id = ?) AS question_count,
-      (SELECT COUNT(*) FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id = ?
+      (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id = ? AND question_number IN (SELECT value FROM json_each(?))) AS question_count,
+      (SELECT COUNT(*) FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id = ? AND q.question_number IN (SELECT value FROM json_each(?))
         ${pendingIds.length ? "" : "AND (g.updated_at>=s.submitted_at OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))"}) AS result_count`)
-    .bind(submission.assignment_id, submission.id).first<{ question_count: number; result_count: number }>();
+    .bind(submission.assignment_id, inventory, submission.id, inventory).first<{ question_count: number; result_count: number }>();
   if (!counts || !Number(counts.question_count) || Number(counts.result_count) < Number(counts.question_count)) return false;
   await (await import("./homework-page-coverage")).assertCompletePageCoverage(submission.id);
   if (pendingIds.length) {
@@ -90,7 +93,8 @@ async function processHomeworkSubmissionQuestions(submissionId: string, upperAtt
   const pendingIds = JSON.parse(submission.reprocess_question_ids_json || "[]") as string[];
   const prior=await homeworkDb().prepare('SELECT g.assignment_question_id,g.updated_at,g.reviewed_at,g.requires_review,s.submitted_at FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?').bind(submissionId).all<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>();
   const done=new Set((prior.results as Array<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>).filter(g=>(g.reviewed_at && !g.requires_review)||g.updated_at>=(g.submitted_at??0)).map(g=>g.assignment_question_id));
-  const questions = questionsResult.results.filter(q => (!questionIds || questionIds.includes(q.id)) && (!pendingIds.length || pendingIds.includes(q.id))&&!done.has(q.id));
+  const recognized=await readRecognizedQuestionNumbers(submissionId);
+  const questions = questionsResult.results.filter(q => recognized?.has(q.question_number) && (!questionIds || questionIds.includes(q.id)) && (!pendingIds.length || pendingIds.includes(q.id))&&!done.has(q.id));
   await (await import("./completed-homework-grading")).gradeCompletedQuestions(submissionId, questions, upperAttempt, questionIds ? 1 : undefined);
 }
 

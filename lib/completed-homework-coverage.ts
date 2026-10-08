@@ -2,7 +2,7 @@ import { completedExtractionSchema, completedExtractionPrompt, normalizeComplete
 import { homeworkFigureRules, mergeHomeworkFigures } from './homework-figures';
 import type { HomeworkCurriculum } from './types';
 
-export const HOMEWORK_PAGE_CONTRACT = 'completed-homework-pages-v1';
+export const HOMEWORK_PAGE_CONTRACT = 'completed-homework-pages-v2-primary-image';
 export const HOMEWORK_AI_CONCURRENCY = 4;
 export const HOMEWORK_QUESTION_BATCH = 6;
 export type PageExtraction = { pageNumber:number; kind:'questions'|'continuation'|'blank'|'unreadable'; reason:string; questions:CompletedQuestion[] };
@@ -31,16 +31,18 @@ export function normalizePageExtraction(raw:unknown,pageNumber:number,contextPag
   // An IGCSE / A Level upload is one paper, which keeps its printed numbers and is always marked by the model.
   const normalized=curriculum==='international'?questions.map(q=>({...q,teacher_mark:'none' as const})):questions.map(q=>{
     const number=q.question_number.replace(/（/g,'(').replace(/）/g,')').replace(/\s+/g,'');
-    return {...q,question_number:/^\d+(?:\([^()]+\))*$/.test(number)?`${q.page_numbers[0]}-${number}`:number};
+    const prefix=number.match(/^(\d+)-/);
+    if(prefix && Number(prefix[1])!==q.page_numbers[0])invalid(`题号 ${number} 的页码前缀与作答起始页不一致`);
+    return {...q,question_number:/^(?:\d+)?(?:\([^()]+\))*$/.test(number)?`${q.page_numbers[0]}-${number}`:number};
   });
   return {pageNumber,kind:page.kind as PageExtraction['kind'],reason,questions:normalized};
 }
 const QUESTION_IDENTITY='每道题使用“起始页码-印刷题号”作为 question_number，如 5-1。不同练习重复的印刷题号不能合并。有小问的题，每个小问单独作为一题，question_number 写“起始页码-印刷题号(小问号)”，小问号统一写成 (1)(2) 的形式，如 5-3(1)、5-3(2)；stem 先写本大题的公共条件，再写这一小问的原文；student_answer、bbox、teacher_mark 只对应这一小问。没有小问的题照旧作为一题。';
 const INTERNATIONAL_IDENTITY='本作业是一份 IGCSE / A Level 英文试卷。按印刷分值的粒度拆分：单独印了分值的小问各作为一题，question_number 写印刷题号加小问，如 3(b)(ii)；分值只印在整题末尾、小问没有各自分值时，整题作为一题，只写印刷题号，如 5，题干和作答包含全部小问。stem 先写本大题的公共条件，再写这一题的原文，保持英文原文、不翻译；本大题配图的解题条件写进每一个小问的 figure_notes。max_score 是这一题印刷的分值，如 [3] 或 (3 marks)。student_answer 只写这一题的作答。只有印刷了选项的题用单选题，其余用解答题。';
 export function completedPageExtractionPrompt(pageNumber:number,contextPages:number[],totalPages:number,curriculum:HomeworkCurriculum='school'){
-  return completedExtractionPrompt(totalPages,curriculum)+`\n本次仅处理 PDF 第 ${pageNumber} 页，即输入的第 ${contextPages.indexOf(pageNumber)+1} 张图片。输入图片按顺序对应实际页码 ${contextPages.join('、')}；其余图片仅用于确认跨页题，禁止把相邻页的新题当作本页题。
+  return completedExtractionPrompt(contextPages.length,curriculum)+`\n整份 PDF 共 ${totalPages} 页。本次仅处理 PDF 第 ${pageNumber} 页，即输入的第 ${contextPages.indexOf(pageNumber)+1} 张图片。输入图片按顺序对应实际页码 ${contextPages.join('、')}；其余图片仅用于确认跨页题，禁止把相邻页的新题当作本页题。
 必须完整列出第 ${pageNumber} 页上所有可见题目，包括续题。返回 page 回执：page_number=${pageNumber}，question_numbers 与 questions 中的题号一一对应。kind 只能是 questions、continuation、blank、unreadable；blank 仅用于确实没有题目或作答的空白页，unreadable 用于整页无法可靠辨认，并具体说明原因。
-${curriculum==='international'?INTERNATIONAL_IDENTITY:QUESTION_IDENTITY}续题沿用起始页题号；利用相邻页补全题干、所有分问，并列出 page_numbers；学生作答按上述转录要求处理。表格按印刷内容转录进题干。不能因输出较长省略后半页或题目。
+${curriculum==='international'?INTERNATIONAL_IDENTITY:QUESTION_IDENTITY}${contextPages.length===1?'本次只有当前页图片，page_numbers 只能包含当前 PDF 页码。严格照录本页印刷题号，不能按上一页推算、不能用书本页脚数字代替 PDF 页码。仅见小问号而看不到大题号时保留可见小问号，如 (3)，不要猜大题号；缺少公共条件写 question_complete=false，后续单独补全。':'续题沿用起始页题号；利用相邻页补全题干，并列出 page_numbers。'}学生作答按上述转录要求处理。只列本页可见分问，不能补出相邻页的新题或其他分问。表格按印刷内容转录进题干。不能因输出较长省略后半页或题目。
 figures：第 ${pageNumber} 页（输入的第 ${contextPages.indexOf(pageNumber)+1} 张图片）上属于本题的每一幅印刷配图，坐标都按这一张图计算；相邻页上的配图不要写，没有配图返回空数组。${homeworkFigureRules.join('')}选项本身是图形时，options 只写图外另有的印刷文字，没有则返回空数组。
 figure_notes：用文字写出配图中解题必需的条件，如图象经过的象限、点和线的位置关系、标注的长度与角度、各选项图形的区别；只用于解题核对，不展示给学生。没有配图写空字符串。`;
 }

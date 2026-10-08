@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -125,6 +125,8 @@ function startMockModel(port) {
     }
     if (prompt.includes("只识别学生已完成的数学作业")) {
       const primary=Number(prompt.match(/本次仅处理 PDF 第 (\d+) 页/)?.[1]??1);
+      const context=prompt.includes('当前任务只补全已独立识别');
+      if(!context)state.pageImageCounts.push(payload.input[0].content.filter(item=>item.type==='input_image').length);
       state.pageExtractionCalls[primary]=(state.pageExtractionCalls[primary]??0)+1;
       // A worksheet the teacher already marked: question 3 has two sub-questions, the printed (1) still without its page prefix.
       const marked=[
@@ -143,6 +145,11 @@ function startMockModel(port) {
         {question_number:"D5",page_numbers:[1],type:"解答题",stem:"条件不完整",options:[],student_answer:"10",answer_state:"readable",question_complete:false},
       ]).map(q=>({teacher_mark:"none",...q,max_score:({D1:2,D2:4,D3:1,D4:1,D5:3}[q.question_number]??null),bbox:{x:90,y:100,width:700,height:100},knowledge_tags:["有理数运算"],capability_keys:["skill:calculation"],
         figures:q.question_number==="D1"?[{kind:"stem",bbox:{x:660,y:240,width:180,height:50}}]:[],figure_notes:q.question_number==="D1"?"坐标轴":""}));
+      if(state.contextProbe && primary===3){
+        if(context){questions[0].bbox={x:700,y:800,width:100,height:100};questions[0].teacher_mark='correct';questions[0].student_answer='邻页答案';}
+        else questions[0].question_complete=false;
+      }
+      if(state.renumberPage===primary)questions[0].question_number=`${primary}-2`;
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:state.invalidPage===primary?1:primary,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if(prompt.includes("作业配图定位助手")) {state.locatorCalls+=1;response.writeHead(500,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"homework read with figures needs no locator"}}));return;}
@@ -399,6 +406,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(graded.report.overallSummary,"第 1(a) 题完成稳定，优先补全第 1(b) 题。");
     assert.equal(directResult.curriculum,"school");assert.equal(directResult.report.details,null);
 
+    mock.state.contextProbe=true;
     const multi=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"多页完整性截断回归"}});
     const multiId=multi.payload.submission.id,multiPages=[];
     for(let page=0;page<5;page++)multiPages.push(await uploadPage(base,teacherOne,multiId,bytes));
@@ -410,11 +418,28 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"retry"}});
     const recovered=await waitForSubmission(base,teacherOne,multiId,["published"],worker);
     assert.equal(recovered.pageCoverage.processed,5);assert.equal(recovered.gradingItems.length,5);
+    assert.ok(mock.state.pageImageCounts.every(count=>count===1),'school page inventories never see adjacent images');
+    const anchored=JSON.parse(d1Rows(stateDir,'SELECT result_json FROM submission_page_extractions WHERE submission_id=?',[multiId]).find(row=>JSON.parse(row.result_json).pageNumber===3).result_json).questions[0];
+    assert.deepEqual(anchored.bbox,{x:90,y:100,width:700,height:100});assert.equal(anchored.teacher_mark,'none');assert.equal(anchored.student_answer,'6');
+    assert.deepEqual(anchored.page_numbers,[3]);assert.equal(anchored.question_complete,true);
+    mock.state.contextProbe=false;
     assert.equal(mock.state.pageExtractionCalls[1],beforeCalls[1]);assert.equal(mock.state.pageExtractionCalls[4],beforeCalls[4]+1);
     await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:"PUT",body:{action:"rebuild-coverage"}});
     const rebuilt=await waitForSubmission(base,teacherOne,multiId,["published"],worker);
     assert.equal(rebuilt.processingProgress.graded,5,"historical grading rows must not falsely finish a new run");
     assert.ok(d1Rows(stateDir,"SELECT g.updated_at>=s.submitted_at AS fresh FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?",[multiId]).every(g=>g.fresh===1));
+    // A corrected inventory withdraws a phantom question without deleting its audit history.
+    const superseded=rebuilt.gradingItems.find(item=>item.questionNumber==='3-1');
+    mock.state.renumberPage=3;
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE submission_page_extractions SET status='failed' WHERE submission_id='${multiId}' AND json_extract(result_json,'$.pageNumber')=3`]);
+    await jsonRequest(base,`/api/submissions/${multiId}`,{cookie:teacherOne,method:'PUT',body:{action:'rebuild-coverage'}});
+    const reread=await waitForSubmission(base,teacherOne,multiId,['published'],worker);
+    assert.deepEqual(reread.gradingItems.map(item=>item.questionNumber),['1-1','2-1','3-2','4-1','5-1']);
+    assert.equal(reread.processingProgress.identified,5);assert.equal(reread.processingProgress.graded,5);
+    assert.equal(d1Rows(stateDir,'SELECT active FROM student_wrong_occurrences WHERE grading_item_id=?',[superseded.id])[0].active,0);
+    assert.equal(d1Rows(stateDir,'SELECT COUNT(*) AS n FROM grading_items WHERE id=?',[superseded.id])[0].n,1);
+    assert.ok(d1Rows(stateDir,'SELECT COUNT(*) AS n FROM grading_item_revisions WHERE grading_item_id=?',[superseded.id])[0].n>0);
+    mock.state.renumberPage=0;
     // Five pages and 25 questions exercise four slots plus queued work in every AI stage.
     mock.state.pageQuestionCount=5;
     mock.state.concurrency={active:{},peak:{},finished:{},total:0,totalPeak:0,verified:new Set(),earlyGrading:false};

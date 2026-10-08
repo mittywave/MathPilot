@@ -25,3 +25,11 @@ export async function assertCompletePageCoverage(submissionId:string){
   if(!coverage.total||coverage.processed!==coverage.total)throw new Error(`作业页面尚未全部核验：${coverage.processed}/${coverage.total} 页，未完成页：${coverage.missing.join('、')}`);
   return coverage;
 }
+
+/** A completed reread replaces the active inventory, not the saved history of older attempts. */
+export async function readRecognizedQuestionNumbers(submissionId:string){
+  const coverage=await readPageCoverage(submissionId);
+  if(!coverage.total || coverage.processed!==coverage.total)return null;
+  const rows=await homeworkDb().prepare("SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND status='complete'").bind(submissionId).all<{result_json:string}>();
+  return new Set(rows.results.flatMap(row=>(JSON.parse(row.result_json) as PageExtraction).questions.map(q=>q.question_number)));
+}
