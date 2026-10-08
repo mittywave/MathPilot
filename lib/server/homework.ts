@@ -113,9 +113,9 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   const pageCoverage = await (await import("./homework-page-coverage")).readPageCoverage(id);
   const processingProgress = await appEnv().DB.prepare(`SELECT
     (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=?) AS identified,
-    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR json_extract(input_evidence_json,'$.teacher_mark') IN ('correct','partial','incorrect'))) AS referenceChecked,
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR (json_extract(input_evidence_json,'$.teacher_mark')='correct' AND NOT EXISTS (SELECT 1 FROM grading_items g WHERE g.assignment_question_id=assignment_questions.id AND g.submission_id=? AND g.verdict IN ('incorrect','partial'))))) AS referenceChecked,
     (SELECT COUNT(*) FROM grading_items WHERE submission_id=? AND (updated_at>=? OR (reviewed_at IS NOT NULL AND requires_review=0))) AS graded`)
-    .bind(row.assignment_id,row.assignment_id,id,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
+    .bind(row.assignment_id,row.assignment_id,id,id,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
   // Questions read before figures were located; their figures can be filled in from the submission page.
   const figuresPending = Number((await appEnv().DB.prepare(`SELECT COUNT(*) AS count FROM assignment_questions
     WHERE assignment_id=? AND json_type(input_evidence_json,'$.page_numbers')='array' AND json_type(input_evidence_json,'$.figures') IS NULL`).bind(row.assignment_id).first<{count:number}>())?.count ?? 0);
@@ -339,7 +339,8 @@ export async function autoPublishSubmission(id: string) {
 export async function reprocessPendingSubmission(id:string, replacements:Array<{replacePageId?:string;assetId:string}>,user:AuthUser) {
   const row=await teacherSubmissionRow(id,user);
   if(row.status!=="published") throw responseError("请等待本次批改完成后再补充",409);
-  const pending=await appEnv().DB.prepare("SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND (requires_review=1 OR verdict IN ('unreadable','review_required'))").bind(id).all<{assignment_question_id:string}>();
+  const pending=await appEnv().DB.prepare(`SELECT g.assignment_question_id FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id
+    WHERE g.submission_id=? AND (g.requires_review=1 OR g.verdict IN ('unreadable','review_required') OR (g.verdict IN ('incorrect','partial') AND (q.answer='' OR q.reference_verified=0)))`).bind(id).all<{assignment_question_id:string}>();
   const coverage=await (await import("./homework-page-coverage")).readPageCoverage(id);
   const pendingPages=coverage.pages.filter(p=>p.kind==='unreadable').map(p=>`page:${p.pageNumber}`);
   if(!pending.results.length && !pendingPages.length)throw responseError("没有待处理的题目",409);
@@ -351,6 +352,10 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
     changes.push(appEnv().DB.prepare('INSERT INTO submission_page_revisions(id,submission_id,page_id,original_asset_id,processed_asset_id,created_at) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),id,page.id,page.original_asset_id,page.processed_asset_id,now));
     changes.push(appEnv().DB.prepare("UPDATE submission_pages SET original_asset_id=?,processed_asset_id=?,quality_json='{}' WHERE id=? AND submission_id=?").bind(replacement.assetId,replacement.assetId,page.id,id));
   }
+  // Reuse pending-item recovery for historical mistakes whose reference answer was never generated or verified.
+  changes.push(appEnv().DB.prepare(`UPDATE assignment_questions SET reference_fingerprint='' WHERE id IN
+    (SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND verdict IN ('incorrect','partial'))
+    AND (answer='' OR reference_verified=0) AND reference_fingerprint NOT LIKE 'pending:%' AND reference_evidence NOT LIKE '教师补充并确认%'`).bind(id));
   changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
   changes.push(appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id));
   await appEnv().DB.batch(changes);

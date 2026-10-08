@@ -40,3 +40,18 @@ test('IGCSE / A Level references are written as mark points that add up to the p
  assert.match(completedPageExtractionPrompt(1,[1,2],2),/起始页码-印刷题号/);
  assert.equal(normalizeCompletedQuestions({questions:[{...base,max_score:'4'}]},2)[0].max_score,4);
 });
+
+test('school worksheets skip marked-answer transcription while exam marking preserves working',async()=>{
+ const {completedPageExtractionPrompt}=await loadSource('lib/completed-homework-coverage.ts');
+ const school=completedPageExtractionPrompt(1,[1,2],2);
+ assert.match(school,/已有老师批改符号的题 student_answer 留空/);
+ assert.match(school,/不能因为省略转录就当作空白作答/);
+ const exam=completedPageExtractionPrompt(1,[1,2],2,'international');
+ assert.match(exam,/完整转录学生原答，保留逐步评分所需的过程/);
+ assert.doesNotMatch(exam,/已有老师批改符号的题 student_answer 留空/);
+});
+
+test('school answer verification checks mathematics without demanding a hidden written derivation',()=>{
+ assert.match(completedVerificationPrompt([base],[]),/不能仅因答案未附推导或说明理由而判为未通过/);
+ assert.doesNotMatch(completedVerificationPrompt([base],[],'international'),/不能仅因答案未附推导/);
+});

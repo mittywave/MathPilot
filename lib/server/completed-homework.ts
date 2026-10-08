@@ -89,7 +89,18 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const referenceIds=(refs.results as Array<{asset_id:string}>).map(r=>r.asset_id);
   if(referenceIds.length>30)throw new Error('参考答案最多30页');
   const answerImages=await Promise.all(referenceIds.map(id=>homeworkAssetDataUrl(id)));
-  const readable=questions.filter(q=>q.question_complete&&(q.teacher_mark??'none')==='none');
+  const reviewed=await db.prepare('SELECT assignment_question_id,verdict FROM grading_items WHERE submission_id=? AND reviewed_at IS NOT NULL').bind(submissionId).all<{assignment_question_id:string;verdict:string}>();
+  const reviewedVerdicts=new Map(reviewed.results.map(row=>[row.assignment_question_id,row.verdict]));
+  const readable=questions.filter(q=>q.question_complete&&(reviewedVerdicts.get(ids.get(q.question_number)!)??q.teacher_mark??'none')!=='correct').map(q=>{
+    // Some recognized sub-parts explicitly refer to a previous part instead of repeating its conditions.
+    const dependency=curriculum==='school'?q.stem.match(/在[（(](\d+)[）)]的条件下/):null;
+    if(!dependency)return q;
+    const number=q.question_number.replace(/\([^()]+\)$/,'')+`(${dependency[1]})`;
+    const saved=oldByNumber.get(number);
+    const previous=questions.find(item=>item.question_number===number)??(saved?JSON.parse(saved.input_evidence_json) as CompletedQuestion:null);
+    if(!previous||number===q.question_number)return q;
+    return {...q,stem:`本题引用的第(${dependency[1]})问条件（仅用于补足条件）：\n${previous.stem}${previous.figure_notes?`\n配图条件：${previous.figure_notes}`:''}\n当前小问：\n${q.stem}`};
+  });
   const pendingReferences:CompletedQuestion[]=[],ready:CompletedQuestion[]=[];
   const keys=new Map<string,string>();
   for(const q of readable){
@@ -120,7 +131,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
           const answer=answers.find(a=>a.question_number===q.question_number)!,check=checks.find(c=>c.question_number===q.question_number)!;
           const verified=Boolean(answer.answer&&answer.source!=='unresolved'&&check.verified);
           return db.prepare('UPDATE assignment_questions SET reference_source=?,reference_verified=?,reference_evidence=?,reference_fingerprint=?,updated_at=? WHERE id=? AND assignment_id=?')
-            .bind(verified?(answer.source==='provided'&&answerImages.length?'provided':'agent'):'unresolved',verified?1:0,check.reason||'参考答案无法核验',keys.get(q.question_number),Date.now(),ids.get(q.question_number),assignmentId);
+            .bind(verified?(answer.source==='provided'&&answerImages.length?'provided':'agent'):'unresolved',verified?1:0,check.reason||(verified?'已独立核验参考答案':'参考答案无法核验'),keys.get(q.question_number),Date.now(),ids.get(q.question_number),assignmentId);
         }));
       }
       // The callback uses one worker inside this slot and skips verdicts already saved in this run.

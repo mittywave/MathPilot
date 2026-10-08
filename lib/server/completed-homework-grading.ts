@@ -10,7 +10,7 @@ import { callHomeworkModel, parseHomeworkModelText } from './homework-model';
 import { AiQueueFailure } from './ai/queue-policy';
 import { upsertResult } from './homework-grading';
 // School homework is judged right or wrong only; the mark-scheme analysis stays for IGCSE / A Level scoring.
-const VERDICT_ONLY_RULES='本作业只判对错：verdict 照常判定；feedback、error_type、evidence_summary 返回空字符串，step_analysis 返回空数组，不写解析、步骤分析和订正建议。';
+const VERDICT_ONLY_RULES='本作业只判对错：verdict 照常判定；student_answer 只写判题所需的最终答案或极短作答摘要，不逐行转录解题过程；feedback、error_type、evidence_summary 返回空字符串，step_analysis 返回空数组，不写解析、步骤分析和订正建议。';
 const TEACHER_MARK_EVIDENCE={correct:'老师已打勾',partial:'老师判为半对',incorrect:'老师已打叉或圈出答案'};
 type Row={id:string;question_number:string;page_number:number;type:QuestionType;stem:string;answer:string;analysis:string;reference_verified:number;input_evidence_json:string};
 export async function gradeCompletedQuestions(submissionId:string,questions:Row[],upperAttempt:number,concurrency=HOMEWORK_AI_CONCURRENCY){

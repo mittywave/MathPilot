@@ -516,7 +516,7 @@ html[data-theme="dark"]
 .grade-marker.partial { border-color:#c18429!important; color:#b06f0f; }
 .grade-marker.incorrect { border-color:#c44e43!important; color:#b83229; }
 .grade-marker.unreadable,.grade-marker.review_required { border-color:#6978cb!important; color:#5261ba; }
-.grading-heading { position:sticky; top:77px; z-index:5; display:flex; justify-content:space-between; gap:14px; padding:13px; border:1px solid var(--line); border-radius:calc(11px*var(--radius-scale)); background:color-mix(in srgb,var(--surface) 94%,transparent); backdrop-filter:blur(12px); }
+.grading-heading { display:flex; justify-content:space-between; gap:14px; padding:13px; border:1px solid var(--line); border-radius:calc(11px*var(--radius-scale)); background:color-mix(in srgb,var(--surface) 94%,transparent); backdrop-filter:blur(12px); }
 .grading-heading p { margin:4px 0 0; color:var(--muted); font-size:12px; }
 .grading-heading button { min-height:37px; padding:0 13px; }
 .grading-card { min-width:0; display:grid; gap:11px; padding:16px; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); }
@@ -557,7 +557,6 @@ html[data-theme="dark"]
   .review-score { text-align:left; }
   .review-upload { width:calc(100% - 26px); padding:15px; }
   
-  .grading-heading { top:68px; }
   
 }
 
@@ -775,23 +774,31 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .report-download .report-source { color:var(--muted); font-size:12px; }
 .submission-report-card>header p.report-overview { color:var(--ink); font-size:14px; }
 .report-actions ol,.step-analysis ol { margin:0; padding-left:20px; color:var(--ink); font-size:13px; line-height:1.8; }
-.review-evidence-layout { max-width:1240px; margin:0 auto; display:grid; grid-template-columns:minmax(410px,.9fr) minmax(500px,1.1fr); gap:20px; padding:0 30px 70px; align-items:start; }
+.review-evidence-layout { scroll-margin-top:78px; max-width:1600px; height:calc(100dvh - 92px); min-height:440px; margin:0 auto 48px; display:grid; grid-template-columns:minmax(0,var(--review-split,45%)) 14px minmax(0,1fr); padding:0 22px; align-items:stretch; }
+.review-evidence-layout>.review-pages,.review-evidence-layout>.grading-list { min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; align-content:start; grid-auto-rows:max-content; padding:4px; }
+.review-evidence-layout>.review-pages { max-width:none; width:auto; margin:0; }
+.review-splitter { position:relative; cursor:col-resize; touch-action:none; outline-offset:-2px; }
+.review-splitter::after { content:""; position:absolute; left:6px; top:0; bottom:0; width:2px; border-radius:2px; background:var(--line); }
+.review-splitter:hover::after,.review-splitter:focus-visible::after { background:var(--green); }
+.grade-marker[aria-pressed="true"] { outline:3px solid var(--green); outline-offset:3px; background:color-mix(in srgb,var(--green) 15%,transparent)!important; }
+.grading-card.selected { border-color:var(--green); box-shadow:inset 3px 0 0 var(--green); }
 .grading-card.compact { display:block; padding:0; overflow:hidden; }
-.grading-card.compact>summary { display:grid; grid-template-columns:180px minmax(0,1fr) auto; align-items:center; gap:10px; min-height:55px; padding:10px 14px; cursor:pointer; }
+.grading-card.compact>summary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-height:55px; padding:10px 14px; cursor:pointer; }
 .grading-card.compact>summary span { color:var(--ink); font-size:14px; font-weight:700; }
 .grading-card.compact>summary b { width:max-content; padding:4px 8px; border-radius:999px; background:var(--surface-soft); color:var(--muted); font-size:12px; }
 .grading-card.compact.correct>summary b { background:var(--success-soft); color:color-mix(in srgb, var(--ink) 8%, var(--success)); }
 .grading-card.compact.partial>summary b { background:var(--warn-soft); color:var(--c-99641e); }
 .grading-card.compact.incorrect>summary b { background:var(--danger-soft); color:color-mix(in srgb, var(--danger-soft) 6%, var(--danger)); }
-.grading-card.compact>summary small { color:var(--muted); font-size:12px; }
+.grading-card.compact>summary small { grid-column:1 / -1; color:var(--muted); font-size:12px; }
 .grading-detail { display:grid; gap:11px; padding:15px; border-top:1px solid var(--line); background:var(--surface); }
 .grading-detail>label { display:grid; gap:6px; color:var(--muted); font-size:12px; }
-.student-answer-block,.step-analysis,.evidence-feedback { padding:11px 12px; border-radius:calc(9px*var(--radius-scale)); background:var(--surface-soft); }
-.student-answer-block b,.step-analysis b,.evidence-feedback b { color:var(--green); font-size:12px; }
-.student-answer-block p,.evidence-feedback p { margin:5px 0 0; font-size:14px; line-height:1.65; white-space:pre-wrap; }
+.step-analysis,.evidence-feedback { padding:11px 12px; border-radius:calc(9px*var(--radius-scale)); background:var(--surface-soft); }
+.step-analysis b,.evidence-feedback b { color:var(--green); font-size:12px; }
+.evidence-feedback p { margin:5px 0 0; font-size:14px; line-height:1.65; white-space:pre-wrap; }
 .evidence-feedback small { color:var(--muted); font-size:12px; }
 .correction-actions { display:flex; justify-content:flex-end; gap:8px; }
 .correction-actions button { min-height:37px; padding:0 12px; }
+.reference-empty { margin:0; color:var(--muted); font-size:13px; line-height:1.7; }
 .quiet-correction { justify-self:end; min-height:33px!important; padding:0 10px!important; color:var(--muted); font-size:12px; }
 
 html[data-theme="dark"] .grading-card.compact.correct>summary b { background:var(--success-soft); color:var(--success); }
@@ -801,6 +808,10 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 @media (max-width:1000px) {
 
   .diagnosis-grid,.review-evidence-layout { grid-template-columns:1fr; }
+  .review-evidence-layout { height:auto; min-height:0; gap:14px; }
+  .review-evidence-layout>.review-pages { height:50dvh; min-height:260px; }
+  .review-evidence-layout>.grading-list { height:65dvh; min-height:320px; }
+  .review-splitter { display:none; }
   
 }
 

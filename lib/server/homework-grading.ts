@@ -63,7 +63,7 @@ async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
   if (!counts || !Number(counts.question_count) || Number(counts.result_count) < Number(counts.question_count)) return false;
   await (await import("./homework-page-coverage")).assertCompletePageCoverage(submission.id);
   if (pendingIds.length) {
-    const completed = await homeworkDb().prepare(`SELECT COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=? AND g.assignment_question_id IN (${pendingIds.map(()=>"?").join(",")}) AND g.updated_at>=s.submitted_at`).bind(submission.id,...pendingIds).first<{count:number}>();
+    const completed = await homeworkDb().prepare(`SELECT COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=? AND g.assignment_question_id IN (${pendingIds.map(()=>"?").join(",")}) AND (g.updated_at>=s.submitted_at OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))`).bind(submission.id,...pendingIds).first<{count:number}>();
     if (Number(completed?.count??0)<pendingIds.length) return false;
   }
   const now = Date.now();

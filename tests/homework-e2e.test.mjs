@@ -129,7 +129,7 @@ function startMockModel(port) {
       // A worksheet the teacher already marked: question 3 has two sub-questions, the printed (1) still without its page prefix.
       const marked=[
         {question_number:"3(1)",page_numbers:[1],type:"填空题",stem:"3. 计算：(1) 1+1",options:[],student_answer:"2",answer_state:"readable",question_complete:true,teacher_mark:"correct"},
-        {question_number:"1-3(2)",page_numbers:[1],type:"填空题",stem:"3. 计算：(2) 2+2",options:[],student_answer:"5",answer_state:"readable",question_complete:true,teacher_mark:"incorrect"},
+        {question_number:"1-3(2)",page_numbers:[1],type:"填空题",stem:"3. 在(1)的条件下，计算：(2) 2+2",options:[],student_answer:"5",answer_state:"readable",question_complete:true,teacher_mark:state.teacherMarked==="partial"?"partial":"incorrect"},
         ...(state.teacherMarked==="split"?[
           {question_number:"1-4(1)",page_numbers:[1],type:"填空题",stem:"4. 计算：(1) 4+4",options:[],student_answer:"9",answer_state:"readable",question_complete:true,teacher_mark:"none"},
           {question_number:"1-4(2)",page_numbers:[1],type:"填空题",stem:"4. 计算：(2) 5+5",options:[],student_answer:"10",answer_state:"readable",question_complete:true,teacher_mark:"correct"},
@@ -149,6 +149,7 @@ function startMockModel(port) {
     if(prompt.includes("建立独立参考解答")) {
       assert.doesNotMatch(prompt,/student_answer/);
       const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];state.referenceNumbers.push(...numbers);
+      if(numbers.includes("1-3(2)"))assert.match(prompt,/本题引用的第\(1\)问条件[\s\S]*3. 计算：\(1\) 1\+1/);
       const answers=numbers.map(n=>({question_number:n,answer:({D1:"5",D2:"x=2",D3:"6",D4:"8"}[n]??"5"),analysis:"独立验算推导",source:prompt.includes("提供的 0 张")?"agent":"provided"}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({answers})}));return;
     }
@@ -164,7 +165,7 @@ function startMockModel(port) {
       }
       assert.doesNotMatch(prompt,/student_answer/);
       const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];
-      const results=numbers.map(n=>({question_number:n,verified:true,reason:"已独立验算成立"}));
+      const results=numbers.map(n=>({question_number:n,verified:true,reason:n==="1-4"?"":"已独立验算成立"}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({results})}));return;
     }
     if (prompt.includes("IGCSE / A Level 数学学习诊断助手")) {
@@ -467,18 +468,20 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.concurrency=null;mock.state.pageQuestionCount=1;
     mock.state.multiPage=false;
 
-    // Ticks and crosses the teacher already made decide those questions; only the unmarked one is solved and judged, without written analysis.
+    // Teacher marks still decide the verdict; incorrect and partial work receives a reference without being re-judged.
     mock.state.teacherMarked="merged";mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
     const marked=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"老师已批改的练习",outputs:{wrongBook:true,report:false,profile:false}}});
     const markedId=marked.payload.submission.id;
     await submitPages(base,teacherOne,markedId,[await uploadPage(base,teacherOne,markedId,bytes)]);
     const markedResult=await waitForSubmission(base,teacherOne,markedId,["published"],worker);
     assert.deepEqual(markedResult.gradingItems.map(i=>[i.questionNumber,i.verdict,i.teacherMark,i.evidenceSummary]),[["1-3(1)","correct","correct","老师已打勾"],["1-3(2)","incorrect","incorrect","老师已打叉或圈出答案"],["1-4","incorrect",null,""]]);
-    assert.deepEqual([mock.state.referenceNumbers,mock.state.gradedNumbers],[["1-4"],["1-4"]],"marked sub-questions are neither solved nor judged by the model");
+    assert.deepEqual([mock.state.referenceNumbers.sort(),mock.state.gradedNumbers],[["1-3(2)","1-4"],["1-4"]],"teacher-marked mistakes receive answers without being re-judged");
+    assert.ok(markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").referenceVerified);
     assert.ok(mock.state.verdictOnlyPrompts>0);
     const unmarked=markedResult.gradingItems.find(i=>i.questionNumber==="1-4");
+    assert.equal(unmarked.referenceEvidence,"已独立核验参考答案","a successful check with no explanation must not be labeled unverifiable");
     assert.deepEqual([unmarked.feedback,unmarked.stepAnalysis,unmarked.errorType,unmarked.standardAnswer,unmarked.standardAnalysis],["",[],"","5",""],"school homework keeps only the verdict and the final answer");
-    assert.equal(markedResult.gradingSummary.archived,2,"the teacher's cross files the sub-question without a reference answer");
+    assert.equal(markedResult.gradingSummary.archived,2,"the teacher's cross still files the sub-question after its answer is prepared");
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===markedResult.assignmentId).length,2);
     const misread=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").id,verdict:"correct"}]}});
     assert.equal(misread.response.status,200,"a misread mark is corrected without supplying a reference answer");
@@ -493,6 +496,25 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(split.gradingItems.map(i=>[i.questionNumber,i.verdict]),[["1-3(1)","correct"],["1-3(2)","incorrect"],["1-4(1)","incorrect"],["1-4(2)","correct"]]);
     assert.equal(split.gradingItems.find(i=>i.questionNumber==="1-4(1)").assignmentQuestionId,unmarked.assignmentQuestionId);
     assert.deepEqual(mock.state.referenceNumbers,["1-4(1)"]);
+    mock.state.teacherMarked="partial";mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    const partialMarked=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"半对题也有参考答案",outputs:{wrongBook:true,report:false,profile:false}}});
+    const partialMarkedId=partialMarked.payload.submission.id;
+    await submitPages(base,teacherOne,partialMarkedId,[await uploadPage(base,teacherOne,partialMarkedId,bytes)]);
+    const partialMarkedResult=await waitForSubmission(base,teacherOne,partialMarkedId,["published"],worker);
+    const half=partialMarkedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)");
+    assert.deepEqual([half.verdict,half.teacherMark,half.referenceVerified,half.standardAnswer],["partial","partial",true,"5"]);
+    assert.equal(mock.state.gradedNumbers.includes("1-3(2)"),false,"an independent answer never changes the teacher's mark");
+    // A historical / corrected mistake with no reference uses the same pending-item recovery.
+    const formerlyCorrect=partialMarkedResult.gradingItems.find(i=>i.questionNumber==="1-3(1)");
+    assert.equal(formerlyCorrect.standardAnswer,"");
+    await jsonRequest(base,`/api/submissions/${partialMarkedId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:formerlyCorrect.id,verdict:"partial"}]}});
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    assert.equal((await jsonRequest(base,`/api/submissions/${partialMarkedId}`,{cookie:teacherOne,method:"PUT",body:{action:"reprocess-pending"}})).response.status,200);
+    const backfilled=await waitForSubmission(base,teacherOne,partialMarkedId,["published"],worker);
+    const restored=backfilled.gradingItems.find(i=>i.id===formerlyCorrect.id);
+    assert.deepEqual([restored.verdict,restored.referenceVerified,restored.standardAnswer],["partial",true,"5"],"backfilling preserves a teacher's corrected verdict");
+    assert.deepEqual(mock.state.referenceNumbers,["1-3(1)"]);
+    assert.deepEqual(mock.state.gradedNumbers,[]);
     mock.state.teacherMarked="";
 
     mock.state.failAll=true;
