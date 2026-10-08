@@ -6,6 +6,8 @@ import { cdnAdapter } from "@vinext/cloudflare/cache/cdn-adapter";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { preparePdfWorker } from "./scripts/prepare-pdf-worker.mjs";
 import { ensureLocalBindings } from "./scripts/local-binding-config.mjs";
+import { latexDevPlugin } from "./scripts/latex-dev-plugin.mjs";
+import { lanSharePlugin, localNetworkName } from "./scripts/lan-share.mjs";
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -18,11 +20,16 @@ export default defineConfig(async () => {
   process.env.WRANGLER_LOG_PATH ??= ".wrangler/logs";
   process.env.MINIFLARE_REGISTRY_PATH ??= ".wrangler/registry";
 
+  // Colleagues may open the site by this Mac's Bonjour name (共享办公), which survives IP changes.
+  const networkName = localNetworkName();
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      allowedHosts: [networkName],
+      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+    },
     plugins: [
+      lanSharePlugin({ name: networkName }),
+      latexDevPlugin(),
       vinext({
         cache: { cdn: cdnAdapter() },
       }),

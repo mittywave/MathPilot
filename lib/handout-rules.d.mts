@@ -1,0 +1,31 @@
+import type { HandoutBand, HandoutGrade, HandoutItem, HandoutPlacement, HandoutTerm, LibraryScope, Question } from './types';
+
+export type HandoutPart = { label: string; tagline: string; hint: string; prefix?: string };
+export const HANDOUT_LIMITS: { title: number; items: number; id: number; sectionTitle: number; note: number };
+export const DEFAULT_HANDOUT_TITLE: string;
+export const HANDOUT_GRADES: { value: HandoutGrade; label: string }[];
+export const HANDOUT_TERMS: { value: HandoutTerm; label: string }[];
+export function normalizePlacement(raw: unknown): HandoutPlacement | null;
+export function placementLabel(placement: { grade?: HandoutGrade | null; term?: HandoutTerm | null } | null | undefined): string;
+export const HANDOUT_BANDS: HandoutBand[];
+export const HANDOUT_PARTS: { knowledge: HandoutPart } & Record<HandoutBand, HandoutPart & { prefix: string }>;
+export function bandOf(item: { band?: unknown } | null | undefined): HandoutBand;
+export function bandLabel(band: HandoutBand, number: number): string;
+export function chineseNumeral(value: number): string;
+export function normalizeHandoutDraft(raw: unknown): { title: string; items: HandoutItem[] };
+type SectionItem = Extract<HandoutItem, { kind: 'section' }>;
+type QuestionItem = Extract<HandoutItem, { kind: 'question' }>;
+export type HandoutModule = { section: SectionItem | null; bands: Record<HandoutBand, QuestionItem[]> };
+export function handoutModules(items: HandoutItem[]): HandoutModule[];
+export function handoutNumbers(items: HandoutItem[]): Map<string, string>;
+export function moduleHeading(title: string | null | undefined, index: number): { numeral: string; title: string };
+export type HandoutExportModule = { heading: string; note: string; bands: Record<HandoutBand, Question[]> };
+export function handoutSections(items: HandoutItem[], resolve: (scope: LibraryScope, questionId: string) => Question | undefined): {
+  modules: HandoutExportModule[];
+  missingCount: number;
+};
+export function moveHandoutItem(items: HandoutItem[], id: string, direction: -1 | 1): HandoutItem[];
+export function setItemBand(items: HandoutItem[], id: string, band: HandoutBand): HandoutItem[];
+export function ensureLeadingModule(items: HandoutItem[], id: string): HandoutItem[];
+export function insertIndexForSection(items: HandoutItem[], sectionId: string | null): number;
+export function questionPoints(question: Pick<Question, 'tags' | 'tagsZh'> | null | undefined): string[];
