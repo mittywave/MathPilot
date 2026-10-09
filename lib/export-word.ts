@@ -507,7 +507,6 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
         for (const image of images) children.push(figureWidth ? await imageParagraph(image, Math.round(650 * figureWidth), 900, 140, AlignmentType.LEFT) : await imageParagraph(image, 300, 210));
       }
       if (question.optionsImage) children.push(await imageParagraph(question.optionsImage, 650, 320, 120, AlignmentType.LEFT));
-      for (const note of question.recognitionWarnings?.filter(note=>note.startsWith("配图说明：")) ?? []) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: 80 }, children: textRuns(note, 18, { color: "6F7D76" }) }));
       if (question.optionsDocxXml?.length) {
         question.optionsDocxXml.forEach((xml) => {
           const token = `__ZHITI_RAW_OPTIONS_${rawParagraphs.length}__`;

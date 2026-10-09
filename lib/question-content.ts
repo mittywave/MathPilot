@@ -49,7 +49,7 @@ export function assignmentQuestionToQuestion(template: AssignmentQuestion, sourc
     id: template.id, categoryId: "homework", difficulty: "中等", provenance: "来源待核实",
     source: source.title, tags: [...template.knowledgeTags], taxonomyKeys: [...template.taxonomyKeys],
     sourcePage: template.pageNumber, originalImage: source.originalImage,
-    recognitionConfidence: template.confidence, recognitionWarnings: [...template.warnings, ...(figures.some(figure=>figure.hasHandwriting) ? ["配图说明：原卷图内含手写标注，已忠实保留，请结合原卷核对。"] : [])],
+    recognitionConfidence: template.confidence, recognitionWarnings: [...template.warnings],
     createdAt: source.createdAt, updatedAt: source.updatedAt,
   };
 }

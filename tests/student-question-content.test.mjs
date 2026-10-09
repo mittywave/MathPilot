@@ -22,10 +22,10 @@ test("library scanning and automatic wrong-book snapshots preserve the same ques
   }
 });
 
-test('collected subquestions exclude group headings and duplicate major numbers but preserve their part and diagram note',()=>{
+test('collected subquestions exclude group headings and duplicate major numbers without adding diagram notices',()=>{
   const q=assignmentQuestionToQuestion({id:'q',questionNumber:'12-15(2)',type:'填空题',stem:'B组 思想方法\n15. 蚂蚁从$O$出发，如图。\n(2) 求坐标。',options:[],answer:'',analysis:'',pageNumber:12,knowledgeTags:[],taxonomyKeys:[],warnings:[],figures:[{url:'/figure',kind:'stem',hasHandwriting:true}]},{title:'原卷',createdAt:1,updatedAt:2});
   assert.equal(q.stem,'蚂蚁从$O$出发，如图。\n(2) 求坐标。');
-  assert.equal(q.contentImages[0],'/figure');assert.match(q.recognitionWarnings[0],/手写标注/);
+  assert.equal(q.contentImages[0],'/figure');assert.deepEqual(q.recognitionWarnings,[]);
 });
 
 test('collected OCR math repairs explicit command escapes and parallel signs without changing mathematical content',()=>{
@@ -35,7 +35,7 @@ test('collected OCR math repairs explicit command escapes and parallel signs wit
   assert.notEqual(question.stem,template.stem);
 });
 
-test('Word keeps the diagram annotation note and editable subquestion text beside the image',async(t)=>{
+test('Word omits legacy diagram notices while retaining images and editable text',async(t)=>{
   const {readFile}=await import('node:fs/promises');const {default:JSZip}=await import('jszip');
   const {buildQuestionsWordBlob}=await loadSource('lib/export-word.ts');
   const png=await readFile(new URL('./fixtures/homework-question-page.png',import.meta.url));
@@ -46,7 +46,8 @@ test('Word keeps the diagram annotation note and editable subquestion text besid
   t.after(()=>{if(OriginalImage===undefined)delete globalThis.Image;else globalThis.Image=OriginalImage;});
   const url='data:image/png;base64,'+png.toString('base64');
   const question=assignmentQuestionToQuestion({id:'q',questionNumber:'12-15(2)',type:'填空题',stem:'B组 思想方法\n15. 如图。\n(2) 求$x$。',options:[],answer:'1',analysis:'',pageNumber:12,knowledgeTags:[],taxonomyKeys:[],warnings:[],figures:[{url,kind:'stem',hasHandwriting:true}]},{title:'原卷',createdAt:1,updatedAt:2});
+  question.recognitionWarnings=['配图说明：原卷图内含手写标注，已忠实保留，请结合原卷核对。'];
   const zip=await JSZip.loadAsync(await (await buildQuestionsWordBlob([question],'配图规范回归',false)).arrayBuffer());
   const xml=await zip.file('word/document.xml').async('string');
-  assert.match(xml,/配图说明：原卷图内含手写标注/);assert.match(xml,/<w:drawing/);assert.match(xml,/\(2\)/);assert.doesNotMatch(xml,/B组|思想方法|15\./);
+  assert.doesNotMatch(xml,/配图说明|手写标注/);assert.match(xml,/<w:drawing/);assert.match(xml,/\(2\)/);assert.doesNotMatch(xml,/B组|思想方法|15\./);
 });
