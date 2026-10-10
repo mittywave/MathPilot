@@ -232,6 +232,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [picker, setPicker] = useState<PickerMode | null>(null);
+  const bankPane = useRef<HTMLDivElement>(null);
   const [entry, setEntry] = useState<EntryState | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [answers, setAnswers] = useState<WordAnswerPlacement>("end");
@@ -289,14 +290,18 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   }
 
   // A replacement keeps the slot: same module, same band, same position.
-  function pick(questionIds: string[]) {
-    if (!picker) return;
-    if (picker.kind === "replace") {
-      const [questionId] = questionIds; const itemId = picker.itemId;
+  function pick(questionIds: string[], target: PickerMode) {
+    if (target.kind === "replace") {
+      const [questionId] = questionIds; const itemId = target.itemId;
       setItems(latest.current!.items.map((item) => item.id === itemId && item.kind === "question" ? { ...item, scope: "public", questionId } : item));
       onNotice("题目已替换");
-    } else { insertQuestions(questionIds, picker.sectionId, picker.band); onNotice(`已加入 ${questionIds.length} 道${HANDOUT_PARTS[picker.band].label}`); }
-    setPicker(null);
+    } else { insertQuestions(questionIds, target.sectionId, target.band); onNotice(`已加入 ${questionIds.length} 道${HANDOUT_PARTS[target.band].label}`); }
+    if (target.kind === "replace") setPicker(null);
+  }
+
+  function choosePicker(mode: PickerMode) {
+    setPicker(mode);
+    bankPane.current?.scrollIntoView({ block: "nearest" });
   }
 
   function changeBand(itemId: string, band: HandoutBand) {
@@ -410,6 +415,9 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
   // Questions always sit in a module (see ensureLeadingModule), so only module cards are shown.
   const modules = handoutModules(doc.items).flatMap((module) => module.section ? [{ section: module.section, bands: module.bands }] : []);
+  const activePicker: PickerMode = picker?.kind === "replace" && doc.items.some((item) => item.id === picker.itemId)
+    ? picker
+    : { kind: "add", sectionId: picker?.kind === "add" && modules.some(({ section }) => section.id === picker.sectionId) ? picker.sectionId : modules[0]?.section.id ?? null, band: picker?.kind === "add" ? picker.band : "example" };
   const numbers = handoutNumbers(doc.items);
   const taken = new Set(doc.items.flatMap((item) => item.kind === "question" ? [item.questionId] : []));
   const questionCount = doc.items.filter((item) => item.kind === "question").length;
@@ -431,7 +439,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         <div className="handout-actions">
           <button aria-label={`${name} 上移`} disabled={laneIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
           <button aria-label={`${name} 下移`} disabled={laneIndex === laneSize - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
-          <button disabled={!libraryReady} onClick={() => setPicker({ kind: "replace", itemId: item.id, question, label: `替换 ${name}` })}>替换</button>
+          <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
           <PaperMoreMenu label="题目更多操作">
             {HANDOUT_BANDS.filter((other) => other !== band).map((other) => <button key={other} onClick={() => changeBand(item.id, other)}>改为{HANDOUT_PARTS[other].label}</button>)}
             {question?.canEdit && <button onClick={() => openEditEntry(question)}>编辑原题</button>}
@@ -448,6 +456,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
       <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </div>
+    <div className="handout-workspace">
+      <div className="handout-bank-pane" ref={bankPane}>
+        <QuestionPicker library={library} mode={activePicker} taken={taken} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
+          sections={modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }))} />
+      </div>
+      <div className="handout-draft" aria-label="讲义编辑">
     <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
     <p className="handout-muted">{placementLabel(home)} · {modules.length} 个模块 · {bandTotals.join(" · ")} · 题目随题库同步更新{!libraryReady ? " · 正在读取题库…" : missingCount ? ` · ${missingCount} 道题已无法读取` : ""}</p>
 
@@ -488,7 +502,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
             <div className="handout-lane-head"><b>{part.label}</b><span>{part.tagline}</span></div>
             {lane.length ? lane.map((item, laneIndex) => questionCard(item, band, laneIndex, lane.length)) : <p className="handout-lane-hint">{part.hint}</p>}
             <div className="handout-add">
-              <button className="secondary" disabled={!libraryReady} onClick={() => setPicker({ kind: "add", sectionId: section.id, band, label: `加入${part.label} · ${badge}` })}>＋ 从题库选题</button>
+              <button className="secondary" disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>＋ 从题库选题</button>
               <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(section.id, band)}>＋ 录入新题</button>
             </div>
           </div>;
@@ -497,8 +511,10 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     })}
     <button className="handout-add-section" onClick={() => setItems([...doc.items, { id: newId(), kind: "section", title: "", note: "" }])}>＋ 添加知识模块</button>
 
+      </div>
+    </div>
+
     <input ref={noteFile} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file && noteTarget.current) void importNoteScreenshot(noteTarget.current, file); event.target.value = ""; }} />
-    {picker && <QuestionPicker library={library} mode={picker} taken={taken} onPick={pick} onClose={() => setPicker(null)} />}
     {entry && library && <QuestionEntry initial={entry.draft} modules={library.modules} categories={library.categories}
       moduleIds={entry.draft.id ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
       onSaved={(saved) => entrySaved(entry, saved)} onClose={() => setEntry(null)} onNotice={onNotice} />}

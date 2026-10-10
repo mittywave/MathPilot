@@ -1,4 +1,4 @@
-.handouts button,.picker-modal button{white-space:nowrap}
+.handouts button{white-space:nowrap}
 .handouts-head{flex-wrap:wrap}
 .handouts-head>div{flex:1;min-width:220px}
 .handouts .primary-button{margin-left:auto;height:44px;padding:0 20px;font-size:14px}
@@ -92,8 +92,26 @@
 .handout-answer-choice label.unavailable{opacity:.45;cursor:not-allowed}
 .handout-export-actions{align-items:center}
 
-.picker-modal{width:min(860px,100%)}
-.picker-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.4fr);gap:10px}
+.toolbox.handout-editor{display:flex;flex-direction:column;gap:18px;width:100%;max-width:1800px;height:100dvh;padding:20px 24px}
+.handout-workspace{display:grid;grid-template-columns:minmax(340px,2fr) minmax(0,3fr);gap:24px;flex:1;min-height:0}
+.handout-bank-pane,.handout-draft{min-height:0}
+.handout-bank{display:flex;flex-direction:column;height:100%;padding:18px;border:1px solid var(--line,#e4e9e6);border-radius:calc(14px*var(--radius-scale));background:var(--surface,#fff)}
+.picker-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin-bottom:14px}
+.picker-head h2{margin:0;font-size:20px}
+.picker-head span{color:color-mix(in srgb,var(--ink,#24352f) 58%,var(--surface,#fff));font-size:12px}
+.picker-target{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px;margin-bottom:14px;padding:12px;background:var(--green-soft,#edf5f0);border-radius:calc(10px*var(--radius-scale))}
+.picker-target label{display:grid;gap:5px;color:var(--green,#2f6b53);font-size:12px}
+.picker-target select,.picker-filters select,.picker-filters input{width:100%;height:40px;padding:0 9px;border:1px solid var(--line,#e4e9e6);border-radius:calc(8px*var(--radius-scale));background:var(--surface,#fff);color:var(--ink,#24352f);font:inherit;font-size:13px}
+.picker-replacing{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;padding:12px;border-radius:calc(10px*var(--radius-scale));background:var(--green-soft,#edf5f0);font-size:13px}
+.picker-results{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.handout-draft{overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:0 4px 20px}
+.handout-draft .handout-title{margin-top:0}
+.handout-draft .handout-module-head{flex-wrap:wrap}
+.handout-draft .handout-question-foot{flex-wrap:wrap}
+.handout-draft .handout-question-foot small{flex-basis:100%}
+.handout-draft .handout-actions{margin-left:auto}
+.picker-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.picker-search{grid-column:1/-1}
 .picker-filters label{display:grid;gap:5px;color:color-mix(in srgb,var(--ink,#24352f) 60%,var(--surface,#fff));font-size:11px}
 .picker-count{margin:12px 0 6px;color:color-mix(in srgb,var(--ink,#24352f) 58%,var(--surface,#fff));font-size:12px}
 .picker-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
@@ -105,9 +123,16 @@
 .picker-taken{color:color-mix(in srgb,var(--ink,#24352f) 50%,var(--surface,#fff));font-size:12.5px}
 .picker-empty{padding:30px 0;color:color-mix(in srgb,var(--ink,#24352f) 58%,var(--surface,#fff));text-align:center}
 .picker-more{display:block;margin:12px auto 0}
-.picker-actions{position:sticky;bottom:-22px;align-items:center;background:color-mix(in srgb,var(--surface) 55%,var(--page))}
+.picker-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--line,#e4e9e6)}
 .picker-actions span{margin-right:auto;color:color-mix(in srgb,var(--ink,#24352f) 60%,var(--surface,#fff));font-size:13px}
 .picker-actions .primary-button,.picker-actions .secondary{height:44px}
+
+@media(max-width:900px){
+  .toolbox.handout-editor{height:auto;padding:16px 12px 40px}
+  .handout-workspace{grid-template-columns:1fr;gap:18px}
+  .handout-bank{height:70dvh;min-height:460px;padding:14px}
+  .handout-draft{overflow:visible;padding:0;scrollbar-gutter:auto}
+}
 
 @media(max-width:600px){
   .handout-list li{flex-wrap:wrap}
@@ -124,7 +149,6 @@
   .handout-question-foot small{flex-basis:100%}
   .handout-actions{margin-left:auto}
   .handout-add .secondary{flex:1;height:44px}
-  .modal.picker-modal{padding:18px 14px}
   .picker-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
   .picker-search{grid-column:1/-1}
   .picker-item-foot{flex-wrap:wrap}
