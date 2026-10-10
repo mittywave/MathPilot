@@ -56,11 +56,8 @@ def main():
         page.set_viewport_size({'width':1440,'height':1050});invalid=True;upload('invalid.png')
         page.locator('#studio-output-text').check();page.get_by_role('button',name='\u751f\u6210 Word',exact=True).click()
         expect(page.locator('.studio-error')).to_contain_text('unknown',timeout=30000);assert page.locator('a.studio-download').count()==0
-        page.get_by_text('\u6821\u5bf9\u4e0e\u6392\u9519',exact=True).click();page.get_by_role('button',name='\u751f\u6210\u6821\u5bf9\u6837\u5f20',exact=True).click()
-        review=page.get_by_role('link',name='\u4e0b\u8f7d\u6821\u5bf9\u6837\u5f20\uff08\u975e\u6b63\u5f0f\u6210\u54c1\uff09',exact=True);expect(review).to_be_visible(timeout=30000)
-        with page.expect_download() as download:review.click()
-        assert 'REVIEW_ONLY' in download.value.suggested_filename;download.value.save_as(out/'browser-review.docx')
-        results['strictBlocksAndReviewSeparate']=True
+        # The page has no review-copy export any more; an unsupported formula simply blocks the formal Word.
+        results['strictBlocksInvalidMath']=True
         # Real IndexedDB, with put-count instrumentation and a failed transaction.
         results['storage']=page.evaluate('''async()=>{
           const store=studioTest.studioStorage,d=studioTest.mathContractDraft();d.pages=[{id:'p',hash:'h',page:1,image:'pixels',role:'answer',selected:true,name:'test'}];

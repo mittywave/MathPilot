@@ -225,12 +225,12 @@ def exercise(page,app,out,upstream):
     tab('诊断');page.get_by_label('测试模型',exact=True).select_option('Model-A');page.get_by_label('测试项目',exact=True).select_option('vision');page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');tab('模型目录')
     r['perModelEffort']=True;r['imageChallenge']=True
     # Manual case-sensitive model, duplicate rejected; blank form cannot submit.
-    button('添加模型').click();button('保存模型').click();expect(page.locator('[name=modelId]')).to_be_focused();page.locator('[name=modelId]').fill('Manual-Case');page.get_by_label('文本能力',exact=True).select_option('supported');page.get_by_label('图片能力',exact=True).select_option('unsupported');page.get_by_label('结构化能力',exact=True).select_option('supported');button('保存模型').click();expect(page.get_by_text('Manual-Case',exact=True)).to_be_visible()
+    button('添加模型').click();button('保存模型').click();expect(page.locator('[name=modelId]')).to_be_focused();page.locator('[name=modelId]').fill('Manual-Case');page.get_by_label('文本能力',exact=True).select_option('supported');page.get_by_label('图片能力',exact=True).select_option('unsupported');page.get_by_label('结构化能力',exact=True).select_option('supported');button('保存模型').click();page.locator('summary',has_text='已保留但不在当前上游目录').click();expect(page.get_by_text('Manual-Case',exact=True)).to_be_visible()
     button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])
     gm=new('Sub2API · Gemini','sub2api','gemini_generate_content','/tenant/antigravity/v1beta');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
     cl=new('Sub2API · Claude','sub2api','anthropic_messages','/claude/antigravity/v1');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('alert')).to_contain_text('目录接口不可用');button('添加模型').click();page.locator('[name=modelId]').fill('Claude-Alias');
     for cap in ['文本能力','图片能力','结构化能力']:page.get_by_label(cap,exact=True).select_option('supported')
-    button('保存模型').click();expect(page.get_by_text('Claude-Alias',exact=True)).to_be_visible();tab('诊断');expect(button('测试模型')).to_be_disabled();page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');page.screenshot(path=str(out/'claude-diagnostics.png'),full_page=True)
+    button('保存模型').click();page.locator('summary',has_text='已保留但不在当前上游目录').click();expect(page.get_by_text('Claude-Alias',exact=True)).to_be_visible();tab('诊断');expect(button('测试模型')).to_be_disabled();page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');page.screenshot(path=str(out/'claude-diagnostics.png'),full_page=True)
     Upstream.slow=True;before=len(Upstream.calls);button('测试模型').click();expect(button('取消测试')).to_be_visible();
     for _ in range(40):
         if len(Upstream.calls)>before:break
@@ -249,7 +249,8 @@ def exercise(page,app,out,upstream):
     page.get_by_text('更多操作',exact=True).click();button('删除提供方').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();expect(page.get_by_role('status')).to_contain_text('提供方已删除');assert len(app.ok(API)['providers'])==3
     page.get_by_label('允许任务使用此连接',exact=False).uncheck();button('保存配置').click();expect(page.get_by_role('dialog')).to_contain_text('处引用');page.screenshot(path=str(out/'referenced-disable-confirmation.png'),full_page=True);page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click();button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click()
     # Actual business endpoints go through the shared gateway, not a mocked application API.
-    for path,body,model,prefix in [('/api/recognize',{'image':IMAGE,'categories':[]},'Model-A','/tenant/antigravity/v1beta'),('/api/optimize',{'stem':'合成验收题：计算 x','options':[],'tags':[]},'Model-A','/deepseek'),('/api/reconstruct-diagram',{'image':IMAGE,'stem':'线段 AB','imageAspectRatio':1.5},'Claude-Alias','/claude/antigravity/v1')]:
+    # Recognition goes to the model routed above (Manual-Case): capability labels never redirect a call.
+    for path,body,model,prefix in [('/api/recognize',{'image':IMAGE,'categories':[]},'Manual-Case','/deepseek'),('/api/optimize',{'stem':'合成验收题：计算 x','options':[],'tags':[]},'Model-A','/deepseek'),('/api/reconstruct-diagram',{'image':IMAGE,'stem':'线段 AB','imageAspectRatio':1.5},'Claude-Alias','/claude/antigravity/v1')]:
         before=len(Upstream.calls);data=app.ok(path,'POST',body);calls=Upstream.calls[before:];assert len(calls)==1,(path,data,calls);assert calls[0]['model']==model and calls[0]['path'].startswith(prefix),(path,calls)
     r['businessRoles']=['recognition','text','diagram'];r['threeProviders']=len(app.ok(API)['providers'])==3
     current=app.ok(API);p=next(x for x in current['providers'] if x['id']==ds['id']);assert app.request(API+'/'+p['id'],'DELETE',{'expectedRevision':p['revision']})[0]==409
@@ -295,11 +296,11 @@ def word_image():
     return 'data:image/png;base64,'+base64.b64encode(png).decode()
 
 def word_export(page,app,out):
-    mod=app.ok('/api/modules','POST',{'scope':'mine','module':{'name':'V2 验收题库'}})['module']
+    mod=app.ok('/api/modules','POST',{'module':{'name':'V2 验收题库'}})['module']
     # Real application data, safe synthetic material. Fraction + picture exercise native Word structures.
     q={'moduleId':mod['id'],'categoryId':mod['id'],'type':'单选题','difficulty':'基础','stem':'合成验收：计算 $x=\\frac{1}{2}$。','options':['$\\frac{1}{2}$','1','2','4'],'answer':'A','analysis':'分数保持为可编辑公式：$\\frac{1}{2}$。','source':'V2 本地验收','tags':[],'contentImages':[word_image()],'imageLayout':'right','createdAt':1,'updatedAt':1}
-    app.ok('/api/questions','POST',{'scope':'mine','question':q});page.goto(app.base+'/');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.get_by_role('button',name='我的题库',exact=True).click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('dialog',name='生成 Word')).to_be_visible()
-    with page.expect_download() as dl:page.get_by_role('button',name='下载 .docx',exact=True).click()
+    app.ok('/api/questions','POST',{'question':q});page.goto(app.base+'/');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.locator('.module-switcher button',has_text='V2 验收题库').click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('button',name='生成 Word',exact=True)).to_be_visible()
+    with page.expect_download() as dl:page.get_by_role('button',name='生成 Word',exact=True).click()
     path=out/'actual-page-export.docx';dl.value.save_as(str(path));page.screenshot(path=str(out/'question-bank-after-word-export.png'),full_page=True)
     with zipfile.ZipFile(path) as z:
         xml=z.read('word/document.xml').decode();assert 'oMath' in xml;assert 'Times New Roman' in xml;assert 'Songti SC' in xml;assert '<w:drawing>' in xml;assert any(n.startswith('word/media/') for n in z.namelist())
