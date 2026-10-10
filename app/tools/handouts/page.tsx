@@ -442,8 +442,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           <PaperMoreMenu label="题目更多操作">
             {HANDOUT_BANDS.filter((other) => other !== band).map((other) => <button key={other} onClick={() => changeBand(item.id, other)}>改为{HANDOUT_PARTS[other].label}</button>)}
             {question?.canEdit && <button onClick={() => openEditEntry(question)}>编辑原题</button>}
-            <button onClick={() => setItems(doc.items.filter((entryItem) => entryItem.id !== item.id))}>移出讲义</button>
           </PaperMoreMenu>
+          <button className="danger" aria-label={`${name} 移出讲义`} onClick={() => setItems(doc.items.filter((entryItem) => entryItem.id !== item.id))}>移出讲义</button>
         </div>
       </div>
     </article>;

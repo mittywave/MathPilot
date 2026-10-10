@@ -72,6 +72,8 @@
 .handout-actions>button{min-width:44px;min-height:40px;padding:0 12px;border:1px solid var(--line,#e4e9e6);border-radius:calc(8px*var(--radius-scale));background:var(--surface,#fff);color:var(--ink,#24352f);font-size:13px}
 .handout-actions>button:hover:not(:disabled){border-color:var(--green,#2f6b53);color:var(--green,#2f6b53)}
 .handout-actions>button:disabled{opacity:.35;cursor:default}
+.handout-actions>button.danger{border-color:color-mix(in srgb,var(--danger,#a34f39) 40%,var(--line,#e4e9e6));background:var(--danger-soft,#fff0e8);color:var(--danger,#a34f39)}
+.handout-actions>button.danger:hover:not(:disabled){border-color:var(--danger-fill,#a34f39);background:var(--danger-fill,#a34f39);color:var(--on-fill,#fff)}
 .handout-missing{margin:0;color:var(--danger,#b4442f);font-size:14px}
 .handout-add{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .handout-add .secondary{height:40px;padding:0 14px;border-style:dashed;font-size:13px}
