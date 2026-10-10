@@ -21,6 +21,20 @@ const modules = [
   { heading: "", note: "", bands: { ...empty, practice: [{ ...blank, id: "e" }] } },
 ];
 const build = answers => buildHandoutLatex({ title: "第一讲-平行四边形的性质", modules, answers }, source => source === "fig://one" ? "figures/fig-1.png" : null);
+// Word-imported content with its pictures where the document put them, and screenshot figures beside or under the text.
+const wordParagraph = body => `<w:p xmlns:w="w">${body}</w:p>`;
+const wordText = value => `<w:r><w:t>${value}</w:t></w:r>`;
+const wordPicture = (id, cx, cy) => `<w:r><w:drawing><wp:inline><wp:extent cx="${cx}" cy="${cy}"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+const modelling = {
+  ...base, id: "m", type: "解答题", stem: "【建立模型】\n如图1，求证：AB=CD。\n【模型应用】如图2，求点 C 的坐标。", answer: "见解析", contentImages: ["fig://row"],
+  stemDocxXml: [wordParagraph(wordText("16．【建立模型】")), wordParagraph(wordText("如图1，求证：AB=CD。")), wordParagraph(wordPicture("rId24", 4617730, 1962916)), wordParagraph(wordText("【模型应用】如图2，求点 C 的坐标。"))],
+  stemDocxAssets: { rId24: "fig://row" },
+  analysisDocxXml: [wordParagraph(wordText("【解答】解：如图：")), wordParagraph(wordPicture("rId50", 1563627, 2033020)), wordParagraph(wordText("故 C(6,2)。"))],
+  analysisDocxAssets: { rId50: "fig://work" },
+};
+const shot = (id, diagramBox) => ({ ...base, id, type: "填空题", stem: "如图，直线与 x 轴交于点 B，则 C 点坐标为____。", originalImage: "fig://page", diagramImage: `fig://${id}`, diagramBox, imageLayout: "right" });
+const figureModules = [{ heading: "图位", note: "", bands: { ...empty, practice: [modelling, shot("beside", { x: 820, y: 60, width: 180, height: 800 }), shot("under", { x: 60, y: 300, width: 620, height: 400 })] } }];
+const buildFigures = answers => buildHandoutLatex({ title: "图位测试", modules: figureModules, answers }, source => source.startsWith("fig://") ? `figures/${source.slice(6)}.png` : null);
 
 test("plain text is escaped and keeps blanks and Word-style symbols printable", () => {
   assert.equal(latexPlain("100% & #1 {a_b} ~^\\"), "100\\% \\& \\#1 \\{a\\_b\\} \\textasciitilde{}\\textasciicircum{}\\textbackslash{}");
@@ -84,9 +98,23 @@ test("Word-imported stems keep formulas and tables", () => {
   assert.match(buildHandoutLatex({ title: "小测", modules, answers: "none" }), /\\handoutfields\{姓名,班级,得分\}/);
 });
 
+test("Word-imported pictures stay where the document put them, at its size", () => {
+  const student = buildFigures("none");
+  assert.match(student, /\\begin\{handoutquestion\}\{1\}\n【建立模型】\\par\n如图1，求证：AB=CD。\\par\n\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{128\.3mm\}\{figures\/row\.png\}\}\\par\n【模型应用】如图2/);
+  assert.equal((student.match(/figures\/row\.png/g) ?? []).length, 1, "a picture placed in the stem is not repeated beside or under it");
+  assert.match(student, /\\begin\{handoutsidefigure\}\[0\.18\]\{figures\/beside\.png\}/, "a screenshot figure on the right keeps its share of the line");
+  assert.match(student, /\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{0\.62\\linewidth\}\{figures\/under\.png\}\}/, "a screenshot figure under the text keeps its share of the line");
+  assert.doesNotMatch(student, /figures\/work\.png/, "学生版 prints no analysis");
+  assert.match(buildFigures("end"), /\\handoutanalysis\{解答\}\{解：如图：\\par \\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{43\.4mm\}\{figures\/work\.png\}\}\\par 故 C\(6,2\)。\}/, "analysis pictures keep their place too");
+  // A question is one unbreakable unit; the 教师版 answer box follows it and may run on to the next page.
+  const teacher = buildFigures("each");
+  assert.ok(teacher.match(/\\begin\{handoutquestion\}[\s\S]*?\\end\{handoutquestion\}/g).every(question => !question.includes("handoutanswer")), "no answer box sits inside a question");
+  assert.equal((teacher.match(/\\end\{handoutquestion\}\n\\begin\{handoutanswer\}/g) ?? []).length, 3);
+});
+
 test("every handout command the generator emits is defined by the class", async () => {
   const cls = await readFile(new URL("../latex/mitty-handout.cls", import.meta.url), "utf8");
-  const used = new Set([...["none", "end", "each"].flatMap(answers => [...build(answers).matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
+  const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
   for (const command of used) assert.match(cls, new RegExp(`\\\\(?:newcommand|newenvironment|newtcolorbox)\\{?\\\\?${command}\\b`), `${command} is defined`);
 });
 

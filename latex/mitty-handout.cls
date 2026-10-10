@@ -77,11 +77,10 @@
     {\small\def\mh@sep{}\@for\mh@item:=\mh@fields\do{\mh@sep\mh@field{\mh@item}\def\mh@sep{\hspace{7mm}}}\par}
   \end{tcolorbox}\par\vspace{4mm}}
 
-% ---- 页眉页脚：首页无页眉；之后显示标题和当前分节 ----
-\newcommand\mh@sectionmark{}
+% ---- 页眉页脚：首页无页眉；之后显示标题和本页最先出现的分节（本页没有新分节就沿用上一页的） ----
 \fancypagestyle{mhpage}{\fancyhf{}%
   \fancyhead[L]{\sffamily\footnotesize\color{mhmuted}\mh@title}%
-  \fancyhead[R]{\sffamily\footnotesize\color{mhmuted}\mh@sectionmark}%
+  \fancyhead[R]{\sffamily\footnotesize\color{mhmuted}\rightmark}%
   \fancyfoot[L]{\sffamily\scriptsize\color{mhmuted}\mh@brand}%
   \fancyfoot[R]{\sffamily\footnotesize{\color{mhgreen}\bfseries\thepage}\,{\color{mhmuted}/\,\pageref{LastPage}}}%
   \renewcommand\headrule{{\color{mhline}\hrule height 0.5pt}}\renewcommand\footrule{}}
@@ -92,20 +91,29 @@
 \pagestyle{mhpage}
 \AtBeginDocument{\thispagestyle{mhfirst}}
 
+% ---- 分页：标题总和下面的内容在同一页；一道题放得进一页就不拆开 ----
+% 题目和答案条目先整条排进盒子：不超过给定高度就整条放上页面，更长的照常分页（开头不断开）。
+% 标题之后不留断页点，放不下时标题随下面的内容一起移到下一页。
+\newif\ifmh@afterhead
+\newbox\mh@unit
+\newcommand\mh@unitstart{\setbox\mh@unit\vbox\bgroup\@nobreaktrue}
+\newcommand\mh@keep[1]{\egroup\ifdim\dimexpr\ht\mh@unit+\dp\mh@unit\relax>#1\unvbox\mh@unit\else\box\mh@unit\fi\global\mh@afterheadfalse}
+\newcommand\mh@headbreak[1]{\par\ifmh@afterhead\nobreak\else\needspace{#1}\fi}
+
 % ---- 分节：老师写了序号就做成圆角徽标，没写就用一道色条，不替老师编号 ----
+% 留够分节标题、知识点标签和至少两行知识点的位置
 \newcommand\handoutsection[2]{%
-  \par\needspace{6\baselineskip}\vspace{6mm}%
-  \renewcommand\mh@sectionmark{#2}%
-  \noindent\ifx\relax#1\relax\tikz[baseline=-0.7ex]\fill[mhgreen,rounded corners=0.8mm](0,-2.6mm) rectangle (1.8mm,2.6mm);%
+  \par\needspace{8\baselineskip}\vspace{6mm}%
+  \noindent\markright{\unexpanded{#2}}\ifx\relax#1\relax\tikz[baseline=-0.7ex]\fill[mhgreen,rounded corners=0.8mm](0,-2.6mm) rectangle (1.8mm,2.6mm);%
   \else\tikz[baseline=(b.base)]\node[fill=mhgreen,rounded corners=1.6mm,minimum width=7mm,minimum height=7mm,inner sep=0pt,text=white,font=\sffamily\bfseries](b){#1};\fi%
   \hspace{2.6mm}{\sffamily\bfseries\large\color{mhdeep}#2}\hspace{3mm}%
-  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\nobreak\vspace{3.2mm}}
+  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\nobreak\vspace{3.2mm}\global\mh@afterheadtrue}
 
 % ---- 模块里的四段：知识点 / 例题 / 练习 / 变式。同一种小标签，靠文字区分，不靠颜色堆叠 ----
 \newcommand\handoutpart[2]{%
-  \par\needspace{4\baselineskip}\vspace{4.4mm}%
+  \mh@headbreak{6\baselineskip}\vspace{4.4mm}%
   \noindent\tikz[baseline=(p.base)]\node[fill=mhwash,rounded corners=1.4mm,inner xsep=2.2mm,inner ysep=1.1mm,font=\sffamily\bfseries\small,text=mhdeep](p){#1};%
-  \hspace{2.4mm}{\sffamily\footnotesize\color{mhmuted}#2}\par\nobreak\vspace{1.6mm}}
+  \hspace{2.4mm}{\sffamily\footnotesize\color{mhmuted}#2}\par\nobreak\vspace{1.6mm}\global\mh@afterheadtrue}
 % 题号栏按本段最长的编号（例12 / 12 / 变式12）定宽，所有题干对齐
 \newcommand\handoutnumberwidth[1]{\settowidth\mh@numwidth{\sffamily\bfseries #1}\addtolength\mh@numwidth{2.8mm}\ifdim\mh@numwidth<7mm\setlength\mh@numwidth{7mm}\fi}
 
@@ -113,7 +121,7 @@
 \newtcolorbox{handoutnote}{enhanced,breakable,colback=mhtint,colframe=mhtint,boxrule=0pt,arc=2mm,
   left=5mm,right=4mm,top=3mm,bottom=3mm,
   borderline west={2pt}{0pt}{mhgreen},
-  fontupper=\mhkai\linespread{1.15}\selectfont,before upper={\parskip=1.2mm}}
+  fontupper=\mhkai\linespread{1.15}\selectfont,before upper={\global\mh@afterheadfalse\parskip=1.2mm}}
 % 知识点里的三级标题、要点（序号悬挂，换行对齐正文）
 \newcommand\handoutnoteheading[2][2]{\par\ifcase#1\or
   \vspace{.6mm}{\sffamily\bfseries\large\color{mhdeep}#2}\par\vspace{.4mm}\or
@@ -131,18 +139,19 @@
 % ---- 题目：悬挂题号，所有行对齐题干 ----
 \newlength\mh@numwidth\setlength\mh@numwidth{7mm}
 \newenvironment{handoutquestion}[1]{%
-  \par\needspace{4\baselineskip}\vspace{3.6mm}%
+  \mh@headbreak{4\baselineskip}\vspace{3.6mm}\mh@unitstart
   \begin{list}{}{\setlength\leftmargin{\mh@numwidth}\setlength\labelwidth{\mh@numwidth}\setlength\labelsep{0pt}%
     \setlength\itemsep{0pt}\setlength\topsep{0pt}\setlength\parsep{1.4mm}\setlength\listparindent{0pt}}%
   \item[{\makebox[\mh@numwidth][l]{\sffamily\bfseries\color{mhgreen}#1}}]\ignorespaces}
-  {\end{list}\par}
+  {\end{list}\mh@keep\textheight}
 \newcommand\handoutsource[1]{\mbox{\sffamily\footnotesize\color{mhmuted}\tikz[baseline=(s.base)]\node[draw=mhline,line width=0.5pt,rounded corners=1.2mm,inner xsep=1.4mm,inner ysep=0.6mm](s){#1};}\enspace}
-\newcommand\handoutblank[1]{\uline{\hspace{#1}}}
+% 填空横线：一行放不下时最多缩短四成，不伸出版心
+\newcommand\handoutblank[1]{\uline{\hspace{#1 minus \dimexpr#1*4/10\relax}}}
 % 考点：题库里这道题自带的知识点标签
 \newcommand\handoutpoints[1]{\par\vspace{0.4mm}{\sffamily\footnotesize\color{mhmuted}考点\enspace #1\par}}
 % 学生版例题：跟着老师记思路和步骤的笔记区
 \newcommand\handoutnotesarea[1]{\par\vspace{1.6mm}%
-  \begin{tcolorbox}[enhanced,breakable,colback=white,colframe=mhline,boxrule=0.5pt,arc=2mm,left=4mm,right=4mm,top=2mm,bottom=0mm]
+  \begin{tcolorbox}[enhanced,colback=white,colframe=mhline,boxrule=0.5pt,arc=2mm,left=4mm,right=4mm,top=2mm,bottom=0mm]
     {\sffamily\scriptsize\color{mhmuted}课堂笔记}\par\vspace{6.2mm}%
     \foreach \mh@line in {1,...,#1}{\noindent\textcolor{mhline}{\rule{\linewidth}{0.45pt}}\par\vspace{6.4mm}}
   \end{tcolorbox}}
@@ -159,12 +168,17 @@
 \newcommand\handoutworkspace[1]{\par\vspace{2mm}%
   \foreach \mh@line in {1,...,#1}{\par\noindent\textcolor{mhline}{\rule{\linewidth}{0.45pt}}\par\vspace{7.2mm}}}
 
-% 配图
-\newcommand\handoutfigure[2]{\includegraphics[width=#1,height=46mm,keepaspectratio]{#2}}
-\newenvironment{handoutsidefigure}[1]{%
-  \def\mh@figurefile{#1}\par\noindent\begin{minipage}[t]{0.64\linewidth}}
-  {\end{minipage}\hfill\begin{minipage}[t]{0.32\linewidth}\vspace{0pt}\raggedleft
+% 配图（可选参数是最大高度）；题干右侧配图默认占三分之一行宽，截图题按原图所占的比例
+\newcommand\handoutfigure[3][46mm]{\includegraphics[width=#2,height=#1,keepaspectratio]{#3}}
+\newenvironment{handoutsidefigure}[2][.32]{%
+  \def\mh@figurefile{#2}\def\mh@figureshare{#1}\par\noindent\begin{minipage}[t]{\dimexpr.96\linewidth-#1\linewidth\relax}}
+  {\end{minipage}\hfill\begin{minipage}[t]{\mh@figureshare\linewidth}\vspace{0pt}\raggedleft
     \handoutfigure{\linewidth}{\mh@figurefile}\end{minipage}\par}
+% 原卷里的一行配图：原尺寸、原对齐，排在原来的两段之间；整行比版心宽时等比缩到版心宽
+\newsavebox\mh@figrow
+\newcommand\handoutfigureline[2]{\par\vspace{1mm}\sbox\mh@figrow{#2}%
+  \ifdim\wd\mh@figrow>\linewidth\sbox\mh@figrow{\resizebox{\linewidth}{!}{\usebox\mh@figrow}}\fi
+  \noindent\makebox[\linewidth][#1]{\usebox\mh@figrow}\par\vspace{1mm}}
 \newcommand\handoutfigures[1]{\par\vspace{2mm}{\centering #1\par}\vspace{1mm}}
 \newcommand\handoutfiguresright[1]{\par\vspace{2mm}{\raggedleft #1\par}\vspace{1mm}}
 
@@ -172,10 +186,10 @@
 \newcommand\handouttablerule{\arrayrulecolor{mhline}}
 \newcommand\handoutheadrow{\rowcolor{mhtint}}
 
-% ---- 教师版：紧跟题目的答案卡 ----
+% ---- 教师版：紧跟题目的答案卡，与题干对齐；答案长时可以接着排到下一页 ----
 \newcommand\mh@tag[1]{\tikz[baseline=(t.base)]\node[fill=mhwash,rounded corners=1.2mm,inner xsep=1.6mm,inner ysep=0.8mm,font=\sffamily\bfseries\footnotesize,text=mhdeep](t){#1};}
 \newtcolorbox{handoutanswer}{enhanced,breakable,colback=white,colframe=mhline,boxrule=0.6pt,arc=2mm,
-  left=4mm,right=4mm,top=2.6mm,bottom=2.6mm,before skip=2.4mm,
+  left=4mm,right=4mm,top=2.6mm,bottom=2.6mm,before skip=2.4mm,left skip=\mh@numwidth,
   before upper={\parskip=1.4mm}}
 % 标签固定宽度，换行后的文字与首行文字对齐
 \newlength\mh@tagwidth\setlength\mh@tagwidth{10.5mm}
@@ -186,17 +200,18 @@
 \newcommand\handoutanalysis[2]{\mh@tagged{#1}{#2}}
 
 % ---- 文末答案 ----
-\newcommand\handoutanswerkey{\clearpage\renewcommand\mh@sectionmark{参考答案与解析}%
-  \noindent\tikz[baseline=(b.base)]\node[fill=mhgreen,rounded corners=1.6mm,minimum width=7mm,minimum height=7mm,inner sep=0pt,text=white,font=\sffamily\bfseries](b){答};%
+\newcommand\handoutanswerkey{\clearpage
+  \noindent\markright{参考答案与解析}\tikz[baseline=(b.base)]\node[fill=mhgreen,rounded corners=1.6mm,minimum width=7mm,minimum height=7mm,inner sep=0pt,text=white,font=\sffamily\bfseries](b){答};%
   \hspace{2.6mm}{\sffamily\bfseries\large\color{mhdeep}参考答案与解析}\hspace{3mm}%
-  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\vspace{3mm}}
-\newcommand\handoutkeygroup[2]{\par\needspace{4\baselineskip}\vspace{4.4mm}\noindent{\sffamily\bfseries\color{mhdeep}#1}\par\nobreak\vspace{0.6mm}\handoutnumberwidth{#2}}
+  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\nobreak\vspace{3mm}\global\mh@afterheadtrue}
+\newcommand\handoutkeygroup[2]{\mh@headbreak{4\baselineskip}\vspace{4.4mm}\noindent{\sffamily\bfseries\color{mhdeep}#1}\par\nobreak\vspace{0.6mm}\handoutnumberwidth{#2}\global\mh@afterheadtrue}
+% 短的答案条目整条不拆，长的解析可以接着排到下一页
 \newenvironment{handoutkey}[1]{%
-  \par\needspace{3\baselineskip}\vspace{2.6mm}%
+  \mh@headbreak{3\baselineskip}\vspace{2.6mm}\mh@unitstart
   \begin{list}{}{\setlength\leftmargin{\mh@numwidth}\setlength\labelwidth{\mh@numwidth}\setlength\labelsep{0pt}%
     \setlength\itemsep{0pt}\setlength\topsep{0pt}\setlength\parsep{1.2mm}}%
   \item[{\makebox[\mh@numwidth][l]{\sffamily\bfseries\color{mhgreen}#1}}]\ignorespaces}
-  {\end{list}\par}
+  {\end{list}\mh@keep{.3\textheight}}
 
 % KaTeX 写法兼容
 \providecommand\lt{<}\providecommand\gt{>}

@@ -1,6 +1,6 @@
-import { parseDocxWebContent, parseDocxWebOptions, type DocxWebBlock, type DocxWebInline, type DocxWebTable } from "./docx-web-content";
+import { docxFigureLine, parseDocxWebContent, parseDocxWebOptions, type DocxWebBlock, type DocxWebInline, type DocxWebTable } from "./docx-web-content";
 import { plainTextWebLines, splitMathLines, splitMathText, toLatexMath } from "./math-text";
-import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout } from "./question-layout";
+import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout, sourceFigureWidth } from "./question-layout";
 import { parseHandoutNote, type NoteLine, type NoteSpan } from "./handout-note.mjs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, bandLabel, moduleHeading, questionPoints, type HandoutExportModule } from "./handout-rules.mjs";
 import type { WordAnswerPlacement } from "./export-word";
@@ -149,12 +149,37 @@ function docxBlocks(blocks: DocxWebBlock[]) {
   }).filter(Boolean);
 }
 
-function stemParagraphs(question: Question) {
-  if (question.stemDocxXml?.length) return docxBlocks(parseDocxWebContent(question.stemDocxXml, { stripLeadingQuestionNumber: true }).blocks);
+// A Word paragraph's pictures stay where the document put them, at the printed size and alignment.
+function docxFigureLatex(fragment: string, assets: Record<string, string> | undefined, figureName: (source: string) => string | null) {
+  const line = docxFigureLine(fragment);
+  const figures = (line?.figures ?? []).flatMap((figure) => {
+    const source = assets?.[figure.id]; const name = source ? figureName(source) : null;
+    return source && name ? [{ ...figure, source, name }] : [];
+  });
+  if (!line || !figures.length) return null;
+  const row = figures.map((figure) => `\\handoutfigure[.45\\textheight]{${figure.width.toFixed(1)}mm}{${figure.name}}`).join("\\hspace{4mm}");
+  return { latex: `\\handoutfigureline{${line.align[0]}}{${row}}`, sources: figures.map((figure) => figure.source) };
+}
+
+// The stem's paragraphs, with a Word-imported picture between the paragraphs it sat between; placed lists those pictures.
+function stemContent(question: Question, figureName: (source: string) => string | null) {
+  const lines: string[] = []; const placed: string[] = [];
+  if (question.stemDocxXml?.length) {
+    let numbered = false;
+    for (const fragment of question.stemDocxXml) {
+      const { blocks } = parseDocxWebContent([fragment], { stripLeadingQuestionNumber: !numbered });
+      numbered ||= blocks.some((block) => block.type === "paragraph");
+      lines.push(...docxBlocks(blocks));
+      const figures = docxFigureLatex(fragment, question.stemDocxAssets, figureName);
+      if (figures) { lines.push(figures.latex); placed.push(...figures.sources); }
+    }
+    return { lines, placed };
+  }
   const text = question.stemParagraphs?.length ? question.stemParagraphs.join("\n") : question.stem;
-  return plainTextWebLines(text, { stripLeadingQuestionNumber: true })
+  lines.push(...plainTextWebLines(text, { stripLeadingQuestionNumber: true })
     .filter((line) => line.value.trim())
-    .map((line) => line.align === "center" ? `{\\centering ${latexInline(line.value)}\\par}` : latexInline(line.value));
+    .map((line) => line.align === "center" ? `{\\centering ${latexInline(line.value)}\\par}` : latexInline(line.value)));
+  return { lines, placed };
 }
 
 type Choice = { label: string; latex: string; weight: number };
@@ -189,20 +214,24 @@ function answerLatex(question: Question) {
   return latexInline(answer);
 }
 
-// 【分析】【解答】… lines become tagged paragraphs; untagged text joins the previous tag.
-function analysisGroups(question: Question) {
+// 【分析】【解答】… lines become tagged paragraphs; untagged text and pictures join the previous tag.
+function analysisGroups(question: Question, figureName: (source: string) => string | null) {
   const groups: { label: string; parts: string[] }[] = [];
   const append = (label: string | null, body: string) => {
     if (label || !groups.length) groups.push({ label: label ?? "解析", parts: [] });
     if (body) groups.at(-1)!.parts.push(body);
   };
   if (question.analysisDocxXml?.length) {
-    for (const block of parseDocxWebContent(question.analysisDocxXml).blocks) {
-      if (block.type === "table") { append(null, latexTable(block)); continue; }
-      const first = block.inlines.find((inline) => inline.type === "text");
-      const tag = first?.type === "text" ? first.value.match(/^\s*【([^】]{1,6})】\s*/) : null;
-      const inlines = tag ? block.inlines.map((inline) => inline === first ? { ...inline, value: inline.value.slice(tag[0].length) } : inline) : block.inlines;
-      append(tag?.[1] ?? null, latexInlines(inlines));
+    for (const fragment of question.analysisDocxXml) {
+      for (const block of parseDocxWebContent([fragment]).blocks) {
+        if (block.type === "table") { append(null, latexTable(block)); continue; }
+        const first = block.inlines.find((inline) => inline.type === "text");
+        const tag = first?.type === "text" ? first.value.match(/^\s*【([^】]{1,6})】\s*/) : null;
+        const inlines = tag ? block.inlines.map((inline) => inline === first ? { ...inline, value: inline.value.slice(tag[0].length) } : inline) : block.inlines;
+        append(tag?.[1] ?? null, latexInlines(inlines));
+      }
+      const figures = docxFigureLatex(fragment, question.analysisDocxAssets, figureName);
+      if (figures) append(null, figures.latex);
     }
   } else {
     for (const line of splitMathLines(question.analysis)) {
@@ -214,23 +243,28 @@ function analysisGroups(question: Question) {
   return groups.filter((group) => group.parts.length);
 }
 
-function answerBody(question: Question) {
-  return [`\\handoutanswerline{${answerLatex(question)}}`, ...analysisGroups(question).map((group) => `\\handoutanalysis{${latexPlain(group.label)}}{${group.parts.join("\\par ")}}`)].join("\n");
+function answerBody(question: Question, figureName: (source: string) => string | null) {
+  return [`\\handoutanswerline{${answerLatex(question)}}`, ...analysisGroups(question, figureName).map((group) => `\\handoutanalysis{${latexPlain(group.label)}}{${group.parts.join("\\par ")}}`)].join("\n");
 }
 
 function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
-  const paragraphs = stemParagraphs(question);
+  const { lines: paragraphs, placed } = stemContent(question, figureName);
   const source = question.source?.trim() ? `\\handoutsource{${latexPlain(question.source.trim())}}` : "";
   const stem = [`${source}${paragraphs[0] ?? ""}`, ...paragraphs.slice(1)].join("\\par\n");
-  const figures = questionImages(question).map(figureName).filter((name): name is string => Boolean(name));
+  // Pictures not already placed in the stem follow the question's layout; a screenshot figure keeps its share of the line.
+  const figures = questionImages(question).filter((image) => !placed.includes(image)).map(figureName).filter((name): name is string => Boolean(name));
   const layout = resolveQuestionImageLayout(question);
+  const compactConclusion = isCompactConclusionQuestion(question);
+  const sourceWidth = sourceFigureWidth(question);
   const choices = questionChoices(question);
   const out = [`\\begin{handoutquestion}{${label}}`];
-  if (figures.length === 1 && layout === "right" && !isCompactConclusionQuestion(question)) {
-    out.push(`\\begin{handoutsidefigure}{${figures[0]}}`, stem, "\\end{handoutsidefigure}");
+  if (figures.length === 1 && layout === "right" && !compactConclusion) {
+    out.push(`\\begin{handoutsidefigure}${sourceWidth ? `[${Math.min(.45, sourceWidth).toFixed(2)}]` : ""}{${figures[0]}}`, stem, "\\end{handoutsidefigure}");
   } else {
     out.push(stem);
-    if (figures.length) {
+    if (figures.length === 1 && sourceWidth && layout === "below" && !compactConclusion) {
+      out.push(`\\handoutfigureline{l}{\\handoutfigure[.45\\textheight]{${sourceWidth.toFixed(2)}\\linewidth}{${figures[0]}}}`);
+    } else if (figures.length) {
       const width = figures.length === 1 ? "0.42\\linewidth" : `${(0.92 / figures.length).toFixed(2)}\\linewidth`;
       out.push(`\\handoutfigures${layout === "below-right" ? "right" : ""}{${figures.map((name) => `\\handoutfigure{${width}}{${name}}`).join("\\hspace{4mm}")}}`);
     }
@@ -241,8 +275,9 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线；教师版不留白。
   if (answers !== "each" && band === "example") out.push("\\handoutnotesarea{4}");
   else if (answers !== "each" && !choices.length && question.type === "解答题") out.push("\\handoutworkspace{4}");
-  if (answers === "each") out.push("\\begin{handoutanswer}", answerBody(question), "\\end{handoutanswer}");
   out.push("\\end{handoutquestion}");
+  // The question is never split across pages; the 教师版 answer after it may run on to the next page.
+  if (answers === "each") out.push("\\begin{handoutanswer}", answerBody(question, figureName), "\\end{handoutanswer}");
   return out.join("\n");
 }
 
@@ -300,7 +335,7 @@ export function buildHandoutLatex({ title, modules, answers }: HandoutLatexInput
       body.push(`\\handoutpart{${HANDOUT_PARTS[band].label}}{${HANDOUT_PARTS[band].tagline}}`, `\\handoutnumberwidth{${labels.at(-1)}}`);
       questions.forEach((question, position) => {
         body.push(questionLatex(question, labels[position], band, answers, figureName));
-        if (answers === "end") keys[band].push(`\\begin{handoutkey}{${labels[position]}}`, answerBody(question), "\\end{handoutkey}");
+        if (answers === "end") keys[band].push(`\\begin{handoutkey}{${labels[position]}}`, answerBody(question, figureName), "\\end{handoutkey}");
       });
     }
   });

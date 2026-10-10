@@ -377,6 +377,35 @@ export function parseDocxWebOptions(xml: string[]): DocxWebOption[] {
     .filter((option) => option.inlines.length > 0);
 }
 
+export type DocxFigureLine = { align: DocxWebParagraph["align"]; figures: Array<{ id: string; width: number; height: number }> };
+
+// The pictures a paragraph places in line with its text, at the size the document printed them (mm), with the
+// paragraph's alignment. Floating pictures and pictures inside tables are not included.
+export function docxFigureLine(xml: string): DocxFigureLine | null {
+  let entries: XmlEntry[];
+  try { entries = parser.parse(xml) as XmlEntry[]; } catch { return null; }
+  const paragraph = entries.find((entry) => entryName(entry) === "p");
+  if (!paragraph) return null;
+  const figures: DocxFigureLine["figures"] = [];
+  const blipId = (list: XmlEntry[]): string | undefined => {
+    for (const entry of list) {
+      const id = entryName(entry) === "blip" ? attribute(entry, "embed") : blipId(entryChildren(entry));
+      if (id) return id;
+    }
+  };
+  const visit = (list: XmlEntry[]) => {
+    for (const entry of list) {
+      if (entryName(entry) !== "inline") { visit(entryChildren(entry)); continue; }
+      const children = entryChildren(entry);
+      const extent = childEntry(children, "extent");
+      const id = blipId(children); const width = Number(attribute(extent, "cx")) / 36000; const height = Number(attribute(extent, "cy")) / 36000;
+      if (id && width > 0 && height > 0) figures.push({ id, width, height });
+    }
+  };
+  visit(entryChildren(paragraph));
+  return figures.length ? { align: parseParagraph(paragraph).align, figures } : null;
+}
+
 export function docxWebInlineText(inlines: DocxWebInline[]) {
   return inlines.map((inline) => inline.type === "text" ? inline.value : inline.type === "math" ? `$${inline.latex}$` : inline.type === "break" ? "\n" : "\t").join("");
 }
