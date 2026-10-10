@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { CategoryTree } from "../../components/CategoryTree";
 import { QuestionBody } from "../../components/QuestionBody";
 import { HANDOUT_BANDS, HANDOUT_PARTS } from "../../../lib/handout-rules.mjs";
@@ -13,13 +13,15 @@ const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "
 const PAGE_SIZE = 30;
 
 // The same bank stays open while adding to different lanes or replacing a question.
-export function QuestionPicker({ library, mode, taken, onPick, sections, onModeChange }: {
+// The footer sits under the directory: the editor puts its back link, save status and export there.
+export function QuestionPicker({ library, mode, taken, onPick, sections, onModeChange, footer }: {
   library: LibraryData | null;
   mode: PickerMode;
   taken: Set<string>;
   onPick: (questionIds: string[]) => void;
   sections: { id: string; label: string }[];
   onModeChange: (mode: PickerMode | null) => void;
+  footer?: ReactNode;
 }) {
   const replacing = mode.kind === "replace";
   const [moduleId, setModuleId] = useState("");
@@ -53,6 +55,7 @@ export function QuestionPicker({ library, mode, taken, onPick, sections, onModeC
     <aside className="picker-tree" aria-label="知识目录">
       <h2>知识目录</h2>
       <CategoryTree module={activeModule} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} onSelect={(id) => { setCategoryId(id === activeModuleId ? "" : id); setLimit(PAGE_SIZE); }} />
+      {footer}
     </aside>
     <div className="picker-main">
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div className="picker-target">

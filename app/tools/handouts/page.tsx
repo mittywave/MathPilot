@@ -422,7 +422,6 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const taken = new Set(doc.items.flatMap((item) => item.kind === "question" ? [item.questionId] : []));
   const questionCount = doc.items.filter((item) => item.kind === "question").length;
   const missingCount = doc.items.filter((item) => item.kind === "question" && libraryReady && !resolve(item.questionId)).length;
-  const bandTotals = HANDOUT_BANDS.map((band) => `${HANDOUT_PARTS[band].label} ${modules.reduce((sum, module) => sum + module.bands[band].length, 0)}`);
   const saveLabel = { saved: "已保存", editing: "编辑中", saving: "保存中…", failed: "保存失败" }[saveState];
 
   const questionCard = (item: QuestionItem, band: HandoutBand, laneIndex: number, laneSize: number) => {
@@ -451,19 +450,18 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   };
 
   return <main className="toolbox handouts handout-editor">
-    <div className="handout-topbar">
-      <a className="handout-back" href={home.grade ? `/tools/handouts?grade=${home.grade}` : "/tools/handouts"}><HandoutIcon name="back" /><span>全部讲义</span></a>
-      <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
-      <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
-      <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
-    </div>
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
         <QuestionPicker library={library} mode={activePicker} taken={taken} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
-          sections={modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }))} />
+          sections={modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }))}
+          footer={<div className="handout-bar">
+            <a className="handout-back" aria-label="全部讲义" href={home.grade ? `/tools/handouts?grade=${home.grade}` : "/tools/handouts"}><HandoutIcon name="back" /><span>全部讲义</span></a>
+            <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
+            <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+          </div>} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
-    <p className="handout-muted">{placementLabel(home)} · {modules.length} 个模块 · {bandTotals.join(" · ")} · 题目随题库同步更新{!libraryReady ? " · 正在读取题库…" : missingCount ? ` · ${missingCount} 道题已无法读取` : ""}</p>
+    <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
 
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
