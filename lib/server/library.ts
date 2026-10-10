@@ -173,8 +173,10 @@ export async function readLibrary(user: AuthUser | null): Promise<LibraryData> {
       ORDER BY sort_order, created_at, source_id`).bind(context.libraryId, ...bindings),
     db.prepare(`SELECT library_questions_v2.source_id, library_questions_v2.module_source_id,
         library_questions_v2.category_source_id, library_questions_v2.payload_json,
+        printf('%04d', question_codes.number) AS code,
         library_questions_v2.created_by, users.email AS created_by_email
-      FROM library_questions_v2 LEFT JOIN users ON users.id = library_questions_v2.created_by
+      FROM library_questions_v2 JOIN question_codes ON question_codes.question_id = library_questions_v2.source_id
+      LEFT JOIN users ON users.id = library_questions_v2.created_by
       WHERE library_questions_v2.library_id = ? AND library_questions_v2.${version} AND library_questions_v2.deleted_at IS NULL
       ORDER BY library_questions_v2.created_at DESC`).bind(context.libraryId, ...bindings),
   ]);
@@ -194,6 +196,7 @@ export async function readLibrary(user: AuthUser | null): Promise<LibraryData> {
     return {
       ...question,
       id: String(row.source_id),
+      code: String(row.code),
       moduleId,
       categoryId: row.category_source_id == null ? moduleId : String(row.category_source_id),
       createdBy,
@@ -259,6 +262,7 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
   const now = Date.now();
   const sanitized = { ...raw };
   delete sanitized.canEdit;
+  delete sanitized.code;
   delete sanitized.createdByEmail;
   delete sanitized.createdBy;
   sanitized.tags = normalizedQuestionTags(raw.tags);
@@ -315,6 +319,10 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
     .bind(rowId(context, "question", question.id), question.id, context.libraryId, context.publicationId,
       moduleId, categoryId, payload, await sha256Text(payload), user.id, question.createdAt, question.updatedAt).run();
+  const code = await db.prepare("SELECT printf('%04d', number) AS code FROM question_codes WHERE question_id = ?")
+    .bind(question.id).first<{ code: string }>();
+  if (!code) throw new Error("试题编号分配失败，请刷新后重试");
+  question.code = code.code;
   if (!result.meta.changes) {
     const existing = await db.prepare(`SELECT payload_json FROM library_questions_v2
       WHERE library_id = ? AND ${versionWhere(context.publicationId)} AND source_id = ?`)
@@ -337,7 +345,7 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
     if (!identical) throw new Response(JSON.stringify({ error: "这道题已经保存，但提交内容不同。请刷新题库后编辑已保存的题目。" }), {
       status: 409, headers: { "Content-Type": "application/json" },
     });
-    return { ...stored, createdByEmail: user.email, canEdit: true };
+    return { ...stored, code: code.code, createdByEmail: user.email, canEdit: true };
   }
   return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: user.id, createdByEmail: user.email, canEdit: true };
 }
@@ -345,9 +353,10 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
 export async function updateScopedQuestion(id: string, raw: Question, user: AuthUser) {
   const context = await resolveLibraryContext(user); requireWritable(context);
   const version = versionWhere(context.publicationId);
-  const existing = await appEnv().DB.prepare(`SELECT created_by, created_at FROM library_questions_v2
+  const existing = await appEnv().DB.prepare(`SELECT created_by, created_at,
+      (SELECT printf('%04d', number) FROM question_codes WHERE question_id = library_questions_v2.source_id) AS code FROM library_questions_v2
     WHERE library_id = ? AND ${version} AND source_id = ? AND deleted_at IS NULL`)
-    .bind(context.libraryId, ...versionBindings(context.publicationId), id).first<{ created_by: string | null; created_at: number }>();
+    .bind(context.libraryId, ...versionBindings(context.publicationId), id).first<{ created_by: string | null; created_at: number; code: string }>();
   if (!existing) throw new Response(JSON.stringify({ error: "试题不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
   const moduleId = String(raw.moduleId || raw.categoryId || "");
   await validateModule(context, moduleId);
@@ -358,7 +367,7 @@ export async function updateScopedQuestion(id: string, raw: Question, user: Auth
     payload_json = ?, content_hash = ?, updated_at = ? WHERE library_id = ? AND ${version} AND source_id = ?`)
     .bind(moduleId, categoryId, payload, await sha256Text(payload), question.updatedAt,
       context.libraryId, ...versionBindings(context.publicationId), id).run();
-  return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: existing.created_by, createdByEmail: user.email, canEdit: true };
+  return { ...question, code: existing.code, moduleId, categoryId: categoryId ?? moduleId, createdBy: existing.created_by, createdByEmail: user.email, canEdit: true };
 }
 
 /** 删除只是移入回收站；删除模块时其中的试题才会被彻底删除。 */
@@ -375,12 +384,13 @@ export async function deleteScopedQuestion(id: string, user: AuthUser) {
 export async function readDeletedQuestions(user: AuthUser) {
   requireAdmin(user);
   const context = await resolveLibraryContext(user); requireWritable(context);
-  const rows = await appEnv().DB.prepare(`SELECT source_id, module_source_id, category_source_id, payload_json, deleted_at
+  const rows = await appEnv().DB.prepare(`SELECT source_id, module_source_id, category_source_id, payload_json, deleted_at,
+    (SELECT printf('%04d', number) FROM question_codes WHERE question_id = library_questions_v2.source_id) AS code
     FROM library_questions_v2 WHERE library_id = ? AND ${versionWhere(context.publicationId)} AND deleted_at IS NOT NULL
     ORDER BY deleted_at DESC`).bind(context.libraryId, ...versionBindings(context.publicationId)).all<Record<string, unknown>>();
   return rows.results.map((row: Record<string, unknown>) => {
     const moduleId = String(row.module_source_id);
-    return { ...JSON.parse(String(row.payload_json)) as Question, id: String(row.source_id), moduleId,
+    return { ...JSON.parse(String(row.payload_json)) as Question, id: String(row.source_id), code: String(row.code), moduleId,
       categoryId: row.category_source_id == null ? moduleId : String(row.category_source_id), deletedAt: Number(row.deleted_at) };
   });
 }

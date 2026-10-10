@@ -20,5 +20,5 @@ export function categoryDescendants(categories: Category[], id: string): string[
 
 // Search question content, topic tags and optional source details.
 export function questionMatchesKeyword(question: Question, keyword: string, path: string) {
-  return `${question.stem} ${question.answer} ${question.analysis} ${question.source} ${question.examYear ?? ""} ${(question.tags ?? []).join(" ")} ${(question.tagsZh ?? []).join(" ")} ${(question.tagsEn ?? []).join(" ")} ${path}`.toLowerCase().includes(keyword);
+  return `${question.code ?? ""} ${question.stem} ${question.answer} ${question.analysis} ${question.source} ${question.examYear ?? ""} ${(question.tags ?? []).join(" ")} ${(question.tagsZh ?? []).join(" ")} ${(question.tagsEn ?? []).join(" ")} ${path}`.toLowerCase().includes(keyword);
 }

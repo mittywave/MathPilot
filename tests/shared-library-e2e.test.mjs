@@ -127,9 +127,12 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.equal(category.response.status, 201);
     const saved = await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "公式 x²+1 与表格图片题", true) } });
     assert.equal(saved.response.status, 201);
+    const firstCode = saved.payload.question.code;
+    assert.match(firstCode, /^\d{4}$/);
     const asset = saved.payload.question.contentImages[0];
     const retry = await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "公式 x²+1 与表格图片题", true) } });
     assert.equal(retry.response.status, 201, "retry after a lost response must return the already saved question");
+    assert.equal(retry.payload.question.code, firstCode);
     assert.equal(retry.payload.question.updatedAt, saved.payload.question.updatedAt);
     assert.equal((await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("shared-question", moduleId, "shared-category", "不应覆盖原题", true) } })).response.status, 409);
 
@@ -139,6 +142,9 @@ test("one shared library: every teacher reads and edits it, only administrators 
     concurrentBody.question.stemDocxAssets = { rId1: { dataUrl: freshImage, contentType: "image/svg+xml" } };
     const concurrentCreates = await Promise.all(Array.from({ length: 3 }, () => jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: concurrentBody })));
     assert.deepEqual(concurrentCreates.map(x => x.response.status), [201, 201, 201]);
+    const concurrentCode = concurrentCreates[0].payload.question.code;
+    assert.notEqual(concurrentCode, firstCode);
+    assert.ok(concurrentCreates.every(x => x.payload.question.code === concurrentCode));
     const sharedImage = concurrentCreates[0].payload.question.contentImages[0];
     assert.ok(concurrentCreates.every(x => x.payload.question.contentImages.every(url => url === sharedImage)), "all repeated image references must reuse one complete asset");
     const storedImage = await fetch(`${base}${sharedImage}`, { headers: { Cookie: two } });
@@ -155,8 +161,9 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.equal((await jsonRequest(base, "/api/library?scope=mine", { cookie: two })).payload.questions.length, seenByTwo.payload.questions.length, "the legacy scope parameter reads the same library");
     assert.equal((await fetch(`${base}${asset}`, { headers: { Cookie: two } })).status, 200);
     assert.equal((await jsonRequest(base, "/api/download", { cookie: two, method: "POST", body: { questionIds: ["shared-question"] } })).response.status, 200);
-    const edited = await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "PUT", body: { question: { ...sharedQuestion, stem: "第二位老师修改后的题干" } } });
+    const edited = await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "PUT", body: { question: { ...sharedQuestion, code: "9999", stem: "第二位老师修改后的题干" } } });
     assert.equal(edited.response.status, 200);
+    assert.equal(edited.payload.question.code, firstCode, "client cannot reassign a code");
     assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find((item) => item.id === "shared-question").stem, "第二位老师修改后的题干");
     const second = await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { module: { name: "待删模块", subtitle: "" } } });
     const tempId = second.payload.module.id;
@@ -172,11 +179,13 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "DELETE" })).response.status, 200);
     // A deleted question waits in the recycle bin, which only administrators open, and comes back unchanged.
     assert.equal((await jsonRequest(base, "/api/questions", { cookie: two })).response.status, 403);
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: admin })).payload.questions[0].code, concurrentCode);
     assert.deepEqual((await jsonRequest(base, "/api/questions", { cookie: admin })).payload.questions.map((item) => item.id), ["concurrent-import-question"]);
     assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((item) => item.id === "concurrent-import-question"), false);
     assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: two, method: "PATCH" })).response.status, 403);
     assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "PATCH" })).response.status, 200);
     assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((item) => item.id === "concurrent-import-question"), true);
+    assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find(q => q.id === "concurrent-import-question").code, concurrentCode);
     assert.deepEqual((await jsonRequest(base, "/api/questions", { cookie: admin })).payload.questions, []);
     assert.equal((await jsonRequest(base, "/api/questions/concurrent-import-question", { cookie: admin, method: "DELETE" })).response.status, 200);
     assert.equal((await jsonRequest(base, `/api/modules/${tempId}`, { cookie: admin, method: "DELETE", body: { confirmation: "错误名称" } })).response.status, 400);

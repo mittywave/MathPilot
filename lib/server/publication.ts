@@ -91,7 +91,7 @@ async function buildSnapshot(user: AuthUser): Promise<Snapshot> {
   const modules = await Promise.all(data.modules.map(async (item) => ({ id: item.id, hash: await hashText(JSON.stringify(item)), value: item })));
   const categories = await Promise.all(data.categories.map(async (item) => ({ id: item.id, hash: await hashText(JSON.stringify(item)), value: item })));
   const questions = await Promise.all(data.questions.map(async (item) => {
-    const clean = replaceAssetIds({ ...item, canEdit: undefined, createdBy: undefined, createdByEmail: undefined }, hashes);
+    const clean = replaceAssetIds({ ...item, code: undefined, canEdit: undefined, createdBy: undefined, createdByEmail: undefined }, hashes);
     return { id: item.id, hash: await hashText(JSON.stringify(clean)), value: clean };
   }));
   return { modules, categories, questions, assets: deduplicatePublicationAssets(assets) };
@@ -384,7 +384,7 @@ async function commitPublication(publicationId: string, manifest: SnapshotManife
   }
   for (const item of changes.questions) {
     const value = materializeAssetHashes(item.value, assets);
-    const payload = JSON.stringify({ ...value, createdBy: undefined, createdByEmail: undefined, canEdit: undefined });
+    const payload = JSON.stringify({ ...value, createdBy: undefined, createdByEmail: undefined, canEdit: undefined, code: undefined });
     statements.push(db.prepare(`INSERT INTO library_questions_v2
       (row_id, source_id, library_id, publication_id, module_source_id, category_source_id,
        payload_json, content_hash, created_by, created_at, updated_at)

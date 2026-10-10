@@ -164,18 +164,20 @@ export default function Home() {
 
   const basketPool = useMemo(() => [...questions, ...basketWrongQuestions], [questions, basketWrongQuestions]);
   const selectedQuestions = orderedBasketQuestions(basketPool, selectedIds);
+  const byCode = query.trim() ? questions.find((item) => item.code === query.trim()) : undefined;
   const filteredQuestions = useMemo(() => {
     if (showSelected) return orderedBasketQuestions(basketPool, selectedIds);
+    const keyword = query.trim().toLowerCase();
+    if (byCode) return [byCode];
     let result = questions;
     if (activeCategory) { const allowed = descendantsOf(activeCategory); result = result.filter((item) => allowed.includes(item.categoryId)); }
     if (typeFilter !== "全部") result = result.filter((item) => item.type === typeFilter);
-    const keyword = query.trim().toLowerCase();
     if (keyword) result = result.filter((item) => questionMatchesKeyword(item, keyword, pathOf(item.categoryId)));
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds]);
+  }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode]);
 
-  const activeName = showSelected ? "我的组卷" : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
+  const activeName = showSelected ? "我的组卷" : byCode ? `ID ${byCode.code}` : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
   const activeWrongEntries = wrongEntries.filter(entry => entry.archivedAt == null);
   const historicalWrongEntries = wrongEntries.filter(entry => entry.archivedAt != null);
   const filteredWrongEntries = useMemo(() => {
@@ -510,12 +512,12 @@ export default function Home() {
             {canManageLibrary && <button className="module-add" onClick={openNewModule}><span>＋</span><div><b>{pageCopy.newModule}</b><small>{pageCopy.customModule}</small></div></button>}
           </div>
           <div className="content-head">
-            <div><p className="breadcrumb">{showSelected ? "当前题库组卷篮" : activeCategory ? pathOf(activeCategory) : activeModule?.name ?? "尚无模块"}</p><h1>{activeName}</h1><p className="subtext">{alevelQuestionCount(filteredQuestions.length, pageLocale)} · {showSelected ? "可跨当前题库的模块组卷" : activeModule ? `${activeModule.name} ${pageCopy.moduleSuffix}` : "创建第一个模块后开始录题"}{authUser ? authUser.local ? ` · ${pageCopy.localAdminSuffix}` : ` · ${pageCopy.loggedInAs} ${authUser.role === "admin" ? pageCopy.admin : pageCopy.member}` : ` · ${pageCopy.guestSuffix}`}</p></div>
+            <div><p className="breadcrumb">{showSelected ? "当前题库组卷篮" : activeCategory ? pathOf(activeCategory) : activeModule?.name ?? "尚无模块"}</p><h1>{activeName}</h1><p className="subtext">{alevelQuestionCount(filteredQuestions.length, pageLocale)} · {showSelected ? "可跨当前题库的模块组卷" : byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeModule ? `${activeModule.name} ${pageCopy.moduleSuffix}` : "创建第一个模块后开始录题"}{authUser ? authUser.local ? ` · ${pageCopy.localAdminSuffix}` : ` · ${pageCopy.loggedInAs} ${authUser.role === "admin" ? pageCopy.admin : pageCopy.member}` : ` · ${pageCopy.guestSuffix}`}</p></div>
             <div className="content-head-actions">{isAlevelPage && <div className="page-language-switch" role="group" aria-label={pageCopy.language}><button lang="zh-CN" className={alevelPageLocale === "zh" ? "active" : ""} aria-pressed={alevelPageLocale === "zh"} onClick={() => chooseAlevelPageLocale("zh")}>中文</button><button lang="en" className={alevelPageLocale === "en" ? "active" : ""} aria-pressed={alevelPageLocale === "en"} onClick={() => chooseAlevelPageLocale("en")}>English</button></div>}<label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label></div>
           </div>
           <div className="filters">
-            <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>{pageCopy.allTypes} <span>{showSelected ? selectedQuestions.length : categoryQuestions.length}</span></button>
-            {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(showSelected ? selectedQuestions : categoryQuestions).filter((item) => item.type === type).length}</span></button>)}
+            <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>{pageCopy.allTypes} <span>{showSelected ? selectedQuestions.length : byCode ? 1 : categoryQuestions.length}</span></button>
+            {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(showSelected ? selectedQuestions : byCode ? [byCode] : categoryQuestions).filter((item) => item.type === type).length}</span></button>)}
             {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? pageCopy.clearSelection : pageCopy.selectResults}</button>}
           </div>
           </>}
@@ -526,7 +528,7 @@ export default function Home() {
               return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
                 {authUser && !showSelected && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
                 <div className="question-main">
-                  <div className="meta"><span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{pathOf(question.categoryId) || question.source}</em></div>
+                  <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{pathOf(question.categoryId) || question.source}</em></div>
                   <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
                   {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
                   {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
@@ -550,7 +552,7 @@ export default function Home() {
           <label className="field">上级分类<select value={categoryParent || activeModule.id} onChange={(event) => setCategoryParent(event.target.value)}><option value={activeModule.id}>{activeModule.name}（模块根目录）</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
           <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div>
         </> : categoryDialog === "trash" ? <>
-          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button onClick={() => restoreQuestion(item)}>恢复</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
+          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{item.code && `ID ${item.code} · `}{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button onClick={() => restoreQuestion(item)}>恢复</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
           <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog("manage")}>返回</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
         </> : <>
           <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>

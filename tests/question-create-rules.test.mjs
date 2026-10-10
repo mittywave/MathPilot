@@ -5,7 +5,7 @@ import { questionCreationContent } from '../lib/question-create-rules.mjs';
 const question = { id: 'import-id', stem: '计算 $\\frac{3}{4}$', options: ['1', '2'], answer: 'B', analysis: '保持原解析', stemDocxXml: ['<w:p/>'], createdAt: 1, updatedAt: 1 };
 
 test('creation retries ignore server metadata and object order, preserving user content', () => {
-  const retry = { ...question, updatedAt: 99, createdAt: 5, createdBy: 'local-admin', canEdit: true, createdByEmail: 'localhost', taxonomyKeys: ['inferred'] };
+  const retry = { ...question, code: '0001', updatedAt: 99, createdAt: 5, createdBy: 'local-admin', canEdit: true, createdByEmail: 'localhost', taxonomyKeys: ['inferred'] };
   assert.equal(questionCreationContent(question), questionCreationContent(retry));
   assert.equal(questionCreationContent({ ...question, assets: { b: 2, a: 1 } }), questionCreationContent({ ...retry, assets: { a: 1, b: 2 } }));
 });

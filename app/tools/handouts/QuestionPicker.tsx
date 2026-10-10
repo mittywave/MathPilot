@@ -35,7 +35,8 @@ export function QuestionPicker({ library, mode, taken, onPick, onClose }: {
   const allowed = activeCategoryId ? new Set(categoryDescendants(categories, activeCategoryId)) : null;
   const pathOf = (id: string) => categoryPath(modules, categories, id);
   const search = keyword.trim().toLowerCase();
-  const results = (library?.questions ?? []).filter((question) => question.moduleId === activeModuleId
+  const byCode = library?.questions.find((question) => question.code === search);
+  const results = byCode ? [byCode] : (library?.questions ?? []).filter((question) => question.moduleId === activeModuleId
     && (!allowed || allowed.has(question.categoryId))
     && (type === "全部" || question.type === type)
     && (!search || questionMatchesKeyword(question, search, pathOf(question.categoryId))));
@@ -49,7 +50,7 @@ export function QuestionPicker({ library, mode, taken, onPick, onClose }: {
       <label>模块<select value={activeModuleId} onChange={(event) => { setModuleId(event.target.value); setCategoryId(""); setLimit(PAGE_SIZE); }}>{modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>分类<select value={activeCategoryId} onChange={(event) => { setCategoryId(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部分类</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
       <label>题型<select value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option>全部</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select></label>
-      <label className="picker-search">搜索<input type="search" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder="题干、答案、知识点" /></label>
+      <label className="picker-search">搜索<input type="search" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder="四位 ID（全库）、题干、知识点" /></label>
     </div>
     {!library ? <p className="picker-empty">正在读取题库…</p> : !modules.length ? <p className="picker-empty">题库还没有模块。</p> : !results.length ? <p className="picker-empty">没有符合条件的题目。</p> : <>
       <p className="picker-count">共 {results.length} 道</p>
@@ -57,7 +58,7 @@ export function QuestionPicker({ library, mode, taken, onPick, onClose }: {
         const inHandout = taken.has(question.id); const chosen = isSelected(question.id);
         return <li key={question.id} className={`picker-item${chosen ? " chosen" : ""}`}>
           <QuestionBody question={question} number={index + 1} />
-          <div className="picker-item-foot"><small>{question.type} · {question.difficulty} · {pathOf(question.categoryId)}</small>
+          <div className="picker-item-foot"><small>{question.code && `ID ${question.code} · `}{question.type} · {question.difficulty} · {pathOf(question.categoryId)}</small>
             {inHandout ? <span className="picker-taken">已在讲义中</span> : replacing
               ? <button className="secondary" onClick={() => onPick([question.id])}>换成这道</button>
               : <button className={chosen ? "picker-toggle on" : "picker-toggle"} aria-pressed={chosen} onClick={() => toggle(question.id)}>{chosen ? "✓ 已选" : "＋ 选择"}</button>}

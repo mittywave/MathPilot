@@ -126,6 +126,8 @@ export type LibraryModule = {
 
 export type Question = {
   id: string;
+  /** Stable library lookup ID; at least four digits. Assigned by the server. */
+  code?: string;
   moduleId?: string;
   categoryId: string;
   type: QuestionType;
