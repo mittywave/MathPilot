@@ -168,10 +168,16 @@ try {
   step('题库 文件批量录入: Word fixture split into 2 questions and saved with table structure');
 
   // ---- 讲义编撰：每个知识模块 = 知识点 → 例题 → 练习 → 变式 ----
+  // 讲义编撰 and 知识图谱 are top-bar entries, not toolbox cards.
   await page.goto(base + '/tools');
-  await page.locator('.tool-card').first().screenshot({ path: join(out, 'toolbox-card.png') });
-  await page.getByRole('link', { name: /讲义编撰/ }).click();
+  const nav = page.getByRole('navigation', { name: '题库入口' });
+  await nav.getByRole('link', { name: '讲义编撰', exact: true }).waitFor();
+  assert.deepEqual(await nav.locator('.nav-item').allInnerTexts(), ['题库', '组卷篮', '讲义编撰', '知识图谱', '学生档案', '工具箱']);
+  assert.deepEqual(await page.locator('.tool-card strong').allInnerTexts(), ['作业批改', '手写转录', '共享办公']);
+  await page.locator('.topbar').screenshot({ path: join(out, 'site-header.png') });
+  await nav.getByRole('link', { name: '讲义编撰', exact: true }).click();
   await page.waitForURL('**/tools/handouts');
+  assert.equal(await nav.locator('.nav-item.active').innerText(), '讲义编撰');
   await page.getByText('还没有讲义').waitFor();
   await page.getByRole('button', { name: '新建讲义', exact: true }).click();
   await page.waitForURL(/\/tools\/handouts\?id=/);

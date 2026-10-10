@@ -15,6 +15,7 @@ import type { AuthUser, Handout, HandoutBand, HandoutGrade, HandoutItem, Handout
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
+import { SiteHeader } from "../../components/SiteHeader";
 import { QuestionPicker, type PickerMode } from "./QuestionPicker";
 import { NotePreview } from "./NotePreview";
 import "../tools.css";
@@ -78,10 +79,11 @@ export default function HandoutsPage() {
   }, []);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
 
-  if (!loaded) return <main className="toolbox handouts"><p>正在读取…</p></main>;
-  if (!user) return <main className="toolbox handouts"><h1>讲义编撰</h1><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main>;
+  // The list sits under the shared site header; an open handout's editor takes the whole window.
+  if (!loaded) return <><SiteHeader active="handouts" user={null} loading /><main className="toolbox handouts"><p>正在读取…</p></main></>;
+  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><h1>讲义编撰</h1><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main></>;
   return <>
-    {openId ? <HandoutEditor id={openId} onNotice={setNotice} /> : <HandoutList canDelete={user.role === "admin"} onNotice={setNotice} />}
+    {openId ? <HandoutEditor id={openId} onNotice={setNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList canDelete={user.role === "admin"} onNotice={setNotice} /></>}
     {notice && <div className="toast" role="status">✓ {notice}</div>}
   </>;
 }
@@ -180,7 +182,6 @@ function HandoutList({ canDelete, onNotice }: { canDelete: boolean; onNotice: (m
     return `${placementLabel(placement)} · ${lessonName(lessons(placement).indexOf(handout))}`;
   };
   return <main className="toolbox handouts">
-    <a className="toolbox-back" href="/tools"><HandoutIcon name="back" /><span>返回工具箱</span></a>
     <header className="toolbox-head handouts-head">
       <span className="toolbox-mark"><HandoutIcon name="book" /></span>
       <div><h1>讲义编撰</h1><p>按年级、学期编排每一讲的讲义；从题库选题或录入外部题目。</p></div>

@@ -722,6 +722,7 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 
 @media (max-width:1180px) and (min-width:851px) {
   .topbar { gap:20px; padding-left:22px; padding-right:22px; }
+  .brand { min-width:auto; }
   .library-entries { min-width:0; }
   .account-area .user-chip { display:none; }
 }
