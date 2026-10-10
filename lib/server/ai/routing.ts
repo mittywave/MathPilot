@@ -30,7 +30,7 @@ async function environmentRuntime(role: AiTaskRole): Promise<RuntimeTarget | nul
     const root = setting('OPENAI_BASE_URL') || 'https://api.openai.com/v1';
     const baseUrl = gemini ? aiProviderModelsUrl(root, 'antigravity_gemini').replace(/\/models$/, '') : normalizeAiProviderApiBase(root);
     // The environment endpoint is trusted server configuration, not browser input.
-    assertTrustedDestination(baseUrl, true);
+    assertTrustedDestination(baseUrl);
     const model: ProviderModel = { id: environmentModel(role), displayName: environmentModel(role), capabilities: unknownCapabilities(), metadata: {}, catalogPresent: false, manual: false, legacyCompatible: true, updatedAt: 0 };
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
     const provider: ProviderConfig = { id: 'environment', name: '环境变量（只读）', kind: 'custom', baseUrl, wireApi, endpoints: defaultEndpoints(wireApi), enabled: true, hasApiKey: true, credentialRevision: 0, revision: 0, timeoutMs: Number(setting('AI_REQUEST_TIMEOUT_MS')) || 180000, catalogTimeoutMs: 15000, outputStrategy: 'auto', reasoningEffort: '', legacy: true, fingerprint: '', referenceCount: 0, models: [model], createdAt: 0, updatedAt: 0 };

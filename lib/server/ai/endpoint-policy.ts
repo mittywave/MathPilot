@@ -46,9 +46,8 @@ function unsafeProductionHost(value: string) {
  * a public hostname can still resolve to different addresses after validation.
  *
  * AI_PROVIDER_LOCAL_HTTP exists only for isolated loopback integration fixtures.
- * The optional second argument is retained for migration-call compatibility.
  */
-export function assertTrustedDestination(value: string, _legacyCompatibility = false) {
+export function assertTrustedDestination(value: string) {
     const base = normalizeProviderBase(value), url = new URL(base);
     const loopbackHttpTest = setting('AI_PROVIDER_LOCAL_HTTP') === 'true'
         && ['127.0.0.1', '[::1]'].includes(url.hostname);

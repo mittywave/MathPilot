@@ -30,7 +30,7 @@ export default function ToolboxPage() {
     </header>
     <ul className="toolbox-grid">
       {tools.map((tool) => <li key={tool.key}>
-        <a className="tool-card" href={tool.href} target="_blank" rel="noopener">
+        <a className="tool-card" href={tool.href} target="_blank" rel="noreferrer">
           <span className="tool-card-icon"><ToolIcon name={tool.icon} /></span>
           <span className="tool-card-copy">
             <strong>{tool.name}</strong>

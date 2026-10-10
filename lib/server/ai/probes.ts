@@ -15,7 +15,7 @@ export async function discoverModels(id: string, expectedFingerprint: unknown, s
         throw new ProviderError('REVISION_CONFLICT', '连接版本已变化，请重新加载。', 409);
     if (!p.endpoints.models)
         throw new ProviderError('CATALOG_UNAVAILABLE', '本入口未配置目录 API，可以手动添加模型。', 422);
-    assertTrustedDestination(p.baseUrl, p.legacy);
+    assertTrustedDestination(p.baseUrl);
     const key = await providerKey(state, p), endpoint = providerEndpoint(p.baseUrl, p.endpoints.models)!, start = Date.now();
     let status = 0, code = 'OK';
     try {

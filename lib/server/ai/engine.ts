@@ -107,7 +107,7 @@ interface Budget {
 }
 async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget, signal: AbortSignal, fixed?: ConcreteProtocol): Promise<EngineResult> {
     const p = runtime.provider, cacheKey = modelConfigurationFingerprint(p, runtime.model);
-    assertTrustedDestination(p.baseUrl, p.legacy);
+    assertTrustedDestination(p.baseUrl);
     const order: ConcreteProtocol[] = fixed ? [fixed] : p.wireApi === 'auto' ? ['responses', 'chat_completions'] : [p.wireApi];
     const remembered = cache.get(cacheKey);
     if (remembered && order.includes(remembered))

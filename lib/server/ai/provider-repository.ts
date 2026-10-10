@@ -149,7 +149,7 @@ export function checkedTarget(state: CenterState, target: ModelTarget, images: b
     const provider = findProvider(state, target.providerId), model = provider.models.find(m => m.id === target.modelId);
     if (!provider.enabled || !provider.hasApiKey || !model)
         throw new ProviderError('ROUTE_UNAVAILABLE', '已配置目标被停用、缺少密钥或模型；不会静默改用其他提供方。', 422);
-    assertTrustedDestination(provider.baseUrl, provider.legacy);
+    assertTrustedDestination(provider.baseUrl);
     requireCapabilities(provider, model, images, allowLegacy);
     return { provider, model };
 }
@@ -225,7 +225,7 @@ export async function saveProvider(id: string | null, value: unknown) {
     if (input.enabled) {
         if (!ciphertext)
             invalid('启用前请保存 API Key。', 'apiKey');
-        assertTrustedDestination(input.baseUrl, legacy);
+        assertTrustedDestination(input.baseUrl);
     }
     const now = Date.now();
     await atomic(state.routing.revision, [stmt(`INSERT INTO ai_providers(id,name,kind,base_url,wire_api,endpoint_config_json,enabled,api_key_encrypted,cipher_version,credential_revision,revision,timeout_ms,catalog_timeout_ms,output_strategy,reasoning_effort,legacy,created_at,updated_at)
