@@ -13,6 +13,7 @@ function ToolIcon({ name }: { name: ToolboxTool["icon"] | "box" | "arrow" }) {
     arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
     box: <><path d="M3 8h18v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8Z" /><path d="M8 8V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v3M3 13h18M10 13v2h4v-2" /></>,
     check: <><path d="M9 4h6v3H9z" /><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15" /><path d="m8.5 14 2.5 2.5 4.5-5" /></>,
+    graph: <><circle cx="12" cy="5" r="2" /><circle cx="5.5" cy="18" r="2" /><circle cx="18.5" cy="18" r="2" /><path d="M11 6.8 6.5 16.2M13 6.8l4.5 9.4M7.5 18h9" /></>,
     share: <><circle cx="18" cy="5.5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="18.5" r="2.5" /><path d="m8.3 10.8 7.4-4.1M8.3 13.2l7.4 4.1" /></>,
   } as const;
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
@@ -31,7 +32,7 @@ export default function ToolboxPage() {
     </header>
     <ul className="toolbox-grid">
       {tools.map((tool) => <li key={tool.key}>
-        <a className="tool-card" href={tool.href}>
+        <a className="tool-card" href={tool.href} target="_blank" rel="noopener">
           <span className="tool-card-icon"><ToolIcon name={tool.icon} /></span>
           <span className="tool-card-copy">
             <strong>{tool.name}</strong>
