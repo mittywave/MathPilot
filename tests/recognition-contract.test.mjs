@@ -82,13 +82,66 @@ test("single and PDF diagram extraction share one minimum box and reconstruction
   assert.equal(hasUsableRecognitionDiagramBox({ x: 0, y: 0, width: 20, height: 20 }), true);
   assert.equal(hasUsableRecognitionDiagramBox({ x: 0, y: 0, width: 19.9, height: 20 }), false);
   const photographed = { score: .95, reconstructable: true, kind: "geometry", issues: [], capture: "photo", rotation: 0 };
-  assert.equal(shouldReconstructRecognizedDiagram("data:image/png;base64,AA==", photographed, true), true);
-  assert.equal(shouldReconstructRecognizedDiagram("data:image/png;base64,AA==", photographed, false), false);
-  assert.equal(shouldReconstructRecognizedDiagram(undefined, photographed, true), false);
+  assert.equal(shouldReconstructRecognizedDiagram("data:image/png;base64,AA==", photographed), true);
+  assert.equal(shouldReconstructRecognizedDiagram("data:image/png;base64,AA==", { ...photographed, capture: "digital", score: 1 }), false);
+  assert.equal(shouldReconstructRecognizedDiagram(undefined, photographed), false);
 });
 
 test("recognition reasoning effort is shared by both API routes", () => {
   assert.equal(recognitionReasoningEffort("low"), "low");
   assert.equal(recognitionReasoningEffort("max"), "max");
   assert.equal(recognitionReasoningEffort("unsupported"), "low");
+});
+
+test("a recognized diagram box keeps every figure whole and leaves the question text out", async () => {
+  const { PNG } = await import("pngjs");
+  const { readFileSync } = await import("node:fs");
+  const { loadSource } = await import("./load-source.mjs");
+  const { diagramInk } = await loadSource("lib/image-tools.ts");
+  // A real single-question screenshot: two lines of stem, 图1 and 图2 side by side, a page frame around it all.
+  const { data, width, height } = PNG.sync.read(readFileSync("tests/fixtures/screenshot-layout-two-figures.png"));
+  // diagram_bbox the model returned for it (0–1000), in pixels.
+  const box = { x: 51, y: 204, width: 462, height: 397 };
+  const target = { minX: Math.floor(box.x / 1000 * width), minY: Math.floor(box.y / 1000 * height), maxX: Math.ceil((box.x + box.width) / 1000 * width), maxY: Math.ceil((box.y + box.height) / 1000 * height) };
+  const ink = diagramInk(data, width, height, target);
+  const isInk = (x, y) => { const o = (y * width + x) * 4; return data[o] * .299 + data[o + 1] * .587 + data[o + 2] * .114 < 160; };
+  const kept = (x0, y0, x1, y1) => { let total = 0; let left = 0; for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (isInk(x, y)) { total++; if (!ink.foreign[y * width + x]) left++; } return { total, left }; };
+  // 图1 (triangle, x 94–433) and 图2 (axes and curves, x 445–940) with their labels and captions all fit inside.
+  assert.ok(ink.rect.minX <= 94 && ink.rect.maxX >= 941 && ink.rect.minY <= 167 && ink.rect.maxY >= 485, JSON.stringify(ink.rect));
+  for (const figure of [[94, 167, 434, 485], [445, 167, 941, 485]]) { const { total, left } = kept(...figure); assert.ok(total > 1000); assert.equal(left, total); }
+  // The stem line just above (ending at y 156) and the page frame stay out of the picture.
+  assert.ok(ink.rect.maxX < 1000);
+  const stem = kept(ink.rect.minX, ink.rect.minY, ink.rect.maxX, 157);
+  assert.equal(stem.left, 0);
+});
+
+test("a box that stops mid-drawing still yields the whole figure; picture options are cut as one row", async () => {
+  const { PNG } = await import("pngjs");
+  const { readFileSync } = await import("node:fs");
+  const { loadSource } = await import("./load-source.mjs");
+  const { diagramInk } = await loadSource("lib/image-tools.ts");
+  // A cube net at the top right (bottom row D, F at y≈165–230), four cube drawings A–D as options below.
+  const { data, width, height } = PNG.sync.read(readFileSync("tests/fixtures/screenshot-picture-options.png"));
+  const pixels = (box) => ({ minX: Math.floor(box.x / 1000 * width), minY: Math.floor(box.y / 1000 * height), maxX: Math.ceil((box.x + box.width) / 1000 * width), maxY: Math.ceil((box.y + box.height) / 1000 * height) });
+  // Two boxes the model actually returned for this screenshot; the second stops halfway down the net.
+  for (const box of [{ x: 816, y: 64, width: 164, height: 303 }, { x: 818, y: 38, width: 162, height: 222 }]) {
+    const net = diagramInk(data, width, height, pixels(box));
+    assert.ok(net.rect.maxY >= 230, `the D/F row is kept: ${JSON.stringify(net.rect)}`);
+    assert.ok(net.rect.minX > 1300, "the stem text on the left stays out");
+  }
+  const options = diagramInk(data, width, height, pixels({ x: 16, y: 605, width: 866, height: 305 }));
+  assert.ok(options.rect.minX <= 35 && options.rect.maxX >= 1515 && options.rect.minY >= 240, `all four options and their letters, nothing above: ${JSON.stringify(options.rect)}`);
+});
+
+test("tick labels under a number line stay with the figure even when the box stops at the axis", async () => {
+  const { PNG } = await import("pngjs");
+  const { readFileSync } = await import("node:fs");
+  const { loadSource } = await import("./load-source.mjs");
+  const { diagramInk } = await loadSource("lib/image-tools.ts");
+  // A ruler over a number line; labels −4 … 4 at y≈250–276, the options row at y≈355, stem text above y≈112.
+  const { data, width, height } = PNG.sync.read(readFileSync("tests/fixtures/screenshot-number-line.png"));
+  const box = { x: 22, y: 308, width: 435, height: 269 };
+  const ink = diagramInk(data, width, height, { minX: Math.floor(box.x / 1000 * width), minY: Math.floor(box.y / 1000 * height), maxX: Math.ceil((box.x + box.width) / 1000 * width), maxY: Math.ceil((box.y + box.height) / 1000 * height) });
+  assert.ok(ink.rect.maxY >= 276, `the −4 … 4 labels are kept: ${JSON.stringify(ink.rect)}`);
+  assert.ok(ink.rect.maxY < 340 && ink.rect.minY > 112, "neither the options nor the stem come along");
 });

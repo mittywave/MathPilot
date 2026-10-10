@@ -1,3 +1,5 @@
+import { environmentSummary } from '../../../../lib/server/ai/routing';
+import { hasV2Schema } from "../../../../lib/server/ai/provider-repository";
 import { requireSameOrigin, requireUser } from "../../../../lib/server/auth";
 import { AiProviderInputError, aiProviderEncryptionReady, environmentAiFallbackSummary, getAiProviderConfig, saveAiProviderConfig } from "../../../../lib/server/ai-provider";
 import { normalizeAiProviderWireApi } from "../../../../lib/ai-provider-rules.mjs";
@@ -20,7 +22,8 @@ function caught(error: unknown) {
 export async function GET(request: Request) {
   try {
     await requireAdmin(request);
-    return Response.json({ config: await getAiProviderConfig(), environmentFallback: environmentAiFallbackSummary(), encryptionReady: aiProviderEncryptionReady() });
+    const v2 = await hasV2Schema();
+    return Response.json({ config: v2 ? null : await getAiProviderConfig(), environmentFallback: v2 ? environmentSummary() : environmentAiFallbackSummary(), encryptionReady: aiProviderEncryptionReady(), ...(v2 ? { version: 2, settingsUrl: '/settings/ai' } : {}) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     return caught(error);
   }
@@ -30,6 +33,7 @@ export async function PUT(request: Request) {
   try {
     requireSameOrigin(request);
     await requireAdmin(request);
+    if (await hasV2Schema()) return Response.json({ error: "V2 已启用，请使用 /settings/ai；旧接口不可写入或借用旧密钥。", code: "V2_REQUIRED" }, { status: 409 });
     const body = await request.json() as Record<string, unknown>;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new AiProviderInputError("配置必须是 JSON 对象");
     const modelCatalog = Array.isArray(body.modelCatalog)

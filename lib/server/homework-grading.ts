@@ -1,12 +1,9 @@
+import { AiQueueFailure, queueRetryDelay } from "./ai/queue-policy";
 import { env } from "cloudflare:workers";
-import { buildHomeworkGradingPrompt, buildSubmissionReportPrompt, homeworkGradingSchema, normalizeHomeworkGrading, normalizeHomeworkReport, submissionReportSchema } from "../homework-grading-contract";
-import { CAPABILITY_FRAMEWORK_VERSION } from "../homework-capability-framework.mjs";
-import { buildFallbackSubmissionReport } from "../homework-report.mjs";
-import { finalizeHomeworkVerdict } from "../homework-grading-rules.mjs";
 import type { GradingVerdict, QuestionType } from "../types";
-import { homeworkAssetDataUrl, processHomeworkAssetCleanup, recordHomeworkAssetCleanupFailure } from "./homework-assets";
+import { processHomeworkAssetCleanup, recordHomeworkAssetCleanupFailure } from "./homework-assets";
 import { homeworkDb } from "./homework";
-import { callHomeworkModel, parseHomeworkModelText } from "./homework-model";
+import { readRecognizedQuestionNumbers } from './homework-page-coverage';
 
 type AppEnv = {
   DB: D1Database;
@@ -21,12 +18,12 @@ function retryBaseSeconds() { return Math.max(1, Math.min(300, Number(appEnv().H
 function maxQueueAttempts() { return Math.max(1, Math.min(20, Number(appEnv().HOMEWORK_QUEUE_MAX_ATTEMPTS ?? process.env.HOMEWORK_QUEUE_MAX_ATTEMPTS) || 4)); }
 
 type QuestionRow = {
-  id: string; question_number: string; page_number: number; type: QuestionType; stem: string; answer: string; analysis: string;
+  id: string; question_number: string; page_number: number; type: QuestionType; stem: string; answer: string; analysis: string; reference_verified: number; input_evidence_json: string;
 };
-type SubmissionRow = { id: string; assignment_id: string; status: string };
+type SubmissionRow = { id: string; assignment_id: string; status: string; reprocess_question_ids_json: string };
 
-async function upsertResult(input: {
-  submissionId: string; question: QuestionRow; pageId: string | null; verdict: GradingVerdict; studentAnswer: string;
+export async function upsertResult(input: {
+  submissionId: string; question: QuestionRow; pageId: string | null; verdict: GradingVerdict; score?: number | null; studentAnswer: string;
   feedback: string; errorType: string; stepAnalysis?: string[]; evidenceSummary?: string; capabilityKeys?: string[];
   confidence: number; bbox: unknown; requiresReview: boolean;
 }) {
@@ -34,149 +31,95 @@ async function upsertResult(input: {
     .bind(input.submissionId, input.question.id).first<{ id: string; created_at: number }>();
   const id = existing?.id ?? crypto.randomUUID(); const now = Date.now();
   if (existing) {
-    await homeworkDb().prepare(`UPDATE grading_items SET page_id = ?, verdict = ?, student_answer = ?, feedback = ?, error_type = ?,
+    await homeworkDb().prepare(`UPDATE grading_items SET page_id = ?, verdict = ?, score = ?, student_answer = ?, feedback = ?, error_type = ?,
       step_analysis_json = ?, evidence_summary = ?, capability_keys_json = ?, confidence = ?, bbox_json = ?, requires_review = ?,
       reviewed_by = NULL, reviewed_at = NULL, wrong_book_applied_at = NULL, corrected_at = NULL, updated_at = ? WHERE id = ?`)
-      .bind(input.pageId, input.verdict, input.studentAnswer, input.feedback, input.errorType, JSON.stringify(input.stepAnalysis ?? []),
+      .bind(input.pageId, input.verdict, input.score ?? null, input.studentAnswer, input.feedback, input.errorType, JSON.stringify(input.stepAnalysis ?? []),
         input.evidenceSummary ?? "", JSON.stringify(input.capabilityKeys ?? []), input.confidence,
         input.bbox ? JSON.stringify(input.bbox) : null, input.requiresReview ? 1 : 0, now, id).run();
   } else {
     await homeworkDb().prepare(`INSERT INTO grading_items
-      (id, submission_id, assignment_question_id, page_id, verdict, student_answer, feedback, error_type, step_analysis_json,
+      (id, submission_id, assignment_question_id, page_id, verdict, score, student_answer, feedback, error_type, step_analysis_json,
        evidence_summary, capability_keys_json, confidence, bbox_json, requires_review, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, input.submissionId, input.question.id, input.pageId, input.verdict, input.studentAnswer, input.feedback, input.errorType,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, input.submissionId, input.question.id, input.pageId, input.verdict, input.score ?? null, input.studentAnswer, input.feedback, input.errorType,
         JSON.stringify(input.stepAnalysis ?? []), input.evidenceSummary ?? "", JSON.stringify(input.capabilityKeys ?? []), input.confidence,
         input.bbox ? JSON.stringify(input.bbox) : null, input.requiresReview ? 1 : 0, now, now).run();
   }
 }
 
 async function processingSubmission(submissionId: string) {
-  return homeworkDb().prepare("SELECT id, assignment_id, status FROM homework_submissions WHERE id = ?")
+  return homeworkDb().prepare("SELECT id,assignment_id,status,reprocess_question_ids_json FROM homework_submissions WHERE id = ?")
     .bind(submissionId).first<SubmissionRow>();
 }
 
-export async function generateSubmissionReport(submissionId: string) {
-  const owner = await homeworkDb().prepare(`SELECT homework_assignments.owner_user_id FROM homework_submissions
-    JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id WHERE homework_submissions.id = ?`)
-    .bind(submissionId).first<{ owner_user_id: string }>();
-  if (!owner) throw new Error("提交记录不存在");
-  const { readTeacherSubmission } = await import("./homework");
-  const submission = await readTeacherSubmission(submissionId, { id: owner.owner_user_id, email: "", role: "member" });
-  const fallback = buildFallbackSubmissionReport(submission.gradingItems);
-  let report = fallback;
-  try {
-    const result = await callHomeworkModel({ images: [], prompt: buildSubmissionReportPrompt(submission.gradingItems),
-      schema: submissionReportSchema, schemaName: "homework_submission_report" });
-    if (result.text) report = normalizeHomeworkReport(parseHomeworkModelText(result.text));
-  } catch { /* Deterministic fallback keeps the automatic pipeline available. */ }
-  const { saveSubmissionReport } = await import("./homework-capabilities");
-  await saveSubmissionReport(submissionId, owner.owner_user_id, report, CAPABILITY_FRAMEWORK_VERSION);
-  return report;
-}
-
 async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
+  const scope=await homeworkDb().prepare('SELECT reprocess_question_ids_json FROM homework_submissions WHERE id=?').bind(submission.id).first<{reprocess_question_ids_json:string}>();
+  const pendingIds = JSON.parse(scope?.reprocess_question_ids_json || "[]") as string[];
+  const recognized=await readRecognizedQuestionNumbers(submission.id);
+  const inventory=JSON.stringify(recognized?[...recognized]:[]);
   const counts = await homeworkDb().prepare(`SELECT
-      (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id = ?) AS question_count,
-      (SELECT COUNT(*) FROM grading_items WHERE submission_id = ?) AS result_count,
-      (SELECT COUNT(*) FROM grading_items WHERE submission_id = ? AND verdict = 'unreadable') AS unreadable_count`)
-    .bind(submission.assignment_id, submission.id, submission.id).first<{ question_count: number; result_count: number; unreadable_count: number }>();
-  if (!counts || Number(counts.result_count) < Number(counts.question_count)) return false;
-  const now = Date.now();
-  if (Number(counts.unreadable_count)) {
-    const reasons = await homeworkDb().prepare(`SELECT DISTINCT error_type, feedback FROM grading_items
-      WHERE submission_id = ? AND verdict = 'unreadable' ORDER BY updated_at`).bind(submission.id).all<{ error_type: string; feedback: string }>();
-    const reason = reasons.results.map((item) => item.feedback || item.error_type).filter(Boolean).slice(0, 3).join("；") || "答卷存在无法辨认、漏页或无法匹配的内容，请重新上传清晰完整的照片";
-    await homeworkDb().prepare(`UPDATE homework_submissions SET status = 'returned', returned_at = ?, failure_reason = ?, updated_at = ?
-      WHERE id = ? AND status IN ('submitted', 'processing', 'failed')`).bind(now, reason.slice(0, 500), now, submission.id).run();
-    await homeworkDb().prepare("DELETE FROM submission_reports WHERE submission_id = ?").bind(submission.id).run();
-    await homeworkDb().prepare("DELETE FROM student_capability_evidence WHERE submission_id = ?").bind(submission.id).run();
-    return true;
+      (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id = ? AND question_number IN (SELECT value FROM json_each(?))) AS question_count,
+      (SELECT COUNT(*) FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id = ? AND q.question_number IN (SELECT value FROM json_each(?))
+        ${pendingIds.length ? "" : "AND (g.updated_at>=s.submitted_at OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))"}) AS result_count`)
+    .bind(submission.assignment_id, inventory, submission.id, inventory).first<{ question_count: number; result_count: number }>();
+  if (!counts || !Number(counts.question_count) || Number(counts.result_count) < Number(counts.question_count)) return false;
+  await (await import("./homework-page-coverage")).assertCompletePageCoverage(submission.id);
+  if (pendingIds.length) {
+    const completed = await homeworkDb().prepare(`SELECT COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=? AND g.assignment_question_id IN (${pendingIds.map(()=>"?").join(",")}) AND (g.updated_at>=s.submitted_at OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))`).bind(submission.id,...pendingIds).first<{count:number}>();
+    if (Number(completed?.count??0)<pendingIds.length) return false;
   }
+  const now = Date.now();
   const claimed = await homeworkDb().prepare(`UPDATE homework_submissions SET status = 'ready', failure_reason = '', updated_at = ?
     WHERE id = ? AND status IN ('submitted', 'processing', 'failed')`).bind(now, submission.id).run();
-  if (!claimed.meta.changes) return true;
+  if (!claimed.meta.changes && submission.status !== "ready") return true;
   if (autoPublishEnabled()) {
-    await generateSubmissionReport(submission.id);
     const { autoPublishSubmission } = await import("./homework");
     await autoPublishSubmission(submission.id);
   }
   return true;
 }
 
-export async function processHomeworkSubmissionPage(submissionId: string, pageNumberValue: number) {
+async function processHomeworkSubmissionQuestions(submissionId: string, upperAttempt = 1, questionIds?: string[]) {
   const submission = await processingSubmission(submissionId);
+  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission); return; }
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
-  const pageNumber = Math.max(1, Math.min(200, Math.floor(Number(pageNumberValue) || 1)));
   await homeworkDb().prepare("UPDATE homework_submissions SET status = 'processing', failure_reason = '', updated_at = ? WHERE id = ?")
     .bind(Date.now(), submissionId).run();
 
-  const questionsResult = await homeworkDb().prepare(`SELECT id, question_number, page_number, type, stem, answer, analysis
-    FROM assignment_questions WHERE assignment_id = ? AND page_number = ? ORDER BY sort_order`)
-    .bind(submission.assignment_id, pageNumber).all<QuestionRow>();
-  const questions = questionsResult.results;
-  if (!questions.length) { await finalizeSubmissionIfComplete(submission); return; }
+  const questionsResult = await homeworkDb().prepare(`SELECT id, question_number, page_number, type, stem, answer, analysis, reference_verified, input_evidence_json
+    FROM assignment_questions WHERE assignment_id = ? ORDER BY sort_order`)
+    .bind(submission.assignment_id).all<QuestionRow>();
+  const pendingIds = JSON.parse(submission.reprocess_question_ids_json || "[]") as string[];
+  const prior=await homeworkDb().prepare('SELECT g.assignment_question_id,g.updated_at,g.reviewed_at,g.requires_review,s.submitted_at FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=?').bind(submissionId).all<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>();
+  const done=new Set((prior.results as Array<{assignment_question_id:string;updated_at:number;reviewed_at:number|null;requires_review:number;submitted_at:number}>).filter(g=>(g.reviewed_at && !g.requires_review)||g.updated_at>=(g.submitted_at??0)).map(g=>g.assignment_question_id));
+  const recognized=await readRecognizedQuestionNumbers(submissionId);
+  const questions = questionsResult.results.filter(q => recognized?.has(q.question_number) && (!questionIds || questionIds.includes(q.id)) && (!pendingIds.length || pendingIds.includes(q.id))&&!done.has(q.id));
+  await (await import("./completed-homework-grading")).gradeCompletedQuestions(submissionId, questions, upperAttempt, questionIds ? 1 : undefined);
+}
 
-  for (const question of questions) {
-    if (!question.answer.trim()) await upsertResult({ submissionId, question, pageId: null, verdict: "unreadable", studentAnswer: "",
-      feedback: "作业模板缺少标准答案，暂时无法可靠批改", errorType: "答案缺失", confidence: 0, bbox: null, requiresReview: false });
-  }
-  const gradeable = questions.filter((question) => question.answer.trim());
-  if (gradeable.length) {
-    const [template, studentPage] = await Promise.all([
-      homeworkDb().prepare("SELECT asset_id FROM assignment_assets WHERE assignment_id = ? AND role = 'question' AND page_order = ?")
-        .bind(submission.assignment_id, pageNumber - 1).first<{ asset_id: string }>(),
-      homeworkDb().prepare("SELECT id, processed_asset_id FROM submission_pages WHERE submission_id = ? AND page_order = ?")
-        .bind(submissionId, pageNumber - 1).first<{ id: string; processed_asset_id: string }>(),
-    ]);
-    if (!template || !studentPage) {
-      const reason = !template ? "题目模板缺少对应页面" : "学生答卷缺少对应页面";
-      const errorType = !template ? "模板缺页" : "漏页";
-      for (const question of gradeable) await upsertResult({ submissionId, question, pageId: studentPage?.id ?? null, verdict: "unreadable",
-        studentAnswer: "", feedback: reason, errorType, confidence: 0, bbox: null, requiresReview: false });
-    } else {
-      const images = await Promise.all([homeworkAssetDataUrl(template.asset_id), homeworkAssetDataUrl(studentPage.processed_asset_id)]);
-      const result = await callHomeworkModel({ images, prompt: buildHomeworkGradingPrompt(pageNumber, gradeable.map((question) => ({
-        questionNumber: question.question_number, type: question.type, stem: question.stem, answer: question.answer, analysis: question.analysis,
-      }))), schema: homeworkGradingSchema, schemaName: "homework_page_grading" });
-      if (!result.text) throw new Error(result.error || `第 ${pageNumber} 页批改失败`);
-      const extracted = normalizeHomeworkGrading(parseHomeworkModelText(result.text));
-      for (const question of gradeable) {
-        const item = extracted.find((candidate) => candidate.question_number === question.question_number);
-        if (!item) {
-          await upsertResult({ submissionId, question, pageId: studentPage.id, verdict: "unreadable", studentAnswer: "",
-            feedback: "未能在答卷中定位本题作答", errorType: "无法匹配", confidence: 0, bbox: null, requiresReview: false });
-          continue;
-        }
-        const finalized = finalizeHomeworkVerdict({ type: question.type, standardAnswer: question.answer, studentAnswer: item.student_answer,
-          modelVerdict: item.verdict, confidence: item.confidence, warnings: item.warnings, threshold: .5 });
-        await upsertResult({ submissionId, question, pageId: studentPage.id, verdict: finalized.verdict, studentAnswer: item.student_answer,
-          feedback: item.feedback, errorType: item.error_type, stepAnalysis: item.step_analysis, evidenceSummary: item.evidence_summary,
-          capabilityKeys: item.capability_keys, confidence: finalized.confidence, bbox: item.bbox, requiresReview: finalized.requiresReview });
-      }
-    }
-  }
+export async function processHomeworkSubmission(submissionId: string, upperAttempt = 1) {
+  const submission = await processingSubmission(submissionId);
+  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission); return; }
+  if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
+  // Failures are recorded by the caller: only it knows whether the queue will retry or this was the last attempt.
+  await homeworkDb().prepare("UPDATE homework_submissions SET status='processing',failure_reason='',updated_at=? WHERE id=? AND status IN ('submitted','failed')").bind(Date.now(),submissionId).run();
+  await (await import("./completed-homework")).prepareCompletedHomework(submissionId,submission.assignment_id,upperAttempt,ids=>processHomeworkSubmissionQuestions(submissionId,upperAttempt,ids));
+  // Batch all pending questions together so sparse pages can fill the same four worker slots.
+  await processHomeworkSubmissionQuestions(submissionId, upperAttempt);
   await finalizeSubmissionIfComplete(submission);
 }
 
-export async function processHomeworkSubmission(submissionId: string) {
-  const submission = await processingSubmission(submissionId);
-  if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
-  try {
-    const pages = await homeworkDb().prepare("SELECT DISTINCT page_number FROM assignment_questions WHERE assignment_id = ? ORDER BY page_number")
-      .bind(submission.assignment_id).all<{ page_number: number }>();
-    for (const page of pages.results) await processHomeworkSubmissionPage(submissionId, Number(page.page_number));
-    await finalizeSubmissionIfComplete(submission);
-  } catch (error) {
-    await homeworkDb().prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?")
-      .bind(error instanceof Error ? error.message.slice(0, 500) : "批改失败", Date.now(), submissionId).run();
-    throw error;
-  }
-}
-
-type QueueBody = { kind?: string; submissionId?: string; pageNumber?: number; jobId?: string };
+type QueueBody = { kind?: string; submissionId?: string; jobId?: string };
 type QueueMessage = { body: QueueBody; attempts: number; ack(): void; retry(options?: { delaySeconds?: number }): void };
 type QueueBatch = { messages: QueueMessage[] };
+
+// Until the queue gives up, the submission stays in progress with a note: a manual retry now would start a second, separately billed run.
+async function recordQueueRetry(submissionId: string, error: unknown, attempt: number) {
+  const cause = error instanceof AiQueueFailure ? "AI 服务中断" : error instanceof Error ? error.message.slice(0, 300).replace(/[。.]$/, "") : "批改中断";
+  await homeworkDb().prepare("UPDATE homework_submissions SET status = 'processing', failure_reason = ?, updated_at = ? WHERE id = ? AND status IN ('submitted', 'processing', 'failed')")
+    .bind(`${cause}，正在自动重试（第 ${attempt} 次重试，最多 ${maxQueueAttempts() - 1} 次）`, Date.now(), submissionId).run();
+}
 
 async function recordFinalQueueFailure(submissionId: string, error: unknown) {
   const reason = error instanceof Error ? error.message.slice(0, 500) : "批改失败";
@@ -188,19 +131,20 @@ export async function processHomeworkQueue(batch: QueueBatch) {
   for (const message of batch.messages) {
     const { kind, submissionId, jobId } = message.body;
     const cleanup = kind === "cleanup_homework_assets" && Boolean(jobId);
-    const grading = Boolean(submissionId) && ["grade_submission", "grade_submission_page", "recompute_submission_report"].includes(String(kind));
+    const grading = Boolean(submissionId) && kind === "grade_submission";
     if (!cleanup && !grading) { message.ack(); continue; }
     try {
       if (cleanup) await processHomeworkAssetCleanup(jobId!);
-      else if (kind === "grade_submission_page") await processHomeworkSubmissionPage(submissionId!, Number(message.body.pageNumber));
-      else if (kind === "recompute_submission_report") await generateSubmissionReport(submissionId!);
-      else await processHomeworkSubmission(submissionId!);
+      else await processHomeworkSubmission(submissionId!, message.attempts);
       message.ack();
     } catch (error) {
       const attempts = Math.max(1, Number(message.attempts) || 1);
-      if (cleanup) await recordHomeworkAssetCleanupFailure(jobId!, error, attempts >= maxQueueAttempts());
-      else if (attempts >= maxQueueAttempts()) await recordFinalQueueFailure(submissionId!, error);
-      message.retry({ delaySeconds: Math.min(300, retryBaseSeconds() * 2 ** Math.max(0, attempts - 1)) });
+      const delay = queueRetryDelay(error, attempts, maxQueueAttempts(), retryBaseSeconds());
+      if (cleanup) await recordHomeworkAssetCleanupFailure(jobId!, error, delay === null);
+      else if (delay === null) await recordFinalQueueFailure(submissionId!, error);
+      else await recordQueueRetry(submissionId!, error, attempts);
+      if (delay === null) message.ack();
+      else message.retry({ delaySeconds: delay });
     }
   }
 }

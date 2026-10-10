@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import katex from 'katex';
+import { normalizeProseLineBreaks } from '../lib/math-source.mjs';
 import { splitMathText, splitMathLines, plainTextWebLines, toReadableNestedFractionLatex, toLatexMath, latexFractionDepth } from '../lib/math-text-core.mjs';
-import { enlargeNestedWordMath, wordMathFractionDepth, ensureWordMathSettings } from '../lib/word-math-sizing.mjs';
+import { fullSizeInlineFractions, wordMathFractionDepth, ensureWordMathSettings } from '../lib/word-math-sizing.mjs';
 
 const math = text => splitMathText(text, { autoDetect: false }).filter(s => s.kind === 'math');
 for (const [open, close, display] of [['$', '$', false], ['$$', '$$', true], ['\\(', '\\)', false], ['\\[', '\\]', true]]) {
@@ -68,21 +70,25 @@ test('fraction depth remains diagnostic, not a sizing policy', () => {
   assert.equal(latexFractionDepth(String.raw`\frac{\frac{1}{2}}{\frac{3}{4}}`), 2);
   assert.equal(toLatexMath('x\u00b2\uff0by\uff1d0'), 'x^{2}+y=0');
 });
-test('Word does not inject font sizes or control properties at any nesting depth', () => {
+test('Word sets only the top-level fraction of an inline equation one size up, as printed papers read', () => {
   const run = value => `<m:r><m:t>${value}</m:t></m:r>`;
   const frac = (num,den) => `<m:f><m:num>${num}</m:num><m:den>${den}</m:den></m:f>`;
+  const sized = value => `<m:r><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr><m:t>${value}</m:t></m:r>`;
+  assert.equal(fullSizeInlineFractions(`<m:oMath>${run('-')}${frac(run('1'),run('3'))}</m:oMath>`), `<m:oMath>${run('-')}${frac(sized('1'),sized('3'))}</m:oMath>`);
+  // The fraction inside keeps Word's own step down.
+  assert.equal(fullSizeInlineFractions(`<m:oMath>${frac(run('1'),`${run('1+')}${frac(run('1'),run('x'))}`)}</m:oMath>`), `<m:oMath>${frac(sized('1'),`${sized('1+')}${frac(run('1'),run('x'))}`)}</m:oMath>`);
+  // Display equations are already full size.
+  const display = `<m:oMathPara><m:oMath>${frac(run('1'),run('2'))}</m:oMath></m:oMathPara>`;
+  assert.equal(fullSizeInlineFractions(display), display);
   for (let depth=1;depth<=4;depth++) {
     let body=run('x');
     for(let i=0;i<depth;i++)body=frac(run('1'),body);
-    const source=`<w:p><m:oMath>${body}</m:oMath></w:p>`;
-    assert.equal(wordMathFractionDepth(source), depth);
-    assert.equal(enlargeNestedWordMath(source),source);
-    assert.doesNotMatch(enlargeNestedWordMath(source), /<w:sz\b|<m:ctrlPr\b/);
+    assert.equal(wordMathFractionDepth(`<w:p><m:oMath>${body}</m:oMath></w:p>`), depth);
   }
 });
 test('author-defined imported Word sizes are preserved byte for byte', () => {
   const source='<m:oMath><m:f><m:fPr/><m:num><m:r><w:rPr><w:sz w:val="24"/></w:rPr><m:t>1</m:t></m:r></m:num><m:den><m:f/></m:den></m:f></m:oMath>';
-  assert.equal(enlargeNestedWordMath(source),source);
+  assert.equal(fullSizeInlineFractions(source),source);
 });
 test('Word math settings are still present and idempotent', () => {
   const result=ensureWordMathSettings('<w:settings xmlns:w="word" xmlns:m="math"><w:compat/></w:settings>');
@@ -91,4 +97,36 @@ test('Word math settings are still present and idempotent', () => {
 });
 test('legacy undelimited formulas never swallow physical line breaks', () => {
   assert.deepEqual(splitMathText('x=1\ny=2').filter(s=>s.kind==='math').map(s=>s.value), ['x=1','y=2']);
+});
+
+test('saved homework prose with escaped newlines renders without becoming a formula', () => {
+  const source = String.raw`点$A$与点$B$关于直线$l$对称.\n（2）点$C$的坐标为$(6, 0)$，满足$S_{\triangle POA}=S_{\triangle PBC}$`;
+  const expected = source.replace('\\n', '\n');
+  assert.deepEqual(splitMathText(source), splitMathText(expected));
+  assert.deepEqual(splitMathLines(source), splitMathLines(expected));
+  for (const segment of splitMathText(source).filter(s => s.kind === 'math')) {
+    assert.doesNotThrow(() => katex.renderToString(toLatexMath(segment.value), { throwOnError: true, strict: 'ignore' }));
+    assert.doesNotMatch(segment.value, /对称|点/);
+  }
+});
+
+test('prose newline recovery handles CRLF, consecutive lines and remains idempotent', () => {
+  const source = String.raw`条件。\r\n（1）求值。\n\n（2）证明。`;
+  const expected = '条件。\n（1）求值。\n\n（2）证明。';
+  assert.equal(normalizeProseLineBreaks(source), expected);
+  assert.equal(normalizeProseLineBreaks(expected), expected);
+  assert.deepEqual(splitMathText(source, { autoDetect: false }), [{ kind: 'text', value: source }]);
+});
+
+test('newline recovery leaves explicit math, commands, literals and paths intact', () => {
+  for (const source of [
+    String.raw`$\n$`, String.raw`\(\n\)`, String.raw`\[\n\]`,
+    String.raw`$$\begin{aligned}a&=1\\n&=2\end{aligned}$$`,
+    String.raw`\neq \nabla \nu \notin \newcommand`,
+    '`\\n`', '```text\n\\n\n```', String.raw`\text{换行\n示例}`,
+    String.raw`\verb|\n|`, String.raw`C:\n\file`, String.raw`C:\notes\n.txt`,
+    String.raw`\\n`, String.raw`\\r\\n`,
+  ]) assert.equal(normalizeProseLineBreaks(source), source, source);
+  const source = String.raw`$\n$之后。\n（2）$a\neq b$`;
+  assert.equal(normalizeProseLineBreaks(source), '$\\n$之后。\n（2）$a\\neq b$');
 });

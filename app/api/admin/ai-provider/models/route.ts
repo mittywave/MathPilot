@@ -1,3 +1,4 @@
+import { hasV2Schema } from "../../../../../lib/server/ai/provider-repository";
 import { AiTimeoutError } from "../../../../../lib/server/ai-http";
 import { requireSameOrigin, requireUser } from "../../../../../lib/server/auth";
 import { AiProviderInputError, discoverAiProviderModels } from "../../../../../lib/server/ai-provider";
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     await requireAdmin(request);
+    if (await hasV2Schema()) return Response.json({ error: "V2 已启用，请使用 /settings/ai；旧接口不可写入或借用旧密钥。", code: "V2_REQUIRED" }, { status: 409 });
     const body = await request.json() as { baseUrl?: string; apiKey?: string; wireApi?: string };
     if (!body || typeof body !== "object" || Array.isArray(body) || [body.baseUrl, body.apiKey, body.wireApi].some(value => value !== undefined && typeof value !== "string")) {
       throw new AiProviderInputError("模型目录参数必须是字符串");

@@ -1,0 +1,52 @@
+name: AI Provider V2 validation
+on:
+  push:
+    branches: [feature/ai-provider-center-v2]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ai-provider-v2-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive exact public source for review
+        run: git archive HEAD | gzip > /tmp/ai-v2-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-v2-source
+          path: /tmp/ai-v2-source.tar.gz
+          retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:studio
+      - name: Full regression with retained first-attempt evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee ai-v2-regression.log
+      - run: npm run benchmark:studio
+      - name: Three independent homework runs without rerun masking
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            node --import ./scripts/local-wrangler-fetch-retry.mjs --test tests/homework-e2e.test.mjs 2>&1 | tee "ai-v2-homework-${attempt}.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-v2-validation-logs
+          path: ai-v2-*.log
+          retention-days: 7

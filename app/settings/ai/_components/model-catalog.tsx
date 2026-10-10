@@ -1,0 +1,26 @@
+'use client';
+import {useState} from 'react';
+import type {CapabilityName,CapabilityState,ProviderConfig,ProviderModel} from '../../../../lib/ai-provider-types';
+import {time} from './common';
+import css from '../ai-center.module.css';
+const names={text:'文本',vision:'图片',structured:'结构化'};
+const states={unknown:'未确认',supported:'支持',unsupported:'不支持'};
+const sources={manual:'管理员标注',catalog:'目录',probe:'合成探测',legacy:'迁移待确认',documentation:'文档'};
+export function ModelCatalog({provider,busy,discoverBusy,discover,cancel,save,remove,dirtyChange,close}:{provider:ProviderConfig;busy:boolean;discoverBusy:boolean;discover:()=>void;cancel:()=>void;save:(body:unknown)=>Promise<boolean>;remove:(model:ProviderModel)=>void;dirtyChange:(dirty:boolean)=>void;close:()=>void}) {
+  const [search,setSearch]=useState(''),[editing,setEditing]=useState(false),[id,setId]=useState(''),[name,setName]=useState(''),[update,setUpdate]=useState(false),[effort,setEffort]=useState<string|null>(null);
+  const [caps,setCaps]=useState<Record<CapabilityName,CapabilityState>>({text:'unknown',vision:'unknown',structured:'unknown'});
+  function edit(model?:ProviderModel){setEffort(model?.metadata.reasoningEffort??null);setEditing(true);dirtyChange(true);setUpdate(Boolean(model));setId(model?.id||'');setName(model?.displayName||'');setCaps(Object.fromEntries(Object.keys(names).map(n=>[n,model?.capabilities[n as CapabilityName]?.configurationFingerprint===provider.fingerprint?model.capabilities[n as CapabilityName].state:'unknown'])) as Record<CapabilityName,CapabilityState>);}
+  const editingModel=provider.models.find(m=>m.id===id);
+  const effortOptions=[...new Set([...(provider.kind==='deepseek'?['none']:[]),...(editingModel?.metadata.effortLevels||[])])];
+  const matches=(m:ProviderModel)=>`${m.id} ${m.displayName}`.toLowerCase().includes(search.toLowerCase());
+  const current=provider.models.filter(m=>m.catalogPresent&&matches(m));
+  const retained=provider.models.filter(m=>!m.catalogPresent&&matches(m));
+  const card=(m:ProviderModel)=><article className={css.model} key={m.id}><div className={css.toolbar}><div><code>{m.id}</code>{m.displayName!==m.id&&<p>{m.displayName}</p>}</div><div className={css.actions}><button disabled={busy||editing} onClick={()=>edit(m)}>编辑</button><button disabled={busy||editing} onClick={()=>remove(m)}>删除模型</button></div></div><div className={css.capabilities}>{Object.entries(names).map(([n,l])=>{const e=m.capabilities[n as CapabilityName];const stale=e.configurationFingerprint!==provider.fingerprint;return <span key={n}>{l}：<strong>{states[stale?'unknown':e.state]}</strong><small>{sources[e.source]} · {time(e.observedAt)}{stale&&e.observedAt?' · 已失效':''}</small></span>;})}</div>{!m.catalogPresent&&<p className={css.hint}>{m.manual?'手动添加模型；当前上游目录未返回此 ID。':'当前上游目录未返回，但仍被任务或默认路由引用，因此暂时保留。'}</p>}</article>;
+  return <section><div className={css.toolbar}><div><h2>模型目录 <span className={css.badge}>{provider.models.filter(m=>m.catalogPresent).length}</span></h2><p className={css.hint}>点击“获取上游模型”会重新读取最新目录并替换旧目录项。手动模型和仍被任务引用的旧模型会单独保留。能力信息仅作参考，不参与调用门禁。</p></div><div className={css.actions}><button disabled={busy||editing} onClick={discover}>{discoverBusy?'重新获取中…':'重新获取上游模型'}</button>{discoverBusy&&<button onClick={cancel}>取消获取</button>}<button disabled={busy||editing} onClick={()=>edit()}>添加模型</button></div></div>
+    <label>搜索模型<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="准确 ID 或展示名"/></label>
+    {editing&&<form className={css.inlineForm} onSubmit={async e=>{e.preventDefault();if(await save({id,displayName:name||id,capabilities:caps,update,reasoningEffort:effort})){setEditing(false);dirtyChange(false);}}}><fieldset disabled={busy}><h3>{update?'编辑模型':'手动添加模型'}</h3><label>模型 ID<input name="modelId" required maxLength={200} readOnly={update} value={id} onChange={e=>setId(e.target.value)}/></label><label>展示名<input maxLength={200} value={name} onChange={e=>setName(e.target.value)}/></label><div className={css.fields}>{Object.entries(names).map(([n,l])=><label key={n}>{l}能力<select aria-label={`${l}能力`} value={caps[n as CapabilityName]} onChange={e=>setCaps({...caps,[n]:e.target.value as CapabilityState})}>{Object.entries(states).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></label>)}</div><label>此模型思考档位<select name="reasoningEffort" aria-label="此模型思考档位" value={effort===null?'__inherit':effort} onChange={e=>setEffort(e.target.value==='__inherit'?null:e.target.value)}><option value="__inherit">沿用兼容默认（仍按此模型校验）</option><option value="">上游默认（不发送思考参数）</option>{effortOptions.map(v=><option key={v} value={v}>{v}</option>)}{effort&&!effortOptions.includes(effort)&&<option value={effort}>{effort}（目录未确认，请重新选择）</option>}</select><small>只对当前模型生效。建议来自其目录；Gemini / Claude 不发送这组参数。</small></label><p className={css.hint}>能力标注完全可选，仅作为备注；模型 ID 区分大小写。</p><div className={css.actions}><button type="button" onClick={close}>关闭编辑</button><button data-primary disabled={busy} type="submit">保存模型</button></div></fieldset></form>}
+    {current.map(card)}
+    {!current.length&&<p className={css.empty}>当前上游目录暂无匹配模型。重新获取目录或手动添加准确 ID。</p>}
+    {retained.length>0&&<details><summary>已保留但不在当前上游目录（{retained.length}）</summary>{retained.map(card)}</details>}
+  </section>;
+}

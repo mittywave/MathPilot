@@ -67,7 +67,7 @@ function compileMathOmml(source:string):string {
       skip();let degree='';if(text[i]==='['){i++;degree=sequence(']',style);}
       return wrap('rad',`<m:radPr><m:degHide m:val="${degree?'0':'1'}"/></m:radPr>${wrap('deg',degree)}${wrap('e',group(style))}`);
     }
-    if(['widehat','hat','overparen','overgroup'].includes(name))return wrap('acc',`<m:accPr><m:chr m:val="${name==='overparen'?'⏜':name==='overgroup'?'⏠':'̂'}"/></m:accPr>${wrap('e',group(style))}`);
+    if(['widehat','hat','overparen','wideparen','overgroup'].includes(name))return wrap('acc',`<m:accPr><m:chr m:val="${name==='overparen'||name==='wideparen'?'⏜':name==='overgroup'?'⏠':'̂'}"/></m:accPr>${wrap('e',group(style))}`);
     if(['underline','overline'].includes(name))return wrap('bar',`<m:barPr><m:pos m:val="${name==='underline'?'bot':'top'}"/></m:barPr>${wrap('e',group(style))}`);
     if(name==='sout')return wrap('borderBox',`<m:borderBoxPr><m:hideTop m:val="1"/><m:hideBot m:val="1"/><m:hideLeft m:val="1"/><m:hideRight m:val="1"/><m:strikeH m:val="1"/></m:borderBoxPr>${wrap('e',group(style))}`);
     if(name==='xlongequal')return wrap('limUpp',wrap('e',run('='))+wrap('lim',group(style)));

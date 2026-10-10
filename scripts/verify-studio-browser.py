@@ -1,7 +1,7 @@
 """Optional browser regression: pip install playwright; install Chromium.
 Run after: node scripts/build-studio-browser.mjs /path/to/harness
 Mocks ONLY auth and model HTTP responses. Uses the real React component,
-canvas/image encoding, IndexedDB checkpoint/resume and browser DOCX download.
+canvas/image encoding, a fresh start on every visit, and browser DOCX download.
 """
 import argparse, json, functools, threading, tempfile
 from pathlib import Path
@@ -39,12 +39,17 @@ def main():
           page.get_by_role('button',name='\u5f00\u59cb\u8f6c\u5f55',exact=True).click()
           expect(page.get_by_role('heading',name='\u8f6c\u5f55\u7ed3\u679c',exact=True)).to_be_visible(timeout=30000)
         upload('fixture.png');count=len(calls);assert count==1
-        page.reload();expect(page.get_by_role('heading',name='\u8f6c\u5f55\u7ed3\u679c',exact=True)).to_be_visible();assert len(calls)==count
+        # Every visit starts empty: the previous task is cleared from this browser, never restored.
+        page.on('dialog',lambda dialog:dialog.accept())
+        page.reload();expect(page.get_by_role('button',name='\u5f00\u59cb\u8f6c\u5f55',exact=True)).to_be_visible()
+        expect(page.get_by_role('heading',name='\u8f6c\u5f55\u7ed3\u679c',exact=True)).to_have_count(0)
+        assert page.evaluate("studioTest.studioStorage('browser-test','read')") is None
+        upload('fixture.png');count=len(calls);assert count==2
         page.locator('#studio-output-text').check();page.get_by_role('button',name='\u751f\u6210 Word',exact=True).click()
         link=page.locator('a.studio-download');expect(link).to_be_visible(timeout=30000)
         with page.expect_download() as download:link.click()
         download.value.save_as(out/'browser-formal.docx');assert len(calls)==count
-        results['resumeWithoutNewRecognition']=True
+        results['freshStartOnReload']=True
         for name,width,height in [('desktop',1440,1050),('mobile',390,844)]:
           page.set_viewport_size({'width':width,'height':height});page.screenshot(path=str(out/f'{name}.png'),full_page=True)
           sizes=page.evaluate('({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth})');assert sizes['scroll']<=sizes['width'];results[name]=sizes

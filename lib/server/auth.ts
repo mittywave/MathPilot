@@ -9,6 +9,8 @@ type AppEnv = {
 };
 
 const COOKIE_NAME = "zhiti_session";
+// app_settings key for the invite code set in 共享办公; see migrations/0022_team.sql.
+export const INVITE_SETTING = "invite_code";
 const SESSION_DAYS = 30;
 const LOCAL_ADMIN: AuthUser = { id: "local-admin", email: "localhost", role: "admin", local: true };
 // Cloudflare Workers Web Crypto currently caps PBKDF2 at 100,000 iterations.
@@ -43,7 +45,7 @@ async function sha256(value: string) {
 
 async function derivePassword(password: string, salt: Uint8Array, iterations: number) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt), iterations }, key, 256);
   return bytesToBase64(new Uint8Array(bits));
 }
 
@@ -121,7 +123,7 @@ export async function currentUser(request: Request): Promise<AuthUser | null> {
   const row = await appEnv().DB.prepare(`
     SELECT users.id, users.email, users.role
     FROM sessions JOIN users ON users.id = sessions.user_id
-    WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+    WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND users.disabled_at IS NULL
   `).bind(tokenHash, now).first<{ id: string; email: string; role: "admin" | "member" }>();
   return row ? { id: row.id, email: row.email, role: row.role } : null;
 }
@@ -141,29 +143,47 @@ export function requireSameOrigin(request: Request) {
   }
 }
 
-export async function createSession(userId: string) {
+// Browsers drop Secure cookies sent over plain http, so a LAN address (http://192.168.x.x)
+// gets the cookie without it; the deployed https site keeps Secure. Students log in the same way.
+function sessionCookie(token: string, maxAge: number, secure: boolean) {
+  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly${secure ? "; Secure" : ""}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+export async function createSession(userId: string, secure: boolean) {
   const token = randomToken();
   const now = Date.now();
   const expiresAt = now + SESSION_DAYS * 24 * 60 * 60 * 1000;
-  await appEnv().DB.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
-    .bind(await sha256(token), userId, expiresAt, now).run();
-  return `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
+  const db = appEnv().DB;
+  await db.batch([
+    db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)").bind(await sha256(token), userId, expiresAt, now),
+    db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").bind(now, userId),
+  ]);
+  return sessionCookie(token, SESSION_DAYS * 86400, secure);
 }
 
 export async function destroySession(request: Request) {
   const token = cookieValue(request, COOKIE_NAME);
   if (token) await appEnv().DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  return sessionCookie("", 0, new URL(request.url).protocol === "https:");
 }
 
 export function authBindings() {
   return appEnv();
 }
 
-export function inviteMatches(candidate: string) {
-  const expected = appEnv().REGISTRATION_INVITE_CODE ?? "";
-  return expected.split(",").map((code) => code.trim()).filter(Boolean)
-    .reduce((matched, code) => constantTimeEqual(candidate.trim(), code) || matched, false);
+function configInviteCodes() {
+  return (appEnv().REGISTRATION_INVITE_CODE ?? "").split(",").map((code) => code.trim()).filter(Boolean);
+}
+
+export function inviteFromConfig() {
+  return configInviteCodes().length > 0;
+}
+
+// An invite code set in 共享办公 replaces the config file's codes; an empty one closes registration.
+export async function inviteMatches(candidate: string) {
+  const stored = await appEnv().DB.prepare("SELECT value FROM app_settings WHERE key = ?").bind(INVITE_SETTING).first<{ value: string }>();
+  const codes = stored ? [stored.value.trim()].filter(Boolean) : configInviteCodes();
+  return codes.reduce((matched, code) => constantTimeEqual(candidate.trim(), code) || matched, false);
 }
 
 export function roleForEmail(email: string): "admin" | "member" {

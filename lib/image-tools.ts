@@ -1,10 +1,10 @@
 import type { ClipboardEvent as ReactClipboardEvent } from "react";
 import { fitWithinMaxEdge, normalizeDiagramRotation } from "./image-processing-rules.mjs";
+import { strokeComponents } from "./note-figures";
 import type { DiagramKind, DiagramRotation } from "./types";
 
 export type NormalizedBox = { x: number; y: number; width: number; height: number };
 type PixelBox = { minX: number; minY: number; maxX: number; maxY: number };
-type Component = PixelBox & { count: number };
 type CropOptions = { photographed?: boolean; rotation?: DiagramRotation; kind?: DiagramKind };
 
 export function fileToDataUrl(file: File): Promise<string> {
@@ -34,52 +34,96 @@ function normalizedToPixels(box: NormalizedBox, image: HTMLImageElement): PixelB
   };
 }
 
-function expandBox(box: PixelBox, image: HTMLImageElement): PixelBox {
-  const width = box.maxX - box.minX; const height = box.maxY - box.minY;
-  return { minX: Math.max(0, Math.floor(box.minX - width * .18 - 12)), minY: Math.max(0, Math.floor(box.minY - height * .28 - 12)), maxX: Math.min(image.naturalWidth, Math.ceil(box.maxX + width * .18 + 12)), maxY: Math.min(image.naturalHeight, Math.ceil(box.maxY + height * .42 + 12)) };
-}
-
-function findComponents(data: Uint8ClampedArray, width: number, height: number): Component[] {
-  const mask = new Uint8Array(width * height); const seen = new Uint8Array(width * height);
+// The figure is every stroke lying mostly inside the model's box (with a little slack), taken whole, so a
+// clipped axis or label comes back complete and side-by-side figures (图1, 图2) all stay. Strokes outside it —
+// the question text above, a page frame — are not part of the figure: their pixels are listed so the crop can
+// paint them white. Returns null when the box holds no ink.
+export function diagramInk(data: Uint8ClampedArray, width: number, height: number, target: PixelBox) {
+  const mask = new Uint8Array(width * height);
   for (let index = 0; index < mask.length; index += 1) {
-    const offset = index * 4; const alpha = data[offset + 3]; const luminance = data[offset] * .299 + data[offset + 1] * .587 + data[offset + 2] * .114;
-    if (alpha > 20 && luminance < 218) mask[index] = 1;
+    const offset = index * 4; const luminance = data[offset] * .299 + data[offset + 1] * .587 + data[offset + 2] * .114;
+    if (data[offset + 3] > 20 && luminance < 218) mask[index] = 1;
   }
-  const components: Component[] = []; const stack = new Int32Array(width * height);
-  for (let seed = 0; seed < mask.length; seed += 1) {
-    if (!mask[seed] || seen[seed]) continue;
-    let top = 0; stack[top++] = seed; seen[seed] = 1; let minX = width; let minY = height; let maxX = 0; let maxY = 0; let count = 0;
-    while (top) {
-      const index = stack[--top]; const x = index % width; const y = Math.floor(index / width); count += 1;
-      if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
-      for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
-        if (!dx && !dy) continue; const nx = x + dx; const ny = y + dy; if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-        const next = ny * width + nx; if (mask[next] && !seen[next]) { seen[next] = 1; stack[top++] = next; }
+  const { labels, components } = strokeComponents(mask, width, height);
+  const slackX = Math.max(4, (target.maxX - target.minX) * .02); const slackY = Math.max(4, (target.maxY - target.minY) * .02);
+  const zone = { minX: target.minX - slackX, minY: target.minY - slackY, maxX: target.maxX + slackX, maxY: target.maxY + slackY };
+  const kept = components.map((item) => {
+    const inside = Math.max(0, Math.min(item.maxX, zone.maxX) - Math.max(item.minX, zone.minX)) * Math.max(0, Math.min(item.maxY, zone.maxY) - Math.max(item.minY, zone.minY));
+    return item.count >= 4 && inside >= (item.maxX - item.minX) * (item.maxY - item.minY) * .5;
+  });
+  // The box may stop short of the drawing (a row of squares cut in half). Strokes within a few pixels of the figure
+  // belong to it, and so do labels sitting inside one of its shapes; text a line away does not touch it.
+  const reach = 3;
+  // A page frame or ruled border is never part of the figure, even where the figure touches it.
+  const fits = (item: { minX: number; minY: number; maxX: number; maxY: number }) => item.maxX - item.minX <= (target.maxX - target.minX) * 1.5 && item.maxY - item.minY <= (target.maxY - target.minY) * 1.5;
+  for (let pass = 0; pass < 6; pass += 1) {
+    const near = new Uint8Array(width * height);
+    for (let index = 0; index < labels.length; index += 1) {
+      if (!labels[index] || !kept[labels[index] - 1]) continue;
+      const x = index % width; const y = (index - x) / width;
+      for (let dy = -reach; dy <= reach; dy += 1) for (let dx = -reach; dx <= reach; dx += 1) {
+        const nx = x + dx; const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) near[ny * width + nx] = 1;
       }
     }
-    if (count >= 4) components.push({ minX, minY, maxX, maxY, count });
+    let added = false;
+    for (let index = 0; index < labels.length; index += 1) {
+      const label = labels[index];
+      if (label && near[index] && !kept[label - 1] && components[label - 1].count >= 4 && fits(components[label - 1])) { kept[label - 1] = true; added = true; }
+    }
+    const shapes = components.filter((item, index) => kept[index] && item.maxX - item.minX >= 24 && item.maxY - item.minY >= 24);
+    components.forEach((item, index) => {
+      if (kept[index] || item.count < 4) return;
+      const cx = (item.minX + item.maxX) / 2; const cy = (item.minY + item.maxY) / 2;
+      if (shapes.some((shape) => cx > shape.minX && cx < shape.maxX && cy > shape.minY && cy < shape.maxY && item.maxX - item.minX < (shape.maxX - shape.minX) / 2)) { kept[index] = true; added = true; }
+    });
+    if (!added) break;
   }
-  return components;
-}
-
-function componentScore(component: Component) {
-  const width = component.maxX - component.minX + 1; const height = component.maxY - component.minY + 1;
-  return width * height * Math.log2(component.count + 2);
-}
-
-function refineToDiagram(components: Component[], roiWidth: number, roiHeight: number): PixelBox | null {
-  const candidates = components.filter((item) => item.maxX - item.minX > roiWidth * .12 && item.maxY - item.minY > roiHeight * .12);
-  const main = (candidates.length ? candidates : components).sort((a, b) => componentScore(b) - componentScore(a))[0]; if (!main) return null;
-  let result: PixelBox = { minX: main.minX, minY: main.minY, maxX: main.maxX, maxY: main.maxY };
-  const mainWidth = main.maxX - main.minX + 1; const mainHeight = main.maxY - main.minY + 1; const margin = Math.max(7, Math.min(mainWidth, mainHeight) * .085);
-  for (const item of components) {
-    if (item === main) continue; const width = item.maxX - item.minX + 1; const height = item.maxY - item.minY + 1;
-    if (width > mainWidth * .2 || height > mainHeight * .22) continue;
-    const dx = Math.max(main.minX - item.maxX, item.minX - main.maxX, 0); const dy = Math.max(main.minY - item.maxY, item.minY - main.maxY, 0);
-    if (dx <= margin && dy <= margin) result = { minX: Math.min(result.minX, item.minX), minY: Math.min(result.minY, item.minY), maxX: Math.max(result.maxX, item.maxX), maxY: Math.max(result.maxY, item.maxY) };
+  // Tick labels under a number line, axis names and 图1/图2 under figures sit a little apart from the drawing, often
+  // just past the model's box. A row of small, spaced-out marks right above or below the figure and within its width
+  // belongs to it; a line of the question's text is dense or runs past the figure, so it stays out.
+  const keptBox = (): PixelBox | null => components.reduce<PixelBox | null>((box, item, index) => !kept[index] ? box : box
+    ? { minX: Math.min(box.minX, item.minX), minY: Math.min(box.minY, item.minY), maxX: Math.max(box.maxX, item.maxX), maxY: Math.max(box.maxY, item.maxY) }
+    : { minX: item.minX, minY: item.minY, maxX: item.maxX, maxY: item.maxY }, null);
+  const figure = keptBox();
+  if (figure) {
+    const tall = figure.maxY - figure.minY; const gap = Math.max(12, tall * .15); const slack = (figure.maxX - figure.minX) * .02 + 4;
+    const band = components.map((item, index) => ({ item, index })).filter(({ item, index }) => !kept[index] && item.count >= 4 && item.maxY - item.minY <= Math.max(14, tall * .25)
+      && ((item.minY >= figure.maxY - 1 && item.minY - figure.maxY <= gap) || (item.maxY <= figure.minY + 1 && figure.minY - item.maxY <= gap)));
+    const rows: Array<typeof band> = [];
+    for (const entry of [...band].sort((a, b) => a.item.minY - b.item.minY)) {
+      const row = rows.find((candidate) => candidate.some(({ item }) => item.minY < entry.item.maxY && entry.item.minY < item.maxY));
+      if (row) row.push(entry); else rows.push([entry]);
+    }
+    for (const row of rows) {
+      const minX = Math.min(...row.map(({ item }) => item.minX)); const maxX = Math.max(...row.map(({ item }) => item.maxX));
+      const height = Math.max(...row.map(({ item }) => item.maxY)) - Math.min(...row.map(({ item }) => item.minY));
+      const covered = row.reduce((sum, { item }) => sum + item.maxX - item.minX, 0) / Math.max(1, maxX - minX);
+      const within = minX >= figure.minX - slack && maxX <= figure.maxX + slack;
+      if (within && (covered < .6 || maxX - minX <= height * 3)) for (const { index } of row) kept[index] = true;
+    }
   }
-  const padding = Math.max(10, Math.round(Math.min(mainWidth, mainHeight) * .06));
-  return { minX: Math.max(0, result.minX - padding), minY: Math.max(0, result.minY - padding), maxX: Math.min(roiWidth, result.maxX + padding), maxY: Math.min(roiHeight, result.maxY + padding) };
+  let found: PixelBox | null = null;
+  components.forEach((item, index) => {
+    if (!kept[index]) return;
+    found = found ? { minX: Math.min(found.minX, item.minX), minY: Math.min(found.minY, item.minY), maxX: Math.max(found.maxX, item.maxX), maxY: Math.max(found.maxY, item.maxY) } : { ...item };
+  });
+  if (!found) return null;
+  const union = found as PixelBox; const padding = Math.max(8, Math.round(Math.min(union.maxX - union.minX, union.maxY - union.minY) * .05));
+  const rect = { minX: Math.max(0, union.minX - padding), minY: Math.max(0, union.minY - padding), maxX: Math.min(width, union.maxX + padding), maxY: Math.min(height, union.maxY + padding) };
+  // Foreign ink plus its one-pixel antialiased edge, unless that edge also touches the figure.
+  const foreign = new Uint8Array(width * height);
+  for (let y = rect.minY; y < rect.maxY; y += 1) for (let x = rect.minX; x < rect.maxX; x += 1) {
+    const label = labels[y * width + x];
+    if (label) { if (!kept[label - 1]) foreign[y * width + x] = 1; continue; }
+    let other = false; let own = false;
+    for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
+      const nx = x + dx; const ny = y + dy; if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const near = labels[ny * width + nx]; if (near) { if (kept[near - 1]) own = true; else other = true; }
+    }
+    if (other && !own) foreign[y * width + x] = 1;
+  }
+  return { rect, foreign };
 }
 
 function photoThreshold(data: Uint8ClampedArray) {
@@ -150,7 +194,7 @@ function orientCoordinateDiagram(source: HTMLCanvasElement) {
   return leftScore > rightScore * 1.08 && bottomScore > topScore * 1.08 ? rotateCanvas180(source) : source;
 }
 
-function renderCleanCrop(image: HTMLImageElement, box: PixelBox, options: CropOptions = {}): string {
+function renderCleanCrop(image: HTMLImageElement | HTMLCanvasElement, box: PixelBox, options: CropOptions = {}): string {
   const sourceWidth = Math.max(1, box.maxX - box.minX); const sourceHeight = Math.max(1, box.maxY - box.minY); const scale = Math.min(2.2, Math.max(1, 900 / sourceWidth));
   const crop = document.createElement("canvas"); crop.width = Math.round(sourceWidth * scale); crop.height = Math.round(sourceHeight * scale);
   const cropContext = crop.getContext("2d"); if (!cropContext) throw new Error("无法处理配图");
@@ -183,12 +227,16 @@ export async function cropDataUrl(source: string, box: NormalizedBox, options: C
     const image = await loadImage(source);
     return renderCleanCrop(image, paddedBox(normalizedToPixels(box, image), image, .04), options);
   }
-  const image = await loadImage(source); const rough = expandBox(normalizedToPixels(box, image), image); const width = rough.maxX - rough.minX; const height = rough.maxY - rough.minY;
+  // The whole screenshot is read: a box drawn short must not cut the drawing's strokes before they are judged.
+  const image = await loadImage(source); const target = normalizedToPixels(box, image); const width = image.naturalWidth; const height = image.naturalHeight;
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height; const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return renderCleanCrop(image, normalizedToPixels(box, image)); context.drawImage(image, rough.minX, rough.minY, width, height, 0, 0, width, height);
-  const refined = refineToDiagram(findComponents(context.getImageData(0, 0, width, height).data, width, height), width, height);
-  if (!refined) return renderCleanCrop(image, normalizedToPixels(box, image));
-  return renderCleanCrop(image, { minX: rough.minX + refined.minX, minY: rough.minY + refined.minY, maxX: rough.minX + refined.maxX, maxY: rough.minY + refined.maxY });
+  if (!context) return renderCleanCrop(image, target); context.fillStyle = "#fff"; context.fillRect(0, 0, width, height); context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, width, height);
+  const ink = diagramInk(pixels.data, width, height, target);
+  if (!ink) return renderCleanCrop(image, target);
+  ink.foreign.forEach((flag, index) => { if (flag) pixels.data.fill(255, index * 4, index * 4 + 4); });
+  context.putImageData(pixels, 0, 0);
+  return renderCleanCrop(canvas, ink.rect);
 }
 
 export async function cropExactDataUrl(source: string, box: NormalizedBox): Promise<string> {

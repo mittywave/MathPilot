@@ -32,6 +32,30 @@ const {studioWordEquationXml,studioWordDisplayXml,isStudioDisplayMathLine,studio
 test.after(()=>rm(dir,{recursive:true,force:true}));
 
 const system=String.raw`\begin{cases}a_{1}=4\\d=2\end{cases}`;
+test('mixed display boundaries become balanced inline proof spans without changing content',()=>{
+  for(const [source,expected] of [
+    [String.raw`$$\therefore P$、$O$、$F$ 三点共线 $\therefore PF \perp BC$$`,String.raw`$\therefore P$、$O$、$F$ 三点共线 $\therefore PF \perp BC$`],
+    [String.raw`$$\therefore CD$、$AO$的交点$G$为$\triangle ABC$的重心`,String.raw`$\therefore CD$、$AO$的交点$G$为$\triangle ABC$的重心`],
+    [String.raw`$$\therefore \text{易知 }D$、$E$是$\widehat{AB}$中点`,String.raw`$\therefore \text{易知 }D$、$E$是$\widehat{AB}$中点`],
+  ]){
+    const field=`$x=1$\n${source}\n$$y=2$$`;
+    const repaired=repairMathSource(field);
+    assert.equal(repaired,`$x=1$\n${expected}\n$$y=2$$`);
+    assert.equal(repairMathSource(repaired),repaired);
+    assert.deepEqual(studioMathIssues(repaired),[]);
+    assert.equal(repaired.replaceAll('$',''),field.replaceAll('$',''));
+  }
+});
+test('mixed-marker recovery preserves valid multiline formulas, code, currency and ambiguous prose',()=>{
+  const fenced='```latex\n'+String.raw`$$\therefore CD$与$AB$垂直`+'\n```';
+  assert.equal(repairMathSource(fenced),fenced);
+  for(const source of ['$$\nx=1\ny=2\n$$',String.raw`$$\text{price $5 and $10}+x$$`,String.raw`\verb|$$\therefore A$和$B$|`,'`$$x=1$a$b$`','$$price $5 and $10 and $20','$$\\therefore 中文$x$+y$'])assert.equal(repairMathSource(source),source);
+});
+test('arc and checkmark commands produce editable Word math',()=>{
+  assert.equal(mathOmml(String.raw`\wideparen{BC}`),mathOmml(String.raw`\overparen{BC}`));
+  assert.match(mathOmml(String.raw`\wideparen{BC}`),/<m:acc>/);
+  assert.match(mathOmml(String.raw`\checkmark`),/>✓<\/m:t>/);
+});
 for(const [input,expected] of [
   [`$${system}$$$`,`$${system}$`],
   [`$$$${system}$$$`,`$$${system}$$`],

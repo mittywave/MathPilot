@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { AuthUser, Category, LibraryModule, Question } from "../../lib/types";
 import { deduplicatePublicationAssets } from "../publication-assets.mjs";
+import { applySyncedKnowledgeGraph, knowledgeGraphForSync } from "./knowledge-graph";
 import { encodeAssetBase64, hashBytes, hashText, libraryBindings, readLibrary, readRawAsset } from "./library";
 
 type PublicationEnv = {
@@ -75,7 +76,7 @@ function replaceAssetIds<T>(value: T, hashes: Map<string, string>): T {
 }
 
 async function buildSnapshot(user: AuthUser): Promise<Snapshot> {
-  const data = await readLibrary(user, "public");
+  const data = await readLibrary(user);
   const ids = new Set<string>();
   for (const question of data.questions) for (const id of assetIds(question)) ids.add(id);
   const assets: AssetManifest[] = [];
@@ -90,7 +91,7 @@ async function buildSnapshot(user: AuthUser): Promise<Snapshot> {
   const modules = await Promise.all(data.modules.map(async (item) => ({ id: item.id, hash: await hashText(JSON.stringify(item)), value: item })));
   const categories = await Promise.all(data.categories.map(async (item) => ({ id: item.id, hash: await hashText(JSON.stringify(item)), value: item })));
   const questions = await Promise.all(data.questions.map(async (item) => {
-    const clean = replaceAssetIds({ ...item, canEdit: undefined, createdBy: undefined, createdByEmail: undefined }, hashes);
+    const clean = replaceAssetIds({ ...item, code: undefined, canEdit: undefined, createdBy: undefined, createdByEmail: undefined }, hashes);
     return { id: item.id, hash: await hashText(JSON.stringify(clean)), value: clean };
   }));
   return { modules, categories, questions, assets: deduplicatePublicationAssets(assets) };
@@ -110,8 +111,23 @@ async function remoteRequest<T>(action: string, body: Record<string, unknown>) {
   return result;
 }
 
+// Question taxonomy keys point into the knowledge graph, so an edited graph is
+// mirrored before the library: production never holds tags it cannot resolve.
+async function syncKnowledgeGraph(onProgress?: (progress: PublicationProgress) => void | Promise<void>) {
+  const graph = await knowledgeGraphForSync();
+  if (!graph) return null;
+  await onProgress?.({ phase: "compare", current: 0, total: 1, label: `正在同步知识图谱 v${graph.version}` });
+  try {
+    return await remoteRequest<{ changed: boolean; version: number }>("knowledge-graph", { graph });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("未知发布操作")) throw new Error("线上站点尚未部署知识图谱同步功能，请先部署新版本再发布公共资源库");
+    throw error;
+  }
+}
+
 export async function publishLocalLibrary(user: AuthUser, onProgress?: (progress: PublicationProgress) => void | Promise<void>) {
   if (!user.local) throw new Response(JSON.stringify({ error: "只能从 localhost 发布公共资源库" }), { status: 403, headers: { "Content-Type": "application/json" } });
+  const knowledgeGraph = await syncKnowledgeGraph(onProgress);
   await onProgress?.({ phase: "snapshot", current: 0, total: 1, label: "正在计算模块、分类、题目和图片摘要" });
   const snapshot = await buildSnapshot(user);
   await onProgress?.({ phase: "compare", current: 0, total: 1, label: "正在与远程公共版本比对差异" });
@@ -151,7 +167,7 @@ export async function publishLocalLibrary(user: AuthUser, onProgress?: (progress
     await onProgress?.({ phase: "commit", current: 0, total: 1, label: "正在校验增量并原子切换公共版本", diff: begin.diff });
     const committed = await remoteRequest<{ publishedAt: number }>("commit", { publicationId, manifest, changes });
     await onProgress?.({ phase: "complete", current: 1, total: 1, label: "公共资源库发布完成", diff: begin.diff });
-    return { publicationId, diff: begin.diff, publishedAt: committed.publishedAt };
+    return { publicationId, diff: begin.diff, publishedAt: committed.publishedAt, knowledgeGraph };
   } catch (error) {
     if (publicationId) await remoteRequest("fail", { publicationId }).catch(() => undefined);
     throw error;
@@ -368,7 +384,7 @@ async function commitPublication(publicationId: string, manifest: SnapshotManife
   }
   for (const item of changes.questions) {
     const value = materializeAssetHashes(item.value, assets);
-    const payload = JSON.stringify({ ...value, createdBy: undefined, createdByEmail: undefined, canEdit: undefined });
+    const payload = JSON.stringify({ ...value, createdBy: undefined, createdByEmail: undefined, canEdit: undefined, code: undefined });
     statements.push(db.prepare(`INSERT INTO library_questions_v2
       (row_id, source_id, library_id, publication_id, module_source_id, category_source_id,
        payload_json, content_hash, created_by, created_at, updated_at)
@@ -404,5 +420,6 @@ export async function handleInternalPublication(request: Request, body: Record<s
   if (body.action === "asset") return uploadPublicationAsset(String(body.publicationId ?? ""), String(body.hash ?? ""), String(body.contentType ?? ""), String(body.base64 ?? ""));
   if (body.action === "commit") return commitPublication(String(body.publicationId ?? ""), body.manifest as SnapshotManifest, body.changes as SnapshotChanges);
   if (body.action === "fail") return failPublication(String(body.publicationId ?? ""));
+  if (body.action === "knowledge-graph") return applySyncedKnowledgeGraph(body.graph);
   throw new Response(JSON.stringify({ error: "未知发布操作" }), { status: 400, headers: { "Content-Type": "application/json" } });
 }

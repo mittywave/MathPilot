@@ -212,7 +212,7 @@ test('browser HTTP client keeps status and retry advice instead of throwing a pl
   await assert.rejects(studioApi('/test',{}),e=>e instanceof StudioRequestError&&!e.retryable);
 });
 test('new speed selector does not clear saved results or change the existing Word controls', () => {
-  const page=readFileSync(resolve(root,'app/answer-studio/page.tsx'),'utf8');
+  const page=readFileSync(resolve(root,'app/tools/answer-studio/page.tsx'),'utf8');
   assert.match(page,/id="studio-text-concurrency"/);assert.match(page,/textConcurrency,drawingConcurrency:2/);
   assert.match(page,/onChange=\{e=>setTextConcurrency\(Number\(e.target.value\)\)\}/);
   assert.match(page,/'\u751f\u6210 Word'/);assert.match(page,/includeTranscriptionWarnings/);
@@ -224,12 +224,13 @@ test('Gemini adapter retains status and Retry-After even for a non-JSON gateway 
   const result=await callAntigravityGemini('https://example.invalid','test-key','test-model','test',[],{});
   assert.equal(result.status,503);assert.equal(result.retryAfter,'7');assert.equal(result.text,undefined);
 });
+// These two cases explicitly cover pre-0015 legacy runtime; V2 is tested against real bindings separately.
 test('Studio auto mode does not turn a 429 into an immediate second-protocol request', async t => {
   const oldMode=process.env.OPENAI_API_MODE;
   t.after(()=>{if(oldMode===undefined)delete process.env.OPENAI_API_MODE;else process.env.OPENAI_API_MODE=oldMode;});
   process.env.OPENAI_API_MODE='auto';let calls=0;
   t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({error:{message:'limited'}},{status:429,headers:{'retry-after':'9'}});});
-  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
+  const {callRecognitionModel}=loader({'./ai/provider-repository':{hasV2Schema:async()=>false}, './ai/engine':{callV2:()=>{throw new Error('Legacy regression must not enter V2');}}, './recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
   const result=await callRecognitionModel({apiKey:'test-key',prompt:'test',image:'data:image/png;base64,AA==',schema:{},schemaName:'teacher_answer_transcription'});
   assert.equal(calls,1);assert.equal(result.status,429);assert.equal(result.retryAfter,'9');
 });
@@ -238,7 +239,7 @@ test('Chat Completions non-JSON HTTP errors preserve retry metadata', async t =>
   t.after(()=>{if(oldMode===undefined)delete process.env.OPENAI_API_MODE;else process.env.OPENAI_API_MODE=oldMode;});
   process.env.OPENAI_API_MODE='chat_completions';
   t.mock.method(globalThis,'fetch',async()=>new Response('unavailable',{status:502,headers:{'retry-after':'4'}}));
-  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
+  const {callRecognitionModel}=loader({'./ai/provider-repository':{hasV2Schema:async()=>false}, './ai/engine':{callV2:()=>{throw new Error('Legacy regression must not enter V2');}}, './recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
   const result=await callRecognitionModel({apiKey:'test-key',prompt:'test',image:'data:image/png;base64,AA==',schema:{},schemaName:'teacher_answer_transcription'});
   assert.equal(result.status,502);assert.equal(result.retryAfter,'4');
 });

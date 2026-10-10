@@ -41,8 +41,6 @@ yarn-error.log*
 /dist/
 /.wrangler/
 /.codex/config.toml
-/public/opencv.js
-/public/document-scanner-worker.js
 /public/pdfjs/
 /outputs/
 /work/
@@ -54,3 +52,5 @@ yarn-error.log*
 /studio-browser-results/
 /.ai-settings-browser-test/
 /ai-settings-browser-results/
+# Local typesetting engine for 讲义编撰 PDF export (downloaded on first use)
+/.tools/

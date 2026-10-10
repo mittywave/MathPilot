@@ -16,12 +16,14 @@ test("limits automatic administrator access to loopback hostnames", async () => 
 
 test("shows localhost as a passwordless administrator and hides logout", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const header = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
   assert.equal(ALEVEL_PAGE_COPY.zh.localAdmin, "本地管理员");
   assert.equal(ALEVEL_PAGE_COPY.zh.noLogin, "无需登录");
   assert.equal(ALEVEL_PAGE_COPY.zh.localAdminSuffix, "localhost 本地管理员");
   assert.equal(ALEVEL_PAGE_COPY.en.localAdmin, "Local Admin");
-  assert.match(page, /authUser\.local \? pageCopy\.localAdmin/);
-  assert.match(page, /authUser\.local \? pageCopy\.noLogin/);
+  // The account chip sits in the shared site header; the home page passes the sign-out button to it.
+  assert.match(header, /user\.local \? copy\.localAdmin/);
+  assert.match(header, /user\.local \? copy\.noLogin/);
   assert.match(page, /!authUser\.local && <button className="account-button" onClick=\{signOut\}>\{pageCopy\.signOut\}<\/button>/);
   assert.match(page, /pageCopy\.localAdminSuffix/);
 });

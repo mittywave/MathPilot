@@ -44,7 +44,7 @@ jobs:
           retention-days: 7
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,12 +54,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: python -m pip install playwright
-      - run: python -m playwright install --with-deps chromium > playwright-install.log 2>&1
+      - name: Install document rendering tools
+        run: sudo apt-get update && sudo apt-get install -y libreoffice-writer poppler-utils fonts-noto-cjk fonts-liberation
+      - run: python -m pip install playwright==1.57.0
+      - run: python -m playwright install --with-deps chromium webkit > playwright-install.log 2>&1
       - run: node scripts/build-studio-browser.mjs .studio-browser-test
       - run: python scripts/verify-studio-browser.py .studio-browser-test --out studio-browser-results
-      - run: node scripts/build-ai-settings-browser.mjs .ai-settings-browser-test
-      - run: python scripts/verify-ai-settings-browser.py .ai-settings-browser-test --out ai-settings-browser-results
+      - run: npm run build
+      - name: Actual Worker/D1 settings and Word export in Chromium and WebKit
+        run: python scripts/verify-ai-settings-browser.py --out ai-settings-browser-results --browsers chromium,webkit
+      - name: Render every actual Word-export page
+        run: |
+          python scripts/render-word-evidence.py ai-settings-browser-results/chromium/actual-page-export.docx --out ai-settings-browser-results/chromium/word-pages
+          python scripts/render-word-evidence.py ai-settings-browser-results/webkit/actual-page-export.docx --out ai-settings-browser-results/webkit/word-pages
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -4,7 +4,7 @@ import JSZip from "jszip";
 import { richText } from "./answer-studio-rich-text";
 import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, type StudioQuestion } from "./answer-studio";
 import { studioDiagramVml } from "./answer-studio-diagram";
-import { ensureWordMathSettings, enlargeNestedWordMath } from "./word-math-sizing.mjs";
+import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
 import { splitMathText } from "./answer-studio-math-text";
 import { standaloneRuledArray, standaloneRuledArrayLine as ruledArrayLine } from './math-grid';
 import { mathOmml } from './math-omml';
@@ -18,7 +18,7 @@ import { studioFiguresReady, studioIncludesQuestionFigures, studioOutputBlocker,
 export function assertStudioMathSupported(text:string,allowBlockArrays=true) {
   text=repairMathSource(text);
   const issues=scanMathSource(text).issues;
-  if(issues.length)throw new Error(`Math delimiter is incomplete at character ${issues[0].offset+1}`);
+  if(issues.length)throw new Error(`公式分隔符不完整（位置 ${issues[0].offset+1}）`);
   for(const [lineIndex,line] of splitMathParagraphs(text).entries()){
     const ruled=allowBlockArrays?ruledArrayLine(line):null;
     const expressions=ruled?ruled.rows.flat():splitMathText(line).filter(s=>s.kind==='math').map(s=>s.value);
@@ -213,7 +213,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // Include the paragraph end-mark properties as well as OMML run properties:
   // equation importers may use the surrounding paragraph's character color.
   xml=xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,p=>/w:val="Studio(?:Math)?Answer"/.test(p) ? p.replace('</w:pPr>',`<w:rPr><w:color w:val="C00000"/></w:rPr></w:pPr>`) : p);
-  zip.file("word/document.xml",enlargeNestedWordMath(xml));
+  zip.file("word/document.xml",fullSizeInlineFractions(xml));
   zip.file("word/_rels/document.xml.rels",rels); zip.file("[Content_Types].xml",contentTypes);
   // Word/WPS can promote a formula-only paragraph to display math. Keep those
   // lines aligned with the proof instead of inheriting the exam export's center.

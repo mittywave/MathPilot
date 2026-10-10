@@ -2,7 +2,7 @@ import { loadSource } from './load-source.mjs';
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { automaticQuestionImageLayout, isCompactConclusionChoice, markDocxUnderline, splitDisplayUnderlines } from "../lib/question-presentation-rules.mjs";
+import { automaticQuestionImageLayout, isCompactConclusionChoice, markDocxUnderline, optionColumnCount, splitDisplayUnderlines } from "../lib/question-presentation-rules.mjs";
 import { isSafeGeoGebraCommand, scoreDiagramVisualFit, validateGeoGebraPlan } from "../lib/geogebra-reconstruction.mjs";
 import { combineDiagramRasterFit, scoreProjectionProfiles, shouldAutoVectorizeDiagram, validateVectorDiagramPlan } from "../lib/vector-diagram-reconstruction.mjs";
 import { correctionForCapturedRotation, fitWithinMaxEdge, isPhotographedDiagram, normalizeDiagramRotation } from "../lib/image-processing-rules.mjs";
@@ -10,7 +10,7 @@ import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recogniti
 const { fractionSizeClass, latexFractionDepth, splitMathText, toLatexMath, toReadableNestedFractionLatex } = await loadSource("lib/math-text.ts");
 import { needsWordMathEquation, normalizeMathNotation } from "../lib/math-notation.mjs";
 const { orthogonalizeCoordinatePlan, printReadyInkColor, regularizeQuadraticFunctionPlan, svgFromVectorDiagramPlan, vectorDiagramAspectRatio } = await loadSource("lib/vector-diagram-renderer.ts");
-import { enlargeNestedWordMath, ensureWordMathSettings, wordMathFractionDepth } from "../lib/word-math-sizing.mjs";
+import { ensureWordMathSettings, fullSizeInlineFractions, wordMathFractionDepth } from "../lib/word-math-sizing.mjs";
 import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
 
 async function render() {
@@ -42,9 +42,11 @@ test("server-renders the cloud question-bank guest shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
   assert.match(html, /全部试题/);
-  assert.match(html, /公共资源库/);
-  assert.match(html, /我的题库/);
-  assert.match(html, /题目属性/);
+  const navigation = html.match(/<nav[^>]*aria-label="题库入口"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? "";
+  assert.equal((navigation.match(/>题库</g) ?? []).length, 1, "one shared library entry");
+  assert.doesNotMatch(html, /我的题库|私人题库|公共资源库|复制到私人题库/);
+  assert.match(html, /全部题型/);
+  assert.doesNotMatch(html, /题目属性|来源待核实|provenance-filters/);
   assert.match(html, /登录后可下载/);
   assert.doesNotMatch(html, /新建试题/);
   assert.doesNotMatch(html, /⇧ 文件录入/);
@@ -57,11 +59,13 @@ test("keeps every privileged operation behind server-side authentication", async
   const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
   const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
   const downloadRoute = await readFile(new URL("../app/api/download/route.ts", import.meta.url), "utf8");
+  const loginRoute = await readFile(new URL("../app/api/auth/login/route.ts", import.meta.url), "utf8");
 
   assert.equal(ALEVEL_PAGE_COPY.zh.guestBrowse, "访客 · 仅浏览");
   assert.equal(ALEVEL_PAGE_COPY.en.guestBrowse, "Guest · Browse only");
   assert.match(page, /pageCopy\.guestBrowse/);
-  assert.match(auth, /HttpOnly; Secure; SameSite=Lax/);
+  assert.match(auth, /HttpOnly\$\{secure \? "; Secure" : ""\}; SameSite=Lax/);
+  assert.match(loginRoute, /createSession\(user\.id, new URL\(request\.url\)\.protocol === "https:"\)/, "the https site keeps Secure session cookies");
   assert.match(auth, /PBKDF2/);
   assert.match(questionRoute, /await requireUser\(request\)/);
   assert.match(questionRoute, /updateScopedQuestion/);
@@ -82,11 +86,12 @@ test("keeps the select-all control on the right without filter scroll chrome", a
 
 test("keeps file import inside the new-question flow only", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const entry = await readFile(new URL("../app/components/QuestionEntry.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
-  assert.doesNotMatch(page, /className="file-import-top"/);
+  assert.doesNotMatch(page + entry, /className="file-import-top"/);
   assert.doesNotMatch(css, /\.file-import-top/);
-  assert.match(page, /<button onClick=\{openFileImport\}><b>文件批量录入<\/b>/);
+  assert.match(entry, /<button onClick=\{openFileImport\}><b>文件批量录入<\/b>/);
 });
 
 test("keeps the Word export font and layout contract", async () => {
@@ -103,20 +108,11 @@ test("keeps the Word export font and layout contract", async () => {
   assert.match(source, /archive\.file\("word\/fontTable\.xml", FONT_TABLE_XML\)/);
   assert.match(source, /columnWidths:\s*Array\.from\(\{ length: columnCount \}/);
   assert.match(source, /imageParagraph\(images\[0\], 220, 165, 80, AlignmentType\.RIGHT\)/);
+  assert.match(source, /indent: \{ left: 420, hanging: 420 \}/);
   assert.doesNotMatch(source, /columnWidths:\s*\[6627, 3119\]/);
 });
 
-test("keeps screen and Word geometry layouts deliberately separate", async () => {
-  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const optimizeRoute = await readFile(new URL("../app/api/optimize/route.ts", import.meta.url), "utf8");
 
-  assert.match(css, /\.question-presentation\.layout-right\s*\{[^}]*grid-template-columns:minmax\(0,1fr\) minmax\(190px,28%\)/);
-  assert.match(css, /\.question-presentation\.layout-right \.question-images\s*\{[^}]*place-items:end center;/);
-  assert.match(page, /网页端题干左、配图右；导出 Word 时自动改为题干下、配图右/);
-  assert.match(page, /网页 · 题干左配图右/);
-  assert.match(optimizeRoute, /Word 导出由程序独立处理/);
-});
 
 test("preserves Word underline runs as visible web segments", () => {
   const display = `（①${markDocxUnderline("    ")}）`;
@@ -177,21 +173,20 @@ test("preserves fraction styles and Word sizes instead of forcing nested enlarge
   const fraction = (numerator, denominator) => `<m:f><m:num>${numerator}</m:num><m:den>${denominator}</m:den></m:f>`;
   const deepXml = `<m:oMath>${run("1", '<w:rPr><w:sz w:val="24"/></w:rPr>')}+${fraction(run("1"), `${run("1+")}${fraction(run("1"), `${run("1+")}${fraction(run("1"), run("4x"))}`)}`)}=${fraction(run("3038"), run("2025"))}</m:oMath>`;
   const ordinaryXml = `<m:oMath>${fraction(run("1"), run("2"))}</m:oMath>`;
-  const documentXml = enlargeNestedWordMath(`<w:p>${deepXml}${ordinaryXml}</w:p>`);
+  const documentXml = fullSizeInlineFractions(`<w:p>${deepXml}${ordinaryXml}</w:p>`);
   const equations = [...documentXml.matchAll(/<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>/g)].map((match) => match[0]);
   const deepEquation = equations.find((xml) => xml.includes("3038"));
   const ordinaryEquation = equations.find((xml) => wordMathFractionDepth(xml) === 1 && !xml.includes("3038"));
   assert.ok(deepEquation);
   assert.equal(wordMathFractionDepth(deepEquation), 3);
-  assert.doesNotMatch(deepEquation, /<w:sz w:val="(?:26|30)"\/>/);
+  // Only the top-level fraction parts grow; the size the source set on "1" outside any fraction is kept.
   assert.match(deepEquation, /<w:sz w:val="24"\/>/);
-  assert.equal(documentXml, `<w:p>${deepXml}${ordinaryXml}</w:p>`);
-  assert.doesNotMatch(documentXml, /<m:ctrlPr\b/);
-  assert.doesNotMatch(documentXml, /<w:drawing\b/);
+  assert.equal((deepEquation.match(/<w:sz w:val="28"\/>/g) ?? []).length, 4);
+  assert.doesNotMatch(documentXml, /<w:sz w:val="(?:26|30)"\/>|<m:ctrlPr\b|<w:drawing\b/);
   assert.ok(ordinaryEquation);
-  assert.doesNotMatch(ordinaryEquation, /<w:sz\b/);
-  const importedEquation = `<m:oMath>${fraction(run("1"), `${run("1")}${fraction(run("1"), run("x"))}`)}</m:oMath>`.replace("<m:f>", '<m:f><m:fPr><m:type m:val="bar"/></m:fPr>');
-  assert.equal(enlargeNestedWordMath(importedEquation), importedEquation);
+  assert.equal((ordinaryEquation.match(/<w:sz w:val="28"\/>/g) ?? []).length, 2);
+  const importedEquation = `<m:oMath>${fraction(run("1", '<w:rPr><w:sz w:val="21"/></w:rPr>'), `${run("1", '<w:rPr><w:sz w:val="21"/></w:rPr>')}${fraction(run("1"), run("x"))}`)}</m:oMath>`.replace("<m:f>", '<m:f><m:fPr><m:type m:val="bar"/></m:fPr>');
+  assert.equal(fullSizeInlineFractions(importedEquation), importedEquation);
   const settings = ensureWordMathSettings('<w:settings xmlns:w="word" xmlns:m="math"><w:compat/></w:settings>');
   assert.match(settings, /<m:mathPr>[\s\S]*?<m:smallFrac m:val="off"\/>[\s\S]*?<\/m:mathPr>/);
   assert.equal((ensureWordMathSettings(settings).match(/<m:mathPr>/g) ?? []).length, 1);
@@ -202,6 +197,25 @@ test("chooses distinct image positions for short, multipart, and very long quest
   assert.equal(automaticQuestionImageLayout({ imageCount: 1, stemLength: 320, paragraphCount: 4 }), "below-right");
   assert.equal(automaticQuestionImageLayout({ imageCount: 1, stemLength: 900, paragraphCount: 12 }), "below");
   assert.equal(automaticQuestionImageLayout({ imageCount: 3, stemLength: 120, paragraphCount: 2 }), "below");
+});
+
+test("puts four options on one line only when each fits a quarter of it, on the web and in Word alike", () => {
+  assert.equal(optionColumnCount(["$\\frac{116}{17}$", "$\\frac{120}{17}$", "$\\frac{112}{15}$", "$\\frac{116}{15}$"]), 4);
+  assert.equal(optionColumnCount(["$v_{0}=60$米/秒", "汽车行驶总时间为10秒", "$a=6$", "$n=150$米"]), 2);
+  assert.equal(optionColumnCount(["相交", "平行", "垂直", "重合"]), 4);
+});
+
+test("a screenshot question places its figure where the original printed it, at the same share of the line", async () => {
+  const { resolveQuestionImageLayout, sourceFigureWidth } = await loadSource("lib/question-layout.ts");
+  const base = { type: "单选题", stem: "如图1，……\n①……\n②……\n下列选项中正确的是（ ）", options: ["a", "b", "c", "d"], originalImage: "/api/assets/source", diagramImage: "/api/assets/figure", imageLayout: "right" };
+  const under = { ...base, diagramBox: { x: 12, y: 330, width: 460, height: 300 } };
+  assert.equal(resolveQuestionImageLayout(under), "below");
+  assert.equal(sourceFigureWidth(under), .46);
+  const beside = { ...base, diagramBox: { x: 700, y: 60, width: 280, height: 300 } };
+  assert.equal(resolveQuestionImageLayout(beside), "right");
+  assert.equal(sourceFigureWidth(beside), .28, "a figure beside the text keeps its share of the line too");
+  // Typed questions without a source screenshot keep the existing rules.
+  assert.equal(sourceFigureWidth({ ...under, originalImage: undefined }), null);
 });
 
 test("keeps short line-based conclusion choices in a compact source-order flow", () => {
@@ -240,10 +254,17 @@ test("recognition image sizing caps the longest edge instead of only landscape w
 });
 
 test("keeps a higher-resolution photo for diagram cropping without increasing OCR input", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = await readFile(new URL("../app/components/QuestionEntry.tsx", import.meta.url), "utf8");
+  const handouts = await readFile(new URL("../app/tools/handouts/page.tsx", import.meta.url), "utf8");
+  const screenshots = await readFile(new URL("../lib/screenshot-recognition.ts", import.meta.url), "utf8");
   const extraction = await readFile(new URL("../lib/recognition-diagram.ts", import.meta.url), "utf8");
-  assert.match(page, /compressDataUrl\(await fileToDataUrl\(file\), 3200\)/);
-  assert.match(page, /const uploadImage = await materializeImageDataUrl\(image\);/);
+  assert.match(screenshots, /compressDataUrl\(await fileToDataUrl\(file\), 3200\)/);
+  assert.match(screenshots, /image: await materializeImageDataUrl\(image\)/);
+  // 截图录题 and 讲义知识点 share the same screenshot path.
+  assert.match(page, /readScreenshot\(file\)/);
+  assert.match(page, /recognizeScreenshot<RecognitionQuestionResult>\("\/api\/recognize", image/);
+  assert.match(handouts, /readScreenshot\(file\)/);
+  assert.match(handouts, /recognizeScreenshot<NoteRecognitionResult>\("\/api\/recognize-note", image\)/);
   assert.match(page, /extractRecognizedDiagram\(image, result\)/);
   assert.match(extraction, /cropDataUrl\(image, result\.diagram_bbox/);
 });
@@ -334,12 +355,12 @@ test("photographed-diagram fit can omit source-only student annotations", () => 
   assert.ok(filtered.annotationAwareScore > filtered.strictScore);
 });
 
-test("keeps single-question vector reconstruction optional and renders from source coordinates", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+test("redraws low-quality figures automatically and renders from source coordinates", async () => {
+  const page = await readFile(new URL("../app/components/QuestionEntry.tsx", import.meta.url), "utf8");
   const renderer = await readFile(new URL("../lib/vector-diagram-renderer.ts", import.meta.url), "utf8");
 
-  assert.match(page, /useState\(true\).*enableVectorReconstruction|enableVectorReconstruction.*useState\(true\)/s);
-  assert.match(page, /低质量配图时，自动高清矢量重绘/);
+  assert.match(page, /shouldReconstructRecognizedDiagram\(reconstruction\.diagramImage, result\.diagram_quality\)/);
+  assert.doesNotMatch(page, /geogebra-toggle|enableVectorReconstruction/);
   assert.match(page, /questionDraft\.vectorDiagramPlan[\s\S]*renderVectorDiagramPlan\(questionDraft\.vectorDiagramPlan, original, \{ allowSourceAnnotations: isPhotographedDiagram\(questionDraft\.diagramQuality\) \}\)/);
   assert.match(renderer, /stroke\.points\.map/);
   assert.match(renderer, /scoreDiagramRasterFit/);
@@ -347,7 +368,6 @@ test("keeps single-question vector reconstruction optional and renders from sour
   assert.match(renderer, /boundsScore/);
   assert.match(renderer, /sourceInkColor/);
   assert.match(renderer, /toneScore/);
-  assert.match(page, /自动排除学生手写计算、圈画和后加辅助线/);
 });
 
 test("validates an explicit vector scene and requires every expected label", () => {

@@ -19,7 +19,7 @@
   },
   "vars": {
     "HOMEWORK_GRADING_ENABLED": "true",
-    "HOMEWORK_AUTO_PUBLISH_ENABLED": "false"
+    "HOMEWORK_AUTO_PUBLISH_ENABLED": "true"
   },
   "d1_databases": [
     {

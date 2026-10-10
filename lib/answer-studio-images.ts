@@ -1,4 +1,6 @@
 import { parseStudioPages, type StudioBox, type StudioPage, type StudioDiagram } from "./answer-studio";
+import { randomClientId } from "./client-random-id.mjs";
+import { contentFingerprint } from "./content-fingerprint.mjs";
 
 /** Asynchronous encoding avoids synchronous JPEG work on the UI thread.
  * Preserve existing dimensions and quality; release backing canvas memory.
@@ -40,8 +42,7 @@ export async function readStudioFilesInBatches(files:File[],role:StudioPage["rol
   for (const file of files) {
     if (file.size>80_000_000) throw new Error("单个文件不得超过80MB");
     const add=async(image:string,page:number,target:StudioPage[])=> {
-      const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(image));
-      target.push({id:crypto.randomUUID(),role,name:file.name,page,image,hash:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,"0")).join(""),selected:true});
+      target.push({id:randomClientId(),role,name:file.name,page,image,hash:await contentFingerprint(image),selected:true});
     };
     if (/\.pdf$/i.test(file.name)) {
       // ?url still transforms this .mjs in development, injecting page-only

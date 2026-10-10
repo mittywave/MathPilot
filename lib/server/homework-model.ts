@@ -6,11 +6,13 @@ type ModelInput = {
   images: string[];
   schema: Record<string, unknown>;
   schemaName: string;
+  upperAttempt?: number;
 };
 
 export async function callHomeworkModel(input: ModelInput): Promise<AiGatewayResult> {
   return callStructuredAi({
     role: "grading",
+    upperAttempt: input.upperAttempt,
     prompt: input.prompt,
     images: input.images,
     schema: input.schema,

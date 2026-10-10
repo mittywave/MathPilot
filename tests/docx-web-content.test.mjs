@@ -1,7 +1,7 @@
 import { loadSource } from './load-source.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
-const { docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } = await loadSource("lib/docx-web-content.ts");
+const { docxFigureLine, docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } = await loadSource("lib/docx-web-content.ts");
 const { plainTextWebLines, toLatexMath } = await loadSource("lib/math-text.ts");
 
 const paragraph = (body) => `<w:p xmlns:w="word" xmlns:m="math"><w:pPr><w:jc w:val="left"/></w:pPr>${body}</w:p>`;
@@ -65,6 +65,19 @@ test("preserves table rows, nested tables, column spans and vertical merges", ()
   assert.match(docxWebContentText(content), /数据\n0\t3/);
 });
 
+test("reads in-line pictures with the size and alignment the document printed them at", () => {
+  const picture = (id, cx, cy, kind = "inline") => `<w:r><w:drawing><wp:${kind}><wp:extent cx="${cx}" cy="${cy}"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:${kind}></w:drawing></w:r>`;
+  const line = docxFigureLine(paragraph(picture("rId24", 4617730, 1962916)));
+  assert.equal(line.align, "left");
+  assert.deepEqual(line.figures.map((figure) => [figure.id, figure.width.toFixed(1), figure.height.toFixed(1)]), [["rId24", "128.3", "54.5"]]);
+  const row = docxFigureLine(`<w:p><w:pPr><w:jc w:val="center"/></w:pPr>${picture("rId1", 720000, 360000)}${textRun("　")}${picture("rId2", 1080000, 360000)}</w:p>`);
+  assert.equal(row.align, "center");
+  assert.deepEqual(row.figures.map((figure) => [figure.id, figure.width]), [["rId1", 20], ["rId2", 30]]);
+  assert.equal(docxFigureLine(paragraph(textRun("如图，求 x．"))), null, "text-only paragraphs have no figure line");
+  assert.equal(docxFigureLine(paragraph(picture("rId3", 720000, 360000, "anchor"))), null, "floating pictures keep their own layout");
+  assert.equal(docxFigureLine(`<w:tbl><w:tr><w:tc>${paragraph(picture("rId4", 720000, 360000))}</w:tc></w:tr></w:tbl>`), null, "pictures inside tables stay with the table");
+});
+
 test("keeps analysis paragraphs separate and leaves plain text questions on their fallback path", () => {
   const analysis = parseDocxWebContent([
     paragraph(textRun("【分析】先读题．")),
@@ -99,4 +112,12 @@ test("centers only formula-only fallback lines and keeps prose controls left ali
     { value: "", align: "left" },
     { value: "继续说明", align: "left" },
   ]);
+});
+
+test("a line of inline formulas stays in the running text; a fraction in it is printed full size", async () => {
+  const stem = "把下列各数填入相应的集合中：\n$+6$, $0.75$, $-3$, $\\frac{24}{5}$, $-\\frac{1}{3}$, $9\\%$.\n$$x^{2}=4$$";
+  assert.deepEqual(plainTextWebLines(stem).map((line) => line.align), ["left", "left", "center"]);
+  const { renderKatex } = await loadSource("lib/math-render.ts");
+  assert.match(renderKatex("-\\frac{1}{3}").html, /\\displaystyle -\\frac\{1\}\{3\}/);
+  assert.doesNotMatch(renderKatex("x^{2}").html, /\\displaystyle/);
 });

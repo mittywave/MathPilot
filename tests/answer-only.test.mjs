@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {transform} from 'esbuild';
-import {readFile} from 'node:fs/promises';
-const source=await transform(await readFile('lib/answer-studio.ts','utf8'),{loader:'ts',format:'esm'});
-const m=await import(`data:text/javascript;base64,${Buffer.from(source.code).toString('base64')}`);
+import {build} from 'esbuild';
+const result=await build({entryPoints:['lib/answer-studio.ts'],bundle:true,platform:'node',format:'esm',write:false});
+const m=await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const record=(id,section='例题',continuation=false)=>({id,lesson:'第一讲',section,number:'1',stem:'',analysis:'原文步骤'+id,source:{pageId:id,box:{x:0,y:0,width:100,height:100}},diagramBoxes:[],warnings:[],continuation});
 test('answer-only records work without stems, preserve order and merge unambiguous continuations',()=>{
  const d={...m.emptyStudioDraft(),inputMode:'answers',answers:[record('a'),record('b','例题',true),record('c','练习')]};

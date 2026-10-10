@@ -1,3 +1,5 @@
+import { hasV2Schema } from './ai/provider-repository';
+import { callV2 } from './ai/engine';
 import {
   aiProviderAutoProtocolOrder,
   normalizeAiProviderApiBase,
@@ -21,8 +23,9 @@ export type StructuredAiInput = {
   stopAutoFallbackStatuses?: number[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  upperAttempt?: number;
 };
-export type AiGatewayResult = AntigravityResult & { terminal?: boolean };
+export type AiGatewayResult = AntigravityResult & { terminal?: boolean; code?: string; attempts?: number; fallbackUsed?: boolean; diagnosticId?: string };
 type ConcreteWireApi = Exclude<AiProviderWireApi, "auto">;
 type JsonObject = Record<string, unknown>;
 const asObject = (value: unknown): JsonObject => value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
@@ -153,6 +156,7 @@ async function callConfigured(runtime: AiRuntime, input: StructuredAiInput): Pro
   return result;
 }
 export async function callStructuredAi(input: StructuredAiInput): Promise<AiGatewayResult> {
+  if (await hasV2Schema()) return callV2(input);
   input.signal?.throwIfAborted();
   const runtime = await resolveAiRuntime(input.role);
   if (!runtime) return { status: 503, terminal: true, error: input.missingMessage || "尚未配置 AI Provider" };

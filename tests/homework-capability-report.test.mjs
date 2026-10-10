@@ -15,19 +15,17 @@ test("China math taxonomy follows its schema contract and keeps references acycl
   assert.deepEqual(resolveChinaMathTaxonomyKeys(["圆周角与切线"]), ["cn-math:topic:circle"]);
 });
 
-test("capability evidence aggregates with time decay and highlights current assignment problems", () => {
+test("capability evidence aggregates with time decay", () => {
   const now = 2_000_000_000_000;
   const profile = buildCapabilityProfile([
     { capabilityKey: "skill:calculation", capabilityLabel: "计算准确性", verdict: "correct", confidence: 1, assignmentId: "old", questionNumber: "1", diagnosis: "计算正确", createdAt: now - 200 * 86_400_000 },
     { capabilityKey: "skill:calculation", capabilityLabel: "计算准确性", verdict: "incorrect", confidence: .9, assignmentId: "current", questionNumber: "2", diagnosis: "符号错误", createdAt: now },
     { capabilityKey: "skill:calculation", capabilityLabel: "计算准确性", verdict: "partial", confidence: .8, assignmentId: "current", questionNumber: "3", diagnosis: "检查不足", createdAt: now - 1_000 },
-  ], { studentId: "student", assignmentId: "current", now });
+  ], { studentId: "student", now });
   const node = profile.nodes.find((item) => item.key === "skill:calculation");
   assert.equal(node.status, "attention");
-  assert.equal(node.highlighted, true);
-  assert.equal(node.currentEvidenceCount, 2);
+  assert.equal(node.evidenceCount, 3);
   assert.equal(profile.nodes.find((item) => item.key === "skill:modeling").status, "insufficient");
-  assert.equal(profile.viewMode, "teacher");
   assert.ok(Array.isArray(profile.edges));
 });
 
@@ -35,20 +33,18 @@ test("legacy knowledge evidence is merged into stable China curriculum nodes", (
   const profile = buildCapabilityProfile([
     { capabilityKey: "knowledge:tag:一元一次方程", capabilityLabel: "一元一次方程", verdict: "incorrect", confidence: .95,
       assignmentId: "a", questionNumber: "2", diagnosis: "移项符号错误", createdAt: 2_000_000_000_000 },
-  ], { studentId: "s", assignmentId: "a", now: 2_000_000_000_000, viewMode: "student" });
+  ], { studentId: "s", now: 2_000_000_000_000 });
   const node = profile.nodes.find((item) => item.key === "cn-math:topic:linear-equation");
-  assert.equal(node.highlighted, true);
+  assert.equal(node.evidenceCount, 1);
   assert.equal(node.textbookMappings.length, 3);
-  assert.equal(profile.viewMode, "student");
   assert.ok(profile.edges.some((edge) => edge.targetKey === "cn-math:topic:linear-equation"));
 });
 
 test("teacher framework view contains the complete China curriculum graph without student evidence", () => {
-  const profile = buildCapabilityProfile([], { viewMode: "teacher", includeAllKnowledge: true, now: 2_000_000_000_000 });
+  const profile = buildCapabilityProfile([], { includeAllKnowledge: true, now: 2_000_000_000_000 });
   assert.equal(profile.nodes.filter((node) => node.dimension === "knowledge").length, CHINA_MATH_NODES.length);
   assert.equal(profile.edges.filter((edge) => edge.sourceKey.startsWith("cn-math:")).length, 29);
   assert.ok(profile.nodes.filter((node) => node.dimension === "knowledge").every((node) => node.status === "insufficient"));
-  assert.equal(profile.viewMode, "teacher");
 });
 
 test("fallback report is concise, deterministic, and normalized to three points", () => {

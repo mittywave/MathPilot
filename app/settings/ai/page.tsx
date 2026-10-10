@@ -1,152 +1,62 @@
-"use client";
-
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { canReuseAiProviderKey } from "../../../lib/ai-provider-rules.mjs";
-
-type WireApi = "auto" | "responses" | "chat_completions" | "antigravity_gemini";
-type Model = { id: string; displayName?: string };
-type ProviderConfig = {
-  name: string; baseUrl: string; wireApi: WireApi; modelCatalog: Model[];
-  recognitionModel: string; textModel: string; diagramModel: string; gradingModel: string;
-  enabled: boolean; hasApiKey: boolean; updatedAt: number;
-};
-type Draft = Omit<ProviderConfig, "hasApiKey" | "updatedAt"> & { apiKey: string };
-const emptyDraft: Draft = { name: "AI Provider", baseUrl: "", apiKey: "", wireApi: "auto", modelCatalog: [], recognitionModel: "", textModel: "", diagramModel: "", gradingModel: "", enabled: true };
-const pageStyle: React.CSSProperties = { maxWidth: 920, overflowWrap: "anywhere", margin: "0 auto", padding: "36px 24px 64px", fontFamily: "system-ui, sans-serif" };
-const cardStyle: React.CSSProperties = { border: "1px solid #ddd", borderRadius: 14, padding: 20, marginTop: 18 };
-const fieldStyle: React.CSSProperties = { display: "grid", gap: 7, marginTop: 14 };
-const inputStyle: React.CSSProperties = { width: "100%", minWidth: 0, boxSizing: "border-box", padding: "10px 12px", border: "1px solid #bbb", borderRadius: 8, fontSize: 14 };
-const buttonStyle: React.CSSProperties = { border: 0, borderRadius: 8, padding: "10px 16px", cursor: "pointer", fontWeight: 650 };
-
-export default function AiSettingsPage() {
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
-  const [hasSavedKey, setHasSavedKey] = useState(false);
-  const [savedBaseUrl, setSavedBaseUrl] = useState("");
-  const [encryptionReady, setEncryptionReady] = useState(true);
-  const endpointChanged = hasSavedKey && !canReuseAiProviderKey(savedBaseUrl, draft.baseUrl);
-  const needsKey = !hasSavedKey || endpointChanged;
-  const hasModel = [draft.recognitionModel, draft.textModel, draft.diagramModel, draft.gradingModel].some(model => model.trim());
-  const [environmentFallback, setEnvironmentFallback] = useState<{ configured?: boolean; baseUrl?: string } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const [manualModel, setManualModel] = useState("");
-  const modelOptions = useMemo(() => {
-    const models = [...draft.modelCatalog];
-    for (const id of [draft.recognitionModel, draft.textModel, draft.diagramModel, draft.gradingModel]) {
-      if (id && !models.some(model => model.id === id)) models.push({ id });
-    }
-    return models;
-  }, [draft.modelCatalog, draft.recognitionModel, draft.textModel, draft.diagramModel, draft.gradingModel]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const { signal } = controller;
-    fetch("/api/admin/ai-provider", { cache: "no-store", signal })
-      .then(async response => {
-        const payload = await response.json() as { config?: ProviderConfig | null; encryptionReady?: boolean; environmentFallback?: { configured?: boolean; baseUrl?: string }; error?: string };
-        if (signal.aborted) return;
-        if (!response.ok) throw new Error(payload.error || "读取 AI Provider 配置失败");
-        if (payload.config) {
-          const { hasApiKey, updatedAt, ...config } = payload.config;
-          void updatedAt;
-          setDraft({ ...config, apiKey: "" });
-          setHasSavedKey(hasApiKey);
-          setSavedBaseUrl(config.baseUrl);
-        }
-        setEnvironmentFallback(payload.environmentFallback ?? null);
-        setEncryptionReady(payload.encryptionReady !== false);
-      })
-      .catch(value => { if (!signal.aborted) setError(value instanceof Error ? value.message : "读取失败"); })
-      .finally(() => { if (!signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, []);
-
-  async function fetchModels() {
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const response = await fetch("/api/admin/ai-provider/models", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseUrl: draft.baseUrl, apiKey: draft.apiKey, wireApi: draft.wireApi }),
-        signal: AbortSignal.timeout(25_000),
-      });
-      const payload = await response.json() as { models?: Model[]; latencyMs?: number; error?: string };
-      if (!response.ok) throw new Error(payload.error || "获取模型失败");
-      const models = payload.models ?? [];
-      setDraft((current) => ({ ...current, modelCatalog: models }));
-      setNotice(`已从上游获取 ${models.length} 个模型${typeof payload.latencyMs === "number" ? ` · ${payload.latencyMs} ms` : ""}`);
-    } catch (value) { setError(value instanceof Error ? value.message : "获取模型失败"); }
-    finally { setBusy(false); }
-  }
-  function addManualModel() {
-    const id = manualModel.trim();
-    if (!id) return;
-    setDraft((current) => current.modelCatalog.some((item) => item.id.toLowerCase() === id.toLowerCase()) ? current : { ...current, modelCatalog: [...current.modelCatalog, { id }] });
-    setManualModel("");
-  }
-  async function save() {
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const response = await fetch("/api/admin/ai-provider", {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft), signal: AbortSignal.timeout(25_000),
-      });
-      const payload = await response.json() as { config?: ProviderConfig; error?: string };
-      if (!response.ok || !payload.config) throw new Error(payload.error || "保存失败");
-      const { hasApiKey, updatedAt, ...config } = payload.config;
-      void updatedAt;
-      setDraft({ ...config, apiKey: "" }); setHasSavedKey(hasApiKey); setSavedBaseUrl(config.baseUrl);
-      setNotice(config.enabled ? "AI Provider 已保存，后续请求使用所选任务模型。" : "数据库 Provider 已停用，将使用环境变量配置（如有）。");
-    } catch (value) { setError(value instanceof Error ? value.message : "保存失败"); }
-    finally { setBusy(false); }
-  }
-  const modelSelect = (label: string, key: "recognitionModel" | "textModel" | "diagramModel" | "gradingModel") => (
-    <label style={fieldStyle}>
-      <span>{label}</span>
-      <select aria-label={label} style={inputStyle} value={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))}>
-        <option value="">自动回退到其他已选模型</option>
-        {modelOptions.map((model) => <option key={model.id} value={model.id}>{model.displayName ? `${model.displayName} · ${model.id}` : model.id}</option>)}
-      </select>
-    </label>
-  );
-  return <main style={pageStyle}>
-    <Link href="/" style={{ textDecoration: "none" }}>← 返回题库</Link>
-    <h1 style={{ marginBottom: 6 }}>AI Provider</h1>
-    <p style={{ color: "#666", marginTop: 0 }}>管理员统一配置中转站并从上游拉取模型。API Key 只发送到本站 Worker，不会从保存接口返回浏览器。</p>
-    {loading ? <p>正在读取配置…</p> : <>
-      <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-      <section style={cardStyle}>
-        <label style={{ display: "flex", gap: 9, alignItems: "center" }}>
-          <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />
-          启用数据库中的 Provider 配置
-        </label>
-        <label style={fieldStyle}><span>名称</span><input style={inputStyle} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="例如：灵算 / Sub2API / OpenRouter" /></label>
-        <label style={fieldStyle}><span>Base URL</span><input style={inputStyle} value={draft.baseUrl} onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://relay.example.com/v1" /></label>
-        <label style={fieldStyle}><span>API Key</span><input style={inputStyle} type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder={needsKey ? "请填写该地址对应的 API Key" : "已保存密钥；留空表示保持不变"} /></label>
-        <label style={fieldStyle}><span>API 协议</span><select aria-label="API 协议" style={inputStyle} value={draft.wireApi} onChange={(event) => setDraft((current) => ({ ...current, wireApi: event.target.value as WireApi }))}><option value="auto">自动：Responses → Chat Completions（Gemini 可再尝试 Antigravity）</option><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="antigravity_gemini">Antigravity Gemini</option></select></label>
-        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}><button style={{ ...buttonStyle, background: "#eee" }} disabled={busy || !draft.baseUrl.trim() || (needsKey && !draft.apiKey.trim())} onClick={() => void fetchModels()}>{busy ? "处理中…" : "获取上游模型"}</button></div>
-      </section>
-      <section style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>模型目录 <small style={{ fontSize: 14, color: "#777" }}>({draft.modelCatalog.length})</small></h2>
-        <div style={{ display: "flex", gap: 8 }}><input style={inputStyle} value={manualModel} onChange={(event) => setManualModel(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addManualModel(); } }} placeholder="上游不提供 /models 时，可手动添加模型 ID" /><button style={{ ...buttonStyle, background: "#eee", flexShrink: 0 }} onClick={addManualModel}>添加</button></div>
-        {draft.modelCatalog.length > 0 && <div style={{ maxHeight: 180, overflow: "auto", marginTop: 12, border: "1px solid #eee", borderRadius: 8, padding: 10 }}>{draft.modelCatalog.map((model) => <div key={model.id} style={{ padding: "4px 2px", fontFamily: "ui-monospace, monospace", fontSize: 13 }}>{model.id}</div>)}</div>}
-        {modelSelect("截图 / 文件识题", "recognitionModel")}
-        {modelSelect("文字优化 / 解析", "textModel")}
-        {modelSelect("几何图重绘", "diagramModel")}
-        {modelSelect("作业批改", "gradingModel")}
-      </section>
-      </fieldset>
-      <section style={cardStyle}>
-        <strong>兼容回退：</strong>{environmentFallback?.configured ? ` 已检测到环境变量 Provider（${environmentFallback.baseUrl || "已配置"}）` : " 未检测到 OPENAI_API_KEY"}。当上面的 Provider 未配置或停用时，系统继续使用原有 `.env.local` / Cloudflare Secret。
-      </section>
-      {endpointChanged && <p role="status" style={{ color: "#b42318" }}>Base URL 已变化，必须重新输入该地址的 API Key；旧密钥不会发送到新地址。</p>}
-      {draft.enabled && !hasModel && <p role="status">请至少选择一个任务模型后再启用 Provider。未指定的任务将使用其他已选模型。</p>}
-      {!encryptionReady && <p role="alert">生产环境尚未设置 AI_PROVIDER_ENCRYPTION_KEY Worker Secret，暂时不能保存新密钥。</p>}
-      {error && <p style={{ color: "#b42318", fontWeight: 650 }}>{error}</p>}
-      {notice && <p style={{ color: "#067647", fontWeight: 650 }}>{notice}</p>}
-      <button style={{ ...buttonStyle, marginTop: 18, background: "#111", color: "white", minWidth: 140 }} disabled={busy || !draft.baseUrl.trim() || (needsKey && !draft.apiKey.trim()) || (draft.enabled && !hasModel) || (!encryptionReady && Boolean(draft.apiKey.trim()))} onClick={() => void save()}>{busy ? "保存中…" : "保存配置"}</button>
-    </>}
-  </main>;
+'use client';
+import {useCallback,useEffect,useRef,useState} from 'react';
+import Link from 'next/link';
+import type {AiCenterPublic,AiRoutingConfig,ProviderConfig,ProviderDiagnostic,ProviderKind,ProviderWrite} from '../../../lib/ai-provider-types';
+import {KIND_LABELS,newProvider} from '../../../lib/ai-provider-presets';
+import {api,ConfirmDialog,providerDraft} from './_components/common';
+import {ProviderEditor} from './_components/provider-editor';
+import {ModelCatalog} from './_components/model-catalog';
+import {TaskRouting} from './_components/task-routing';
+import {ConnectionTestPanel} from './_components/connection-test-panel';
+import {AppearancePicker} from '../../components/AppearancePicker';
+import css from './ai-center.module.css';
+type Operation='save'|'model'|'discover'|'test'|'route'|'delete';
+type Confirmation={title:string;message:string;accept:()=>void};
+const endpoint='/api/admin/ai-providers';
+export default function AiSettingsPage(){
+ const [data,setData]=useState<AiCenterPublic|null>(null),[selected,setSelected]=useState(''),[draft,setDraft]=useState<ProviderWrite|null>(null),[routing,setRouting]=useState<AiRoutingConfig|null>(null);
+ const [view,setView]=useState<'providers'|'routing'>('providers'),[tab,setTab]=useState<'connection'|'models'|'diagnostics'>('connection'),[search,setSearch]=useState('');
+ const [records,setRecords]=useState<ProviderDiagnostic[]>([]),[notice,setNotice]=useState(''),[error,setError]=useState(''),[field,setField]=useState<string>(),[confirm,setConfirm]=useState<Confirmation|null>(null);
+ const [busy,setBusy]=useState<Partial<Record<Operation,boolean>>>({}),[modelDirty,setModelDirty]=useState(false),[modelEpoch,setModelEpoch]=useState(0);
+ const controllers=useRef<Partial<Record<Operation,AbortController>>>({}),generation=useRef(0),root=useRef<HTMLElement>(null);
+ const saved=data?.providers.find(p=>p.id===selected);
+ const connectionDirty=Boolean(draft&&(!saved||JSON.stringify(draft)!==JSON.stringify(providerDraft(saved))));
+ const routeDirty=Boolean(data&&routing&&JSON.stringify(data.routing)!==JSON.stringify(routing));
+ const dirty=connectionDirty||routeDirty||modelDirty,working=Object.values(busy).some(Boolean);
+ const report=useCallback((e:unknown)=>{const value=e as Error&{field?:string};setError(value.message||'操作未完成');setField(value.field);if(value.field)queueMicrotask(()=>{const target=root.current?.querySelector<HTMLElement>(`[name="${CSS.escape(value.field!)}"]`)||(value.field==='apiKey'?root.current?.querySelector<HTMLElement>('select[aria-label="密钥操作"]'):null);target?.focus();});},[]);
+ useEffect(()=>{const controller=new AbortController();api<AiCenterPublic>(endpoint,undefined,'GET',controller.signal).then(d=>{if(controller.signal.aborted)return;setData(d);setRouting(d.routing);if(d.providers[0]){setSelected(d.providers[0].id);setDraft(providerDraft(d.providers[0]));}}).catch(e=>{if(!controller.signal.aborted)report(e);});return()=>{controller.abort();Object.values(controllers.current).forEach(c=>c?.abort());};},[report]);
+ useEffect(()=>{if(!dirty)return;const unload=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',unload);return()=>window.removeEventListener('beforeunload',unload);},[dirty]);
+ useEffect(()=>{if(!saved||tab!=='diagnostics')return;const c=new AbortController();api<{diagnostics:ProviderDiagnostic[]}>(`${endpoint}/${saved.id}/diagnostics`,undefined,'GET',c.signal).then(r=>{if(!c.signal.aborted)setRecords(r.diagnostics);}).catch(e=>{if(!c.signal.aborted)report(e);});return()=>c.abort();},[saved,tab,report]);
+ function cancelAll(){generation.current++;Object.values(controllers.current).forEach(c=>c?.abort());controllers.current={};setBusy({});}
+ function resetDrafts(){setDraft(saved?providerDraft(saved):null);if(data)setRouting(data.routing);setModelDirty(false);setModelEpoch(v=>v+1);setError('');setField(undefined);}
+ function move(action:()=>void){const go=()=>{cancelAll();resetDrafts();action();setNotice('');};if(dirty)setConfirm({title:'放弃未保存修改？',message:'当前编辑尚未保存。已保存的连接和密钥不会改变。',accept:go});else go();}
+ function choose(id:string){const p=data?.providers.find(p=>p.id===id);move(()=>{setSelected(id);setDraft(p?providerDraft(p):null);setTab('connection');setRecords([]);});}
+ function add(kind:ProviderKind='openai_compatible',copy?:ProviderConfig){move(()=>{setView('providers');setSelected('');setTab('connection');setDraft(copy?{...providerDraft(copy),name:`${copy.name} 副本`.slice(0,80),expectedRevision:0,enabled:false,credential:{action:'keep'}}:newProvider(kind));});}
+ async function perform(kind:Operation,task:(signal:AbortSignal)=>Promise<unknown>,message:string,selectId?:()=>string):Promise<boolean>{
+  controllers.current[kind]?.abort();const c=new AbortController();controllers.current[kind]=c;const epoch=generation.current;setBusy(v=>({...v,[kind]:true}));setError('');setField(undefined);setNotice('');
+  try{await task(c.signal);if(c.signal.aborted||generation.current!==epoch)return false;const d=await api<AiCenterPublic>(endpoint,undefined,'GET',c.signal);if(c.signal.aborted||generation.current!==epoch)return false;setData(d);setRouting(d.routing);const id=selectId?.()??selected;const p=d.providers.find(p=>p.id===id);setSelected(id);setDraft(p?providerDraft(p):null);setNotice(message);return true;}
+  catch(e){if(!c.signal.aborted&&generation.current===epoch)report(e);return false;}
+  finally{if(generation.current===epoch&&controllers.current[kind]===c){delete controllers.current[kind];setBusy(v=>({...v,[kind]:false}));}}
+ }
+ function cancel(kind:Operation){controllers.current[kind]?.abort();setBusy(v=>({...v,[kind]:false}));setNotice('已取消；不会开始新的上游请求。已发送请求仍可能计费。');}
+ function save(confirmed=false){if(!draft)return;if(saved?.referenceCount&&!draft.enabled&&!confirmed){setConfirm({title:'停用被引用的提供方？',message:`有 ${saved.referenceCount} 处引用此连接；停用将使相关任务不可用，不会自动改用列表第一项。`,accept:()=>save(true)});return;}let id=selected;void perform('save',async signal=>{const r=await api<{provider:ProviderConfig}>(id?`${endpoint}/${id}`:endpoint,{...draft,confirmDisable:confirmed},id?'PATCH':'POST',signal);id=r.provider.id;},'连接已保存。任务分配和模型测试需分别设置。',()=>id);}
+ const providerPath=saved?`${endpoint}/${saved.id}`:'';
+ const visible=data?.providers.filter(p=>`${p.name} ${p.baseUrl}`.toLowerCase().includes(search.toLowerCase()))||[];
+ const selector=<label>当前提供方<select aria-label="当前提供方" value={selected} onChange={e=>choose(e.target.value)}><option value="">{draft?'新建连接':'选择提供方'}</option>{data?.providers.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>;
+ return <main className={css.root} ref={root}><div className={css.shell}><div className={css.toolbar}><Link href="/" onClick={e=>{if(dirty){e.preventDefault();move(()=>{window.location.href='/';});}}}>← 返回题库</Link><AppearancePicker label="外观" /></div>
+ <header className={css.header}><div><p className={css.eyebrow}>AI / Provider center</p><h1>AI 配置中心</h1><p className={css.hint}>管理接入服务，明确每种任务的模型与数据去向。</p></div><div className={css.actions}>{data&&<span className={css.badge}>{data.encryptionReady?'密钥加密可用':'密钥加密未就绪'}</span>}{Boolean(data?.providers.length)&&<button data-primary disabled={working} onClick={()=>add()}>添加提供方</button>}</div></header>
+ {error&&<div role="alert" className={css.warning}>{error}<div className={css.actions}><button onClick={()=>move(()=>{window.location.reload();})}>重新加载</button></div></div>}{notice&&<div role="status" className={css.notice}>{notice}</div>}
+ {!data&&!error&&<p role="status">正在读取配置…</p>}
+ {data&&!data.providers.length&&!draft?<section className={`${css.panel} ${css.empty}`}><h2>添加第一个提供方</h2><p>先保存连接，再选择模型与任务。不预设任何模型已可用。</p><button data-primary onClick={()=>add()}>添加第一个提供方</button></section>:data&&<><nav className={css.nav} aria-label="配置中心视图"><button aria-pressed={view==='providers'} onClick={()=>move(()=>setView('providers'))}>提供方</button><button aria-pressed={view==='routing'} onClick={()=>move(()=>setView('routing'))}>任务分配</button></nav>
+ {view==='routing'&&routing?<div className={css.panel}><TaskRouting providers={data.providers} routing={routing} busy={working} change={setRouting}/></div>:<div className={css.grid}><aside className={css.sidebar}><label>搜索提供方<input type="search" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className={css.list}>{visible.map(p=><button key={p.id} aria-pressed={p.id===selected} onClick={()=>choose(p.id)}><strong>{p.name}</strong><small>{KIND_LABELS[p.kind]} · {new URL(p.baseUrl).host}</small><small>{p.enabled?'允许使用':'已停用'} · {p.referenceCount} 处引用</small></button>)}</div><details><summary>环境变量配置 · 只读</summary><p className={css.hint}>{data.environmentFallback.configured?'存在环境凭据':'没有环境凭据'}；仅在路由允许且没有明确目标时使用。</p><code>{data.environmentFallback.baseUrl}</code></details></aside>
+ <div><div className={css.mobile}>{selector}</div><div className={css.panel}>{draft?<><div className={css.toolbar}><div><h2>{saved?.name||'新建提供方'}</h2><span className={css.badge}>{connectionDirty?'未保存修改':saved?.referenceCount?'已保存 · 任务已引用':'已保存，尚未分配任务'}</span></div>{saved&&<details><summary>更多操作</summary><div className={css.actions}><button disabled={working} onClick={()=>add(saved.kind,saved)}>复制连接（无 Key）</button><button disabled={working} onClick={()=>setConfirm({title:'删除提供方？',message:'有任务、默认或备用引用时后端会拒绝删除。未引用的连接及其诊断将删除。',accept:()=>{void perform('delete',signal=>api(providerPath,{expectedRevision:saved.revision},'DELETE',signal),'提供方已删除。',()=>data.providers.find(p=>p.id!==saved.id)?.id||'');}})}>删除提供方</button></div></details>}</div>
+ {!saved&&<div className={css.nav} aria-label="新建预设">{Object.entries(KIND_LABELS).map(([k,l])=><button key={k} onClick={()=>add(k as ProviderKind)}>{l}</button>)}</div>}
+ <nav className={css.nav} aria-label="提供方详情">{([['connection','连接配置'],['models','模型目录'],['diagnostics','诊断']] as const).map(([v,l])=><button key={v} disabled={v!=='connection'&&!saved} aria-pressed={tab===v} onClick={()=>move(()=>setTab(v))}>{l}</button>)}</nav>
+ {tab==='connection'&&<ProviderEditor key={selected||'new'} draft={draft} saved={saved} change={setDraft} disabled={working} fieldError={field}/>}
+ {tab==='models'&&saved&&<ModelCatalog key={`${saved.id}:${modelEpoch}`} provider={saved} busy={working} discoverBusy={Boolean(busy.discover)} dirtyChange={setModelDirty} close={()=>move(()=>{})} discover={()=>{void perform('discover',signal=>api(`${providerPath}/models/discover`,{fingerprint:saved.fingerprint},'POST',signal),'目录已刷新；模型推理尚需单独测试。');}} cancel={()=>cancel('discover')} save={body=>perform('model',signal=>api(`${providerPath}/models`,{...(body as object),expectedRevision:saved.revision,expectedConfigurationRevision:data.routing.revision},'POST',signal),'模型已保存。')} remove={m=>setConfirm({title:'删除模型？',message:`删除 ${m.id}。仍被路由引用时将拒绝删除。`,accept:()=>{void perform('model',signal=>api(`${providerPath}/models`,{id:m.id,expectedRevision:saved.revision,expectedConfigurationRevision:data.routing.revision},'DELETE',signal),'模型已删除。');}})}/>}
+ {tab==='diagnostics'&&saved&&<ConnectionTestPanel key={`${saved.id}:${saved.revision}`} provider={saved} records={records} busy={working} testBusy={Boolean(busy.test)} cancel={()=>cancel('test')} test={body=>{void perform('test',async signal=>{const r=await api<{result:{code:string;error?:string}}>(`${providerPath}/test`,{...(body as object),fingerprint:saved.fingerprint},'POST',signal);if(r.result.code!=='OK'){const failed=await api<{diagnostics:ProviderDiagnostic[]}>(`${providerPath}/diagnostics`,undefined,'GET',signal);if(!signal.aborted)setRecords(failed.diagnostics);throw new Error(r.result.error||r.result.code);}},'合成样本通过；不等于复杂题库质量验收。');}}/>}
+ </>:<p className={css.empty}>选择一个提供方，或添加新连接。</p>}</div></div></div>}
+ {((view==='providers'&&draft&&tab==='connection')||view==='routing')&&<footer className={css.savebar}><span>{view==='routing'?(routeDirty?'任务分配有未保存修改':'任务分配已保存'):(connectionDirty?'连接有未保存修改':'连接已保存')}</span><div className={css.actions}><button disabled={!dirty||working} onClick={()=>move(()=>{})}>放弃修改</button><button data-primary disabled={working||(view==='routing'?!routeDirty:!connectionDirty)} onClick={()=>view==='routing'?void perform('route',signal=>api('/api/admin/ai-routing',routing,'PUT',signal),'任务分配已保存。'):save()}>{working?'处理中…':view==='routing'?'保存任务分配':'保存配置'}</button>{busy.save&&<button onClick={()=>cancel('save')}>取消保存</button>}</div></footer>}
+ </>}{confirm&&<ConfirmDialog title={confirm.title} accept={()=>{const action=confirm.accept;setConfirm(null);action();}} cancel={()=>setConfirm(null)}>{confirm.message}</ConfirmDialog>}
+ </div></main>;
 }

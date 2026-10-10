@@ -10,7 +10,7 @@ test("recognizes Alevel 9709 modules without depending on a database id", () => 
 
 test("provides concise English labels while preserving stored Chinese values", () => {
   assert.equal(alevelPageLabel("解答题", "en"), "Structured Question");
-  assert.equal(alevelPageLabel("来源待核实", "en"), "Source Pending");
+  assert.equal(alevelPageLabel("中等", "en"), "Intermediate");
   assert.equal(alevelPageLabel("解答题", "zh"), "解答题");
   assert.equal(alevelQuestionCount(1, "en"), "1 question");
   assert.equal(alevelQuestionCount(2, "en"), "2 questions");

@@ -1,6 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { AuthUser, LibraryData, LibraryScope, Question, Student, StudentSummary, WrongQuestionEntry } from "../types";
-import { readLibrary, resolveLibraryContext, retainQuestionAssetsForUser } from "./library";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Question, type Student, type StudentSummary, type WrongQuestionEntry } from "../types";
 
 type AppEnv = { DB: D1Database };
 
@@ -42,24 +41,17 @@ function toStudent(row: Record<string, unknown>): Student {
 
 export async function readStudents(user: AuthUser): Promise<StudentSummary[]> {
   const result = await appEnv().DB.prepare(`SELECT students.id, students.name, students.class_name, students.notes,
-      students.created_at, students.updated_at, student_accounts.login_id,
-      COUNT(student_wrong_questions.id) AS wrong_count,
-      SUM(CASE WHEN student_wrong_questions.mastered = 0 THEN 1 ELSE 0 END) AS reviewing_count,
-      SUM(CASE WHEN student_wrong_questions.mastered = 1 THEN 1 ELSE 0 END) AS mastered_count
+      students.created_at, students.updated_at,
+      COUNT(student_wrong_questions.id) AS wrong_count
     FROM students
-    LEFT JOIN student_accounts ON student_accounts.student_id = students.id
-      AND student_accounts.owner_user_id = students.owner_user_id
     LEFT JOIN student_wrong_questions ON student_wrong_questions.student_id = students.id
-      AND student_wrong_questions.owner_user_id = students.owner_user_id
+      AND student_wrong_questions.owner_user_id = students.owner_user_id AND student_wrong_questions.archived_at IS NULL
     WHERE students.owner_user_id = ?
-    GROUP BY students.id, student_accounts.login_id
+    GROUP BY students.id
     ORDER BY students.updated_at DESC, students.created_at DESC`).bind(user.id).all<Record<string, unknown>>();
   return result.results.map((row: Record<string, unknown>) => ({
     ...toStudent(row),
-    loginId: String(row.login_id ?? ""),
     wrongCount: Number(row.wrong_count ?? 0),
-    reviewingCount: Number(row.reviewing_count ?? 0),
-    masteredCount: Number(row.mastered_count ?? 0),
   }));
 }
 
@@ -96,20 +88,6 @@ export async function deleteStudent(id: string, user: AuthUser) {
   return { wrongQuestionCount: Number(count?.count ?? 0) };
 }
 
-function questionPath(data: LibraryData, question: Question) {
-  const names: string[] = [];
-  const examModule = data.modules.find((item) => item.id === question.moduleId);
-  if (examModule) names.push(examModule.name);
-  const seen = new Set<string>();
-  let category = data.categories.find((item) => item.id === question.categoryId);
-  while (category && !seen.has(category.id)) {
-    seen.add(category.id);
-    names.splice(examModule ? 1 : 0, 0, category.name);
-    category = data.categories.find((item) => item.id === category?.parentId);
-  }
-  return names.join(" / ") || (data.scope === "public" ? "公共资源库" : "我的题库");
-}
-
 function cleanQuestionSnapshot(question: Question) {
   const snapshot = { ...question };
   delete snapshot.canEdit;
@@ -128,11 +106,10 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
     sourcePath: String(row.source_path ?? ""),
     question: cleanQuestionSnapshot(question),
     mistakeCount: Number(row.mistake_count),
-    note: String(row.note ?? ""),
-    mastered: Number(row.mastered) === 1,
     lastWrongAt: Number(row.last_wrong_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+    archivedAt: row.archived_at == null ? null : Number(row.archived_at), archiveReason: String(row.archive_reason ?? ""),
     sourceKind: row.source_kind === "assignment" ? "assignment" : "library",
     assignmentId: row.assignment_id == null ? null : String(row.assignment_id),
     submissionId: row.submission_id == null ? null : String(row.submission_id),
@@ -143,72 +120,28 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
   };
 }
 
-export async function readWrongQuestions(studentId: string, user: AuthUser): Promise<WrongQuestionEntry[]> {
+export async function readWrongQuestions(studentId: string, user: AuthUser, includeHistory = false): Promise<WrongQuestionEntry[]> {
   await ownedStudent(studentId, user);
   const result = await appEnv().DB.prepare(`SELECT id, student_id, source_scope, source_question_id, source_path,
-      question_snapshot_json, mistake_count, note, mastered, last_wrong_at, created_at, updated_at,
-      source_kind, assignment_id, submission_id, grading_item_id, student_answer, feedback, answer_crop_asset_id
-    FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ?
-    ORDER BY mastered ASC, last_wrong_at DESC, created_at DESC`).bind(studentId, user.id).all<Record<string, unknown>>();
+      question_snapshot_json, mistake_count, last_wrong_at, created_at, updated_at,
+      source_kind, assignment_id, submission_id, grading_item_id, student_answer, feedback, answer_crop_asset_id, archived_at, archive_reason
+    FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ? ${includeHistory ? "" : "AND archived_at IS NULL"}
+    ORDER BY last_wrong_at DESC, created_at DESC`).bind(studentId, user.id).all<Record<string, unknown>>();
   return result.results.map(toWrongQuestion);
 }
 
-export async function recordWrongQuestions(studentId: string, scope: LibraryScope, rawQuestionIds: string[], rawNote: string, user: AuthUser) {
-  await ownedStudent(studentId, user);
-  const questionIds = [...new Set(rawQuestionIds.map(String))];
-  if (!questionIds.length || questionIds.length > 100) throw responseError("请选择 1 至 100 道题", 400);
-  const data = await readLibrary(user, scope);
-  const selected = questionIds.map((id) => data.questions.find((item) => item.id === id)).filter(Boolean) as Question[];
-  if (selected.length !== questionIds.length) throw responseError("部分所选题目已不存在或无权访问", 400);
-  const context = await resolveLibraryContext(user, scope);
-  const note = String(rawNote ?? "").trim().slice(0, 1000);
-  let created = 0;
-  let updated = 0;
-  for (const question of selected) {
-    await retainQuestionAssetsForUser(question, user);
-    const existing = await appEnv().DB.prepare(`SELECT id, note FROM student_wrong_questions
-      WHERE student_id = ? AND source_library_id = ? AND source_question_id = ? AND owner_user_id = ?`)
-      .bind(studentId, context.libraryId, question.id, user.id).first<{ id: string; note: string }>();
-    const now = Date.now();
-    const snapshot = JSON.stringify(cleanQuestionSnapshot(question));
-    const path = questionPath(data, question);
-    if (existing) {
-      await appEnv().DB.prepare(`UPDATE student_wrong_questions
-        SET source_scope = ?, source_path = ?, question_snapshot_json = ?, mistake_count = mistake_count + 1,
-            note = ?, mastered = 0, last_wrong_at = ?, updated_at = ?
-        WHERE id = ? AND owner_user_id = ?`)
-        .bind(scope, path, snapshot, note || existing.note, now, now, existing.id, user.id).run();
-      updated += 1;
-    } else {
-      await appEnv().DB.prepare(`INSERT INTO student_wrong_questions
-        (id, owner_user_id, student_id, source_scope, source_library_id, source_question_id, source_path,
-         question_snapshot_json, mistake_count, note, mastered, last_wrong_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), user.id, studentId, scope, context.libraryId, question.id, path, snapshot, note, now, now, now).run();
-      created += 1;
-    }
-  }
-  await appEnv().DB.prepare("UPDATE students SET updated_at = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(Date.now(), studentId, user.id).run();
-  return { recorded: selected.length, created, updated };
-}
-
-export async function updateWrongQuestion(studentId: string, entryId: string, raw: Partial<WrongQuestionEntry>, user: AuthUser) {
-  await ownedStudent(studentId, user);
-  const existing = await appEnv().DB.prepare(`SELECT id, mistake_count, note, mastered FROM student_wrong_questions
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(entryId, studentId, user.id)
-    .first<{ id: string; mistake_count: number; note: string; mastered: number }>();
-  if (!existing) throw responseError("错题记录不存在", 404);
-  const mistakeCount = raw.mistakeCount == null ? Number(existing.mistake_count) : Math.max(1, Math.min(999, Math.floor(Number(raw.mistakeCount) || 1)));
-  const note = raw.note == null ? existing.note : String(raw.note).trim().slice(0, 1000);
-  const mastered = raw.mastered == null ? Number(existing.mastered) : raw.mastered ? 1 : 0;
-  await appEnv().DB.prepare(`UPDATE student_wrong_questions SET mistake_count = ?, note = ?, mastered = ?, updated_at = ?
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(mistakeCount, note, mastered, Date.now(), entryId, studentId, user.id).run();
-}
-
+/** 删除只是移入“历史记录”，可以恢复；之后学生再次做错这道题时，它会重新回到错题本。 */
 export async function deleteWrongQuestion(studentId: string, entryId: string, user: AuthUser) {
   await ownedStudent(studentId, user);
-  const result = await appEnv().DB.prepare(`DELETE FROM student_wrong_questions
-    WHERE id = ? AND student_id = ? AND owner_user_id = ?`).bind(entryId, studentId, user.id).run();
+  const now = Date.now();
+  const result = await appEnv().DB.prepare(`UPDATE student_wrong_questions SET archived_at = ?, archive_reason = ?, updated_at = ?
+    WHERE id = ? AND student_id = ? AND owner_user_id = ? AND archived_at IS NULL`).bind(now, WRONG_QUESTION_DELETED, now, entryId, studentId, user.id).run();
   if (!result.meta.changes) throw responseError("错题记录不存在", 404);
+}
+
+export async function restoreWrongQuestion(studentId: string, entryId: string, user: AuthUser) {
+  await ownedStudent(studentId, user);
+  const result = await appEnv().DB.prepare(`UPDATE student_wrong_questions SET archived_at = NULL, archive_reason = '', updated_at = ?
+    WHERE id = ? AND student_id = ? AND owner_user_id = ? AND archive_reason = ?`).bind(Date.now(), entryId, studentId, user.id, WRONG_QUESTION_DELETED).run();
+  if (!result.meta.changes) throw responseError("历史记录中没有这道被删除的错题", 404);
 }

@@ -17,8 +17,6 @@ const eslintConfig = defineConfig([
     "tmp/**",
     "next-env.d.ts",
     // Runtime browser assets are generated from third-party bundles during build.
-    "public/opencv.js",
-    "public/document-scanner-worker.js",
     "public/pdfjs/**",
   ]),
   eslint.configs.recommended,

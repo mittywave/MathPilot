@@ -214,8 +214,10 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
 }
 
 async function renderPdf(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
-  const [pdfjs, workerModule] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]);
-  pdfjs.GlobalWorkerOptions.workerSrc = workerModule.default;
+  // A ?url worker is still transformed in development, which injects page-only HMR (window is undefined) into it;
+  // config serves the versioned worker untouched from public, as Answer Studio does.
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = `/pdfjs/${pdfjs.version}/pdf.worker.min.mjs`;
   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }); const pdf = await loadingTask.promise;
   if (pdf.numPages > MAX_PAGES) throw new Error(`文件共有 ${pdf.numPages} 页，当前一次最多导入 ${MAX_PAGES} 页`);
   const pages: ImportPage[] = [];
