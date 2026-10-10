@@ -47,21 +47,21 @@ export function QuestionPicker({ library, mode, taken, onPick, sections, onModeC
   function toggle(id: string) { setSelected((current) => isSelected(id) ? current.filter((item) => item !== id) : [...current, id]); }
 
   return <section className="handout-bank" aria-label="题库选题">
-    <div className="picker-head"><h2>题库</h2><span>筛选题目，加入右侧讲义</span></div>
     {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div className="picker-target">
-      <label>加入模块<select aria-label="加入模块" value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
+      <span>加入</span>
+      <select aria-label="加入模块" value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
         {!sections.length && <option value="">请先添加知识模块</option>}
         {sections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
-      </select></label>
-      <label>题目用途<select aria-label="题目用途" value={mode.band} onChange={(event) => onModeChange({ ...mode, band: event.target.value as HandoutBand })}>
-        {HANDOUT_BANDS.map((band) => <option key={band} value={band}>{HANDOUT_PARTS[band].label}</option>)}
-      </select></label>
+      </select>
+      <select aria-label="题目用途" value={mode.band} onChange={(event) => onModeChange({ ...mode, band: event.target.value as HandoutBand })}>
+        {HANDOUT_BANDS.map((band) => <option key={band} value={band}>作为{HANDOUT_PARTS[band].label}</option>)}
+      </select>
     </div>}
     <div className="picker-filters">
-      <label>模块<select value={activeModuleId} onChange={(event) => { setModuleId(event.target.value); setCategoryId(""); setLimit(PAGE_SIZE); }}>{modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>分类<select value={activeCategoryId} onChange={(event) => { setCategoryId(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部分类</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
-      <label>题型<select value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option>全部</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select></label>
-      <label className="picker-search">搜索<input type="search" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder="四位 ID（全库）、题干、知识点" /></label>
+      <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder="搜索四位 ID（全库）、题干、知识点" />
+      <select aria-label="模块" value={activeModuleId} onChange={(event) => { setModuleId(event.target.value); setCategoryId(""); setLimit(PAGE_SIZE); }}>{modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      <select aria-label="分类" value={activeCategoryId} onChange={(event) => { setCategoryId(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部分类</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select>
+      <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
     </div>
     <div className="picker-results">
     {!library ? <p className="picker-empty">正在读取题库…</p> : !modules.length ? <p className="picker-empty">题库还没有模块。</p> : !results.length ? <p className="picker-empty">没有符合条件的题目。</p> : <>

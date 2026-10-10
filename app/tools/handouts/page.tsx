@@ -452,7 +452,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
   return <main className="toolbox handouts handout-editor">
     <div className="handout-topbar">
-      <a className="toolbox-back" href={home.grade ? `/tools/handouts?grade=${home.grade}` : "/tools/handouts"}><HandoutIcon name="back" /><span>全部讲义</span></a>
+      <a className="handout-back" href={home.grade ? `/tools/handouts?grade=${home.grade}` : "/tools/handouts"}><HandoutIcon name="back" /><span>全部讲义</span></a>
+      <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
       <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </div>
@@ -462,7 +463,6 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           sections={modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }))} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
-    <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
     <p className="handout-muted">{placementLabel(home)} · {modules.length} 个模块 · {bandTotals.join(" · ")} · 题目随题库同步更新{!libraryReady ? " · 正在读取题库…" : missingCount ? ` · ${missingCount} 道题已无法读取` : ""}</p>
 
     {modules.map(({ section, bands }, moduleIndex) => {
