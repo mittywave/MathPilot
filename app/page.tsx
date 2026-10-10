@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
@@ -138,7 +139,6 @@ export default function Home() {
 
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
 
-  const childrenOf = (id: string | null) => categories.filter((item) => item.parentId === id);
   const descendantsOf = (id: string) => categoryDescendants(categories, id);
   const categoryById = (id: string | null) => categories.find((item) => item.id === id);
   const moduleById = (id: string | null) => modules.find((item) => item.id === id);
@@ -417,27 +417,6 @@ export default function Home() {
     } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
   }
 
-  function renderTree(parentId: string | null, depth = 0) {
-    return childrenOf(parentId).map((category) => (
-      <div key={category.id}>
-        <button className={`tree-row ${activeCategory === category.id && !showSelected ? "active-leaf" : ""}`} style={{ paddingLeft: 10 + depth * 17 }} onClick={() => { setActiveCategory(category.id); setShowSelected(false); }}>
-          <span className="tree-dot">{childrenOf(category.id).length ? "◆" : "·"}</span><span className="tree-name">{category.name}</span><span className="count">{countFor(category.id)}</span>
-        </button>
-        {renderTree(category.id, depth + 1)}
-      </div>
-    ));
-  }
-
-  function renderModuleTree() {
-    if (!activeModule) return <p className="empty-tree">请先创建一个模块</p>;
-    return <>
-      <button className={`tree-row module-root ${activeCategory === activeModule.id && !showSelected ? "active-leaf" : ""}`} onClick={() => { setActiveCategory(activeModule.id); setShowSelected(false); }}>
-        <span className="tree-dot">◆</span><span className="tree-name">{activeModule.name}</span><span className="count">{countFor(activeModule.id)}</span>
-      </button>
-      {renderTree(activeModule.id, 1)}
-    </>;
-  }
-
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading} locale={pageLocale} basketCount={selectedIds.length}
@@ -453,7 +432,7 @@ export default function Home() {
             {activeStudent && <div className="student-profile-actions"><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><button className="danger-text" onClick={() => removeStudent(activeStudent)}>删除</button></div>}
           </> : <>
           <div className="sidebar-heading"><div><span className="eyebrow">{activeModule?.name ?? pageCopy.publicLibrary}</span><h2>{pageCopy.knowledgeDirectory}</h2></div>{canManageLibrary && activeModule && <button className="icon-button" aria-label={pageCopy.addCategory} title={pageCopy.addCategory} onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋</button>}</div>
-          <div className="tree">{renderModuleTree()}</div>
+          <CategoryTree module={activeModule} categories={categories} activeId={showSelected ? null : activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setShowSelected(false); }} />
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button>}
           </>}
         </aside>}
