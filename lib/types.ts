@@ -192,11 +192,14 @@ export type LibraryData = {
 };
 
 // A handout only references library questions; replacing one swaps the reference in place.
-// A section is a knowledge module (title + 知识点); each question sits in one of its bands.
+// A section is a knowledge module (title + 知识点); each 讲义 question sits in one of its bands.
+// 一讲有讲义、小测、作业三份资料。小测和作业各是一列题，每道题记着它考的是哪个模块（讲义没有模块时为 null）。
 export type HandoutBand = "example" | "practice" | "variant";
+export type HandoutSheet = "handout" | "quiz" | "homework";
 export type HandoutItem =
   | { id: string; kind: "question"; scope: LibraryScope; questionId: string; band: HandoutBand }
-  | { id: string; kind: "section"; title: string; note: string };
+  | { id: string; kind: "section"; title: string; note: string }
+  | { id: string; kind: Exclude<HandoutSheet, "handout">; scope: LibraryScope; questionId: string; moduleId: string | null };
 
 // 初一至初三记为 7–9；一学年依次是暑假、秋季、寒假、春季。
 export type HandoutGrade = 7 | 8 | 9;
@@ -220,7 +223,7 @@ export type Handout = HandoutGroup & {
 };
 
 export type HandoutOutline = { title: string; questionIds: string[] }[];
-export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline };
+export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
 
 // 共享办公 · 成员。停用的账号保留数据但不能登录。
 export type TeamMember = { id: string; email: string; role: "admin" | "member"; createdAt: number; disabledAt: number | null; lastLoginAt: number | null };

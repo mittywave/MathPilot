@@ -35,6 +35,7 @@ const modelling = {
 const shot = (id, diagramBox) => ({ ...base, id, type: "填空题", stem: "如图，直线与 x 轴交于点 B，则 C 点坐标为____。", originalImage: "fig://page", diagramImage: `fig://${id}`, diagramBox, imageLayout: "right" });
 const figureModules = [{ heading: "图位", note: "", bands: { ...empty, practice: [modelling, shot("beside", { x: 820, y: 60, width: 180, height: 800 }), shot("under", { x: 60, y: 300, width: 620, height: 400 })] } }];
 const buildFigures = answers => buildHandoutLatex({ title: "图位测试", modules: figureModules, answers }, source => source.startsWith("fig://") ? `figures/${source.slice(6)}.png` : null);
+const buildList = answers => buildHandoutLatex({ title: "第一讲-平行四边形的性质", answers, sheet: "小测", questions: [choice, proof, blank] }, source => source === "fig://one" ? "figures/fig-1.png" : null);
 
 test("plain text is escaped and keeps blanks and Word-style symbols printable", () => {
   assert.equal(latexPlain("100% & #1 {a_b} ~^\\"), "100\\% \\& \\#1 \\{a\\_b\\} \\textasciitilde{}\\textasciicircum{}\\textbackslash{}");
@@ -91,6 +92,24 @@ test("every module runs 知识点 → 例题 → 练习 → 变式 with per-band
   assert.doesNotMatch(teacher, /handoutworkspace|handoutnotesarea|handoutanswerkey/);
 });
 
+test("a 小测 or 作业 prints one numbered list under its name, without 考点", () => {
+  const student = buildList("none");
+  assert.match(student, /\\handoutseries\{第一讲\\enspace 小测\}\n\\handouttitle\{平行四边形的性质\}\n\\handoutedition\{学生版\}\n\\handoutfields\{姓名,班级,得分\}/);
+  assert.match(buildHandoutLatex({ title: "有理数", answers: "none", sheet: "作业", questions: [blank] }), /\\handoutseries\{作业\}\n\\handouttitle\{有理数\}/);
+  const order = ["\\handoutnumberwidth{3}", "\\begin{handoutquestion}{1}", "\\begin{handoutquestion}{2}", "\\begin{handoutquestion}{3}"];
+  const positions = order.map(marker => student.indexOf(marker));
+  assert.ok(positions.every(position => position >= 0), order.filter((_, index) => positions[index] < 0).join(", "));
+  assert.deepEqual([...positions].sort((x, y) => x - y), positions);
+  assert.doesNotMatch(student, /handoutsection|handoutpart|handoutpoints|handoutnotesarea|handoutkey/);
+  assert.equal((student.match(/\\handoutworkspace\{4\}/g) ?? []).length, 1, "the 解答题 gets working lines");
+  const key = buildList("end");
+  assert.match(key, /\\end\{handoutquestion\}\n\\handoutanswerkey\n\\begin\{handoutkey\}\{1\}/);
+  assert.deepEqual([...key.matchAll(/\\begin\{handoutkey\}\{(\d+)\}/g)].map(match => match[1]), ["1", "2", "3"], "the key uses the list numbers");
+  assert.doesNotMatch(key, /handoutkeygroup/);
+  assert.equal((buildList("each").match(/\\begin\{handoutanswer\}/g) ?? []).length, 3);
+  assert.doesNotMatch(buildHandoutLatex({ title: "空", answers: "none", sheet: "小测", questions: [] }), /handoutquestion|handoutnumberwidth/);
+});
+
 test("Word-imported stems keep formulas and tables", () => {
   const latex = build("none");
   assert.match(latex, /\\begin\{handoutquestion\}\{变式1\}\n根据下表求 \$\\frac\{a\}\{2\}\$。/);
@@ -114,7 +133,7 @@ test("Word-imported pictures stay where the document put them, at its size", () 
 
 test("every handout command the generator emits is defined by the class", async () => {
   const cls = await readFile(new URL("../latex/mitty-handout.cls", import.meta.url), "utf8");
-  const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
+  const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}${buildList(answers)}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
   for (const command of used) assert.match(cls, new RegExp(`\\\\(?:newcommand|newenvironment|newtcolorbox)\\{?\\\\?${command}\\b`), `${command} is defined`);
 });
 

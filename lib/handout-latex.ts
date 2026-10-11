@@ -7,7 +7,8 @@ import type { WordAnswerPlacement } from "./export-word";
 import type { HandoutBand, Question } from "./types";
 
 // 讲义 → LaTeX. Only semantic \handout... commands are emitted; latex/mitty-handout.cls owns the design.
-export type HandoutLatexInput = { title: string; modules: HandoutExportModule[]; answers: WordAnswerPlacement };
+// A 讲义 prints its modules; a 小测 or 作业 prints one numbered list of questions under its name.
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[] });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -247,7 +248,8 @@ function answerBody(question: Question, figureName: (source: string) => string |
   return [`\\handoutanswerline{${answerLatex(question)}}`, ...analysisGroups(question, figureName).map((group) => `\\handoutanalysis{${latexPlain(group.label)}}{${group.parts.join("\\par ")}}`)].join("\n");
 }
 
-function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
+// 小测 and 作业 print no 考点: naming the knowledge point would give the method away.
+function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null, showPoints = true) {
   const { lines: paragraphs, placed } = stemContent(question, figureName);
   const source = question.source?.trim() ? `\\handoutsource{${latexPlain(question.source.trim())}}` : "";
   const stem = [`${source}${paragraphs[0] ?? ""}`, ...paragraphs.slice(1)].join("\\par\n");
@@ -270,7 +272,7 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
     }
   }
   if (choices.length) out.push(choicesLatex(choices));
-  const points = questionPoints(question);
+  const points = showPoints ? questionPoints(question) : [];
   if (points.length) out.push(`\\handoutpoints{${points.map(latexPlain).join("、")}}`);
   // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线；教师版不留白。
   if (answers !== "each" && band === "example") out.push("\\handoutnotesarea{4}");
@@ -317,9 +319,39 @@ export function splitHandoutTitle(title: string) {
 
 const ANSWER_TITLES: Record<HandoutBand, string> = { example: "例题解析", practice: "练习答案", variant: "变式答案" };
 
-export function buildHandoutLatex({ title, modules, answers }: HandoutLatexInput, figureName: (source: string) => string | null = () => null) {
+export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source: string) => string | null = () => null) {
+  const { title, answers } = input;
   const heading = splitHandoutTitle(title || "讲义");
-  const fields = /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
+  const list = "questions" in input ? input : null;
+  const fields = list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
+  const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName) : moduleBody(input.modules, answers, figureName);
+  return [
+    "\\documentclass{mitty-handout}",
+    series ? `\\handoutseries{${series}}` : "",
+    `\\handouttitle{${latexPlain(heading.title)}}`,
+    `\\handoutedition{${EDITIONS[answers]}}`,
+    `\\handoutfields{${fields}}`,
+    "\\begin{document}",
+    "\\makehandouttitle",
+    ...body,
+    "\\end{document}",
+  ].filter(Boolean).join("\n") + "\n";
+}
+
+// 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers.
+function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
+  if (!questions.length) return [];
+  const body = [`\\handoutnumberwidth{${questions.length}}`]; const keys: string[] = [];
+  questions.forEach((question, index) => {
+    const label = String(index + 1);
+    body.push(questionLatex(question, label, "practice", answers, figureName, false));
+    if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(question, figureName), "\\end{handoutkey}");
+  });
+  return keys.length ? [...body, "\\handoutanswerkey", ...keys] : body;
+}
+
+function moduleBody(modules: HandoutExportModule[], answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
   const body: string[] = [];
   const counters: Record<HandoutBand, number> = { example: 0, practice: 0, variant: 0 };
   const keys: Record<HandoutBand, string[]> = { example: [], practice: [], variant: [] };
@@ -344,15 +376,5 @@ export function buildHandoutLatex({ title, modules, answers }: HandoutLatexInput
     body.push("\\handoutanswerkey");
     for (const band of HANDOUT_BANDS) if (keys[band].length) body.push(`\\handoutkeygroup{${ANSWER_TITLES[band]}}{${bandLabel(band, counters[band])}}`, ...keys[band]);
   }
-  return [
-    "\\documentclass{mitty-handout}",
-    heading.series ? `\\handoutseries{${latexPlain(heading.series)}}` : "",
-    `\\handouttitle{${latexPlain(heading.title)}}`,
-    `\\handoutedition{${EDITIONS[answers]}}`,
-    `\\handoutfields{${fields}}`,
-    "\\begin{document}",
-    "\\makehandouttitle",
-    ...body,
-    "\\end{document}",
-  ].filter(Boolean).join("\n") + "\n";
+  return body;
 }

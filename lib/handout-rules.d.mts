@@ -1,4 +1,4 @@
-import type { HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutOutline, HandoutShelf, HandoutTerm, LibraryScope, Question } from './types';
+import type { HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutOutline, HandoutSheet, HandoutShelf, HandoutTerm, LibraryScope, Question } from './types';
 
 export type HandoutPart = { label: string; tagline: string; prefix?: string };
 export const HANDOUT_LIMITS: { title: number; items: number; id: number; sectionTitle: number; note: number };
@@ -15,6 +15,8 @@ export function sameGroup(a: GroupLike, b: GroupLike): boolean;
 export function groupLabel(group: GroupLike): string;
 export const HANDOUT_BANDS: HandoutBand[];
 export const HANDOUT_PARTS: { knowledge: HandoutPart & { hint: string } } & Record<HandoutBand, HandoutPart & { prefix: string }>;
+export const HANDOUT_SHEETS: { value: HandoutSheet; label: string }[];
+export function sheetLabel(sheet: HandoutSheet): string;
 export function bandOf(item: { band?: unknown } | null | undefined): HandoutBand;
 export function bandLabel(band: HandoutBand, number: number): string;
 export function chineseNumeral(value: number): string;
@@ -32,6 +34,13 @@ export function handoutSections(items: HandoutItem[], resolve: (scope: LibrarySc
   missingCount: number;
 };
 export function moveHandoutItem(items: HandoutItem[], id: string, direction: -1 | 1): HandoutItem[];
+export function removeHandoutModule(items: HandoutItem[], sectionId: string): HandoutItem[];
+export function copyHandoutItems(items: HandoutItem[], newId: () => string): HandoutItem[];
+export function sheetCounts(items: HandoutItem[]): Record<Exclude<HandoutSheet, 'handout'>, number>;
+export function sheetQuestions(items: HandoutItem[], sheet: Exclude<HandoutSheet, 'handout'>, resolve: (scope: LibraryScope, questionId: string) => Question | undefined): {
+  questions: Question[];
+  missingCount: number;
+};
 export function setItemBand(items: HandoutItem[], id: string, band: HandoutBand): HandoutItem[];
 export function ensureLeadingModule(items: HandoutItem[], id: string): HandoutItem[];
 export function insertIndexForSection(items: HandoutItem[], sectionId: string | null): number;

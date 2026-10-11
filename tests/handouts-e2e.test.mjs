@@ -71,18 +71,22 @@ test("course and topic handouts are shared, student handouts stay with the stude
     const forged = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "x" } }, origin: "http://evil.test" });
     assert.equal(forged.response.status, 403);
 
-    const reordered = [handout.items[2], handout.items[0], { ...handout.items[1], band: "practice" }];
+    // 小测 and 作业 questions are stored after the 讲义; one naming a module that is gone tests the first module.
+    const reordered = [handout.items[2], { id: "t1", kind: "quiz", scope: "public", questionId: "q-d", moduleId: "s1" }, handout.items[0], { ...handout.items[1], band: "practice" },
+      { id: "h1", kind: "homework", scope: "public", questionId: "q-e", moduleId: "gone" }];
     const updated = await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one, method: "PUT", body: { handout: { title: "第3讲 一元一次方程", items: reordered } } });
     assert.equal(updated.response.status, 200);
     assert.equal(updated.payload.handout.createdAt, handout.createdAt);
     const fetched = await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one });
     assert.equal(fetched.payload.handout.title, "第3讲 一元一次方程");
-    assert.deepEqual(fetched.payload.handout.items.map((item) => item.id), ["q2", "s1", "q1"]);
+    assert.deepEqual(fetched.payload.handout.items.map((item) => item.id), ["q2", "s1", "q1", "t1", "h1"]);
     assert.equal(fetched.payload.handout.items[1].note, "$\\frac{1}{2}$");
-    assert.deepEqual(fetched.payload.handout.items.map((item) => item.band), ["variant", undefined, "practice"], "bands persist through save and reload");
+    assert.deepEqual(fetched.payload.handout.items.map((item) => item.band), ["variant", undefined, "practice", undefined, undefined], "bands persist through save and reload");
+    assert.deepEqual(fetched.payload.handout.items.slice(3).map((item) => [item.kind, item.moduleId]), [["quiz", "s1"], ["homework", "s1"]]);
     const list = await jsonRequest(base, "/api/handouts", { cookie: one });
     assert.deepEqual(list.payload.handouts.map((item) => [item.title, item.outline]), [["第3讲 一元一次方程", [{ title: "", questionIds: ["q-c"] }, { title: "一、知识梳理", questionIds: ["q-a"] }]]], "the list outlines modules and their question references");
     assert.equal(list.payload.handouts[0].items, undefined, "the list carries summaries only");
+    assert.deepEqual(list.payload.handouts[0].sheetCounts, { quiz: 1, homework: 1 }, "the list counts the 小测 and 作业 questions");
 
     // 机构版：其他老师能看到并打开同一份讲义，但只有管理员能删除。
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: two })).payload.handout.title, "第3讲 一元一次方程");

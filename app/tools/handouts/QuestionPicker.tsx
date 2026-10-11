@@ -3,9 +3,9 @@
 import { type ReactNode, useState } from "react";
 import { CategoryTree } from "../../components/CategoryTree";
 import { QuestionBody } from "../../components/QuestionBody";
-import { HANDOUT_BANDS, HANDOUT_PARTS } from "../../../lib/handout-rules.mjs";
+import { HANDOUT_BANDS, HANDOUT_PARTS, sheetLabel } from "../../../lib/handout-rules.mjs";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../../lib/library-tree";
-import type { HandoutBand, LibraryData, QuestionType } from "../../../lib/types";
+import type { HandoutBand, HandoutSheet, LibraryData, QuestionType } from "../../../lib/types";
 
 export type PickerMode = { kind: "add"; sectionId: string | null; band: HandoutBand } | { kind: "replace"; itemId: string; label: string };
 
@@ -14,16 +14,21 @@ const PAGE_SIZE = 30;
 
 // The same bank stays open while adding to different lanes or replacing a question.
 // The footer sits under the directory: the editor puts its back link, save status and export there.
-export function QuestionPicker({ library, mode, taken, onPick, sections, onModeChange, footer }: {
+// For a 小测 or 作业 the chosen module is the one the new questions test, and there is no band to choose.
+// taken: already in the open sheet, so not offered again; usedIn: where else in this 讲 a question is used.
+export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, sections, onModeChange, footer }: {
   library: LibraryData | null;
   mode: PickerMode;
+  sheet: HandoutSheet;
   taken: Set<string>;
+  usedIn: Map<string, Set<string>>;
   onPick: (questionIds: string[]) => void;
   sections: { id: string; label: string }[];
   onModeChange: (mode: PickerMode | null) => void;
   footer?: ReactNode;
 }) {
   const replacing = mode.kind === "replace";
+  const list = sheet === "handout" ? null : sheetLabel(sheet);
   const [moduleId, setModuleId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [type, setType] = useState<"全部" | QuestionType>("全部");
@@ -58,15 +63,15 @@ export function QuestionPicker({ library, mode, taken, onPick, sections, onModeC
       {footer}
     </aside>
     <div className="picker-main">
-      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div className="picker-target">
-        <span>加入</span>
-        <select aria-label="加入模块" value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
-          {!sections.length && <option value="">请先添加知识模块</option>}
+      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div className={`picker-target${list ? " list" : ""}`}>
+        <span>{list ? `加入${list}，考查` : "加入"}</span>
+        <select aria-label={list ? "考查模块" : "加入模块"} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
+          {!sections.length && <option value="">{list ? "讲义还没有知识模块" : "请先添加知识模块"}</option>}
           {sections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
         </select>
-        <select aria-label="题目用途" value={mode.band} onChange={(event) => onModeChange({ ...mode, band: event.target.value as HandoutBand })}>
+        {!list && <select aria-label="题目用途" value={mode.band} onChange={(event) => onModeChange({ ...mode, band: event.target.value as HandoutBand })}>
           {HANDOUT_BANDS.map((band) => <option key={band} value={band}>作为{HANDOUT_PARTS[band].label}</option>)}
-        </select>
+        </select>}
       </div>}
       <div className="picker-filters">
         <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder="搜索四位 ID（全库）、题干、知识点" />
@@ -77,11 +82,12 @@ export function QuestionPicker({ library, mode, taken, onPick, sections, onModeC
       {!library ? <p className="picker-empty">正在读取题库…</p> : !modules.length ? <p className="picker-empty">题库还没有模块。</p> : !results.length ? <p className="picker-empty">没有符合条件的题目。</p> : <>
         <p className="picker-count">共 {results.length} 道</p>
         <ol className="picker-list">{results.slice(0, limit).map((question, index) => {
-          const inHandout = taken.has(question.id); const chosen = isSelected(question.id);
+          const inHandout = taken.has(question.id); const chosen = isSelected(question.id); const elsewhere = usedIn.get(question.id);
           return <li key={question.id} className={`picker-item${chosen ? " chosen" : ""}`}>
             <QuestionBody question={question} number={index + 1} />
             <div className="picker-item-foot"><small>{question.code && `ID ${question.code} · `}{question.type} · {question.difficulty} · {pathOf(question.categoryId)}</small>
-              {inHandout ? <span className="picker-taken">已在讲义中</span> : replacing
+              {elsewhere && !inHandout && <span className="picker-taken">{[...elsewhere].join("、")}已用</span>}
+              {inHandout ? <span className="picker-taken">已在{list ?? "讲义"}中</span> : replacing
                 ? <button className="secondary" onClick={() => onPick([question.id])}>换成这道</button>
                 : <button className={chosen ? "picker-toggle on" : "picker-toggle"} aria-pressed={chosen} onClick={() => toggle(question.id)}>{chosen ? "✓ 已选" : "＋ 选择"}</button>}
             </div>
@@ -90,7 +96,7 @@ export function QuestionPicker({ library, mode, taken, onPick, sections, onModeC
         {results.length > limit && <button className="secondary picker-more" onClick={() => setLimit((current) => current + PAGE_SIZE)}>再显示 {Math.min(PAGE_SIZE, results.length - limit)} 道</button>}
       </>}
       </div>
-      {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="primary-button" disabled={!availableSelection.length || !mode.sectionId} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{HANDOUT_PARTS[mode.band].label}</button></div>}
+      {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="primary-button" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
     </div>
   </section>;
 }

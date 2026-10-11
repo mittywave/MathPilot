@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { arrangeHandouts, authorizeDownload, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
-import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_GRADES, HANDOUT_PARTS, HANDOUT_SHELVES, HANDOUT_TERMS, UNSORTED_TOPIC_LABEL, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, sameGroup, setItemBand, shelfOf } from "../../../lib/handout-rules.mjs";
+import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_GRADES, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, HANDOUT_TERMS, UNSORTED_TOPIC_LABEL, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
@@ -11,7 +11,7 @@ import { clipboardImage } from "../../../lib/image-tools";
 import { randomClientId } from "../../../lib/client-random-id.mjs";
 import { droppedImage, readScreenshot, recognizeScreenshot } from "../../../lib/screenshot-recognition";
 import type { NoteRecognitionResult } from "../../../lib/recognition-contract";
-import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutShelf, HandoutTerm, HandoutSummary, LibraryData, Question, StudentSummary } from "../../../lib/types";
+import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutSheet, HandoutShelf, HandoutTerm, HandoutSummary, LibraryData, Question, StudentSummary } from "../../../lib/types";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
@@ -23,16 +23,19 @@ import "./handouts.css";
 import "../../components/note-editor.css";
 
 type SaveState = "saved" | "editing" | "saving" | "failed";
-type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand };
+type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand; sheet: HandoutSheet };
 type SectionItem = Extract<HandoutItem, { kind: "section" }>;
 type QuestionItem = Extract<HandoutItem, { kind: "question" }>;
+type ListSheet = Exclude<HandoutSheet, "handout">;
+type ListItem = Extract<HandoutItem, { kind: ListSheet }>;
 type ExportFormat = "pdf" | "word";
 
 const ENTRY_CATEGORY_KEY = "mitty-handout-entry-category";
-const ANSWER_CHOICES: { value: WordAnswerPlacement; label: string; hint: string }[] = [
-  { value: "none", label: "不附", hint: "学生版：例题留课堂笔记区，练习和变式留作答空间。" },
-  { value: "end", label: "文末", hint: "学生版正文，答案与解析按例题、练习、变式分组附在文末。" },
-  { value: "each", label: "每题后", hint: "教师版：每道题后紧跟答案与解析。" },
+// listHint is shown for 小测 and 作业, which have no 例题/练习/变式.
+const ANSWER_CHOICES: { value: WordAnswerPlacement; label: string; hint: string; listHint: string }[] = [
+  { value: "none", label: "不附", hint: "学生版：例题留课堂笔记区，练习和变式留作答空间。", listHint: "学生版：解答题留作答空间。" },
+  { value: "end", label: "文末", hint: "学生版正文，答案与解析按例题、练习、变式分组附在文末。", listHint: "学生版正文，答案与解析附在文末。" },
+  { value: "each", label: "每题后", hint: "教师版：每道题后紧跟答案与解析。", listHint: "教师版：每道题后紧跟答案与解析。" },
 ];
 // The editor engine loads with the first module; until then the note shows as it reads.
 const NoteEditor = lazy(() => import("../../components/NoteEditor"));
@@ -156,7 +159,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     try {
       const draft = source ? (await fetchHandout(source.id)).handout : null;
       const { handout } = await createHandout(draft
-        ? { title: `${draft.title}（副本）`, items: draft.items.map((item) => ({ ...item, id: newId() })), ...group }
+        ? { title: `${draft.title}（副本）`, items: copyHandoutItems(draft.items, newId), ...group }
         : { title: DEFAULT_HANDOUT_TITLE, items: [], ...group });
       window.location.assign(`/tools/handouts?id=${encodeURIComponent(handout.id)}`);
     } catch (error) { onNotice(error instanceof Error ? error.message : "讲义创建失败"); setBusy(false); }
@@ -201,9 +204,10 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     catch (error) { onNotice(error instanceof Error ? error.message : "讲义删除失败"); }
   }
 
-  // One line of the contents: lesson number, title, its modules and how many questions it holds.
+  // One line of the contents: lesson number, title, its modules and how many questions its 讲义, 小测 and 作业 hold.
   const entry = (handout: HandoutSummary, order: { index: number; size: number } | null, place?: string) => {
     const modules = moduleList(handout);
+    const counts = [questionTotal(handout), handout.sheetCounts.quiz, handout.sheetCounts.homework];
     const numbered = Boolean(order && handout.term && !place);
     return <li className="handout-entry" key={handout.id}>
       <a className={numbered ? "numbered" : undefined} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
@@ -213,7 +217,9 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
           <strong>{handout.title}</strong>
           {modules && <span>{modules}</span>}
         </span>
-        <span className="handout-entry-count">{questionTotal(handout)} 题</span>
+        <span className="handout-entry-count" aria-label={HANDOUT_SHEETS.map((sheet, index) => `${sheet.label} ${counts[index]} 题`).join("，")}>
+          {HANDOUT_SHEETS.map((sheet, index) => <span key={sheet.value} className={counts[index] ? undefined : "zero"}>{sheet.label} {counts[index]}</span>)}
+        </span>
       </a>
       <PaperMoreMenu label={`${handout.title} 更多操作`}>
         {order && order.size > 1 && <>
@@ -313,6 +319,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [picker, setPicker] = useState<PickerMode | null>(null);
+  // 讲义、小测、作业 share one page; the address keeps the open one, so a reload or a link lands on it.
+  const [sheet, setSheet] = useState<HandoutSheet>(() => HANDOUT_SHEETS.find((item) => item.value === new URLSearchParams(window.location.search).get("sheet"))?.value ?? "handout");
   const bankPane = useRef<HTMLDivElement>(null);
   const [entry, setEntry] = useState<EntryState | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -332,6 +340,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     void fetchHandout(id).then(({ handout }) => { setHome({ grade: handout.grade, term: handout.term, domain: handout.domain, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()) }; setDoc(latest.current); }).catch(() => setMissing(true));
     void fetchLibrary().then(setLibrary).catch(() => setLibrary({ scope: "public", modules: [], categories: [], questions: [] }));
   }, [id]);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ id });
+    if (sheet !== "handout") params.set("sheet", sheet);
+    window.history.replaceState(null, "", `/tools/handouts?${params}`);
+  }, [id, sheet]);
 
   // Unsaved text or a failed save would be lost on leaving.
   useEffect(() => {
@@ -370,14 +384,32 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     setItems([...items.slice(0, at), ...added, ...items.slice(at)]);
   }
 
-  // A replacement keeps the slot: same module, same band, same position.
+  // 小测 and 作业 questions join the end of their list, testing the chosen module.
+  function appendToList(questionIds: string[], list: ListSheet, moduleId: string | null) {
+    setItems([...latest.current!.items, ...questionIds.map((questionId): HandoutItem => ({ id: newId(), kind: list, scope: "public", questionId, moduleId }))]);
+  }
+
+  // A replacement keeps the slot: same module, same band or list, same position.
   function pick(questionIds: string[], target: PickerMode) {
     if (target.kind === "replace") {
       const [questionId] = questionIds; const itemId = target.itemId;
-      setItems(latest.current!.items.map((item) => item.id === itemId && item.kind === "question" ? { ...item, scope: "public", questionId } : item));
+      setItems(latest.current!.items.map((item) => item.id === itemId && item.kind !== "section" ? { ...item, scope: "public", questionId } : item));
       onNotice("题目已替换");
-    } else { insertQuestions(questionIds, target.sectionId, target.band); onNotice(`已加入 ${questionIds.length} 道${HANDOUT_PARTS[target.band].label}`); }
+    } else if (sheet === "handout") { insertQuestions(questionIds, target.sectionId, target.band); onNotice(`已加入 ${questionIds.length} 道${HANDOUT_PARTS[target.band].label}`); }
+    else { appendToList(questionIds, sheet, target.sectionId); onNotice(`已加入 ${questionIds.length} 道${sheetLabel(sheet)}题`); }
     if (target.kind === "replace") setPicker(null);
+  }
+
+  // A new module follows the last one, ahead of the 小测 and 作业 lists.
+  function addModule() {
+    const items = latest.current!.items;
+    const lists = items.findIndex((item) => item.kind === "quiz" || item.kind === "homework");
+    const at = lists < 0 ? items.length : lists;
+    setItems([...items.slice(0, at), { id: newId(), kind: "section", title: "", note: "" }, ...items.slice(at)]);
+  }
+
+  function openSheet(next: HandoutSheet) {
+    setSheet(next); setPicker(null);
   }
 
   function choosePicker(mode: PickerMode) {
@@ -390,10 +422,13 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     onNotice(`已改为${HANDOUT_PARTS[band].label}`);
   }
 
+  // 小测 and 作业 questions on the module stay in their lists and test the neighbouring module instead.
   function removeModule(section: SectionItem, questions: QuestionItem[], name: string) {
-    if (questions.length && !window.confirm(`删除“${name}”及其中 ${questions.length} 道题？题目仍保留在题库中。`)) return;
-    const removed = new Set([section.id, ...questions.map((item) => item.id)]);
-    setItems(latest.current!.items.filter((item) => !removed.has(item.id)));
+    const tested = latest.current!.items.filter((item) => (item.kind === "quiz" || item.kind === "homework") && item.moduleId === section.id).length;
+    const ask = questions.length ? `删除“${name}”及其中 ${questions.length} 道题？` : `删除“${name}”？`;
+    const moved = tested ? `考查这个模块的 ${tested} 道小测、作业题会改为考查相邻模块。` : "";
+    if ((questions.length || tested) && !window.confirm(`${ask}${moved}题目仍保留在题库中。`)) return;
+    setItems(removeHandoutModule(latest.current!.items, section.id));
   }
 
   function openNewEntry(sectionId: string | null, band: HandoutBand) {
@@ -402,12 +437,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     const remembered = readStored(ENTRY_CATEGORY_KEY);
     const category = library.categories.find((item) => item.id === remembered);
     const targetModule = library.modules.find((item) => item.id === (category?.moduleId ?? remembered)) ?? library.modules[0];
-    setEntry({ draft: newQuestionDraft(targetModule, category && category.moduleId === targetModule.id ? category.id : targetModule.id), sectionId, band });
+    setEntry({ draft: newQuestionDraft(targetModule, category && category.moduleId === targetModule.id ? category.id : targetModule.id), sectionId, band, sheet });
   }
 
   function openEditEntry(question: Question) {
     const questionModule = library?.modules.find((item) => item.id === question.moduleId);
-    setEntry({ draft: editableQuestionDraft(question, questionModule), sectionId: null, band: "example" });
+    setEntry({ draft: editableQuestionDraft(question, questionModule), sectionId: null, band: "example", sheet });
   }
 
   function entrySaved(current: EntryState, saved: Question[]) {
@@ -416,7 +451,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     const created = saved.filter((question) => question.id !== current.draft.id);
     if (!created.length) return;
     writeStored(ENTRY_CATEGORY_KEY, created[0].categoryId);
-    insertQuestions(created.map((question) => question.id), current.sectionId, current.band);
+    if (current.sheet === "handout") insertQuestions(created.map((question) => question.id), current.sectionId, current.band);
+    else appendToList(created.map((question) => question.id), current.sheet, current.sectionId);
   }
 
   // 知识点截图 → AI 转录成小标题、段落、要点和配图，追加到这个模块的知识点里。
@@ -459,29 +495,34 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     setLatexStatus(status);
   }
 
-  // PDF and LaTeX source share one generator; Word keeps the editable source format.
+  // PDF and LaTeX source share one generator; Word keeps the editable source format. The open 讲义, 小测 or 作业 is exported.
   async function exportHandout(kind: ExportFormat | "source") {
     if (!doc || exporting) return;
     setExporting(kind);
     try {
-      const { modules, missingCount } = handoutSections(doc.items, (_scope, questionId) => resolve(questionId));
-      const ids = [...new Set(doc.items.flatMap((item) => item.kind === "question" && resolve(item.questionId) ? [item.questionId] : []))];
+      const find = (_scope: unknown, questionId: string) => resolve(questionId);
+      const handout = sheet === "handout" ? handoutSections(doc.items, find) : null;
+      const list = sheet === "handout" ? null : sheetQuestions(doc.items, sheet, find);
+      const missingCount = (handout ?? list)!.missingCount;
+      const ids = [...new Set(doc.items.flatMap((item) => item.kind === (sheet === "handout" ? "question" : sheet) && resolve(item.questionId) ? [item.questionId] : []))];
       if (ids.length) await authorizeDownload(ids);
       const notes = missingCount ? [`跳过 ${missingCount} 道无法读取的题`] : [];
+      const fileName = list ? `${doc.title}-${sheetLabel(sheet)}` : doc.title;
       if (kind === "word") {
         const { buildWordBlob, handoutWordSections } = await import("../../../lib/export-word");
-        saveBlob(await buildWordBlob({ title: doc.title, sections: handoutWordSections(modules, answers), answers }), `${doc.title}.docx`);
+        const word = list ? { title: `${doc.title} · ${sheetLabel(sheet)}`, sections: [{ questions: list.questions }] } : { title: doc.title, sections: handoutWordSections(handout!.modules, answers) };
+        saveBlob(await buildWordBlob({ ...word, answers }), `${fileName}.docx`);
         onNotice(["Word 已生成", ...notes].join("，"));
       } else {
         const { buildHandoutLatexProject, compileLatexPdf, latexSourceZip } = await import("../../../lib/handout-latex-files");
-        const project = await buildHandoutLatexProject({ title: doc.title, modules, answers });
+        const project = await buildHandoutLatexProject(list ? { title: doc.title, answers, sheet: sheetLabel(sheet), questions: list.questions } : { title: doc.title, answers, modules: handout!.modules });
         if (project.missingFigures) notes.push(`${project.missingFigures} 张配图未能读取`);
         if (kind === "source") {
-          saveBlob(await latexSourceZip(project), `${doc.title}-LaTeX.zip`);
+          saveBlob(await latexSourceZip(project), `${fileName}-LaTeX.zip`);
           onNotice(["LaTeX 源码已下载", ...notes].join("，"));
         } else {
           const { pdf, issues } = await compileLatexPdf(project);
-          saveBlob(pdf, `${doc.title}.pdf`);
+          saveBlob(pdf, `${fileName}.pdf`);
           setLatexStatus((status) => status && { ...status, installed: true });
           onNotice(["PDF 已生成", ...(issues ? [`${issues} 处公式需要检查`] : []), ...notes].join("，"));
         }
@@ -500,9 +541,17 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     ? picker
     : { kind: "add", sectionId: picker?.kind === "add" && modules.some(({ section }) => section.id === picker.sectionId) ? picker.sectionId : modules[0]?.section.id ?? null, band: picker?.kind === "add" ? picker.band : "example" };
   const numbers = handoutNumbers(doc.items);
-  const taken = new Set(doc.items.flatMap((item) => item.kind === "question" ? [item.questionId] : []));
-  const questionCount = doc.items.filter((item) => item.kind === "question").length;
-  const missingCount = doc.items.filter((item) => item.kind === "question" && libraryReady && !resolve(item.questionId)).length;
+  const moduleOptions = modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }));
+  const listed = doc.items.filter((item): item is ListItem => item.kind === sheet);
+  // A question goes into each of the 讲义, 小测 and 作业 at most once; the bank also marks where else in this 讲 it is used.
+  const placed = doc.items.flatMap((item) => item.kind === "section" ? [] : [{ questionId: item.questionId, sheet: item.kind === "question" ? "handout" as const : item.kind }]);
+  const taken = new Set(placed.filter((entry) => entry.sheet === sheet).map((entry) => entry.questionId));
+  const usedIn = new Map<string, Set<string>>();
+  for (const entry of placed) if (entry.sheet !== sheet) usedIn.set(entry.questionId, (usedIn.get(entry.questionId) ?? new Set<string>()).add(sheetLabel(entry.sheet)));
+  const sizes = Object.fromEntries(HANDOUT_SHEETS.map((item) => [item.value, placed.filter((entry) => entry.sheet === item.value).length])) as Record<HandoutSheet, number>;
+  const questionCount = sizes[sheet];
+  const missingCount = libraryReady ? placed.filter((entry) => entry.sheet === sheet && !resolve(entry.questionId)).length : 0;
+  const answerChoice = ANSWER_CHOICES.find((choice) => choice.value === answers);
   const saveLabel = { saved: "已保存", editing: "编辑中", saving: "保存中…", failed: "保存失败" }[saveState];
   // The back link names where this handout lives and returns to that shelf.
   const homeShelf = shelfOf(home);
@@ -536,11 +585,38 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     </article>;
   };
 
+  // A 小测 or 作业 question: numbered in its list, with the module it tests in place of the 考点.
+  const listCard = (item: ListItem, index: number, size: number) => {
+    const question = resolve(item.questionId);
+    const label = String(index + 1); const list = sheetLabel(item.kind); const name = `${list} ${label}`;
+    return <article className="handout-question" key={item.id}>
+      {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
+      <div className="handout-question-foot">
+        {question && library && <small>{question.type} · {categoryPath(library.modules, library.categories, question.categoryId)}</small>}
+        <label className="handout-tests">考查
+          <select aria-label={`${name} 考查模块`} value={item.moduleId ?? ""} onChange={(event) => setItems(doc.items.map((entry) => entry.id === item.id ? { ...item, moduleId: event.target.value || null } : entry))}>
+            {!item.moduleId && <option value="">未选模块</option>}
+            {moduleOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </label>
+        <div className="handout-actions">
+          <button aria-label={`${name} 上移`} disabled={index === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
+          <button aria-label={`${name} 下移`} disabled={index === size - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
+          <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
+          {question?.canEdit && <PaperMoreMenu label="题目更多操作"><button onClick={() => openEditEntry(question)}>编辑原题</button></PaperMoreMenu>}
+          <button className="danger" aria-label={`${name} 移出${list}`} onClick={() => setItems(doc.items.filter((entry) => entry.id !== item.id))}>移出{list}</button>
+        </div>
+      </div>
+    </article>;
+  };
+  // The bank keeps adding to the module it last pointed at.
+  const addTarget = activePicker.kind === "add" ? activePicker.sectionId : modules[0]?.section.id ?? null;
+
   return <main className="toolbox handouts handout-editor">
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
-        <QuestionPicker library={library} mode={activePicker} taken={taken} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
-          sections={modules.map(({ section }, index) => ({ id: section.id, label: `模块${moduleHeading(section.title, index).numeral} · ${section.title || "未命名模块"}` }))}
+        <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
+          sections={moduleOptions}
           footer={<div className="handout-bar">
             <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><BackIcon /><span>{backLabel}</span></a>
             <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
@@ -548,8 +624,26 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           </div>} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
-    <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
+    <div className="handout-draft-head">
+      <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
+      <div className="handout-sheets" role="tablist" aria-label="本讲资料">
+        {HANDOUT_SHEETS.map((item) => <button key={item.value} role="tab" aria-selected={sheet === item.value} onClick={() => openSheet(item.value)}>
+          {item.label}<span className={`handout-count${sizes[item.value] ? "" : " zero"}`} aria-label={`${sizes[item.value]} 道题`}>{sizes[item.value]}</span>
+        </button>)}
+      </div>
+    </div>
 
+    {sheet !== "handout" ? <section className="handout-list" aria-label={sheetLabel(sheet)}>
+      <div className="handout-lane">
+        <div className="handout-lane-head"><b>{sheetLabel(sheet)}</b><span className={`handout-count${listed.length ? "" : " zero"}`} aria-label={`${listed.length} 道题`}>{listed.length}</span>
+          <div className="handout-lane-add">
+            <button className="text-button" disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: addTarget, band: "example" })}>从题库选题</button>
+            <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(addTarget, "example")}>录入新题</button>
+          </div>
+        </div>
+        {listed.map((item, index) => listCard(item, index, listed.length))}
+      </div>
+    </section> : <>
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
       return <section className="handout-module" key={section.id} aria-label={badge}>
@@ -594,7 +688,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         })}
       </section>;
     })}
-    <button className="handout-add-section" onClick={() => setItems([...doc.items, { id: newId(), kind: "section", title: "", note: "" }])}>＋ 添加知识模块</button>
+    <button className="handout-add-section" onClick={addModule}>＋ 添加知识模块</button>
+    </>}
 
       </div>
     </div>
@@ -604,10 +699,10 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       moduleIds={entry.draft.id ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
       onSaved={(saved) => entrySaved(entry, saved)} onClose={() => setEntry(null)} onNotice={onNotice} />}
     {exportOpen && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="导出讲义">
-      <div className="modal-head"><div><span className="eyebrow">导出 · {questionCount} 题</span><h2>{doc.title}</h2></div><button className="close" aria-label="关闭" disabled={Boolean(exporting)} onClick={() => setExportOpen(false)}>×</button></div>
+      <div className="modal-head"><div><span className="eyebrow">导出{sheet === "handout" ? "" : sheetLabel(sheet)} · {questionCount} 题</span><h2>{doc.title}</h2></div><button className="close" aria-label="关闭" disabled={Boolean(exporting)} onClick={() => setExportOpen(false)}>×</button></div>
       <fieldset className="handout-answer-choice" disabled={Boolean(exporting)}><legend>答案</legend>
         <div>{ANSWER_CHOICES.map((choice) => <label key={choice.value} className={answers === choice.value ? "active" : ""}><input type="radio" name="handout-answers" value={choice.value} checked={answers === choice.value} onChange={() => setAnswers(choice.value)} />{choice.label}</label>)}</div>
-        <p>{ANSWER_CHOICES.find((choice) => choice.value === answers)?.hint}</p>
+        <p>{sheet === "handout" ? answerChoice?.hint : answerChoice?.listHint}</p>
       </fieldset>
       {!!missingCount && <p className="handout-warning">有 {missingCount} 道题已无法读取，导出时会跳过。</p>}
       {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在本机用「启动知题」运行时生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
