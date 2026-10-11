@@ -1,6 +1,6 @@
 import type { HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutOutline, HandoutShelf, HandoutTerm, LibraryScope, Question } from './types';
 
-export type HandoutPart = { label: string; tagline: string; hint: string; prefix?: string };
+export type HandoutPart = { label: string; tagline: string; prefix?: string };
 export const HANDOUT_LIMITS: { title: number; items: number; id: number; sectionTitle: number; note: number };
 export const DEFAULT_HANDOUT_TITLE: string;
 export const HANDOUT_GRADES: { value: HandoutGrade; label: string }[];
@@ -14,7 +14,7 @@ export function normalizeHandoutGroup(raw: unknown): HandoutGroup | null;
 export function sameGroup(a: GroupLike, b: GroupLike): boolean;
 export function groupLabel(group: GroupLike): string;
 export const HANDOUT_BANDS: HandoutBand[];
-export const HANDOUT_PARTS: { knowledge: HandoutPart } & Record<HandoutBand, HandoutPart & { prefix: string }>;
+export const HANDOUT_PARTS: { knowledge: HandoutPart & { hint: string } } & Record<HandoutBand, HandoutPart & { prefix: string }>;
 export function bandOf(item: { band?: unknown } | null | undefined): HandoutBand;
 export function bandLabel(band: HandoutBand, number: number): string;
 export function chineseNumeral(value: number): string;

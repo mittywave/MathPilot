@@ -509,17 +509,19 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const backLabel = groupLabel(home);
   const backHref = homeShelf === "student" ? `/tools/handouts?shelf=student&student=${encodeURIComponent(home.studentId ?? "")}` : homeShelf === "course" ? `/tools/handouts?shelf=course&grade=${home.grade}` : "/tools/handouts?shelf=topic";
 
+  // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
+  // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
   const questionCard = (item: QuestionItem, band: HandoutBand, laneIndex: number, laneSize: number) => {
     const question = resolve(item.questionId);
     const label = numbers.get(item.id) ?? ""; const name = band === "practice" ? `练习 ${label}` : label;
     const points = question ? questionPoints(question) : [];
     return <article className="handout-question" key={item.id}>
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
-      {question && <div className="handout-points">{points.length
-        ? <><span>考点</span>{points.map((point) => <b key={point}>{point}</b>)}</>
-        : question.canEdit ? <button className="text-button" onClick={() => openEditEntry(question)}>未标知识点 · 补充</button> : <span>未标知识点</span>}</div>}
       <div className="handout-question-foot">
-        <small>{question && library ? `${question.type} · ${categoryPath(library.modules, library.categories, question.categoryId)}` : ""}</small>
+        {question && library && <small>{question.type} · {categoryPath(library.modules, library.categories, question.categoryId)}</small>}
+        {question && <span className="handout-points">{points.length
+          ? points.map((point) => <b key={point}>{point}</b>)
+          : question.canEdit ? <button className="text-button" onClick={() => openEditEntry(question)}>未标知识点 · 补充</button> : <em>未标知识点</em>}</span>}
         <div className="handout-actions">
           <button aria-label={`${name} 上移`} disabled={laneIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
           <button aria-label={`${name} 下移`} disabled={laneIndex === laneSize - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
@@ -550,28 +552,25 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
-      const hasNote = Boolean(section.note.trim());
       return <section className="handout-module" key={section.id} aria-label={badge}>
         <div className="handout-module-head">
-          <span className="handout-module-badge">{badge}</span>
+          <span className="handout-module-no" aria-hidden="true">{heading.numeral}</span>
           <input aria-label={`${badge}名称`} value={section.title} placeholder="模块名称，如：平行四边形的性质" onChange={(event) => updateSection(section.id, { title: event.target.value })} onBlur={() => void flush()} />
-          <div className="handout-actions">
-            <button aria-label={`${badge}上移`} disabled={moduleIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, section.id, -1))}>↑</button>
-            <button aria-label={`${badge}下移`} disabled={moduleIndex === modules.length - 1} onClick={() => setItems(moveHandoutItem(doc.items, section.id, 1))}>↓</button>
-            <PaperMoreMenu label="模块更多操作"><button onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块</button></PaperMoreMenu>
-          </div>
+          <PaperMoreMenu label="模块更多操作">
+            {modules.length > 1 && <>
+              <button disabled={moduleIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, section.id, -1))}>上移</button>
+              <button disabled={moduleIndex === modules.length - 1} onClick={() => setItems(moveHandoutItem(doc.items, section.id, 1))}>下移</button>
+            </>}
+            <button className="danger-text" onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块</button>
+          </PaperMoreMenu>
         </div>
-        <p className="handout-module-status">
-          <span className={hasNote ? "done" : ""}>知识点 {hasNote ? "✓" : "待补"}</span>
-          {HANDOUT_BANDS.map((band) => <span key={band} className={bands[band].length ? "done" : ""}>{HANDOUT_PARTS[band].label} {bands[band].length}</span>)}
-        </p>
 
         <div className={`handout-lane knowledge${dropNote === section.id ? " dropping" : ""}`}
           onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void importNoteScreenshot(section.id, file); } }}
           onDragOver={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); setDropNote(section.id); }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropNote(null); }}
           onDrop={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); setDropNote(null); const file = droppedImage(event); if (file) void importNoteScreenshot(section.id, file); else onNotice("请选择图片文件"); }}>
-          <div className="handout-lane-head"><b>{HANDOUT_PARTS.knowledge.label}</b><span>{HANDOUT_PARTS.knowledge.tagline}</span>
+          <div className="handout-lane-head"><b>{HANDOUT_PARTS.knowledge.label}</b>
             {dropNote === section.id ? <em>松开即可识别截图</em> : <button className="text-button" title="选择、拖入或粘贴知识点截图" disabled={Boolean(noteImport)} onClick={() => chooseNoteScreenshot(section.id)}>{noteImport === section.id ? "正在识别截图…" : "截图识别"}</button>}
           </div>
           <Suspense fallback={<div className="note-editor"><div className="note-editor-body"><NotePreview note={section.note} /></div></div>}>
@@ -580,14 +579,17 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         </div>
 
         {HANDOUT_BANDS.map((band) => {
-          const part = HANDOUT_PARTS[band]; const lane = bands[band];
-          return <div className={`handout-lane ${band}`} key={band}>
-            <div className="handout-lane-head"><b>{part.label}</b><span>{part.tagline}</span></div>
-            {lane.length ? lane.map((item, laneIndex) => questionCard(item, band, laneIndex, lane.length)) : <p className="handout-lane-hint">{part.hint}</p>}
-            <div className="handout-add">
-              <button className="secondary" disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>＋ 从题库选题</button>
-              <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(section.id, band)}>＋ 录入新题</button>
+          const lane = bands[band];
+          // The lane the bank is adding to is marked, so it is always clear where picked questions go.
+          const target = activePicker.kind === "add" && activePicker.sectionId === section.id && activePicker.band === band;
+          return <div className={`handout-lane ${band}${target ? " target" : ""}`} key={band}>
+            <div className="handout-lane-head"><b>{HANDOUT_PARTS[band].label}</b>{lane.length ? <span>{lane.length}</span> : null}
+              <div className="handout-lane-add">
+                <button className="text-button" aria-pressed={target} disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>从题库选题</button>
+                <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(section.id, band)}>录入新题</button>
+              </div>
             </div>
+            {lane.map((item, laneIndex) => questionCard(item, band, laneIndex, lane.length))}
           </div>;
         })}
       </section>;
