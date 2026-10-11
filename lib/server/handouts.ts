@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
-import { handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
+import { HANDOUT_TERMS, handoutModules, handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
 import { requireAdmin } from "./library";
-import type { AuthUser, Handout, HandoutGroup, HandoutSummary } from "../types";
+import type { AuthUser, CourseLessonDetail, Handout, HandoutGrade, HandoutGroup, HandoutSummary } from "../types";
 
 type AppEnv = { DB: D1Database };
 type HandoutRow = { id: string; title: string; items_json: string; grade: number | null; term: string | null; domain: string | null; student_id: string | null; student_name: string | null; position: number; created_at: number; updated_at: number };
@@ -118,4 +118,30 @@ export async function deleteHandout(user: AuthUser, id: string) {
   if (!handout.studentId) requireAdmin(user);
   const result = await db().prepare("DELETE FROM handouts WHERE id = ?").bind(id).run();
   if (!result.meta.changes) throw responseError("讲义不存在", 404);
+}
+
+// 课程体系 in teaching order (初一暑假第1讲 first) for the course knowledge graph: every lesson with its modules
+// and how many 例题, 练习, 变式, 小测 and 作业 questions each module holds. Course handouts are shared, so no owner filter.
+type CourseRow = Omit<HandoutRow, "student_name" | "updated_at">;
+type PlacedRow = { row: CourseRow; grade: HandoutGrade; term: number };
+
+export async function readCourseLessons(): Promise<CourseLessonDetail[]> {
+  const rows = await db().prepare(`SELECT id, title, items_json, grade, term, domain, student_id, position, created_at FROM handouts
+    WHERE term IS NOT NULL AND student_id IS NULL`).all<CourseRow>();
+  const termRank = (term: string | null) => HANDOUT_TERMS.findIndex((item) => item.value === term);
+  return rows.results.flatMap((row: CourseRow): PlacedRow[] => {
+    const group = storedGroup(row);
+    return group.grade && group.term ? [{ row, grade: group.grade, term: termRank(group.term) }] : [];
+  }).sort((left: PlacedRow, right: PlacedRow) => left.grade - right.grade || left.term - right.term || left.row.position - right.row.position || left.row.created_at - right.row.created_at)
+    .map(({ row, grade }: PlacedRow) => {
+      let raw: unknown = [];
+      try { raw = JSON.parse(row.items_json); } catch { /* A damaged row reads as a lesson without modules. */ }
+      const { items } = normalizeHandoutDraft({ title: row.title, items: raw });
+      const tested = (sheet: "quiz" | "homework", sectionId: string) => items.filter((item) => item.kind === sheet && item.moduleId === sectionId).length;
+      const modules = handoutModules(items).flatMap((module) => module.section ? [{
+        id: module.section.id, title: module.section.title,
+        counts: { example: module.bands.example.length, practice: module.bands.practice.length, variant: module.bands.variant.length, quiz: tested("quiz", module.section.id), homework: tested("homework", module.section.id) },
+      }] : []);
+      return { id: row.id, title: row.title, grade, modules };
+    });
 }

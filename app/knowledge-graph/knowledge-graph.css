@@ -45,7 +45,13 @@
 .kg-brand:hover { border-color:var(--focus); background:var(--raise-strong); }
 .kg-brand:hover i { color:var(--ink); transform:translate(-2px,-1px); }
 .kg-top-title { min-width:0; display:grid; }
-.kg-top-title b { overflow:hidden; font:600 15px var(--serif); text-overflow:ellipsis; white-space:nowrap; }
+/* The title is the graph switch: it reads like the title, with a small caret. */
+.kg-graph-select { min-width:0; max-width:100%; height:24px; padding:0 18px 0 0; overflow:hidden; border:0; border-radius:6px; appearance:none; -webkit-appearance:none;
+  background:transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b0c6' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 3px center;
+  color:var(--ink); font:600 15px var(--serif); text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+.kg-graph-select:hover { color:#fff; }
+.kg-graph-select:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.kg-graph-select option { background:#171b2b; color:var(--ink); font-family:var(--sans); }
 .kg-top-title small { overflow:hidden; color:var(--faint); font:11px var(--mono); text-overflow:ellipsis; white-space:nowrap; }
 .kg-top-actions { grid-column:3; min-width:0; display:flex; align-items:center; justify-content:flex-end; gap:10px; }
 .kg-segment { flex:0 0 auto; display:flex; gap:2px; padding:3px; border:1px solid var(--stroke); border-radius:11px; background:var(--panel); }
@@ -148,6 +154,15 @@
 .verdict.correct { background:rgba(63,196,141,.14); color:var(--ok); }
 .verdict.partial { background:var(--warn-soft); color:var(--warn); }
 .verdict.incorrect { background:var(--danger-soft); color:var(--danger); }
+/* A course node: how many questions its handout gives it, and the way into that handout. */
+.kg-card-sheets { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; margin:8px 0 0; }
+.kg-card-sheets div { padding:7px 0 6px; border:1px solid var(--stroke); border-radius:10px; text-align:center; }
+.kg-card-sheets dt { color:var(--faint); font-size:11px; }
+.kg-card-sheets dd { margin:2px 0 0; color:var(--ink); font:600 15px var(--mono); }
+.kg-card-sheets .zero dd { color:var(--faint); font-weight:400; }
+.kg-card-open { display:inline-flex; align-items:center; min-height:34px; margin-top:10px; padding:0 14px; border:1px solid var(--stroke-strong); border-radius:10px;
+  background:var(--raise); color:var(--ink); font-size:12.5px; text-decoration:none; }
+.kg-card-open:hover { border-color:var(--focus); background:var(--raise-strong); }
 .kg-card-more { margin-top:18px; padding-top:12px; border-top:1px solid var(--stroke); }
 .kg-card-more summary { color:var(--mut); font-size:12px; cursor:pointer; }
 .kg-card-more summary:hover { color:var(--ink); }
@@ -306,6 +321,10 @@
 .kg-field { display:grid; gap:6px; margin-top:14px; }
 .kg-field>span { color:var(--mut); font-size:12px; }
 .kg-field>small { color:var(--faint); font-size:11.5px; }
+.kg-readonly { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; margin:0; color:var(--ink); font-size:14px; line-height:1.5; }
+.kg-readonly a { color:var(--mut); font-size:12px; text-decoration:underline; text-decoration-color:var(--stroke-strong); text-underline-offset:3px; }
+.kg-readonly a:hover { color:var(--ink); }
+.kg-readonly .kg-link-button { color:var(--ink); font-size:14px; }
 .kg-field input,.kg-field select,.kg-field textarea,.kg-reason,.kg-picker input,.kg-mapping-row input,.kg-batch {
   width:100%; min-width:0; min-height:36px; padding:7px 10px; border:1px solid var(--stroke); border-radius:9px; background:var(--raise); color:var(--ink); font-size:13px; outline:0; }
 .kg-field textarea,.kg-batch { resize:vertical; line-height:1.6; }
@@ -406,13 +425,15 @@
   .kg-hero h1 { font-size:34px; }
   .kg-hero-lede { font-size:14px; }
   .kg-top { grid-template-columns:auto minmax(0,1fr) auto; }
-  .kg-top-title { display:none; }
+  .kg-top-title small { display:none; }
   .kg-student select { width:150px; }
   .kg-hint { display:none; }
 }
 @media (max-width:720px) {
   .kg-top { height:auto; min-height:58px; display:flex; gap:8px; padding:10px 12px; }
-  .kg-segment,.kg-student span,.kg-top-title { display:none; }
+  .kg-segment,.kg-student span,.kg-top-title small { display:none; }
+  .kg-top-title { flex:0 1 auto; }
+  .kg-graph-select { max-width:7.5em; height:38px; font-size:13.5px; }
   .kg-search { min-width:0; flex:1; height:38px; padding:0 12px; }
   .kg-top-actions { flex:0 0 auto; gap:6px; }
   .kg-student select { width:96px; height:38px; padding:0 8px; font-size:12.5px; }

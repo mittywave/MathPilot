@@ -5,7 +5,7 @@ export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     const user = await requireUser(request);
-    const body = await request.json() as { revision?: unknown; note?: unknown };
+    const body = await request.json() as { graph?: unknown; revision?: unknown; note?: unknown };
     return Response.json(await publishKnowledgeGraph(user, body));
   } catch (error) {
     if (error instanceof Response) return error;

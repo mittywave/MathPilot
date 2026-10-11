@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KnowledgeGraphIndex } from "../../../lib/knowledge-graph-core.mjs";
+import { isCourseNodeKey } from "../../../lib/knowledge-graph-course.mjs";
 import type { KnowledgeGraphLevel, KnowledgeGraphNode } from "../../../lib/types";
 import { searchNodes, stageShort, type GraphSelection } from "./graph-model";
 
@@ -14,10 +15,12 @@ type Props = {
   archived: KnowledgeGraphNode[];
   onAdd: (level: KnowledgeGraphLevel) => void;
   onRestore: (key: string) => void;
+  // A course graph: lessons and modules are added and removed in the handouts, not here.
+  course: boolean;
 };
 
 // Editing outline for hundreds of points: domains open, topics folded until needed.
-export default function GraphOutline({ index, selection, colorOf, onSelect, issueKeys, archived, onAdd, onRestore }: Props) {
+export default function GraphOutline({ index, selection, colorOf, onSelect, issueKeys, archived, onAdd, onRestore, course }: Props) {
   const [query, setQuery] = useState("");
   const [openTopics, setOpenTopics] = useState<string[]>([]);
   const [closedDomains, setClosedDomains] = useState<string[]>([]);
@@ -64,8 +67,13 @@ export default function GraphOutline({ index, selection, colorOf, onSelect, issu
       <div className="kg-add-menu">
         <button type="button" className="kg-add-button" aria-expanded={addOpen} onClick={() => setAddOpen((open) => !open)}>＋ 新增</button>
         {addOpen && <div className="kg-menu right" role="menu">
-          <button type="button" role="menuitem" disabled={!selectedTopic} onClick={() => add("point")}>知识点<small>{selectedTopic ? `放在「${selectedTopic.label}」下` : "先选中一个主题"}</small></button>
-          <button type="button" role="menuitem" onClick={() => add("topic")}>主题<small>放在当前领域，如“一次函数”</small></button>
+          {course ? <>
+            <button type="button" role="menuitem" disabled>知识点<small>在讲义里添加知识模块</small></button>
+            <button type="button" role="menuitem" disabled>主题<small>在课程体系里添加讲次</small></button>
+          </> : <>
+            <button type="button" role="menuitem" disabled={!selectedTopic} onClick={() => add("point")}>知识点<small>{selectedTopic ? `放在「${selectedTopic.label}」下` : "先选中一个主题"}</small></button>
+            <button type="button" role="menuitem" onClick={() => add("topic")}>主题<small>放在当前领域，如“一次函数”</small></button>
+          </>}
           <button type="button" role="menuitem" onClick={() => add("domain")}>领域<small>新的课程领域</small></button>
         </div>}
       </div>
@@ -102,8 +110,10 @@ export default function GraphOutline({ index, selection, colorOf, onSelect, issu
     {archived.length > 0 && <details className="kg-archived">
       <summary>已停用 {archived.length}</summary>
       {archived.map((node) => <div key={node.key}>
-        <span>{node.label}<small>{node.mergedInto ? `已合并到「${index.nodeByKey.get(node.mergedInto)?.label ?? "其他知识点"}」` : "不再用于标签和学情"}</small></span>
-        <button type="button" onClick={() => onRestore(node.key)}>恢复</button>
+        {isCourseNodeKey(node.key) ? <span>{node.label}<small>讲义里已删除，删除前的记录保留</small></span> : <>
+          <span>{node.label}<small>{node.mergedInto ? `已合并到「${index.nodeByKey.get(node.mergedInto)?.label ?? "其他知识点"}」` : "不再用于标签和学情"}</small></span>
+          <button type="button" onClick={() => onRestore(node.key)}>恢复</button>
+        </>}
       </div>)}
     </details>}
   </div>;

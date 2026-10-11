@@ -223,6 +223,10 @@ export type Handout = HandoutGroup & {
 };
 
 export type HandoutOutline = { title: string; questionIds: string[] }[];
+// How many questions a module holds in each band of the 讲义 and in the 小测 and 作业 that test it.
+export type HandoutModuleCounts = Record<HandoutBand | Exclude<HandoutSheet, "handout">, number>;
+// One lesson of the 课程体系 as the course knowledge graph sees it.
+export type CourseLessonDetail = { id: string; title: string; grade: HandoutGrade; modules: { id: string; title: string; counts: HandoutModuleCounts }[] };
 export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
 
 // 共享办公 · 成员。停用的账号保留数据但不能登录。
@@ -520,7 +524,8 @@ export type PublishedKnowledgeGraph = {
 export type KnowledgeGraphDraft = { document: KnowledgeGraphDocument; baseVersion: number; updatedAt: number; issues: KnowledgeGraphIssue[] };
 export type KnowledgeGraphEditorState = { published: PublishedKnowledgeGraph; draft: KnowledgeGraphDraft | null; revision: number };
 export type KnowledgeGraphVersion = { version: number; frameworkVersion: string; publishedAt: number | null; note: string; summary: KnowledgeGraphChangeSummary | null };
-export type KnowledgeGraphCoverage = { public: Record<string, number> };
+// public: library questions tagged with each node. handouts (course graph): questions each lesson and module holds.
+export type KnowledgeGraphCoverage = { public: Record<string, number>; handouts?: Record<string, HandoutModuleCounts> };
 
 export type KnowledgeGraphOverview = {
   profile: StudentCapabilityProfile;

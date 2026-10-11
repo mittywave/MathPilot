@@ -1,6 +1,8 @@
 "use client";
 
 import type { KnowledgeGraphIndex } from "../../../lib/knowledge-graph-core.mjs";
+import { handoutHref, isCourseNodeKey } from "../../../lib/knowledge-graph-course.mjs";
+import { HANDOUT_BANDS, HANDOUT_PARTS } from "../../../lib/handout-rules.mjs";
 import type { CapabilityEdge, CapabilityProfileNode, KnowledgeGraphCoverage } from "../../../lib/types";
 import { homeworkQuestionLabel } from "../../../lib/homework-grading-rules.mjs";
 import { LEVEL_LABEL, STATUS_META, learningStatus, stageName } from "./graph-model";
@@ -12,6 +14,8 @@ type Props = {
   profile: Map<string, CapabilityProfileNode> | null;
   coverage: KnowledgeGraphCoverage | null;
   studentName: string;
+  // A course graph: lessons and modules link to their handout and count its questions.
+  course: boolean;
   canGoBack: boolean;
   onBack: () => void;
   onClose: () => void;
@@ -53,7 +57,7 @@ function Relations({ title, empty, edges, pick, index, colorOf, profile, onSelec
 }
 
 // Marble's selection card: where the node sits, how much it rests on, what it opens next.
-export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, studentName, canGoBack, onBack, onClose, onSelect, view, onView, successors, onAllSuccessors }: Props) {
+export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, studentName, course, canGoBack, onBack, onClose, onSelect, view, onView, successors, onAllSuccessors }: Props) {
   const node = index.nodeByKey.get(nodeKey);
   if (!node) return null;
   const domain = index.nodeByKey.get(node.domainKey);
@@ -69,6 +73,9 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
     ? incoming.map((edge) => edge.sourceKey).filter((key) => learningStatus(profile?.get(key)) === "unassessed").map((key) => index.nodeByKey.get(key)?.label).filter(Boolean) : [];
   const mappings = index.mappingsFor(node.key);
   const libraryCount = questionCount(index, coverage?.public, node.key);
+  const fromHandout = course && isCourseNodeKey(node.key);
+  const held = fromHandout ? coverage?.handouts?.[node.key] : undefined;
+  const sheets = held ? [...HANDOUT_BANDS.map((band) => [HANDOUT_PARTS[band].label, held[band]] as const), ["小测", held.quiz] as const, ["作业", held.homework] as const] : [];
   return <aside className="kg-card" aria-label={`${node.label}的详情`} data-inset="auto">
     <div className="kg-card-nav">
       {canGoBack ? <button type="button" className="kg-card-back" onClick={onBack}>← 返回</button> : <span />}
@@ -115,7 +122,12 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
           </button>;
         })}</div>
       </section>}
-      <details className="kg-card-more">
+      {fromHandout && <section className="kg-card-section kg-card-handout">
+        <h3>{node.level === "point" ? "讲义中的这个模块" : "这一讲的讲义"}</h3>
+        {held && <dl className="kg-card-sheets">{sheets.map(([label, count]) => <div key={label} className={count ? "" : "zero"}><dt>{label}</dt><dd>{count}</dd></div>)}</dl>}
+        <a className="kg-card-open" href={handoutHref(node)} target="_blank" rel="noreferrer">打开讲义</a>
+      </section>}
+      {!fromHandout && <details className="kg-card-more">
         <summary>题库与教材</summary>
         <dl className="kg-card-facts">
           <div><dt>题库</dt><dd>{libraryCount} 题</dd></div>
@@ -125,7 +137,7 @@ export default function NodeCard({ index, nodeKey, colorOf, profile, coverage, s
           <em className={mapping.alignmentStatus}>{mapping.alignmentStatus === "verified" ? "已核对" : "待校准"}</em>
         </li>)}</ul>
         {node.aliases.length > 0 && <p className="kg-card-aliases"><span>识别别名</span>{node.aliases.join("、")}</p>}
-      </details>
+      </details>}
     </div>
   </aside>;
 }

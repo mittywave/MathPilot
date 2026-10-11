@@ -155,6 +155,45 @@ test("teachers edit the knowledge graph as a guarded draft, publish versions and
     assert.equal(forged.response.status, 400, "the mirrored document must match its content hash");
     assert.equal((await jsonRequest(remoteInternal, "/api/publications", { method: "POST", headers: { Authorization: "Bearer invalid" }, body: { action: "knowledge-graph", graph: {} } })).response.status, 403);
     assert.equal((await jsonRequest(remoteBase, "/api/knowledge-graph", { cookie: teacher })).payload.graph.version, 2);
+
+    // The course graph: its lessons and modules come from the 课程体系 handouts; the graph keeps domains, mastery and relations.
+    const COURSE = "sz-innovation-course";
+    const lesson = async (title, sections) => (await jsonRequest(localBase, "/api/handouts", { method: "POST", body: { handout: {
+      title, grade: 7, term: "summer", items: sections.map(([id, sectionTitle]) => ({ id, kind: "section", title: sectionTitle, note: "" })),
+    } } })).payload.handout;
+    const first = await lesson("正负数", [["s1", "正负数与数轴"], ["s2", "绝对值"]]);
+    const second = await lesson("有理数运算", [["s3", "加减乘除"]]);
+    assert.equal((await jsonRequest(localBase, "/api/knowledge-graph?graph=nope")).response.status, 404);
+    assert.equal((await jsonRequest(localBase, "/api/knowledge-graph")).payload.graph.graphId, "cn-math-junior", "no graph named is the 人教版 graph");
+    const course = await jsonRequest(localBase, `/api/knowledge-graph?graph=${COURSE}`);
+    assert.equal(course.response.status, 200, JSON.stringify(course.payload));
+    const courseNode = (document, key) => document.nodes.find((node) => node.key === key);
+    assert.deepEqual(["lesson:" + first.id, "module:s1", "module:s2", "lesson:" + second.id, "module:s3"].map((key) => courseNode(course.payload.graph.document, key)?.label),
+      ["正负数", "正负数与数轴", "绝对值", "有理数运算", "加减乘除"]);
+    assert.deepEqual(course.payload.coverage.handouts["module:s1"], { example: 0, practice: 0, variant: 0, quiz: 0, homework: 0 });
+    const courseEditor = await jsonRequest(localBase, `/api/knowledge-graph/draft?graph=${COURSE}`);
+    assert.equal(courseEditor.payload.draft, null);
+    let courseDraft = updateKnowledgeNode(courseEditor.payload.published.document, "module:s1", { mastery: "能在数轴上表示有理数" });
+    courseDraft = addKnowledgeEdge(courseDraft, "module:s1", "module:s3");
+    const savedCourse = await jsonRequest(localBase, "/api/knowledge-graph/draft", { method: "PUT", body: { graph: COURSE, revision: courseEditor.payload.revision, document: courseDraft } });
+    assert.deepEqual(savedCourse.payload.issues, []);
+    const coursePublished = await jsonRequest(localBase, "/api/knowledge-graph/publish", { method: "POST", body: { graph: COURSE, revision: savedCourse.payload.revision, note: "第一批关系" } });
+    assert.deepEqual([coursePublished.payload.version, coursePublished.payload.frameworkVersion], [2, `${COURSE}-v2`]);
+    assert.equal((await jsonRequest(localBase, "/api/knowledge-graph")).payload.graph.version, 2, "each graph keeps its own versions");
+    assert.deepEqual((await jsonRequest(localBase, `/api/knowledge-graph/versions?graph=${COURSE}`)).payload.versions.map((item) => [item.version, item.note]), [[2, "第一批关系"], [1, "课程体系的讲次与知识模块"]]);
+
+    // Renaming a module shows at once; deleting one keeps it as archived history without its relations.
+    const renamed = await jsonRequest(localBase, `/api/handouts/${first.id}`, { method: "PUT", body: { handout: { title: "正负数", items: [
+      { id: "s1", kind: "section", title: "正负数与数轴表示", note: "" }, { id: "s2", kind: "section", title: "绝对值", note: "" },
+    ] } } });
+    assert.equal(renamed.response.status, 200);
+    await jsonRequest(localBase, `/api/handouts/${second.id}`, { method: "PUT", body: { handout: { title: "有理数运算", items: [{ id: "s4", kind: "section", title: "混合运算", note: "" }] } } });
+    const followed = (await jsonRequest(localBase, `/api/knowledge-graph?graph=${COURSE}`)).payload.graph.document;
+    assert.equal(courseNode(followed, "module:s1").label, "正负数与数轴表示");
+    assert.equal(courseNode(followed, "module:s1").mastery, "能在数轴上表示有理数");
+    assert.equal(courseNode(followed, "module:s3").status, "archived");
+    assert.equal(courseNode(followed, "module:s4").status, "active");
+    assert.deepEqual(followed.edges, []);
   } catch (error) {
     console.error(remote.output(), local?.output());
     throw error;

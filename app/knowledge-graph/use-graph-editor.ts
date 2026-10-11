@@ -11,9 +11,9 @@ type History = { past: KnowledgeGraphDocument[]; future: KnowledgeGraphDocument[
 const SAVE_DELAY = 700;
 const HISTORY_LIMIT = 80;
 
-// One shared draft on the server; every edit is applied locally first, kept in an
-// undo stack and autosaved with optimistic revision checks.
-export function useGraphEditor(active: boolean, onConflict: (message: string) => void) {
+// One shared draft per graph on the server; every edit is applied locally first, kept in an
+// undo stack and autosaved with optimistic revision checks. The page reloads to switch graphs.
+export function useGraphEditor(graph: string, active: boolean, onConflict: (message: string) => void) {
   const [session, setSession] = useState<Session | null>(null);
   const [history, setHistory] = useState<History>({ past: [], future: [] });
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -31,7 +31,7 @@ export function useGraphEditor(active: boolean, onConflict: (message: string) =>
   const load = useCallback(async () => {
     window.clearTimeout(timerRef.current);
     try {
-      const state = await knowledgeGraphApi.editor();
+      const state = await knowledgeGraphApi.editor(graph);
       const document = state.draft?.document ?? state.published.document;
       documentRef.current = document; revisionRef.current = state.revision; savedJsonRef.current = JSON.stringify(document);
       setSession({ published: state.published, document, hasDraft: Boolean(state.draft) });
@@ -39,7 +39,7 @@ export function useGraphEditor(active: boolean, onConflict: (message: string) =>
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "图谱草稿读取失败");
     }
-  }, []);
+  }, [graph]);
 
   useEffect(() => {
     if (!active || session) return;
@@ -57,7 +57,7 @@ export function useGraphEditor(active: boolean, onConflict: (message: string) =>
     let saved = false;
     const run = (async () => {
       try {
-        const result = await knowledgeGraphApi.saveDraft(revisionRef.current, document);
+        const result = await knowledgeGraphApi.saveDraft(graph, revisionRef.current, document);
         revisionRef.current = result.revision; savedJsonRef.current = json; setSaveError(""); saved = true;
         setSession((current) => current && { ...current, hasDraft: true });
         setSaveState(JSON.stringify(documentRef.current) === json ? "saved" : "pending");
@@ -74,7 +74,7 @@ export function useGraphEditor(active: boolean, onConflict: (message: string) =>
     if (saved && documentRef.current && JSON.stringify(documentRef.current) !== savedJsonRef.current) {
       window.clearTimeout(timerRef.current); timerRef.current = window.setTimeout(() => { void saveRef.current(); }, SAVE_DELAY);
     }
-  }, []);
+  }, [graph]);
   useEffect(() => { saveRef.current = save; }, [save]);
 
   const schedule = useCallback(() => {
@@ -109,22 +109,22 @@ export function useGraphEditor(active: boolean, onConflict: (message: string) =>
 
   const discard = useCallback(async () => {
     await flush();
-    await knowledgeGraphApi.discardDraft(revisionRef.current);
+    await knowledgeGraphApi.discardDraft(graph, revisionRef.current);
     await load();
-  }, [flush, load]);
+  }, [flush, graph, load]);
 
   const publish = useCallback(async (note: string): Promise<PublishKnowledgeGraphResult> => {
     await flush();
-    const result = await knowledgeGraphApi.publish(revisionRef.current, note);
+    const result = await knowledgeGraphApi.publish(graph, revisionRef.current, note);
     await load();
     return result;
-  }, [flush, load]);
+  }, [flush, graph, load]);
 
   const restore = useCallback(async (version: number) => {
     await flush();
-    await knowledgeGraphApi.restore(version, revisionRef.current);
+    await knowledgeGraphApi.restore(graph, version, revisionRef.current);
     await load();
-  }, [flush, load]);
+  }, [flush, graph, load]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
 
