@@ -94,8 +94,8 @@ const groupOf = ({ grade, term, domain, studentId }: HandoutGroup): HandoutGroup
 const knownShelf = (value: string | null) => HANDOUT_SHELVES.find((item) => item.value === value)?.value;
 const knownGrade = (value: string | null) => HANDOUT_GRADES.find((item) => item.value === Number(value))?.value;
 const questionTotal = (handout: HandoutSummary) => handout.outline.reduce((sum, module) => sum + module.questionIds.length, 0);
-// 有理数的分类、数轴、相反数: module titles without any number typed in front; untitled modules are left out.
-const moduleList = (handout: HandoutSummary) => handout.outline.map((module) => moduleHeading(module.title, 0).title).filter(Boolean).join("、");
+// 有理数的分类；数轴；相反数: module titles without any number typed in front, split by ； because titles use 、 themselves; untitled modules are left out.
+const moduleList = (handout: HandoutSummary) => handout.outline.map((module) => moduleHeading(module.title, 0).title).filter(Boolean).join("；");
 const shortDate = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 
 // The group a handout joins from the move dialog's choices.
