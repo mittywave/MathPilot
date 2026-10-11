@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup } from "../handout-rules.mjs";
+import { handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
 import { requireAdmin } from "./library";
 import type { AuthUser, Handout, HandoutGroup, HandoutSummary } from "../types";
 
@@ -64,7 +64,7 @@ export async function listHandouts(user: AuthUser): Promise<HandoutSummary[]> {
   const rows = await db().prepare(`${SELECT_VISIBLE} ORDER BY handouts.position, handouts.created_at`).bind(user.id).all<HandoutRow>();
   return rows.results.map((row) => {
     const { items, ...summary } = toHandout(row);
-    return { ...summary, outline: handoutOutline(items) };
+    return { ...summary, outline: handoutOutline(items), sheetCounts: sheetCounts(items) };
   });
 }
 

@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chineseNumeral, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, sameGroup, setItemBand, shelfOf } from "../lib/handout-rules.mjs";
+import { HANDOUT_SHEETS, chineseNumeral, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetCounts, sheetLabel, sheetQuestions, shelfOf } from "../lib/handout-rules.mjs";
 
 const q = (id, band = "example", questionId = id, scope = "mine") => ({ id, kind: "question", scope, questionId, band });
+const t = (id, moduleId = null, kind = "quiz", questionId = id) => ({ id, kind, scope: "public", questionId, moduleId });
 const s = (id, title = id, note = "") => ({ id, kind: "section", title, note });
 const ids = list => list.map(item => item.id);
 
@@ -123,4 +124,50 @@ test("the outline lists each module's title and question references in band orde
   assert.deepEqual(handoutOutline(items), [{ title: "", questionIds: ["loose"] }, { title: "平行四边形的性质", questionIds: ["e1", "p1"] }, { title: "", questionIds: ["v1"] }]);
   assert.deepEqual(handoutOutline([s("m1", "空模块")]), [{ title: "空模块", questionIds: [] }]);
   assert.deepEqual(handoutOutline([]), []);
+});
+
+test("小测 and 作业 are lists of their own, stored after the 讲义, each question testing one module", () => {
+  const draft = normalizeHandoutDraft({ items: [t("t1", "m2"), s("m1"), q("e1"), t("h1", "gone", "homework"), s("m2"), t("t2", "m1"),
+    { id: "blank", kind: "quiz", scope: "public", questionId: "" }, { id: "exam", kind: "exam", scope: "public", questionId: "x" }] });
+  assert.deepEqual(ids(draft.items), ["m1", "e1", "m2", "t1", "h1", "t2"]);
+  assert.deepEqual(draft.items.slice(3).map(item => [item.kind, item.moduleId, item.band]), [["quiz", "m2", undefined], ["homework", "m1", undefined], ["quiz", "m1", undefined]], "a module that is gone falls back to the first");
+  assert.equal(normalizeHandoutDraft({ items: [t("t1", "m1")] }).items[0].moduleId, null, "a handout without modules leaves the question unassigned");
+  assert.deepEqual(handoutOutline(draft.items), [{ title: "m1", questionIds: ["e1"] }, { title: "m2", questionIds: [] }], "the 讲义 never sees them");
+  assert.deepEqual(Object.fromEntries(handoutNumbers(draft.items)), { e1: "例1" });
+  assert.deepEqual(sheetCounts(draft.items), { quiz: 2, homework: 1 });
+  const bank = new Map([["t1", { id: "t1" }], ["h1", { id: "h1" }]]);
+  assert.deepEqual(sheetQuestions(draft.items, "quiz", (scope, id) => bank.get(id)), { questions: [{ id: "t1" }], missingCount: 1 });
+  assert.deepEqual(HANDOUT_SHEETS.map(sheet => sheetLabel(sheet.value)), ["讲义", "小测", "作业"]);
+});
+
+test("list questions move inside their list; 讲义 edits keep the lists after the 讲义", () => {
+  const items = [s("m1"), q("e1"), s("m2"), q("e2"), t("t1", "m1"), t("h1", "m2", "homework"), t("t2", "m2")];
+  assert.deepEqual(ids(moveHandoutItem(items, "t2", -1)), ["m1", "e1", "m2", "e2", "t2", "h1", "t1"], "skips the 作业 question in between");
+  assert.equal(moveHandoutItem(items, "t1", -1), items, "the first of its list stays first");
+  assert.equal(moveHandoutItem(items, "h1", 1), items);
+  assert.equal(moveHandoutItem(items, "e2", 1), items, "a 讲义 question never moves into the lists");
+  assert.deepEqual(ids(moveHandoutItem(items, "m2", -1)), ["m2", "e2", "m1", "e1", "t1", "h1", "t2"], "moving a module keeps the lists in place");
+  assert.equal(insertIndexForSection(items, "m2"), 4, "new 讲义 questions go before the lists");
+  assert.equal(insertIndexForSection(items, "missing"), 4);
+  assert.deepEqual(ids(setItemBand(items, "e2", "practice")), ["m1", "e1", "m2", "e2", "t1", "h1", "t2"]);
+});
+
+test("deleting a module moves its 小测 and 作业 questions to a neighbouring module", () => {
+  const items = [s("m1"), q("e1"), s("m2"), q("e2"), s("m3"), t("t1", "m2"), t("t2", "m1"), t("h1", "m3", "homework")];
+  const withoutSecond = removeHandoutModule(items, "m2");
+  assert.deepEqual(ids(withoutSecond), ["m1", "e1", "m3", "t1", "t2", "h1"], "its 讲义 questions go with it");
+  assert.equal(withoutSecond.find(item => item.id === "t1").moduleId, "m1", "the module before it takes over");
+  assert.equal(removeHandoutModule(items, "m1").find(item => item.id === "t2").moduleId, "m2", "the first module hands over to the next");
+  assert.equal(removeHandoutModule([s("m1"), t("t1", "m1")], "m1")[0].moduleId, null, "the last module leaves its questions unassigned");
+  assert.equal(removeHandoutModule(items, "missing"), items);
+  const lead = ensureLeadingModule([t("t1")], "new");
+  assert.deepEqual(lead.map(item => [item.id, item.moduleId]), [["new", undefined], ["t1", "new"]], "an unassigned question tests the new first module");
+});
+
+test("a copy gets fresh ids and keeps each 小测 and 作业 question on the copy of its module", () => {
+  let next = 0;
+  const copy = copyHandoutItems([s("m1"), q("e1"), s("m2"), t("t1", "m2"), t("h1", null, "homework")], () => `n${++next}`);
+  assert.deepEqual(ids(copy), ["n1", "n2", "n3", "n4", "n5"]);
+  assert.deepEqual(copy.slice(3).map(item => item.moduleId), ["n3", null]);
+  assert.equal(copy[1].questionId, "e1");
 });
