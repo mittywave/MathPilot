@@ -58,23 +58,23 @@ export function PublishDialog({ diff, nextVersion, labelOf, onCancel, onConfirm 
   </div>;
 }
 
-export function HistoryDrawer({ currentVersion, onClose, onRestore }: { currentVersion: number; onClose: () => void; onRestore: (version: number) => Promise<void> }) {
+export function HistoryDrawer({ graph, currentVersion, onClose, onRestore }: { graph: string; currentVersion: number; onClose: () => void; onRestore: (version: number) => Promise<void> }) {
   const [versions, setVersions] = useState<KnowledgeGraphVersion[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    knowledgeGraphApi.versions().then((result) => { if (!cancelled) setVersions(result.versions); })
+    knowledgeGraphApi.versions(graph).then((result) => { if (!cancelled) setVersions(result.versions); })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : "版本记录读取失败"); });
     return () => { cancelled = true; };
-  }, []);
+  }, [graph]);
   async function restore(version: number) {
     if (!window.confirm(`把 v${version} 载入为草稿？当前草稿会被替换，发布前不会影响线上与学情。`)) return;
     setBusy(version);
     try { await onRestore(version); onClose(); } catch (reason) { setError(reason instanceof Error ? reason.message : "载入失败"); setBusy(0); }
   }
   const summary = (item: KnowledgeGraphVersion) => {
-    if (!item.summary) return item.version === 1 ? "初始课程骨架" : "";
+    if (!item.summary) return "";
     const parts = [["新增", item.summary.nodesAdded], ["修改", item.summary.nodesUpdated], ["停用", item.summary.nodesArchived],
       ["关系 +", item.summary.edgesAdded], ["关系 −", item.summary.edgesRemoved]].filter(([, count]) => count).map(([label, count]) => `${label}${count}`);
     return parts.join(" · ");

@@ -318,7 +318,9 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const [missing, setMissing] = useState(false);
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [picker, setPicker] = useState<PickerMode | null>(null);
+  // A link from the course knowledge graph (?module=) opens the handout at that module, ready to add questions to it.
+  const [focusModule] = useState(() => new URLSearchParams(window.location.search).get("module"));
+  const [picker, setPicker] = useState<PickerMode | null>(() => focusModule ? { kind: "add", sectionId: focusModule, band: "example" } : null);
   // 讲义、小测、作业 share one page; the address keeps the open one, so a reload or a link lands on it.
   const [sheet, setSheet] = useState<HandoutSheet>(() => HANDOUT_SHEETS.find((item) => item.value === new URLSearchParams(window.location.search).get("sheet"))?.value ?? "handout");
   const bankPane = useRef<HTMLDivElement>(null);
@@ -346,6 +348,11 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     if (sheet !== "handout") params.set("sheet", sheet);
     window.history.replaceState(null, "", `/tools/handouts?${params}`);
   }, [id, sheet]);
+
+  const opened = Boolean(doc);
+  useEffect(() => {
+    if (opened && focusModule) document.getElementById(`module-${focusModule}`)?.scrollIntoView({ block: "start" });
+  }, [opened, focusModule]);
 
   // Unsaved text or a failed save would be lost on leaving.
   useEffect(() => {
@@ -646,7 +653,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     </section> : <>
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
-      return <section className="handout-module" key={section.id} aria-label={badge}>
+      return <section className="handout-module" key={section.id} id={`module-${section.id}`} aria-label={badge}>
         <div className="handout-module-head">
           <span className="handout-module-no" aria-hidden="true">{heading.numeral}</span>
           <input aria-label={`${badge}名称`} value={section.title} placeholder="模块名称，如：平行四边形的性质" onChange={(event) => updateSection(section.id, { title: event.target.value })} onBlur={() => void flush()} />

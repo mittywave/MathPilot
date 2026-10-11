@@ -10,6 +10,7 @@ import {
   createKnowledgeGraphIndex, diagnoseKnowledgeGaps, diffKnowledgeGraphs, layoutKnowledgeChain, layoutKnowledgeFunnel, validateKnowledgeGraph,
   type KnowledgeGraphFunnel, type KnowledgeGraphIndex,
 } from "../../lib/knowledge-graph-core.mjs";
+import { DEFAULT_KNOWLEDGE_GRAPH, KNOWLEDGE_GRAPHS, knowledgeGraphInfo } from "../../lib/knowledge-graph-course.mjs";
 import { addKnowledgeEdge, addKnowledgeNode, restoreKnowledgeNode } from "../../lib/knowledge-graph-edit.mjs";
 import type { AuthUser, KnowledgeGraphDocument, KnowledgeGraphLevel, KnowledgeGraphOverview, StudentSummary } from "../../lib/types";
 import GraphCloud, { type CloudCommand, type CloudTip } from "../components/knowledge-graph/GraphCloud";
@@ -54,6 +55,10 @@ function layoutFor(index: KnowledgeGraphIndex) {
 
 export default function KnowledgeGraphPage() {
   const shellRef = useRef<HTMLElement>(null);
+  // The graph on show comes from the address (?graph=); switching reloads the page into the other graph.
+  // The server render has no address and only shows the loading state, so it can start from the default graph.
+  const [graphId] = useState(() => (typeof window === "undefined" ? null : knowledgeGraphInfo(new URLSearchParams(window.location.search).get("graph"))?.id) ?? DEFAULT_KNOWLEDGE_GRAPH);
+  const course = Boolean(knowledgeGraphInfo(graphId)?.course);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<KnowledgeGraphOverview | null>(null);
@@ -77,19 +82,19 @@ export default function KnowledgeGraphPage() {
   const [chainAll, setChainAll] = useState(false);
 
   const showNotice = useCallback((text: string, tone: "info" | "success" | "error" = "info") => setNotice({ text, tone }), []);
-  const editor = useGraphEditor(mode === "edit", useCallback((message: string) => showNotice(`${message}，已重新载入最新草稿`, "error"), [showNotice]));
+  const editor = useGraphEditor(graphId, mode === "edit", useCallback((message: string) => showNotice(`${message}，已重新载入最新草稿`, "error"), [showNotice]));
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       void homeworkApi.me().then(async ({ user: currentUser }) => {
         setUser(currentUser);
         if (!currentUser) return;
-        const [studentData, graphData] = await Promise.all([homeworkApi.students().catch(() => ({ students: [] as StudentSummary[] })), knowledgeGraphApi.overview()]);
+        const [studentData, graphData] = await Promise.all([homeworkApi.students().catch(() => ({ students: [] as StudentSummary[] })), knowledgeGraphApi.overview(graphId)]);
         setStudents(studentData.students); setOverview(graphData);
       }).catch((error) => showNotice(error instanceof Error ? error.message : "知识图谱读取失败", "error")).finally(() => setLoading(false));
     });
     return () => cancelAnimationFrame(frame);
-  }, [showNotice]);
+  }, [graphId, showNotice]);
 
   useEffect(() => {
     if (!notice || notice.tone === "error") return;
@@ -208,7 +213,7 @@ export default function KnowledgeGraphPage() {
 
   async function reloadOverview(nextStudentId = studentId) {
     setProfileLoading(true);
-    try { setOverview(await knowledgeGraphApi.overview(nextStudentId)); }
+    try { setOverview(await knowledgeGraphApi.overview(graphId, nextStudentId)); }
     catch (error) { showNotice(error instanceof Error ? error.message : "知识图谱读取失败", "error"); }
     finally { setProfileLoading(false); }
   }
@@ -216,6 +221,12 @@ export default function KnowledgeGraphPage() {
   function chooseStudent(nextStudentId: string) {
     setStudentId(nextStudentId); setFilters((current) => ({ ...current, evidenceOnly: false }));
     void reloadOverview(nextStudentId);
+  }
+
+  async function switchGraph(next: string) {
+    if (next === graphId) return;
+    await editor.flush();
+    window.location.assign(`/knowledge-graph${next === DEFAULT_KNOWLEDGE_GRAPH ? "" : `?graph=${encodeURIComponent(next)}`}`);
   }
 
   function chooseMode(next: Mode) {
@@ -252,7 +263,7 @@ export default function KnowledgeGraphPage() {
   async function publishDraft(note: string) {
     const result = await editor.publish(note);
     setDialog("");
-    showNotice(result.unchanged ? "草稿与发布版一致，无需发布" : `已发布 v${result.version}：题库打标签与学情分析已使用新版本`, "success");
+    showNotice(result.unchanged ? "草稿与发布版一致，无需发布" : course ? `已发布 v${result.version}` : `已发布 v${result.version}：题库打标签与学情分析已使用新版本`, "success");
     await reloadOverview();
   }
 
@@ -285,7 +296,12 @@ export default function KnowledgeGraphPage() {
     <header className="kg-top" data-inset="auto">
       <div className="kg-top-left">
         <a className="kg-brand" href="/" title="返回题库" aria-label="返回题库"><i aria-hidden="true">‹</i><span>题</span></a>
-        <div className="kg-top-title"><b>{title}</b><small>{editing ? `编辑草稿 · 基于 v${version}` : sizeLabel}</small></div>
+        <div className="kg-top-title">
+          <select className="kg-graph-select" value={graphId} aria-label="切换知识图谱" title={title} onChange={(event) => void switchGraph(event.target.value)}>
+            {KNOWLEDGE_GRAPHS.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+          </select>
+          <small>{editing ? `编辑草稿 · 基于 v${version}` : sizeLabel}</small>
+        </div>
       </div>
       {!editing && index && <GraphSearch index={index} colorOf={colorOf} onPick={(key) => openNode(key)} onPreview={setMarked} />}
       <div className="kg-top-actions">
@@ -326,12 +342,12 @@ export default function KnowledgeGraphPage() {
     {mode === "explore" && index && !studentId && !cardOpen && <section className="kg-hero" data-inset="auto">
       <h1>{heroName && <span>{heroName}</span>}<span>知识全景<span className="kg-red" aria-hidden="true">。</span></span></h1>
       <p className="kg-hero-lede"><span>{sizeLabel}按年级自下而上排列，</span><span>{prerequisiteCount} 条连线标出学习先后。</span><span>点任一圆点，看它要先学什么、接着能学什么。</span></p>
-      <p className="kg-hero-meta">v{version} · {published?.publishedAt ? `发布于 ${new Date(published.publishedAt).toLocaleDateString("zh-CN")}` : "初始课程骨架"}</p>
+      <p className="kg-hero-meta">v{version} · {published?.publishedAt ? `发布于 ${new Date(published.publishedAt).toLocaleDateString("zh-CN")}` : published?.note || "初始课程骨架"}</p>
     </section>}
 
     {mode === "explore" && index && diagnosis && student && <StudentDiagnosis studentName={student.name} diagnosis={diagnosis} index={index} skills={skills} onSelect={(key) => openNode(key)} />}
 
-    {cardOpen && index && <NodeCard index={index} nodeKey={selectedKey} colorOf={colorOf} profile={profile} coverage={overview?.coverage ?? null} studentName={student?.name ?? ""}
+    {cardOpen && index && <NodeCard index={index} nodeKey={selectedKey} colorOf={colorOf} profile={profile} coverage={overview?.coverage ?? null} studentName={student?.name ?? ""} course={course}
       canGoBack={trail.length > 0} onBack={goBack} onClose={closeNode} onSelect={(key) => openNode(key)}
       view={selectionView} onView={chooseSelectionView}
       successors={chain ? { shown: chain.descendants.shown, total: chain.descendants.total, all: chainAll } : null} onAllSuccessors={setChainAll} />}
@@ -339,10 +355,10 @@ export default function KnowledgeGraphPage() {
     {editing && index && <>
       <aside className="kg-panel kg-outline-panel" aria-label="知识目录" data-inset="auto">
         <GraphOutline index={index} selection={activeSelection} colorOf={colorOf} onSelect={(next) => next?.kind === "node" ? openNode(next.key) : setSelection(next)}
-          issueKeys={issueKeys} archived={archived} onAdd={addNode} onRestore={restoreNode} />
+          issueKeys={issueKeys} archived={archived} onAdd={addNode} onRestore={restoreNode} course={course} />
       </aside>
       <aside className="kg-panel kg-editor-panel" aria-label="编辑知识点" data-inset="auto">
-        <NodeEditor key={activeSelection?.key ?? "none"} document={graphDocument!} index={index} selection={activeSelection} publishedKeys={publishedKeys} issues={issues}
+        <NodeEditor key={activeSelection?.key ?? "none"} document={graphDocument!} index={index} selection={activeSelection} publishedKeys={publishedKeys} issues={issues} course={course}
           autoFocusKey={autoFocusKey} apply={applyEdit} onSelect={(next) => next?.kind === "node" ? openNode(next.key) : setSelection(next)}
           onClose={() => setSelection(null)} onNotice={(message) => showNotice(message, "success")} onError={(message) => showNotice(message, "error")} />
       </aside>
@@ -364,7 +380,7 @@ export default function KnowledgeGraphPage() {
     </div>}
 
     {dialog === "publish" && diff && <PublishDialog diff={diff} nextVersion={nextVersion} labelOf={labelOf} onCancel={() => setDialog("")} onConfirm={publishDraft} />}
-    {dialog === "history" && <HistoryDrawer currentVersion={version} onClose={() => setDialog("")}
+    {dialog === "history" && <HistoryDrawer graph={graphId} currentVersion={version} onClose={() => setDialog("")}
       onRestore={async (restored) => { await editor.restore(restored); setSelection(null); showNotice(`已把 v${restored} 载入为草稿，发布后才会生效`, "success"); }} />}
     {dialog === "import" && editor.session && <ImportDialog published={editor.session.published.document} current={editor.session.document}
       onCancel={() => setDialog("")} onConfirm={importDraft} />}

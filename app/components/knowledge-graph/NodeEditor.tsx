@@ -5,6 +5,7 @@ import { KNOWLEDGE_GRAPH_PALETTE, type KnowledgeGraphIndex } from "../../../lib/
 import {
   addKnowledgeEdge, addKnowledgeNodesFromLines, mergeKnowledgeNode, moveKnowledgeNode, removeKnowledgeEdge, removeKnowledgeNode, setKnowledgeMapping, updateKnowledgeEdge, updateKnowledgeNode,
 } from "../../../lib/knowledge-graph-edit.mjs";
+import { handoutHref, isCourseNodeKey } from "../../../lib/knowledge-graph-course.mjs";
 import type { KnowledgeGraphDocument, KnowledgeGraphIssue, KnowledgeGraphNode } from "../../../lib/types";
 import { LEVEL_LABEL, type GraphSelection } from "./graph-model";
 import NodePicker, { type PickerOption } from "./NodePicker";
@@ -17,6 +18,8 @@ type Props = {
   selection: GraphSelection;
   publishedKeys: Set<string>;
   issues: KnowledgeGraphIssue[];
+  // A course graph: lessons and modules come from the handouts, aliases are not used.
+  course: boolean;
   autoFocusKey: string;
   apply: ApplyEdit;
   onSelect: (selection: GraphSelection) => void;
@@ -127,7 +130,7 @@ function MappingEditor({ node, document, apply, onError }: { node: KnowledgeGrap
   </div>;
 }
 
-export default function NodeEditor({ document, index, selection, publishedKeys, issues, autoFocusKey, apply, onSelect, onClose, onNotice, onError }: Props) {
+export default function NodeEditor({ document, index, selection, publishedKeys, issues, course, autoFocusKey, apply, onSelect, onClose, onNotice, onError }: Props) {
   const [merging, setMerging] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const node = selection ? document.nodes.find((item) => item.key === selection.key) : undefined;
@@ -139,12 +142,17 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
       <p className="kg-eyebrow">编辑模式</p>
       <h2>选择要调整的内容</h2>
       <p className="kg-muted">在左侧目录或点云中点选知识点，这里可以修改名称、学会的标志、别名和前后关系。</p>
-      <ul className="kg-edit-tips">
+      {course ? <ul className="kg-edit-tips">
+        <li>每一讲、每个知识模块都来自课程体系的讲义：名称、年级和先后在讲义里修改</li>
+        <li>这里编辑所属领域、学会的标志、描述和前后关系</li>
+        <li>“连线”工具：先点前驱，再点后继</li>
+        <li>修改自动保存为草稿，点“发布”后才会生效</li>
+      </ul> : <ul className="kg-edit-tips">
         <li>“＋ 新增”添加主题或知识点；选中主题后可批量粘贴</li>
         <li>“连线”工具：先点前驱，再点后继</li>
         <li>整份草稿可从“更多 → 导入 JSON”载入</li>
         <li>修改自动保存为草稿，点“发布”后才会生效</li>
-      </ul>
+      </ul>}
       {issues.length > 0 && <div className="kg-issue-box"><b>发布前需要处理 {issues.length} 个问题</b>
         <ul>{issues.slice(0, 6).map((issue, issueIndex) => <li key={`${issue.code}-${issueIndex}`}>
           {issue.nodeKey ? <button type="button" className="kg-link-button" onClick={() => onSelect({ kind: "node", key: issue.nodeKey! })}>{issue.message}</button> : issue.message}
@@ -153,6 +161,9 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
     </div>;
   }
   const published = publishedKeys.has(node.key);
+  // Lessons and modules of a course graph are named, graded and ordered in their handouts.
+  const fromHandout = course && isCourseNodeKey(node.key);
+  const stageLabel = document.stages.find((stage) => stage.value === node.stage)?.label ?? node.stage;
   const nodeIssues = issues.filter((issue) => issue.nodeKey === node.key || issue.sourceKey === node.key || issue.targetKey === node.key || issue.cycle?.includes(node.key));
   const edit = (patch: Parameters<typeof updateKnowledgeNode>[2], coalesce?: string) => attempt(() => apply(updateKnowledgeNode(document, node.key, patch), coalesce ? { coalesce } : undefined), onError);
   const archiveNode = () => {
@@ -170,12 +181,15 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
   const topics = index.activeNodes.filter((item) => item.level === "topic").sort((left, right) => left.domainKey.localeCompare(right.domainKey) || left.stage - right.stage || left.order - right.order);
   const move = (direction: -1 | 1) => attempt(() => apply(moveKnowledgeNode(document, node.key, direction)), onError);
   return <div className="kg-inspector kg-editor" style={{ "--strip": index.nodeByKey.get(node.domainKey)?.color ?? node.color } as CSSProperties}>
-    <p className="kg-eyebrow"><i className="kg-domain-swatch" />{LEVEL_LABEL[node.level]}<span className={`kg-publish-state ${published ? "" : "new"}`}>{published ? "已发布" : "新增 · 未发布"}</span>
+    <p className="kg-eyebrow"><i className="kg-domain-swatch" />{LEVEL_LABEL[node.level]}{fromHandout ? <span className="kg-publish-state">来自讲义</span>
+      : <span className={`kg-publish-state ${published ? "" : "new"}`}>{published ? "已发布" : "新增 · 未发布"}</span>}
       <button type="button" className="kg-icon-button" aria-label="收起编辑" onClick={onClose}>×</button></p>
     {nodeIssues.length > 0 && <div className="kg-issue-box">{nodeIssues.map((issue, issueIndex) => <p key={`${issue.code}-${issueIndex}`}>{issue.message}</p>)}</div>}
-    <label className="kg-field"><span>名称</span>
+    {fromHandout ? <div className="kg-field"><span>名称</span>
+      <p className="kg-readonly">{node.label}<a href={handoutHref(node)} target="_blank" rel="noreferrer">在讲义中修改</a></p>
+    </div> : <label className="kg-field"><span>名称</span>
       <input ref={nameRef} value={node.label} maxLength={40} onChange={(event) => edit({ label: event.target.value }, `label:${node.key}`)} />
-    </label>
+    </label>}
     {node.level === "domain" ? <>
       <div className="kg-field"><span>颜色</span>
         <div className="kg-swatches" role="group" aria-label="领域颜色">
@@ -190,16 +204,19 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
         </div>
       </div>
     </> : <>
-      <div className="kg-field"><span>年级</span>
+      {fromHandout ? <div className="kg-field"><span>年级</span><p className="kg-readonly">{stageLabel}</p></div> : <div className="kg-field"><span>年级</span>
         <div className="kg-segmented" role="group" aria-label="年级">
           {document.stages.map((stage) => <button key={stage.value} type="button" aria-pressed={node.stage === stage.value} className={node.stage === stage.value ? "active" : ""}
             onClick={() => edit({ stage: stage.value })}>{stage.label}</button>)}
         </div>
-      </div>
+      </div>}
       {node.level === "topic" && <label className="kg-field"><span>所属领域</span>
         <select value={node.domainKey} onChange={(event) => edit({ domainKey: event.target.value })}>{domains.map((domain) => <option key={domain.key} value={domain.key}>{domain.label}</option>)}</select>
       </label>}
-      {node.level === "point" && <label className="kg-field"><span>上级主题</span>
+      {node.level === "point" && fromHandout && <div className="kg-field"><span>所在讲次</span>
+        <p className="kg-readonly"><button type="button" className="kg-link-button" onClick={() => onSelect({ kind: "node", key: node.parentKey! })}>{index.nodeByKey.get(node.parentKey ?? "")?.label}</button></p>
+      </div>}
+      {node.level === "point" && !fromHandout && <label className="kg-field"><span>上级主题</span>
         <select value={node.parentKey} onChange={(event) => edit({ parentKey: event.target.value })}>
           {domains.map((domain) => <optgroup key={domain.key} label={domain.label}>
             {topics.filter((topic) => topic.domainKey === domain.key).map((topic) => <option key={topic.key} value={topic.key}>{topic.label}</option>)}
@@ -213,15 +230,15 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
     {node.level !== "domain" && <label className="kg-field"><span>学会的标志</span>
       <textarea rows={2} value={node.mastery ?? ""} maxLength={120} placeholder="能……（一句可检测的表现，如：能用配方法解一元二次方程）" onChange={(event) => edit({ mastery: event.target.value }, `mastery:${node.key}`)} />
     </label>}
-    <div className="kg-field"><span>识别别名</span>
+    {!course && <div className="kg-field"><span>识别别名</span>
       <AliasInput values={node.aliases} onChange={(aliases) => edit({ aliases })} />
       <small>题目标签或题干出现这些词时，会自动归到这里</small>
-    </div>
+    </div>}
     {node.level !== "domain" && <>
       <RelationEditor direction="up" node={node} document={document} index={index} apply={apply} onSelect={onSelect} onError={onError} />
       <RelationEditor direction="down" node={node} document={document} index={index} apply={apply} onSelect={onSelect} onError={onError} />
-      {node.level === "topic" && <BatchAdd topic={node} document={document} apply={apply} onNotice={onNotice} onError={onError} />}
-      <details className="kg-more">
+      {node.level === "topic" && !fromHandout && <BatchAdd topic={node} document={document} apply={apply} onNotice={onNotice} onError={onError} />}
+      {!fromHandout && <details className="kg-more">
         <summary>教材定位与顺序</summary>
         <MappingEditor node={node} document={document} apply={apply} onError={onError} />
         <div className="kg-field"><span>{node.level === "topic" ? "在领域内的教材顺序（决定在漏斗中的高度）" : "在主题内的顺序"}</span>
@@ -230,9 +247,9 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
             <button type="button" onClick={() => move(1)}>后移</button>
           </div>
         </div>
-      </details>
+      </details>}
     </>}
-    <details className="kg-more danger">
+    {!fromHandout && <details className="kg-more danger">
       <summary>停用、合并或删除</summary>
       <p className="kg-muted">{published ? "已发布的内容不能直接删除：停用后历史题目和作业证据仍能追溯。" : "这是草稿里新增的内容，可以直接删除。"}</p>
       <div className="kg-inline-buttons">
@@ -244,6 +261,6 @@ export default function NodeEditor({ document, index, selection, publishedKeys, 
         if (!window.confirm(`把「${node.label}」合并到「${target?.label ?? key}」？关系、下级知识点和别名会并入目标，历史证据自动归到目标。`)) return;
         attempt(() => { apply(mergeKnowledgeNode(document, node.key, key), { select: { kind: "node", key } }); setMerging(false); }, onError);
       }} />}
-    </details>
+    </details>}
   </div>;
 }

@@ -9,7 +9,7 @@ function failure(error: unknown, fallback: string) {
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
-    return Response.json(await readKnowledgeGraphEditor(user), { headers: { "Cache-Control": "private, no-store" } });
+    return Response.json(await readKnowledgeGraphEditor(user, new URL(request.url).searchParams.get("graph")), { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return failure(error, "图谱草稿读取失败"); }
 }
 
@@ -17,7 +17,7 @@ export async function PUT(request: Request) {
   try {
     requireSameOrigin(request);
     const user = await requireUser(request);
-    const body = await request.json() as { revision?: unknown; document?: unknown };
+    const body = await request.json() as { graph?: unknown; revision?: unknown; document?: unknown };
     return Response.json(await saveKnowledgeGraphDraft(user, body));
   } catch (error) { return failure(error, "图谱草稿保存失败"); }
 }
@@ -26,7 +26,7 @@ export async function DELETE(request: Request) {
   try {
     requireSameOrigin(request);
     const user = await requireUser(request);
-    const body = await request.json().catch(() => ({})) as { revision?: unknown };
+    const body = await request.json().catch(() => ({})) as { graph?: unknown; revision?: unknown };
     return Response.json(await discardKnowledgeGraphDraft(user, body));
   } catch (error) { return failure(error, "放弃草稿失败"); }
 }
