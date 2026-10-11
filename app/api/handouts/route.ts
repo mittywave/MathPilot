@@ -3,8 +3,8 @@ import { arrangeHandouts, createHandout, listHandouts } from "../../../lib/serve
 
 export async function GET(request: Request) {
   try {
-    await requireUser(request);
-    return Response.json({ handouts: await listHandouts() });
+    const user = await requireUser(request);
+    return Response.json({ handouts: await listHandouts(user) });
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "讲义列表读取失败" }, { status: 500 });
@@ -26,11 +26,11 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     requireSameOrigin(request);
-    await requireUser(request);
+    const user = await requireUser(request);
     const body = await request.json().catch(() => ({}));
-    return Response.json(await arrangeHandouts(body));
+    return Response.json(await arrangeHandouts(user, body));
   } catch (error) {
     if (error instanceof Response) return error;
-    return Response.json({ error: error instanceof Error ? error.message : "课次调整失败" }, { status: 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "讲义调整失败" }, { status: 500 });
   }
 }

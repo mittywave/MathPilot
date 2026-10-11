@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chineseNumeral, ensureLeadingModule, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizePlacement, placementLabel, questionPoints, setItemBand } from "../lib/handout-rules.mjs";
+import { chineseNumeral, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, sameGroup, setItemBand, shelfOf } from "../lib/handout-rules.mjs";
 
 const q = (id, band = "example", questionId = id, scope = "mine") => ({ id, kind: "question", scope, questionId, band });
 const s = (id, title = id, note = "") => ({ id, kind: "section", title, note });
@@ -94,10 +94,33 @@ test("loose questions and empty handouts get a first module", () => {
   assert.equal(ensureLeadingModule(ready, "new"), ready);
 });
 
-test("a placement needs both a known grade and a known term", () => {
-  assert.deepEqual(normalizePlacement({ grade: 8, term: "autumn" }), { grade: 8, term: "autumn" });
-  assert.deepEqual(normalizePlacement({ grade: "9", term: "summer" }), { grade: 9, term: "summer" }, "a numeric string from a query reads as a grade");
-  for (const raw of [null, {}, { grade: 8 }, { term: "spring" }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { grade: null, term: null }]) assert.equal(normalizePlacement(raw), null);
-  assert.equal(placementLabel({ grade: 7, term: "winter" }), "初一 · 寒假");
-  assert.equal(placementLabel({ grade: null, term: null }), "未归类");
+test("a group is a term, a topic domain or a student, and the shelf follows from it", () => {
+  const none = { grade: null, term: null, domain: null, studentId: null };
+  assert.deepEqual(normalizeHandoutGroup({ grade: 8, term: "autumn" }), { ...none, grade: 8, term: "autumn" });
+  assert.deepEqual(normalizeHandoutGroup({ grade: "9", term: "summer" }), { ...none, grade: 9, term: "summer" }, "a numeric string from a query reads as a grade");
+  assert.deepEqual(normalizeHandoutGroup({ domain: "geometry" }), { ...none, domain: "geometry" });
+  assert.deepEqual(normalizeHandoutGroup({ domain: "number", grade: 8, term: "autumn" }), { ...none, domain: "number" }, "a domain places a topic, whatever else is sent");
+  assert.deepEqual(normalizeHandoutGroup({ studentId: " s1 ", domain: "function", grade: 8, term: "autumn" }), { ...none, studentId: "s1" }, "a student handout belongs to the student alone");
+  for (const raw of [null, {}, { grade: null, term: null }, { title: "x", items: [] }]) assert.deepEqual(normalizeHandoutGroup(raw), none, "nothing given is the unsorted part of the topic library");
+  for (const raw of [{ term: "spring" }, { grade: 8 }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { domain: "physics" }, { studentId: 5 }, { studentId: "x".repeat(201) }]) assert.equal(normalizeHandoutGroup(raw), null, JSON.stringify(raw));
+  assert.equal(shelfOf({ ...none, grade: 8, term: "autumn" }), "course");
+  assert.equal(shelfOf({ ...none, domain: "algebra" }), "topic");
+  assert.equal(shelfOf(none), "topic", "old unfiled handouts wait in the topic library");
+  assert.equal(shelfOf({ ...none, studentId: "s1" }), "student");
+  assert.equal(groupLabel({ grade: 7, term: "winter" }), "初一寒假");
+  assert.equal(groupLabel({ domain: "geometry" }), "几何专题");
+  assert.equal(groupLabel({ domain: "thinking" }), "数学思想专题");
+  assert.equal(groupLabel(none), "未分板块");
+  assert.equal(groupLabel({ studentId: "s1", studentName: "CICI" }), "CICI");
+  assert.ok(sameGroup({ ...none, domain: "function" }, { domain: "function" }));
+  assert.ok(!sameGroup({ ...none, domain: "function" }, { ...none, domain: "geometry" }));
+  assert.ok(!sameGroup({ ...none, domain: "function" }, none));
+  assert.ok(!sameGroup({ studentId: "a" }, { studentId: "b" }));
+});
+
+test("the outline lists each module's title and question references in band order", () => {
+  const items = [q("loose"), s("m1", "平行四边形的性质", "对边相等"), q("p1", "practice"), q("e1"), s("m2", ""), q("v1", "variant")];
+  assert.deepEqual(handoutOutline(items), [{ title: "", questionIds: ["loose"] }, { title: "平行四边形的性质", questionIds: ["e1", "p1"] }, { title: "", questionIds: ["v1"] }]);
+  assert.deepEqual(handoutOutline([s("m1", "空模块")]), [{ title: "空模块", questionIds: [] }]);
+  assert.deepEqual(handoutOutline([]), []);
 });
