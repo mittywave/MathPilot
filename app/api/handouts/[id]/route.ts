@@ -5,9 +5,9 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
   try {
-    await requireUser(request);
+    const user = await requireUser(request);
     const { id } = await context.params;
-    return Response.json({ handout: await getHandout(id) });
+    return Response.json({ handout: await getHandout(user, id) });
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "讲义读取失败" }, { status: 500 });
@@ -17,10 +17,10 @@ export async function GET(request: Request, context: RouteContext) {
 export async function PUT(request: Request, context: RouteContext) {
   try {
     requireSameOrigin(request);
-    await requireUser(request);
+    const user = await requireUser(request);
     const { id } = await context.params;
     const body = await request.json().catch(() => ({})) as { handout?: unknown };
-    return Response.json({ handout: await updateHandout(id, body.handout) });
+    return Response.json({ handout: await updateHandout(user, id, body.handout) });
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "讲义保存失败" }, { status: 500 });

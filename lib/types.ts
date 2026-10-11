@@ -201,21 +201,26 @@ export type HandoutItem =
 // 初一至初三记为 7–9；一学年依次是暑假、秋季、寒假、春季。
 export type HandoutGrade = 7 | 8 | 9;
 export type HandoutTerm = "summer" | "autumn" | "winter" | "spring";
-export type HandoutPlacement = { grade: HandoutGrade; term: HandoutTerm };
+export type HandoutShelf = "course" | "topic" | "student";
+// 专题库的五个板块：函数、几何、代数、数论、数学思想。
+export type HandoutDomain = "function" | "geometry" | "algebra" | "number" | "thinking";
+// 课程体系 = grade + term；专题库 = domain（都为空的是未分板块）；学生讲义 = studentId。
+export type HandoutGroup = { grade: HandoutGrade | null; term: HandoutTerm | null; domain: HandoutDomain | null; studentId: string | null };
 
-export type Handout = {
+export type Handout = HandoutGroup & {
   id: string;
   title: string;
   items: HandoutItem[];
-  // null grade/term = 未归类. position orders the 课次 within a term.
-  grade: HandoutGrade | null;
-  term: HandoutTerm | null;
+  // Only the student's own teacher ever receives a student handout, so the name travels with it.
+  studentName: string | null;
+  // position orders a group: the 课次 of a term, the topics of a grade, a student's handouts.
   position: number;
   createdAt: number;
   updatedAt: number;
 };
 
-export type HandoutSummary = Omit<Handout, "items"> & { questionCount: number };
+export type HandoutOutline = { title: string; questionIds: string[] }[];
+export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline };
 
 // 共享办公 · 成员。停用的账号保留数据但不能登录。
 export type TeamMember = { id: string; email: string; role: "admin" | "member"; createdAt: number; disabledAt: number | null; lastLoginAt: number | null };

@@ -32,7 +32,7 @@ async function jsonRequest(base, path, { cookie = "", method = "GET", body, orig
   return { response, payload: await response.json().catch(() => ({})) };
 }
 
-test("handouts are shared by every teacher, sanitized and keep item order", { timeout: 120_000 }, async () => {
+test("course and topic handouts are shared, student handouts stay with the student's teacher", { timeout: 120_000 }, async () => {
   const port = await freePort();
   const state = await mkdtemp(join(tmpdir(), "zhiti-handouts-"));
   const migrate = spawnSync(WRANGLER, ["d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "--config", join(ROOT, "wrangler.jsonc")], { cwd: ROOT, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
@@ -81,7 +81,7 @@ test("handouts are shared by every teacher, sanitized and keep item order", { ti
     assert.equal(fetched.payload.handout.items[1].note, "$\\frac{1}{2}$");
     assert.deepEqual(fetched.payload.handout.items.map((item) => item.band), ["variant", undefined, "practice"], "bands persist through save and reload");
     const list = await jsonRequest(base, "/api/handouts", { cookie: one });
-    assert.deepEqual(list.payload.handouts.map((item) => [item.title, item.questionCount]), [["第3讲 一元一次方程", 2]]);
+    assert.deepEqual(list.payload.handouts.map((item) => [item.title, item.outline]), [["第3讲 一元一次方程", [{ title: "", questionIds: ["q-c"] }, { title: "一、知识梳理", questionIds: ["q-a"] }]]], "the list outlines modules and their question references");
     assert.equal(list.payload.handouts[0].items, undefined, "the list carries summaries only");
 
     // 机构版：其他老师能看到并打开同一份讲义，但只有管理员能删除。
@@ -101,7 +101,7 @@ test("handouts are shared by every teacher, sanitized and keep item order", { ti
     assert.equal((await jsonRequest(base, "/api/recognize-note", { cookie: one, method: "POST", body: {} })).response.status, 400);
 
     // 课次: handouts created in a term append to it; arrange sets one term's order and can move a handout in.
-    assert.equal(list.payload.handouts[0].grade, null, "a handout created without a term is unfiled");
+    assert.deepEqual([list.payload.handouts[0].grade, list.payload.handouts[0].term, list.payload.handouts[0].domain, list.payload.handouts[0].studentId], [null, null, null, null], "a handout created without a place waits in the unsorted topics");
     const term = { grade: 8, term: "autumn" };
     const lessonIds = [];
     for (const title of ["第一讲", "第二讲"]) {
@@ -120,6 +120,56 @@ test("handouts are shared by every teacher, sanitized and keep item order", { ti
     assert.deepEqual(autumn.map((item) => item.title), ["第二讲", "第3讲 一元一次方程", "第一讲"], "every teacher sees the same 课次 order");
     const saved = await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one, method: "PUT", body: { handout: { title: "第3讲 一元一次方程", items: reordered } } });
     assert.deepEqual([saved.payload.handout.grade, saved.payload.handout.term, saved.payload.handout.position], [8, "autumn", 1], "saving content keeps the placement");
+
+    // 专题库: topics sit in one of five domains, number within it and can be reordered.
+    const topicIds = [];
+    for (const title of ["一次函数的折叠问题", "一次函数中的规律问题"]) {
+      const topic = await jsonRequest(base, "/api/handouts", { cookie: two, method: "POST", body: { handout: { title, items: [], domain: "function" } } });
+      assert.equal(topic.response.status, 201);
+      assert.deepEqual([topic.payload.handout.domain, topic.payload.handout.grade, topic.payload.handout.term, topic.payload.handout.position], ["function", null, null, topicIds.length]);
+      topicIds.push(topic.payload.handout.id);
+    }
+    const geometry = await jsonRequest(base, "/api/handouts", { cookie: two, method: "POST", body: { handout: { title: "几何最值", items: [], domain: "geometry" } } });
+    assert.equal(geometry.payload.handout.position, 0, "each domain numbers its own topics");
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "x", items: [], domain: "physics" } } })).response.status, 400, "an unknown domain is refused");
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "x", items: [], grade: 8 } } })).response.status, 400, "a grade without a term is refused");
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: "function", ids: [topicIds[1], topicIds[0]] } })).response.status, 200);
+    const topics = (await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.filter((item) => item.domain === "function");
+    assert.deepEqual(topics.map((item) => item.title), ["一次函数中的规律问题", "一次函数的折叠问题"], "topics are shared and keep the arranged order");
+
+    // 学生讲义: only the student's own teacher can list, open, save, arrange or delete it; deleting the student removes it.
+    const student = await jsonRequest(base, "/api/students", { cookie: one, method: "POST", body: { student: { name: "CICI", className: "初二" } } });
+    assert.equal(student.response.status, 201);
+    const studentId = student.payload.student.id;
+    const ownHandout = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "CICI-期中复习", items: [{ id: "s", kind: "section", title: "勾股定理复习", note: "" }], studentId, domain: "geometry" } } });
+    assert.equal(ownHandout.response.status, 201);
+    const personal = ownHandout.payload.handout;
+    assert.deepEqual([personal.studentId, personal.studentName, personal.grade, personal.term, personal.domain, personal.position], [studentId, "CICI", null, null, null, 0]);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two, method: "POST", body: { handout: { title: "冒用", items: [], studentId } } })).response.status, 404, "another teacher's student is not a place");
+    assert.ok(!(await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.some((item) => item.id === personal.id), "other teachers do not list it");
+    assert.equal((await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: two })).response.status, 404);
+    assert.equal((await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: admin })).response.status, 404, "not even an admin opens another teacher's student handout");
+    assert.equal((await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: two, method: "PUT", body: { handout: { title: "改掉", items: [] } } })).response.status, 404);
+    assert.equal((await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: two, method: "DELETE", body: {} })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two, method: "PATCH", body: { domain: "function", ids: [personal.id] } })).response.status, 200);
+    const mine = (await jsonRequest(base, "/api/handouts", { cookie: one })).payload.handouts.find((item) => item.id === personal.id);
+    assert.deepEqual([mine.studentId, mine.studentName, mine.title], [studentId, "CICI", "CICI-期中复习"], "another teacher's arrange cannot pull it out of the student");
+    const saved2 = await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: one, method: "PUT", body: { handout: { title: "CICI-期中复习（二）", items: [] } } });
+    assert.deepEqual([saved2.response.status, saved2.payload.handout.studentName], [200, "CICI"]);
+
+    // Moving a shared handout to the student makes it private to that teacher.
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two, method: "PATCH", body: { studentId, ids: [otherTerm.payload.handout.id] } })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { studentId, ids: [personal.id, otherTerm.payload.handout.id] } })).response.status, 200);
+    assert.ok(!(await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.some((item) => item.id === otherTerm.payload.handout.id), "a handout moved to a student leaves the shared shelves");
+    const studentShelf = (await jsonRequest(base, "/api/handouts", { cookie: one })).payload.handouts.filter((item) => item.studentId === studentId);
+    assert.deepEqual(studentShelf.map((item) => [item.title, item.grade, item.term, item.position]), [["CICI-期中复习（二）", null, null, 0], ["寒假第一讲", null, null, 1]]);
+
+    const extra = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "CICI 小测", items: [], studentId } } });
+    assert.equal(extra.payload.handout.position, 2, "a new student handout goes to the end of that student's list");
+    assert.equal((await jsonRequest(base, `/api/handouts/${extra.payload.handout.id}`, { cookie: one, method: "DELETE", body: {} })).response.status, 200, "the student's teacher deletes it without being an admin");
+    assert.equal((await jsonRequest(base, `/api/students/${studentId}`, { cookie: one, method: "DELETE", body: {} })).response.status, 200);
+    assert.equal((await jsonRequest(base, `/api/handouts/${personal.id}`, { cookie: one })).response.status, 404, "deleting the student deletes the student's handouts");
+    assert.equal((await jsonRequest(base, `/api/handouts/${otherTerm.payload.handout.id}`, { cookie: one })).response.status, 404);
 
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one, method: "DELETE", body: {} })).response.status, 403);
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
