@@ -583,7 +583,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           // The lane the bank is adding to is marked, so it is always clear where picked questions go.
           const target = activePicker.kind === "add" && activePicker.sectionId === section.id && activePicker.band === band;
           return <div className={`handout-lane ${band}${target ? " target" : ""}`} key={band}>
-            <div className="handout-lane-head"><b>{HANDOUT_PARTS[band].label}</b>{lane.length ? <span>{lane.length}</span> : null}
+            <div className="handout-lane-head"><b>{HANDOUT_PARTS[band].label}</b><span className={`handout-count${lane.length ? "" : " zero"}`} aria-label={`${lane.length} 道题`}>{lane.length}</span>
               <div className="handout-lane-add">
                 <button className="text-button" aria-pressed={target} disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>从题库选题</button>
                 <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(section.id, band)}>录入新题</button>
