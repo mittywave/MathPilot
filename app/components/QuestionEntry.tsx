@@ -11,7 +11,7 @@ function TextField({ value, label, placeholder = "", singleLine = false, onChang
     <NoteEditor plainText singleLine={singleLine} value={value} label={label} placeholder={placeholder} onChange={onChange} />
   </Suspense>;
 }
-import { renderImportFile } from "../../lib/file-import";
+import { renderImportFile, structuredDocxQuestions } from "../../lib/file-import";
 import { orderedImportTimestamp } from "../../lib/question-order-rules.mjs";
 import { saveQuestionImportBatch } from "../../lib/question-import-save.mjs";
 import { clipboardImage, compressDataUrl, cropExactDataUrl, fileToDataUrl, imageAspectRatio, materializeImageDataUrl, type NormalizedBox } from "../../lib/image-tools";
@@ -178,19 +178,15 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     try {
       const pages = await renderImportFile(file, (current, total) => setFileImportProgress({ current, total, label: `正在读取第 ${current}/${total} 页` }));
       if (controller.signal.aborted) return;
-      const structuredQuestions = pages.find((page) => page.sourceQuestions?.length)?.sourceQuestions;
-      if (structuredQuestions?.length) {
+      const structuredQuestions = structuredDocxQuestions(pages);
+      if (structuredQuestions.length) {
         setFileImportStep("recognizing"); setFileImportProgress({ current: structuredQuestions.length, total: structuredQuestions.length, label: `已按 Word 原始结构整理 ${structuredQuestions.length} 道题` });
-        const sourcePage = pages.find((page) => page.sourceQuestions?.length) ?? pages[0]; const timestamp = currentTimestamp();
-        const imported = structuredQuestions.map<FileImportDraft>((item, index) => ({
-          id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.questionNumber,
-          categoryId: fileImportCategory, type: item.type, difficulty: item.type === "解答题" ? "提高" : "中等",
-          stem: item.stem, stemParagraphs: item.stemParagraphs, stemDocxXml: item.stemDocxXml, stemDocxAssets: item.stemDocxAssets,
-          options: item.options, optionsDocxXml: item.optionsDocxXml, optionsDocxAssets: item.optionsDocxAssets,
-          answer: sourcePage.sourceAnswers?.[item.questionNumber] ?? (item.type === "解答题" ? "见解析" : ""),
-          analysis: sourcePage.sourceAnalyses?.[item.questionNumber] ?? "", analysisDocxXml: sourcePage.sourceAnalysisXml?.[item.questionNumber], analysisDocxAssets: sourcePage.sourceAnalysisAssets?.[item.questionNumber],
-          examYear: "", source: "", tags: [], ...(isAlevelImport ? { tagsZh: [], tagsEn: [] } : {}), contentImages: sourcePage.sourceQuestionImages?.[item.questionNumber] ?? [], recognitionConfidence: 1,
-          recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取"], importFileName: file.name, sourcePage: item.sourcePage,
+        const timestamp = currentTimestamp();
+        const imported = structuredQuestions.map<FileImportDraft>(({ questionNumber, ...item }, index) => ({
+          ...item, id: uid("q"), importId: uid("import"), selected: true, documentNumber: questionNumber,
+          categoryId: fileImportCategory, difficulty: item.type === "解答题" ? "提高" : "中等",
+          examYear: "", source: "", tags: [], ...(isAlevelImport ? { tagsZh: [], tagsEn: [] } : {}), recognitionConfidence: 1,
+          recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取"], importFileName: file.name,
           createdAt: orderedImportTimestamp(timestamp, index), updatedAt: orderedImportTimestamp(timestamp, index),
         }));
         setFileImportDrafts(imported); setFileImportStep("review"); return;

@@ -8,7 +8,9 @@ import type { HandoutBand, Question } from "./types";
 
 // 讲义 → LaTeX. Only semantic \handout... commands are emitted; latex/mitty-handout.cls owns the design.
 // A 讲义 prints its modules; a 小测 or 作业 prints one numbered list of questions under its name.
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[] });
+// A sheet may set the room left after each question (快速排版): for a 解答题 the number of answer lines, for any other
+// question blank millimetres. Without it a 解答题 gets four lines and other questions none.
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[] });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -59,10 +61,23 @@ export function wrapCjkInMath(latex: string) {
   return result;
 }
 
-function latexMath(value: string, display = false) {
-  const latex = wrapCjkInMath(toLatexMath(cleanText(value)).replace(/(?<![\\A-Za-z])(sin|cos|tan|cot|log|ln)(?![A-Za-z])/g, "\\$1 "));
+// Function names and units stay upright; every other letter in a formula is a variable or a point.
+function mathSource(value: string) {
+  return toLatexMath(cleanText(value))
+    .replace(/(?<![\\A-Za-z])(sin|cos|tan|cot|log|ln)(?![A-Za-z])/g, "\\$1 ")
+    .replace(/(?<![\\A-Za-z])(Rt|cm|mm|dm|km|kg|mg|mL)(?![A-Za-z])/g, "\\mathrm{$1}");
+}
+
+// As on the web page, an inline formula with a fraction is set in display style, so its numbers are as large as the text.
+function inlineMath(latex: string) {
   if (!latex.trim()) return "";
-  return display ? `\\[${latex}\\]` : `$${latex}$`;
+  return /\\frac/.test(latex) ? `$\\displaystyle ${latex}$` : `$${latex}$`;
+}
+
+function latexMath(value: string, display = false) {
+  const latex = wrapCjkInMath(mathSource(value));
+  if (!latex.trim()) return "";
+  return display ? `\\[${latex}\\]` : inlineMath(latex);
 }
 
 // Text with $…$ formulas and the same automatic math detection the web view uses.
@@ -79,20 +94,131 @@ export function latexInline(value: string) {
   }).join("");
 }
 
+// Word documents often type a formula as ordinary runs: italic letters, full-width （）＝﹣, superscript digits.
+// Such a stretch, together with any Word equation it touches, is set as one formula, so every formula in the
+// document has the same math font, size and spacing.
+type Glyph = { char: string; italic: boolean; vertical?: "sup" | "sub" };
+type FormulaPart = Glyph | { latex: string };
+const FORMULA_CHAR = /[A-Za-z0-9.+\-−﹣－＋=＝×÷·•<>＜＞≤≥≠≈±∓/%％:：()（）|｜π√∠△⊥∥≌∽°′]/;
+const FORMULA_SIGNAL = /[+\-−﹣－＋=＝×÷·•<>＜＞≤≥≠≈±∓/π√∠△⊥∥≌∽°]/;
+const OPERATOR = /[+\-−﹣－＋=＝×÷<>＜＞≤≥≠≈±∓]/;
+// What toLatexMath does not already turn into math.
+const FORMULA_SYMBOLS: Record<string, string> = {
+  "﹣": "-", "：": ":", "％": "%", "｜": "|", "·": "\\cdot ", "•": "\\cdot ", "′": "'", "⊥": "\\perp ", "∥": "\\parallel ", "≌": "\\cong ", "∽": "\\backsim ",
+};
+const isGlyph = (part: FormulaPart): part is Glyph => "char" in part;
+
+function glyphsLatex(glyphs: Glyph[]) {
+  let latex = "";
+  for (let index = 0; index < glyphs.length;) {
+    const { vertical } = glyphs[index];
+    let end = index;
+    while (end < glyphs.length && glyphs[end].vertical === vertical) end += 1;
+    const source = mathSource(glyphs.slice(index, end).map((glyph) => FORMULA_SYMBOLS[glyph.char] ?? glyph.char).join(""));
+    latex += vertical ? `${vertical === "sup" ? "^" : "_"}{${source}}` : source;
+    index = end;
+  }
+  return latex;
+}
+
+// Word equations write a ratio's colon as Chinese text; in a formula it is the ratio sign.
+const equationLatex = (latex: string) => latex.replace(/\\text\{：\}|：/g, ":");
+
+function formulaLatex(parts: FormulaPart[]) {
+  const pieces: string[] = [];
+  for (let index = 0; index < parts.length;) {
+    const part = parts[index];
+    if (!isGlyph(part)) { pieces.push(equationLatex(part.latex)); index += 1; continue; }
+    let end = index;
+    while (end < parts.length && isGlyph(parts[end])) end += 1;
+    pieces.push(glyphsLatex(parts.slice(index, end) as Glyph[]));
+    index = end;
+  }
+  return inlineMath(wrapCjkInMath(pieces.join(" ").trim()));
+}
+
+function glyphText(glyphs: Glyph[]) {
+  let latex = "";
+  for (let index = 0; index < glyphs.length;) {
+    const { italic, vertical } = glyphs[index];
+    let end = index;
+    while (end < glyphs.length && glyphs[end].italic === italic && glyphs[end].vertical === vertical) end += 1;
+    let text = latexPlain(glyphs.slice(index, end).map((glyph) => glyph.char).join(""));
+    if (vertical === "sup") text = `\\textsuperscript{${text}}`;
+    if (vertical === "sub") text = `\\textsubscript{${text}}`;
+    if (italic) text = `\\textit{${text}}`;
+    latex += text;
+    index = end;
+  }
+  return latex;
+}
+
+// A stretch is a formula when it has an operator, an exponent, an italic letter or a Word equation in it.
+// A sub-question label （1）, a year range 2026-2027 and the punctuation around a formula stay text.
+function stretchLatex(parts: FormulaPart[]): string {
+  const char = (part: FormulaPart | undefined) => part && isGlyph(part) ? part.char : "";
+  let start = 0; let end = parts.length;
+  const lead: string[] = [];
+  for (const part of parts.slice(0, 4)) { if (!isGlyph(part)) break; lead.push(part.char); }
+  const label = lead.join("").match(/^[（(]\d{1,2}[）)]/);
+  if (label) start = label[0].length;
+  while (start < end && /^[ :：.·•]$/.test(char(parts[start]))) start += 1;
+  while (end > start && /^[ :：.·•]$/.test(char(parts[end - 1]))) end -= 1;
+  const before = parts.slice(0, start); const after = parts.slice(end); const core = parts.slice(start, end);
+  // An unmatched bracket belongs to the text around the formula.
+  const open: number[] = []; const unmatched: number[] = [];
+  core.forEach((part, index) => {
+    if (/^[(（]$/.test(char(part))) open.push(index);
+    else if (/^[)）]$/.test(char(part))) { if (open.length) open.pop(); else unmatched.push(index); }
+  });
+  const breaks = [...unmatched, ...open].sort((a, b) => a - b);
+  if (breaks.length) {
+    let latex = glyphText(before as Glyph[]); let cursor = 0;
+    for (const index of breaks) { latex += stretchLatex(core.slice(cursor, index)) + glyphText([core[index] as Glyph]); cursor = index + 1; }
+    return latex + stretchLatex(core.slice(cursor)) + glyphText(after as Glyph[]);
+  }
+  const text = core.map(char).join("");
+  const formula = core.some((part) => !isGlyph(part) || Boolean(part.vertical) || part.italic && /[A-Za-z]/.test(part.char)) || /[□▱]/.test(text) || FORMULA_SIGNAL.test(text);
+  const range = core.every(isGlyph) && /^\d+(?:-\d+)+$/.test(text);
+  return glyphText(before as Glyph[]) + (formula && !range ? formulaLatex(core) : glyphText(core as Glyph[])) + glyphText(after as Glyph[]);
+}
+
 function latexInlines(inlines: DocxWebInline[]) {
-  return inlines.map((inline) => {
-    if (inline.type === "math") return `$${wrapCjkInMath(inline.latex)}$`;
-    if (inline.type === "tab") return "\\quad ";
-    if (inline.type === "break") return "\\newline ";
-    if (inline.underline && !inline.value.trim()) return `\\handoutblank{${Math.min(12, Math.max(3, inline.value.length * 0.5)).toFixed(1)}em}`;
-    let text = latexPlain(inline.value);
-    if (inline.underline) text = `\\uline{${text}}`;
-    if (inline.vertical === "sup") text = `\\textsuperscript{${text}}`;
-    if (inline.vertical === "sub") text = `\\textsubscript{${text}}`;
-    if (inline.bold) text = `\\textbf{${text}}`;
-    if (inline.italic) text = `\\textit{${text}}`;
-    return text;
-  }).join("");
+  const out: string[] = []; let stretch: FormulaPart[] = []; let text: Glyph[] = [];
+  const flush = () => {
+    if (text.length) out.push(glyphText(text));
+    if (stretch.length) out.push(stretchLatex(stretch));
+    text = []; stretch = [];
+  };
+  // Plain runs are read glyph by glyph; bold, underlined and fill-in runs keep their own formatting.
+  const parts = inlines.flatMap<FormulaPart | DocxWebInline>((inline) => inline.type === "text" && !inline.bold && !inline.underline
+    ? [...cleanText(inline.value)].map((char) => ({ char, italic: Boolean(inline.italic), vertical: inline.vertical }))
+    : inline.type === "math" ? [{ latex: inline.latex }] : [inline]);
+  const charAt = (index: number) => { const part = parts[index]; return part && "char" in part ? part.char : ""; };
+  parts.forEach((part, index) => {
+    if (!("type" in part)) {
+      // A space joins a formula only beside an operator, as in “x = 1”; between words it ends one. □ABCD is a parallelogram.
+      const inFormula = !isGlyph(part) || (part.char === " " ? OPERATOR.test(charAt(index - 1)) || OPERATOR.test(charAt(index + 1))
+        : FORMULA_CHAR.test(part.char) || /[□▱]/.test(part.char) && /^[A-Z]{4}/.test([1, 2, 3, 4].map((step) => charAt(index + step)).join("")));
+      if (inFormula) { if (text.length) { out.push(glyphText(text)); text = []; } stretch.push(part); return; }
+      if (stretch.length) { out.push(stretchLatex(stretch)); stretch = []; }
+      text.push(part as Glyph); return;
+    }
+    flush();
+    if (part.type === "tab") { out.push("\\quad "); return; }
+    if (part.type === "break") { out.push("\\newline "); return; }
+    if (part.type !== "text") return;
+    if (part.underline && !part.value.trim()) { out.push(`\\handoutblank{${Math.min(12, Math.max(3, part.value.length * 0.5)).toFixed(1)}em}`); return; }
+    let value = latexPlain(part.value);
+    if (part.underline) value = `\\uline{${value}}`;
+    if (part.vertical === "sup") value = `\\textsuperscript{${value}}`;
+    if (part.vertical === "sub") value = `\\textsubscript{${value}}`;
+    if (part.bold) value = `\\textbf{${value}}`;
+    if (part.italic) value = `\\textit{${value}}`;
+    out.push(value);
+  });
+  flush();
+  return out.join("");
 }
 
 function plainWeight(value: string) {
@@ -197,6 +323,9 @@ export function choiceColumns(weights: number[]) {
   return widest <= 20 ? 2 : 1;
 }
 
+// A 解答题 without options leaves ruled answer lines under it; any other question leaves blank space.
+export const leavesAnswerLines = (question: Question) => question.type === "解答题" && !questionChoices(question).length;
+
 function choicesLatex(choices: Choice[]) {
   const columns = choiceColumns(choices.map((choice) => choice.weight));
   const rows: string[] = [];
@@ -249,7 +378,7 @@ function answerBody(question: Question, figureName: (source: string) => string |
 }
 
 // 小测 and 作业 print no 考点: naming the knowledge point would give the method away.
-function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null, showPoints = true) {
+function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null, showPoints = true, space?: number) {
   const { lines: paragraphs, placed } = stemContent(question, figureName);
   const source = question.source?.trim() ? `\\handoutsource{${latexPlain(question.source.trim())}}` : "";
   const stem = [`${source}${paragraphs[0] ?? ""}`, ...paragraphs.slice(1)].join("\\par\n");
@@ -274,9 +403,11 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   if (choices.length) out.push(choicesLatex(choices));
   const points = showPoints ? questionPoints(question) : [];
   if (points.length) out.push(`\\handoutpoints{${points.map(latexPlain).join("、")}}`);
-  // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线；教师版不留白。
+  // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线，其他题按给定的毫米留白；教师版不留白。
+  const lines = leavesAnswerLines(question);
   if (answers !== "each" && band === "example") out.push("\\handoutnotesarea{4}");
-  else if (answers !== "each" && !choices.length && question.type === "解答题") out.push("\\handoutworkspace{4}");
+  else if (answers !== "each" && lines && Math.round(space ?? 4) > 0) out.push(`\\handoutworkspace{${Math.round(space ?? 4)}}`);
+  else if (answers !== "each" && !lines && space && space > 0) out.push(`\\handoutgap{${Number(space.toFixed(1))}}`);
   out.push("\\end{handoutquestion}");
   // The question is never split across pages; the 教师版 answer after it may run on to the next page.
   if (answers === "each") out.push("\\begin{handoutanswer}", answerBody(question, figureName), "\\end{handoutanswer}");
@@ -325,7 +456,7 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   const list = "questions" in input ? input : null;
   const fields = list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
   const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
-  const body = "questions" in input ? sheetBody(input.questions, answers, figureName) : moduleBody(input.modules, answers, figureName);
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing) : moduleBody(input.modules, answers, figureName);
   return [
     "\\documentclass{mitty-handout}",
     series ? `\\handoutseries{${series}}` : "",
@@ -340,12 +471,12 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
 }
 
 // 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers.
-function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
+function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[]) {
   if (!questions.length) return [];
   const body = [`\\handoutnumberwidth{${questions.length}}`]; const keys: string[] = [];
   questions.forEach((question, index) => {
     const label = String(index + 1);
-    body.push(questionLatex(question, label, "practice", answers, figureName, false));
+    body.push(questionLatex(question, label, "practice", answers, figureName, false, spacing?.[index]));
     if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(question, figureName), "\\end{handoutkey}");
   });
   return keys.length ? [...body, "\\handoutanswerkey", ...keys] : body;

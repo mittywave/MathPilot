@@ -12,6 +12,7 @@ function ToolIcon({ name }: { name: ToolboxTool["icon"] | "box" | "arrow" }) {
     arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
     box: <><path d="M3 8h18v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8Z" /><path d="M8 8V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v3M3 13h18M10 13v2h4v-2" /></>,
     check: <><path d="M9 4h6v3H9z" /><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15" /><path d="m8.5 14 2.5 2.5 4.5-5" /></>,
+    page: <><path d="M6.5 3h8l4 4v12.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5.5 19.5v-15A1.5 1.5 0 0 1 7 3Z" /><path d="M14.5 3v4h4M8.5 11h7M8.5 14.5h7M8.5 18h4" /></>,
     share: <><circle cx="18" cy="5.5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="18.5" r="2.5" /><path d="m8.3 10.8 7.4-4.1M8.3 13.2l7.4 4.1" /></>,
   } as const;
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;

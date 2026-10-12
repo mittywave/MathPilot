@@ -112,14 +112,14 @@ test("a 小测 or 作业 prints one numbered list under its name, without 考点
 
 test("Word-imported stems keep formulas and tables", () => {
   const latex = build("none");
-  assert.match(latex, /\\begin\{handoutquestion\}\{变式1\}\n根据下表求 \$\\frac\{a\}\{2\}\$。/);
-  assert.match(latex, /\\begin\{tabular\}\{\|c\|c\|\}\\hline\n\\handoutheadrow 月份 & 销量 \\\\\\hline\n一月 & a\+12 \\\\\\hline\n\\end\{tabular\}/);
+  assert.match(latex, /\\begin\{handoutquestion\}\{变式1\}\n根据下表求 \$\\displaystyle \\frac\{a\}\{2\}\$。/);
+  assert.match(latex, /\\begin\{tabular\}\{\|c\|c\|\}\\hline\n\\handoutheadrow 月份 & 销量 \\\\\\hline\n一月 & \$a\+12\$ \\\\\\hline\n\\end\{tabular\}/);
   assert.match(buildHandoutLatex({ title: "小测", modules, answers: "none" }), /\\handoutfields\{姓名,班级,得分\}/);
 });
 
 test("Word-imported pictures stay where the document put them, at its size", () => {
   const student = buildFigures("none");
-  assert.match(student, /\\begin\{handoutquestion\}\{1\}\n【建立模型】\\par\n如图1，求证：AB=CD。\\par\n\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{128\.3mm\}\{figures\/row\.png\}\}\\par\n【模型应用】如图2/);
+  assert.match(student, /\\begin\{handoutquestion\}\{1\}\n【建立模型】\\par\n如图1，求证：\$AB=CD\$。\\par\n\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{128\.3mm\}\{figures\/row\.png\}\}\\par\n【模型应用】如图2/);
   assert.equal((student.match(/figures\/row\.png/g) ?? []).length, 1, "a picture placed in the stem is not repeated beside or under it");
   assert.match(student, /\\begin\{handoutsidefigure\}\[0\.18\]\{figures\/beside\.png\}/, "a screenshot figure on the right keeps its share of the line");
   assert.match(student, /\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{0\.62\\linewidth\}\{figures\/under\.png\}\}/, "a screenshot figure under the text keeps its share of the line");
@@ -131,9 +131,46 @@ test("Word-imported pictures stay where the document put them, at its size", () 
   assert.equal((teacher.match(/\\end\{handoutquestion\}\n\\begin\{handoutanswer\}/g) ?? []).length, 3);
 });
 
+// Word documents type many formulas as plain runs: italic letters, full-width （）＝﹣ and superscript runs.
+const run = (value, props = "") => `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ""}<w:t xml:space="preserve">${value}</w:t></w:r>`;
+const italic = value => run(value, "<w:i/>");
+const sup = value => run(value, '<w:vertAlign w:val="superscript"/>');
+const equation = body => `<m:oMath>${body}</m:oMath>`;
+const fraction = (num, den) => `<m:f><m:num><m:r><m:t>${num}</m:t></m:r></m:num><m:den><m:r><m:t>${den}</m:t></m:r></m:den></m:f>`;
+const stemOf = (...paragraphs) => buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [{ ...base, id: "w", type: "填空题", stem: "", stemDocxXml: paragraphs.map(wordParagraph) }] })
+  .match(/\\begin\{handoutquestion\}\{1\}\n([\s\S]*?)\n\\end\{handoutquestion\}/)[1];
+
+test("formulas typed as Word text are set as one formula, like the document's equations", () => {
+  assert.equal(stemOf(run("1．") + run("（6）5（3") + italic("x") + run("﹣4）﹣2（") + italic("x") + run("﹣1）＝5（2") + italic("x") + run("﹣1）．")), "（6）$5(3x-4)-2(x-1)=5(2x-1)$．");
+  assert.equal(stemOf(run("1．如果方程（") + italic("m") + run("+1）") + italic("x") + sup("2|") + run("m", '<w:i/><w:vertAlign w:val="superscript"/>') + sup("|﹣1") + run("+2＝0是关于") + italic("x") + run("的一元一次方程")),
+    "如果方程$(m+1)x^{2|m|-1}+2=0$是关于$x$的一元一次方程", "superscript runs become one exponent");
+  assert.equal(stemOf(run("1．（2）3") + italic("x") + run("﹣") + equation(fraction(1, 4)) + italic("x") + run("＝11；")), "（2）$\\displaystyle 3x- \\frac{1}{4} x=11$；", "text and a Word equation beside it make one formula");
+  assert.equal(stemOf(run("1．（3）") + equation("<m:r><m:t>x：2.4=5：</m:t></m:r>" + fraction(1, 5)) + run("．")), "（3）$\\displaystyle x:2.4=5:\\frac{1}{5}$．", "a ratio's colon is the ratio sign");
+  assert.equal(stemOf(run("1．在Rt△") + italic("ABC") + run("中，∠") + italic("C") + run("＝90°，长25") + italic("cm")), "在$\\mathrm{Rt}\\triangle ABC$中，$\\angle C=90^{\\circ}$，长$25\\mathrm{cm}$");
+});
+
+test("text that only looks like a formula stays text", () => {
+  assert.equal(stemOf(run("1．2026-2027学年第（1）题，得分18%，x=____")), "2026-2027学年第（1）题，得分18\\%，$x=$\\handoutblank{3.0em}");
+  assert.equal(stemOf(run("1．在□ABCD中，（　　）")), "在$\\parallelogram ABCD$中，（　　）");
+  assert.equal(stemOf(run("1．Find the value of x such that 2x + 3 = 7.")), "Find the value of x such that $2x + 3 = 7$.", "English words are not variables");
+});
+
+test("a sheet can set the room after each question", () => {
+  const sheet = spacing => buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [choice, proof, blank], spacing });
+  assert.equal((sheet().match(/\\handoutworkspace\{4\}/g) ?? []).length, 1, "without spacing a 解答题 gets four lines");
+  assert.doesNotMatch(sheet(), /handoutgap/);
+  const set = sheet([6, 2, 12.5]);
+  assert.match(set, /\\end\{handoutchoices\}\n\\handoutgap\{6\}\n\\end\{handoutquestion\}/, "a choice question gets blank millimetres");
+  assert.match(set, /\\handoutworkspace\{2\}\n\\end\{handoutquestion\}/, "a 解答题 gets that many answer lines");
+  assert.match(set, /\\handoutgap\{12\.5\}/);
+  assert.doesNotMatch(sheet([0, 0, 0]), /handoutgap|handoutworkspace/, "nothing left blank");
+  assert.doesNotMatch(buildHandoutLatex({ title: "练习", answers: "each", sheet: "练习", questions: [choice, proof], spacing: [6, 3] }), /handoutgap|handoutworkspace/, "教师版 leaves no room");
+});
+
 test("every handout command the generator emits is defined by the class", async () => {
   const cls = await readFile(new URL("../latex/mitty-handout.cls", import.meta.url), "utf8");
-  const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}${buildList(answers)}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
+  const spaced = buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [choice, proof], spacing: [4, 3] });
+  const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}${buildList(answers)}${spaced}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
   for (const command of used) assert.match(cls, new RegExp(`\\\\(?:newcommand|newenvironment|newtcolorbox)\\{?\\\\?${command}\\b`), `${command} is defined`);
 });
 

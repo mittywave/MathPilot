@@ -26,8 +26,8 @@
   {\setCJKfamilyfont{mhkai}{FandolKai-Regular.otf}}
 \setmainfont{STIXTwoText}[Extension=.otf,UprightFont=*-Regular,BoldFont=*-Bold,ItalicFont=*-Italic,BoldItalicFont=*-BoldItalic]
 \setmathfont{STIXTwoMath-Regular.otf}
-% 圈码①…⑳由中文字体排印
-\xeCJKDeclareCharClass{CJK}{"2460->"2473}
+% 圈码①…⑳由中文字体排印；省略号…按中文字符断行，后面的“，”不会被挤到下一行开头
+\xeCJKDeclareCharClass{CJK}{"2460->"2473,"2026}
 \newcommand\mhkai{\CJKfamily{mhkai}}
 
 % ---- 配色：一个品牌绿 + 中性色，黑白打印同样清楚 ----
@@ -137,13 +137,20 @@
   \abovedisplayskip=2pt\belowdisplayskip=2pt\abovedisplayshortskip=0pt\belowdisplayshortskip=2pt #2\par\end{minipage}}
 
 % ---- 题目：悬挂题号，所有行对齐题干 ----
+% 每道题的题号处有一个 PDF 目标 q1、q2…（按出现顺序），快速排版的预览据此找到每道题。
+% xdvipdfmx 默认删掉没有被链接引用的目标，C 0x0010 让它保留。
 \newlength\mh@numwidth\setlength\mh@numwidth{7mm}
+\newcounter{mhquestion}
+\AtBeginDocument{\special{dvipdfmx:config C 0x0010}}
+\newcommand\mh@anchor{\stepcounter{mhquestion}\special{pdf:dest (q\arabic{mhquestion}) [@thispage /XYZ @xpos @ypos null]}}
 \newenvironment{handoutquestion}[1]{%
   \mh@headbreak{4\baselineskip}\vspace{3.6mm}\mh@unitstart
   \begin{list}{}{\setlength\leftmargin{\mh@numwidth}\setlength\labelwidth{\mh@numwidth}\setlength\labelsep{0pt}%
     \setlength\itemsep{0pt}\setlength\topsep{0pt}\setlength\parsep{1.4mm}\setlength\listparindent{0pt}}%
-  \item[{\makebox[\mh@numwidth][l]{\sffamily\bfseries\color{mhgreen}#1}}]\ignorespaces}
+  \item[{\makebox[\mh@numwidth][l]{\mh@anchor\sffamily\bfseries\color{mhgreen}#1}}]\ignorespaces}
   {\end{list}\mh@keep\textheight}
+% 题后留白（毫米）：排在题目里，和题目一起换页
+\newcommand\handoutgap[1]{\par\vspace{#1mm}}
 \newcommand\handoutsource[1]{\mbox{\sffamily\footnotesize\color{mhmuted}\tikz[baseline=(s.base)]\node[draw=mhline,line width=0.5pt,rounded corners=1.2mm,inner xsep=1.4mm,inner ysep=0.6mm](s){#1};}\enspace}
 % 填空横线：一行放不下时最多缩短四成，不伸出版心
 \newcommand\handoutblank[1]{\uline{\hspace{#1 minus \dimexpr#1*4/10\relax}}}

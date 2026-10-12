@@ -297,6 +297,20 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
   } finally { host.remove(); }
 }
 
+// A question read from the Word document's own structure: stem, options, figures, and the answer and analysis
+// the document's answer section gives for its number. 录入 and 排版 both build on this.
+export function structuredDocxQuestions(pages: ImportPage[]) {
+  const page = pages.find((item) => item.sourceQuestions?.length);
+  return (page?.sourceQuestions ?? []).map((item) => ({
+    questionNumber: item.questionNumber, type: item.type, sourcePage: item.sourcePage,
+    stem: item.stem, stemParagraphs: item.stemParagraphs, stemDocxXml: item.stemDocxXml, stemDocxAssets: item.stemDocxAssets,
+    options: item.options, optionsDocxXml: item.optionsDocxXml, optionsDocxAssets: item.optionsDocxAssets,
+    answer: page?.sourceAnswers?.[item.questionNumber] ?? (item.type === "解答题" ? "见解析" : ""),
+    analysis: page?.sourceAnalyses?.[item.questionNumber] ?? "", analysisDocxXml: page?.sourceAnalysisXml?.[item.questionNumber], analysisDocxAssets: page?.sourceAnalysisAssets?.[item.questionNumber],
+    contentImages: page?.sourceQuestionImages?.[item.questionNumber] ?? [],
+  }));
+}
+
 export async function renderImportFile(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (extension === "pdf" || file.type === "application/pdf") return renderPdf(file, onProgress);

@@ -1,5 +1,5 @@
 // Tools collected under the single “工具箱” entry. Adding a tool is one entry here plus its own page; cards open the tool in a new tab.
-export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check"; tags: string[]; adminOnly?: boolean };
+export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check" | "page"; tags: string[]; adminOnly?: boolean };
 
 export const TOOLBOX_TOOLS: ToolboxTool[] = [
   {
@@ -11,6 +11,11 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
     key: "answer-studio", href: "/tools/answer-studio", name: "手写转录", icon: "pen",
     summary: "把手写答案、讲义照片或 PDF 转成可编辑的 Word 解析，可选含图或纯文字版本。",
     tags: ["PDF", "图片", "导出 Word"],
+  },
+  {
+    key: "typeset", href: "/tools/typeset", name: "快速排版", icon: "page",
+    summary: "上传 Word 练习，按固定的 LaTeX 练习模板排成 PDF：学生版、附答案或教师版，也可下载 TeX 源码。",
+    tags: ["Word", "LaTeX", "PDF"],
   },
   {
     key: "sharing", href: "/tools/sharing", name: "共享办公", icon: "share", adminOnly: true,
