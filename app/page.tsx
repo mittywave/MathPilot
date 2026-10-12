@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, memo, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, lazy, memo, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
@@ -17,7 +17,7 @@ import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../li
 import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../lib/client-random-id.mjs";
-import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type WrongQuestionEntry } from "../lib/types";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionEntry } from "../lib/types";
 
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
@@ -26,6 +26,8 @@ const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "�
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
 // (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
 const LIBRARY_PAGE = 40;
+// 组卷篮 opens 快速排版 in place; the typesetter loads only then.
+const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
@@ -86,6 +88,10 @@ export default function Home() {
   const [isExporting, setIsExporting] = useState(false);
   const [paperTitle, setPaperTitle] = useState("专项练习");
   const [includeAnswers, setIncludeAnswers] = useState(true);
+  // 快速排版 from the basket takes the whole window. Closing it hands back the title and settings, so the next opening
+  // starts where this one stopped; a question's own spacing is kept only while the same questions stay in the same order.
+  const [typesetting, setTypesetting] = useState(false);
+  const [typesetKept, setTypesetKept] = useState<{ ids: string; settings: TypesetSettings } | null>(null);
   const [notice, setNotice] = useState("");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -223,7 +229,7 @@ export default function Home() {
     }, { rootMargin: "0px 0px 1600px 0px" });
     observer.observe(end);
     return () => observer.disconnect();
-  }, [listKey, visibleCount, filteredQuestions.length]);
+  }, [listKey, visibleCount, filteredQuestions.length, typesetting]);
 
   const activeName =showSelected ? "我的组卷" : byCode ? `ID ${byCode.code}` : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
   const activeWrongEntries = wrongEntries.filter(entry => entry.archivedAt == null);
@@ -416,6 +422,12 @@ export default function Home() {
     finally { setIsExporting(false); }
   }
 
+  async function openTypeset() {
+    if (!selectedQuestions.length || isExporting) return;
+    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); setTypesetting(true); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "无法排版所选题目"); }
+  }
+
   function openNewModule() {
     if (!requireLogin() || !canManageLibrary) return;
     setModuleDraft(null); setModuleName(""); setModuleSubtitle(""); setModuleDialog("new");
@@ -477,6 +489,13 @@ export default function Home() {
     } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
   }
 
+  const typesetIds = selectedQuestions.map((question) => question.id).join(",");
+  if (typesetting) return <Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
+    questions: selectedQuestions, title: paperTitle,
+    settings: typesetKept ? { ...typesetKept.settings, ownRoom: typesetKept.ids === typesetIds ? typesetKept.settings.ownRoom : {} } : { answers: includeAnswers ? "end" : "none" },
+    onClose: (title, settings) => { setPaperTitle(title); setTypesetKept({ ids: typesetIds, settings }); setTypesetting(false); },
+  }} /></Suspense>;
+
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading} locale={pageLocale} basketCount={selectedIds.length}
@@ -533,7 +552,7 @@ export default function Home() {
           </> : <>
           {showSelected ? <>
             <div className="basket-heading">
-              <div><p className="breadcrumb">选题完成后，在这里整理练习</p><h1>组卷篮 <span>{selectedQuestions.length} 题</span></h1><p className="subtext">题目按下方顺序生成 Word，可随时继续选题。</p></div>
+              <div><p className="breadcrumb">选题完成后，在这里整理练习</p><h1>组卷篮 <span>{selectedQuestions.length} 题</span></h1><p className="subtext">题目按下方顺序快速排版成 PDF 或生成 Word，可随时继续选题。</p></div>
               {!!selectedQuestions.length && <button className="secondary" onClick={() => setShowSelected(false)}>继续选题</button>}
             </div>
             {!!selectedQuestions.length && <>
@@ -541,7 +560,7 @@ export default function Home() {
                 <label className="basket-title">练习标题<input value={paperTitle} disabled={isExporting} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
                 <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={isExporting} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
               </div>
-              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><PaperMoreMenu><button disabled={isExporting} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu><button className="primary-button" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button></div>
+              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><PaperMoreMenu><button disabled={isExporting} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu><button className="secondary" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><button className="primary-button" disabled={isExporting} onClick={() => void openTypeset()}>快速排版</button></div>
             </>}
           </> : <>
           <div className="library-context-bar"><div><b>{pageCopy.publicLibrary}</b><span>{authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess}</span></div>{canManageLibrary && <button className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
