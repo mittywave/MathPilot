@@ -678,6 +678,8 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .wrong-book-stats { display:flex; align-items:stretch; gap:7px; }
 .wrong-book-stats span { min-width:75px; display:grid; gap:4px; padding:9px 12px; border-left:1px solid color-mix(in srgb, var(--green) 9%, var(--surface-soft)); color:var(--muted); font-size:8px; text-align:center; }
 .wrong-book-stats b { color:var(--green); font:700 20px Georgia,serif; }
+.wrong-book-smart { align-self:center; display:inline-flex; align-items:center; height:34px; padding:0 13px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; text-decoration:none; white-space:nowrap; }
+.wrong-book-smart:hover { background:var(--green-soft); border-color:var(--green); }
 .wrong-book-head { margin-top:25px; }
 .wrong-book-head h2 { margin:0; font-family:"Songti SC",serif; font-size:20px; }
 .wrong-question-list { margin-top:20px; }

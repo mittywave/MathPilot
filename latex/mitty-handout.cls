@@ -133,6 +133,14 @@
   \hspace{2.6mm}{\sffamily\bfseries\large\color{mhdeep}#2}\hspace{3mm}%
   \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\marks\mh@roommark{}\nobreak\vspace{3.2mm}\global\mh@afterheadtrue}
 
+% ---- 分天的练习（智能组卷）：第二天起另起一页；天名用分节的样式，下面一行留日期、用时和做对几题 ----
+\newcounter{mhgroup}
+\newcommand\handoutgroup[2]{%
+  \ifnum\value{mhgroup}>0 \clearpage\fi\stepcounter{mhgroup}%
+  \handoutsection{\arabic{mhgroup}}{#1}\vspace{-1.6mm}%
+  \noindent{\sffamily\footnotesize\color{mhmuted}日期\enspace\rule[-0.4mm]{20mm}{0.4pt}\qquad 用时\enspace\rule[-0.4mm]{14mm}{0.4pt}\qquad 做对\enspace\rule[-0.4mm]{9mm}{0.4pt}\,/\,#2 题\par}%
+  \marks\mh@roommark{}\nobreak\vspace{2.6mm}\global\mh@afterheadtrue}
+
 % ---- 模块里的四段：知识点 / 例题 / 练习 / 变式。同一种小标签，靠文字区分，不靠颜色堆叠 ----
 \newcommand\handoutpart[2]{%
   \mh@headbreak{6\baselineskip}\vspace{4.4mm}%

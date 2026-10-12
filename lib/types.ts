@@ -229,9 +229,24 @@ export type HandoutModuleCounts = Record<HandoutBand | Exclude<HandoutSheet, "ha
 export type CourseLessonDetail = { id: string; title: string; grade: HandoutGrade; modules: { id: string; title: string; counts: HandoutModuleCounts }[] };
 export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
 
-// 快速排版的历史记录：只属于排它的老师。settings 是当时的排版设置；原始 Word 另行读取，打开时按原样再读一遍。
+// 快速排版的历史记录：只属于排它的老师。settings 是当时的排版设置。Word 记录（word）另行读取原始 Word，打开时按原样
+// 再读一遍；智能组卷的记录（library）是一份按天分好的题库题目清单（plan），打开时按题目 ID 取题库原题。
 export type TypesetSettings = { answers: "none" | "end" | "each"; linePitch: number; groupRoom: Record<string, number>; ownRoom: Record<string, number> };
-export type TypesetRecord = { id: string; title: string; fileName: string; questionCount: number; settings: Partial<TypesetSettings>; createdAt: number; updatedAt: number };
+export type TypesetRecord = {
+  id: string; title: string; fileName: string; questionCount: number; settings: Partial<TypesetSettings>; createdAt: number; updatedAt: number;
+  sourceKind: "word" | "library"; studentId: string | null; studentName: string | null; plan: SmartPaperPlan | null;
+};
+
+// 智能组卷的方案：老师的原话、agent 对需求的理解、从学生档案里看到的问题，以及按天挑好的题。
+// 每道题记着它针对的侧重点和挑它的理由；系统补选的题理由写明“系统补选”。
+export type SmartPaperItem = { id: string; focus: string; reason: string };
+export type SmartPaperGroup = { title: string; theme: string; items: SmartPaperItem[] };
+export type SmartPaperBrief = { title: string; days: number; perDay: number; categoryIds: string[]; questionTypes: QuestionType[]; difficulty: string; focus: { label: string; description: string }[] };
+export type SmartPaperPlan = {
+  request: string; studentId: string | null; brief: SmartPaperBrief; findings: { label: string; evidence: string }[];
+  // How many questions in range were left out because this student already met them (wrong book or earlier plans).
+  avoided: number; groups: SmartPaperGroup[];
+};
 
 // 共享办公 · 成员。停用的账号保留数据但不能登录。
 export type TeamMember = { id: string; email: string; role: "admin" | "member"; createdAt: number; disabledAt: number | null; lastLoginAt: number | null };

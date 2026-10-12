@@ -1,4 +1,4 @@
-import type { AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, Student, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
+import type { AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -36,7 +36,12 @@ export async function createTypesetRecord(file: File, record: Pick<TypesetRecord
   const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
   return request<{ record: TypesetRecord }>("/api/typeset-records", { method: "POST", body: JSON.stringify({ ...record, fileName: file.name, file: data }) });
 }
-export function updateTypesetRecord(id: string, change: { title?: string; settings?: TypesetSettings }) { return request<{ record: TypesetRecord }>(`/api/typeset-records/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }); }
+// 智能组卷: the agent reads the request (and the student's archive) and picks the questions by day; with current and
+// instruction it revises that plan. exclude lists questions the student has already met, which swaps leave out too.
+export function generateSmartPaper(body: { request: string; studentId?: string; current?: SmartPaperPlan; instruction?: string }) { return request<{ plan: SmartPaperPlan; exclude: string[] }>("/api/smart-paper", { method: "POST", body: JSON.stringify(body) }); }
+// 智能组卷 keeps its plan (the questions by day) in the same history; it carries no Word.
+export function createSmartPaperRecord(record: { title: string; plan: SmartPaperPlan; settings: Partial<TypesetSettings> }) { return request<{ record: TypesetRecord }>("/api/typeset-records", { method: "POST", body: JSON.stringify(record) }); }
+export function updateTypesetRecord(id: string, change: { title?: string; settings?: TypesetSettings; plan?: SmartPaperPlan }) { return request<{ record: TypesetRecord }>(`/api/typeset-records/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }); }
 export function deleteTypesetRecord(id: string) { return request<{ ok: boolean }>(`/api/typeset-records/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 export async function fetchTypesetSource(record: Pick<TypesetRecord, "id" | "fileName">) {
   const response = await fetch(`/api/typeset-records/${encodeURIComponent(record.id)}/source`);

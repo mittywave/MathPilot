@@ -1,5 +1,5 @@
 // Tools collected under the single “工具箱” entry. Adding a tool is one entry here plus its own page; cards open the tool in a new tab.
-export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check" | "page"; tags: string[]; adminOnly?: boolean };
+export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check" | "page" | "spark"; tags: string[]; adminOnly?: boolean };
 
 export const TOOLBOX_TOOLS: ToolboxTool[] = [
   {
@@ -16,6 +16,11 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
     key: "typeset", href: "/tools/typeset", name: "快速排版", icon: "page",
     summary: "上传 Word 练习，按固定的 LaTeX 练习模板排成 PDF：学生版、附答案或教师版，题间距和作答横线可调。",
     tags: ["Word", "LaTeX", "PDF"],
+  },
+  {
+    key: "smart-paper", href: "/tools/smart-paper", name: "智能组卷", icon: "spark",
+    summary: "说一句要出什么练习，按学生档案从题库挑题、按天排好，确认后进快速排版，每天单独起页。",
+    tags: ["学生档案", "按天打卡", "快速排版"],
   },
   {
     key: "sharing", href: "/tools/sharing", name: "共享办公", icon: "share", adminOnly: true,

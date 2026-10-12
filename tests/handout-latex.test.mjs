@@ -186,3 +186,17 @@ test("the class file is well formed: every brace closes", async () => {
   }
   assert.equal(depth, 0, "every { has its }");
 });
+
+test("a sheet in days (智能组卷): each day under its own heading from a new page, numbers from 1, the key in days", () => {
+  const days = [{ title: "第 1 天 · 去括号", size: 2 }, { title: "第 2 天 · 通分", size: 1 }];
+  const source = buildHandoutLatex({ title: "计算打卡", answers: "end", sheet: "练习", questions: [proof, blank, { ...blank, id: "f" }], groups: days });
+  assert.match(source, /\\handoutfields\{姓名,班级\}/, "each day scores itself; the title keeps name and class");
+  assert.match(source, /\\handoutnumberwidth\{2\}/, "the number column fits the longest day");
+  const order = ["\\handoutgroup{第 1 天 · 去括号}{2}", "{1}", "{2}", "\\handoutgroup{第 2 天 · 通分}{1}", "{1}", "\\handoutanswerkey", "\\handoutkeygroup{第 1 天 · 去括号}{2}", "\\begin{handoutkey}{1}", "\\begin{handoutkey}{2}", "\\handoutkeygroup{第 2 天 · 通分}{1}", "\\begin{handoutkey}{1}"];
+  order.reduce((from, marker) => { const index = source.indexOf(marker, from); assert.ok(index >= 0, `missing ${marker} after ${from}`); return index + marker.length; }, 0);
+  // Groups that do not cover every question (or are empty) are ignored rather than misnumbering the sheet.
+  const plain = buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [proof, blank], groups: [{ title: "第 1 天", size: 1 }] });
+  assert.doesNotMatch(plain, /handoutgroup/);
+  assert.match(plain, /\\handoutfields\{姓名,班级,得分\}/);
+  assert.match(buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [proof], groups: [{ title: "第 1 天", size: 1 }, { title: "第 2 天", size: 0 }] }), /\\handoutgroup\{第 1 天\}\{1\}/);
+});
