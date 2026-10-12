@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, memo, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, memo, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
@@ -32,6 +32,14 @@ function currentTimestamp() { return Date.now(); }
 
 type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void };
 
+// A click anywhere on a selectable card ticks it, as its check box does. Buttons, links and the grading record keep
+// their own clicks, and dragging across the text to copy it ticks nothing.
+function selectOnCardClick(event: MouseEvent<HTMLElement>, toggle: () => void) {
+  if ((event.target as Element).closest("button, a, details")) return;
+  if (window.getSelection()?.isCollapsed === false) return;
+  toggle();
+}
+
 // One card of the library list. It re-renders only when its own question or state changes, so ticking one question
 // in a long category does not rebuild every other card on the page.
 const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, path, checked, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
@@ -40,7 +48,8 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
 }) {
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
-  return <article className={`question-card ${checked ? "checked" : ""}`}>
+  // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
+  return <article className={`question-card ${checked ? "checked" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{path || question.source}</em></div>
@@ -506,7 +515,8 @@ export default function Home() {
                   <h3 className="wrong-month-head">{group.month}<span>{group.entries.length} 题</span></h3>
                   {group.entries.map((entry, index) => {
                   const question = entry.question; const answerKey = `wrong-${entry.id}`; const answerOpen = expandedAnswers.includes(answerKey); const checked = selectedIds.includes(question.id);
-                  return <article className={`question-card wrong-question-card ${checked ? "checked" : ""}`} key={entry.id}>
+                  // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
+                  return <article className={`question-card wrong-question-card ${checked ? "checked" : ""}`} key={entry.id} onClick={(event) => selectOnCardClick(event, () => toggleSelected(question.id))}>
                     <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}${group.month}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>
                     <div className="question-main">
                       <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span><span className="wrong-count-badge">错 {entry.mistakeCount} 次</span><em>{entry.sourcePath}</em></div>
