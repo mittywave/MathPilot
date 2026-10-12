@@ -9,8 +9,10 @@ import type { HandoutBand, Question } from "./types";
 // 讲义 → LaTeX. Only semantic \handout... commands are emitted; latex/mitty-handout.cls owns the design.
 // A 讲义 prints its modules; a 小测 or 作业 prints one numbered list of questions under its name.
 // A sheet may set the room left after each question (快速排版): for a 解答题 the number of answer lines, for any other
-// question blank millimetres. Without it a 解答题 gets four lines and other questions none.
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[] });
+// question blank millimetres. Without it a 解答题 gets six lines and other questions none. linePitch is the distance
+// between answer lines in millimetres (the class default is 8).
+export const DEFAULT_ANSWER_LINES = 6;
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -405,8 +407,9 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   if (points.length) out.push(`\\handoutpoints{${points.map(latexPlain).join("、")}}`);
   // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线，其他题按给定的毫米留白；教师版不留白。
   const lines = leavesAnswerLines(question);
-  if (answers !== "each" && band === "example") out.push("\\handoutnotesarea{4}");
-  else if (answers !== "each" && lines && Math.round(space ?? 4) > 0) out.push(`\\handoutworkspace{${Math.round(space ?? 4)}}`);
+  const answerLines = Math.round(space ?? DEFAULT_ANSWER_LINES);
+  if (answers !== "each" && band === "example") out.push(`\\handoutnotesarea{${DEFAULT_ANSWER_LINES}}`);
+  else if (answers !== "each" && lines && answerLines > 0) out.push(`\\handoutworkspace{${answerLines}}`);
   else if (answers !== "each" && !lines && space && space > 0) out.push(`\\handoutgap{${Number(space.toFixed(1))}}`);
   out.push("\\end{handoutquestion}");
   // The question is never split across pages; the 教师版 answer after it may run on to the next page.
@@ -463,6 +466,7 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
     `\\handouttitle{${latexPlain(heading.title)}}`,
     `\\handoutedition{${EDITIONS[answers]}}`,
     `\\handoutfields{${fields}}`,
+    list?.linePitch ? `\\handoutlinepitch{${Number(list.linePitch.toFixed(1))}mm}` : "",
     "\\begin{document}",
     "\\makehandouttitle",
     ...body,

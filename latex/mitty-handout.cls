@@ -100,6 +100,30 @@
 \newcommand\mh@keep[1]{\egroup\ifdim\dimexpr\ht\mh@unit+\dp\mh@unit\relax>#1\unvbox\mh@unit\else\box\mh@unit\fi\global\mh@afterheadfalse}
 \newcommand\mh@headbreak[1]{\par\ifmh@afterhead\nobreak\else\needspace{#1}\fi}
 
+% ---- 作答横线：1 行 = \mh@linepitch（默认 8mm，\handoutlinepitch 可改）。每条线在一行的底边，行距不受行高影响 ----
+\newlength\mh@linepitch\setlength\mh@linepitch{8mm}
+\newcommand\handoutlinepitch[1]{\setlength\mh@linepitch{#1}}
+\newcount\mh@linecount
+\newcommand\mh@ruled[2]{\nointerlineskip\moveright#1\vbox to\mh@linepitch{\vfil\hbox{\textcolor{mhline}{\rule{#2}{0.45pt}}}}}
+\newcommand\mh@rules[1]{\par\mh@linecount=#1\relax\@whilenum\mh@linecount>\z@\do{\mh@ruled{\@totalleftmargin}{\linewidth}\advance\mh@linecount\m@ne}}
+% 页底：本页最后一块是印了作答横线的题时，按同样的行距、缩进和宽度把横线画到版心底边。
+% 每道题结束时在独立的 mark 类里记下它的横线（没有横线记空），分节、段标签、文末答案的标题也记空，
+% 所以 \botmarks 就是本页最后一块的情况。分页先由 TeX 定好，横线只补在页底剩下的地方，不改分页。
+\newmarks\mh@roommark
+\newdimen\mh@room
+\newif\ifmh@lines
+\def\mh@lineshape{}
+% 页尾的空白、罚点（如 needspace 留在页底的 \vskip）不算内容：量高度、补横线之前都先去掉，横线紧接着题目的最后一条线。
+\def\mh@striptail{\ifcase\numexpr\lastnodetype-10\relax\or\unskip\expandafter\mh@striptail\or\unkern\expandafter\mh@striptail
+  \or\unpenalty\expandafter\mh@striptail\fi}
+\def\@texttop{\setbox\@tempboxa\vbox{\unvcopy\@outputbox\mh@striptail}%
+  \global\mh@room\dimexpr\@colht-\ht\@tempboxa-\dp\@tempboxa\relax}
+\def\@textbottom{\expandafter\mh@fillroom\botmarks\mh@roommark::\@nil\vskip\z@\@plus.0001fil}
+\def\mh@fillroom#1:#2:#3\@nil{\ifx\relax#1\relax\else\mh@striptail
+  \mh@linecount\mh@room\divide\mh@linecount\mh@linepitch
+  \@whilenum\mh@linecount>\z@\do{\mh@ruled{#1}{#2}\advance\mh@linecount\m@ne}%
+  \vskip\z@\@plus1fill\fi}
+
 % ---- 分节：老师写了序号就做成圆角徽标，没写就用一道色条，不替老师编号 ----
 % 留够分节标题、知识点标签和至少两行知识点的位置
 \newcommand\handoutsection[2]{%
@@ -107,13 +131,13 @@
   \noindent\markright{\unexpanded{#2}}\ifx\relax#1\relax\tikz[baseline=-0.7ex]\fill[mhgreen,rounded corners=0.8mm](0,-2.6mm) rectangle (1.8mm,2.6mm);%
   \else\tikz[baseline=(b.base)]\node[fill=mhgreen,rounded corners=1.6mm,minimum width=7mm,minimum height=7mm,inner sep=0pt,text=white,font=\sffamily\bfseries](b){#1};\fi%
   \hspace{2.6mm}{\sffamily\bfseries\large\color{mhdeep}#2}\hspace{3mm}%
-  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\nobreak\vspace{3.2mm}\global\mh@afterheadtrue}
+  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\marks\mh@roommark{}\nobreak\vspace{3.2mm}\global\mh@afterheadtrue}
 
 % ---- 模块里的四段：知识点 / 例题 / 练习 / 变式。同一种小标签，靠文字区分，不靠颜色堆叠 ----
 \newcommand\handoutpart[2]{%
   \mh@headbreak{6\baselineskip}\vspace{4.4mm}%
   \noindent\tikz[baseline=(p.base)]\node[fill=mhwash,rounded corners=1.4mm,inner xsep=2.2mm,inner ysep=1.1mm,font=\sffamily\bfseries\small,text=mhdeep](p){#1};%
-  \hspace{2.4mm}{\sffamily\footnotesize\color{mhmuted}#2}\par\nobreak\vspace{1.6mm}\global\mh@afterheadtrue}
+  \hspace{2.4mm}{\sffamily\footnotesize\color{mhmuted}#2}\par\marks\mh@roommark{}\nobreak\vspace{1.6mm}\global\mh@afterheadtrue}
 % 题号栏按本段最长的编号（例12 / 12 / 变式12）定宽，所有题干对齐
 \newcommand\handoutnumberwidth[1]{\settowidth\mh@numwidth{\sffamily\bfseries #1}\addtolength\mh@numwidth{2.8mm}\ifdim\mh@numwidth<7mm\setlength\mh@numwidth{7mm}\fi}
 
@@ -144,11 +168,11 @@
 \AtBeginDocument{\special{dvipdfmx:config C 0x0010}}
 \newcommand\mh@anchor{\stepcounter{mhquestion}\special{pdf:dest (q\arabic{mhquestion}) [@thispage /XYZ @xpos @ypos null]}}
 \newenvironment{handoutquestion}[1]{%
-  \mh@headbreak{4\baselineskip}\vspace{3.6mm}\mh@unitstart
+  \mh@headbreak{4\baselineskip}\vspace{3.6mm}\global\mh@linesfalse\mh@unitstart
   \begin{list}{}{\setlength\leftmargin{\mh@numwidth}\setlength\labelwidth{\mh@numwidth}\setlength\labelsep{0pt}%
     \setlength\itemsep{0pt}\setlength\topsep{0pt}\setlength\parsep{1.4mm}\setlength\listparindent{0pt}}%
   \item[{\makebox[\mh@numwidth][l]{\mh@anchor\sffamily\bfseries\color{mhgreen}#1}}]\ignorespaces}
-  {\end{list}\mh@keep\textheight}
+  {\end{list}\mh@keep\textheight\marks\mh@roommark{\ifmh@lines\mh@lineshape\fi}}
 % 题后留白（毫米）：排在题目里，和题目一起换页
 \newcommand\handoutgap[1]{\par\vspace{#1mm}}
 \newcommand\handoutsource[1]{\mbox{\sffamily\footnotesize\color{mhmuted}\tikz[baseline=(s.base)]\node[draw=mhline,line width=0.5pt,rounded corners=1.2mm,inner xsep=1.4mm,inner ysep=0.6mm](s){#1};}\enspace}
@@ -158,9 +182,8 @@
 \newcommand\handoutpoints[1]{\par\vspace{0.4mm}{\sffamily\footnotesize\color{mhmuted}考点\enspace #1\par}}
 % 学生版例题：跟着老师记思路和步骤的笔记区
 \newcommand\handoutnotesarea[1]{\par\vspace{1.6mm}%
-  \begin{tcolorbox}[enhanced,colback=white,colframe=mhline,boxrule=0.5pt,arc=2mm,left=4mm,right=4mm,top=2mm,bottom=0mm]
-    {\sffamily\scriptsize\color{mhmuted}课堂笔记}\par\vspace{6.2mm}%
-    \foreach \mh@line in {1,...,#1}{\noindent\textcolor{mhline}{\rule{\linewidth}{0.45pt}}\par\vspace{6.4mm}}
+  \begin{tcolorbox}[enhanced,colback=white,colframe=mhline,boxrule=0.5pt,arc=2mm,left=4mm,right=4mm,top=2mm,bottom=3mm]
+    {\sffamily\scriptsize\color{mhmuted}课堂笔记}{\@totalleftmargin\z@\mh@rules{#1}}
   \end{tcolorbox}}
 
 % 选项：按长度分 4、2、1 栏；标签用品牌绿无衬线
@@ -171,9 +194,10 @@
   \noindent\tabularx{\linewidth}{@{}*{#1}{>{\raggedright\arraybackslash}X}@{}}}
   {\endtabularx\par}
 
-% 作答区：几条极淡的横线，给学生留出书写空间
-\newcommand\handoutworkspace[1]{\par\vspace{2mm}%
-  \foreach \mh@line in {1,...,#1}{\par\noindent\textcolor{mhline}{\rule{\linewidth}{0.45pt}}\par\vspace{7.2mm}}}
+% 作答区：几条极淡的横线，给学生留出书写空间；本页最后一道题的横线会延伸到页底。
+% 作答区总在题目最后：去掉列表结尾的 \partopsep，最后一条横线就是题目的下沿，延伸的横线紧接着按同样行距排。
+\newcommand\handoutworkspace[1]{\par\vspace{2mm}\mh@rules{#1}\@topsepadd\z@
+  \xdef\mh@lineshape{\the\@totalleftmargin:\the\linewidth}\global\mh@linestrue}
 
 % 配图（可选参数是最大高度）；题干右侧配图默认占三分之一行宽，截图题按原图所占的比例
 \newcommand\handoutfigure[3][46mm]{\includegraphics[width=#2,height=#1,keepaspectratio]{#3}}
@@ -210,8 +234,8 @@
 \newcommand\handoutanswerkey{\clearpage
   \noindent\markright{参考答案与解析}\tikz[baseline=(b.base)]\node[fill=mhgreen,rounded corners=1.6mm,minimum width=7mm,minimum height=7mm,inner sep=0pt,text=white,font=\sffamily\bfseries](b){答};%
   \hspace{2.6mm}{\sffamily\bfseries\large\color{mhdeep}参考答案与解析}\hspace{3mm}%
-  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\nobreak\vspace{3mm}\global\mh@afterheadtrue}
-\newcommand\handoutkeygroup[2]{\mh@headbreak{4\baselineskip}\vspace{4.4mm}\noindent{\sffamily\bfseries\color{mhdeep}#1}\par\nobreak\vspace{0.6mm}\handoutnumberwidth{#2}\global\mh@afterheadtrue}
+  \leaders\hbox{\textcolor{mhline}{\rule[0.55ex]{1pt}{0.6pt}}}\hfill\null\par\marks\mh@roommark{}\nobreak\vspace{3mm}\global\mh@afterheadtrue}
+\newcommand\handoutkeygroup[2]{\mh@headbreak{4\baselineskip}\vspace{4.4mm}\noindent{\sffamily\bfseries\color{mhdeep}#1}\par\marks\mh@roommark{}\nobreak\vspace{0.6mm}\handoutnumberwidth{#2}\global\mh@afterheadtrue}
 % 短的答案条目整条不拆，长的解析可以接着排到下一页
 \newenvironment{handoutkey}[1]{%
   \mh@headbreak{3\baselineskip}\vspace{2.6mm}\mh@unitstart

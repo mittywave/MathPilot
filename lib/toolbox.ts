@@ -14,7 +14,7 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
   },
   {
     key: "typeset", href: "/tools/typeset", name: "快速排版", icon: "page",
-    summary: "上传 Word 练习，按固定的 LaTeX 练习模板排成 PDF：学生版、附答案或教师版，也可下载 TeX 源码。",
+    summary: "上传 Word 练习，按固定的 LaTeX 练习模板排成 PDF：学生版、附答案或教师版，题间距和作答横线可调。",
     tags: ["Word", "LaTeX", "PDF"],
   },
   {

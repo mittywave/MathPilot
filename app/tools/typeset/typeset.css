@@ -21,9 +21,7 @@
 .typeset-editions label.active{border-color:var(--green,#2f6b53);background:var(--green-soft,#edf5f0)}
 .typeset-editions input{grid-row:span 2;margin:0;accent-color:var(--green,#2f6b53)}
 .typeset-editions b{font-size:13.5px}
-.typeset-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.typeset-actions .primary-button{margin:0;font-size:13.5px}
-.typeset-actions .secondary{font-size:13px}
+.typeset-panel .typeset-download{margin:0;font-size:13.5px}
 .typeset-note{margin:0;padding:9px 11px;border-radius:calc(8px*var(--radius-scale));background:color-mix(in srgb,var(--green-soft,#edf5f0) 60%,var(--surface,#fff));color:color-mix(in srgb,var(--ink,#24352f) 72%,var(--surface,#fff));font-size:12.5px}
 .typeset-note.warn{background:var(--amber-soft,#fbf3e2)}
 .typeset-note.error{background:var(--danger-soft,#fbecea);color:var(--danger,#b4442f)}
@@ -38,7 +36,7 @@
 .typeset-stepper input{width:40px;height:30px;padding:0;border:0;border-inline:1px solid var(--line,#e4e9e6);background:none;color:inherit;font:600 13.5px/1 inherit;text-align:center;-moz-appearance:textfield}
 .typeset-stepper input::-webkit-inner-spin-button,.typeset-stepper input::-webkit-outer-spin-button{margin:0;-webkit-appearance:none}
 .typeset-stepper input:focus{outline:2px solid var(--green,#2f6b53);outline-offset:-2px}
-.typeset-stepper em{padding:0 8px 0 6px;font-size:12px;font-style:normal;color:color-mix(in srgb,var(--ink,#24352f) 60%,var(--surface,#fff))}
+.typeset-stepper em{width:30px;padding:0 6px 0 4px;text-align:center;font-size:12px;font-style:normal;color:color-mix(in srgb,var(--ink,#24352f) 60%,var(--surface,#fff))}
 .typeset-own{display:flex;flex-wrap:wrap;gap:6px}
 .typeset-own span{display:inline-flex;border:1px solid color-mix(in srgb,var(--green,#2f6b53) 40%,var(--line,#e4e9e6));border-radius:999px;background:var(--green-soft,#edf5f0);overflow:hidden}
 .typeset-own button{min-height:28px;padding:0 4px 0 10px;border:0;background:none;color:var(--green,#2f6b53);font-size:12.5px;cursor:pointer}

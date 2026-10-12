@@ -70,8 +70,9 @@ test("every module runs 知识点 → 例题 → 练习 → 变式 with per-band
   const positions = order.map(marker => student.indexOf(marker));
   assert.ok(positions.every(position => position >= 0), order.filter((_, index) => positions[index] < 0).join(", "));
   assert.deepEqual([...positions].sort((x, y) => x - y), positions);
-  assert.equal((student.match(/\\handoutnotesarea\{4\}/g) ?? []).length, 2, "学生版 例题 get a note area");
-  assert.equal((student.match(/\\handoutworkspace\{4\}/g) ?? []).length, 1, "only the 变式 解答题 gets working lines");
+  assert.equal((student.match(/\\handoutnotesarea\{6\}/g) ?? []).length, 2, "学生版 例题 get a note area");
+  assert.equal((student.match(/\\handoutworkspace\{6\}/g) ?? []).length, 1, "only the 变式 解答题 gets working lines");
+  assert.doesNotMatch(student, /handoutlinepitch/, "a 讲义 keeps the class's line pitch");
   assert.match(student, /\\handoutpoints\{一元一次方程、移项\}/);
   assert.match(student, /\\handoutsource\{2024 期中\}方程/);
   assert.match(student, /\\begin\{handoutsidefigure\}\{figures\/fig-1\.png\}/);
@@ -101,7 +102,7 @@ test("a 小测 or 作业 prints one numbered list under its name, without 考点
   assert.ok(positions.every(position => position >= 0), order.filter((_, index) => positions[index] < 0).join(", "));
   assert.deepEqual([...positions].sort((x, y) => x - y), positions);
   assert.doesNotMatch(student, /handoutsection|handoutpart|handoutpoints|handoutnotesarea|handoutkey/);
-  assert.equal((student.match(/\\handoutworkspace\{4\}/g) ?? []).length, 1, "the 解答题 gets working lines");
+  assert.equal((student.match(/\\handoutworkspace\{6\}/g) ?? []).length, 1, "the 解答题 gets working lines");
   const key = buildList("end");
   assert.match(key, /\\end\{handoutquestion\}\n\\handoutanswerkey\n\\begin\{handoutkey\}\{1\}/);
   assert.deepEqual([...key.matchAll(/\\begin\{handoutkey\}\{(\d+)\}/g)].map(match => match[1]), ["1", "2", "3"], "the key uses the list numbers");
@@ -157,7 +158,9 @@ test("text that only looks like a formula stays text", () => {
 
 test("a sheet can set the room after each question", () => {
   const sheet = spacing => buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [choice, proof, blank], spacing });
-  assert.equal((sheet().match(/\\handoutworkspace\{4\}/g) ?? []).length, 1, "without spacing a 解答题 gets four lines");
+  assert.equal((sheet().match(/\\handoutworkspace\{6\}/g) ?? []).length, 1, "without spacing a 解答题 gets six lines");
+  assert.doesNotMatch(sheet(), /handoutlinepitch/);
+  assert.match(buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [proof], linePitch: 10 }), /\\handoutfields\{[^}]*\}\n\\handoutlinepitch\{10mm\}\n\\begin\{document\}/, "the line pitch is set before the document");
   assert.doesNotMatch(sheet(), /handoutgap/);
   const set = sheet([6, 2, 12.5]);
   assert.match(set, /\\end\{handoutchoices\}\n\\handoutgap\{6\}\n\\end\{handoutquestion\}/, "a choice question gets blank millimetres");
@@ -169,7 +172,7 @@ test("a sheet can set the room after each question", () => {
 
 test("every handout command the generator emits is defined by the class", async () => {
   const cls = await readFile(new URL("../latex/mitty-handout.cls", import.meta.url), "utf8");
-  const spaced = buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [choice, proof], spacing: [4, 3] });
+  const spaced = buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [choice, proof], spacing: [4, 3], linePitch: 9 });
   const used = new Set([...["none", "end", "each"].flatMap(answers => [...`${build(answers)}${buildFigures(answers)}${buildList(answers)}${spaced}`.matchAll(/\\(handout[a-z]+|makehandouttitle)/g)].map(match => match[1]))]);
   for (const command of used) assert.match(cls, new RegExp(`\\\\(?:newcommand|newenvironment|newtcolorbox)\\{?\\\\?${command}\\b`), `${command} is defined`);
 });

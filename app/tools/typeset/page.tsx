@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
-import type { LatexProject, LatexStatus } from "../../../lib/handout-latex-files";
+import type { LatexStatus } from "../../../lib/handout-latex-files";
 import type { Question } from "../../../lib/types";
 import { PdfPreview } from "./PdfPreview";
 import "../tools.css";
@@ -17,11 +17,13 @@ const EDITIONS: { value: WordAnswerPlacement; label: string; hint: string }[] = 
 // The room after a question: a 解答题 leaves ruled answer lines, any other question blank millimetres.
 type Unit = "行" | "mm";
 const ROOM: Record<Unit, { name: string; fallback: number; step: number; max: number }> = {
-  行: { name: "作答横线", fallback: 4, step: 1, max: 15 },
+  行: { name: "作答横线", fallback: 6, step: 1, max: 20 },
   mm: { name: "题后留白", fallback: 0, step: 2, max: 80 },
 };
 type Source = { fileName: string; questions: Question[]; units: Unit[] };
-type Result = { pdf: Blob | null; project: LatexProject; notes: string[] };
+// The distance between answer lines, in millimetres; the template's default is 8.
+const PITCH = { fallback: 8, min: 6, max: 12 };
+type Result = { pdf: Blob; notes: string[] };
 const groupKey = (question: Question, unit: Unit) => `${question.type}|${unit}`;
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -38,12 +40,13 @@ function TypesetIcon({ name }: { name: "back" | "upload" }) {
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 
-function Stepper({ value, unit, label, disabled, onChange }: { value: number; unit: Unit; label: string; disabled?: boolean; onChange: (value: number) => void }) {
-  const { step, max } = ROOM[unit];
-  const set = (next: number) => { if (Number.isFinite(next)) onChange(Math.min(max, Math.max(0, Math.round(next)))); };
+function Stepper({ value, unit, label, disabled, onChange, min = 0, max = ROOM[unit].max, step = ROOM[unit].step }: {
+  value: number; unit: Unit; label: string; disabled?: boolean; onChange: (value: number) => void; min?: number; max?: number; step?: number;
+}) {
+  const set = (next: number) => { if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, Math.round(next)))); };
   return <span className="typeset-stepper">
-    <button type="button" aria-label={`${label}减少`} disabled={disabled || value <= 0} onClick={() => set(value - step)}>−</button>
-    <input type="number" inputMode="numeric" min={0} max={max} step={1} value={value} aria-label={label} disabled={disabled}
+    <button type="button" aria-label={`${label}减少`} disabled={disabled || value <= min} onClick={() => set(value - step)}>−</button>
+    <input type="number" inputMode="numeric" min={min} max={max} step={1} value={value} aria-label={label} disabled={disabled}
       onChange={(event) => { if (event.target.value !== "") set(Number(event.target.value)); }} />
     <button type="button" aria-label={`${label}增加`} disabled={disabled || value >= max} onClick={() => set(value + step)}>+</button>
     <em>{unit}</em>
@@ -58,6 +61,7 @@ export default function TypesetPage() {
   const [title, setTitle] = useState("");
   const [appliedTitle, setAppliedTitle] = useState("");
   const [answers, setAnswers] = useState<WordAnswerPlacement>("none");
+  const [linePitch, setLinePitch] = useState(PITCH.fallback);
   const [groupRoom, setGroupRoom] = useState<Record<string, number>>({});
   const [ownRoom, setOwnRoom] = useState<Record<number, number>>({});
   const [picked, setPicked] = useState<number | null>(null);
@@ -99,20 +103,20 @@ export default function TypesetPage() {
       try {
         if (!statusRef.current) await statusReady.current;
         const { buildHandoutLatexProject, compileLatexPdf } = await import("../../../lib/handout-latex-files");
-        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number) });
+        // The hosted site has no typesetter; the panel says so instead.
+        if (!statusRef.current?.available) return;
+        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch });
         const notes = project.missingFigures ? [`${project.missingFigures} 张配图未能读取`] : [];
-        // Without the local typesetter (the hosted site) only the TeX source can be offered.
-        if (!statusRef.current?.available) { if (id === run.current) setResult({ pdf: null, project, notes }); return; }
         const { pdf, issues } = await compileLatexPdf(project);
         if (id !== run.current) return;
         if (issues) notes.push(`${issues} 处公式需要检查`);
-        setResult({ pdf, project, notes });
+        setResult({ pdf, notes });
         if (statusRef.current && !statusRef.current.installed) { statusRef.current = { ...statusRef.current, installed: true }; setStatus(statusRef.current); }
       } catch (reason) { if (id === run.current) setError(reason instanceof Error ? reason.message : "排版失败"); }
       finally { if (id === run.current) setBusy(""); }
     })(), 350);
     return () => clearTimeout(timer);
-  }, [source, appliedTitle, answers, spacingKey]);
+  }, [source, appliedTitle, answers, spacingKey, linePitch]);
 
   async function openFile(file: File) {
     if (!/\.docx$/i.test(file.name)) { setError(/\.doc$/i.test(file.name) ? "暂不支持旧版 .doc，请在 Word 中另存为 .docx" : "请选择 Word（.docx）文件"); return; }
@@ -139,12 +143,6 @@ export default function TypesetPage() {
     if (value === null) delete next[index]; else next[index] = value;
     return next;
   });
-
-  async function downloadSource() {
-    if (!result) return;
-    const { latexSourceZip } = await import("../../../lib/handout-latex-files");
-    saveBlob(await latexSourceZip(result.project), `${fileName}-LaTeX.zip`);
-  }
 
   const pickedPopover = source && picked !== null && (() => {
     const unit = source.units[picked]; const group = groupRoom[groupKey(source.questions[picked], unit)] ?? ROOM[unit].fallback;
@@ -186,36 +184,39 @@ export default function TypesetPage() {
 
       {source && <section className="typeset-field" aria-label="间距"><span>间距</span>
         {teacher ? <small>教师版每题后紧跟答案，不留白；切到学生版或附答案可以调整。</small> : <>
-          <ul className="typeset-rooms">{groups.map((group) => <li key={group.key}>
+          <ul className="typeset-rooms">
+            {source.units.includes("行") && <li>
+              <span><b>横线行距</b><small>作答横线之间的距离</small></span>
+              <Stepper value={linePitch} unit="mm" label="横线行距" min={PITCH.min} max={PITCH.max} step={1} onChange={setLinePitch} />
+            </li>}
+            {groups.map((group) => <li key={group.key}>
             <span><b>{group.type}</b><small>{group.count} 道 · {ROOM[group.unit].name}</small></span>
             <Stepper value={groupRoom[group.key] ?? ROOM[group.unit].fallback} unit={group.unit} label={`${group.type}${ROOM[group.unit].name}`}
               onChange={(value) => setGroupRoom((current) => ({ ...current, [group.key]: value }))} />
-          </li>)}</ul>
+          </li>)}
+          </ul>
           {own.length ? <div className="typeset-own" aria-label="单独调整的题">{own.map((index) => <span key={index}>
             <button type="button" onClick={() => setPicked(index)}>第 {index + 1} 题 {ownRoom[index]} {source.units[index]}</button>
             <button type="button" aria-label={`第 ${index + 1} 题跟随题型`} onClick={() => setOwn(index, null)}>×</button>
           </span>)}</div> : null}
-          <small>在预览里点一道题，可以单独调整它的留白。</small>
+          <small>解答题至少留这些行，每页最后一道解答题的横线会画到页底。在预览里点一道题，可以单独调整它的留白。</small>
         </>}
       </section>}
 
-      <div className="typeset-actions">
-        <button className="primary-button" disabled={!result?.pdf || Boolean(busy)} onClick={() => result?.pdf && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-        <button className="secondary" disabled={!result || Boolean(busy)} onClick={() => void downloadSource()}>下载 TeX 源码</button>
-      </div>
-      {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成；这里可以下载 TeX 源码自行编译。</p>}
+      <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
+      {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
       {error && <p className="typeset-note error" role="alert">{error}</p>}
     </aside>
 
     <section className="typeset-preview" aria-label="PDF 预览" aria-busy={Boolean(busy)}>
-      {result?.pdf && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
+      {result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
         label={(index) => `第 ${index + 1} 题 · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
-          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{result ? "这里无法生成 PDF，请下载 TeX 源码。" : "选择一份 Word 练习，排好的 PDF 会显示在这里。"}</p></>}
+          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{status && !status.available && source ? "这里无法生成 PDF，请在本机用「启动知题」打开。" : "选择一份 Word 练习，排好的 PDF 会显示在这里。"}</p></>}
         </div>}
-      {busy && result?.pdf && <div className="typeset-busy"><i className="typeset-spinner" />{busy}</div>}
+      {busy && result && <div className="typeset-busy"><i className="typeset-spinner" />{busy}</div>}
     </section>
   </main>;
 }
