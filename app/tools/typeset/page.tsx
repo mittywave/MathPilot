@@ -265,7 +265,6 @@ export default function TypesetPage() {
             <button type="button" onClick={() => setPicked(index)}>第 {index + 1} 题 {ownRoom[index]} {source.units[index]}</button>
             <button type="button" aria-label={`第 ${index + 1} 题跟随题型`} onClick={() => setOwn(index, null)}>×</button>
           </span>)}</div> : null}
-          <small>解答题至少留这些行，每页最后一道解答题的横线会画到页底。在预览里点一道题，可以单独调整它的留白。</small>
         </>}
       </section>}
 
