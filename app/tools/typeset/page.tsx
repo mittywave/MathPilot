@@ -1,9 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createTypesetRecord, deleteTypesetRecord, fetchMe, fetchTypesetRecords, fetchTypesetSource, updateTypesetRecord } from "../../../lib/api-client";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
-import type { Question } from "../../../lib/types";
+import type { Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
 import { PdfPreview } from "./PdfPreview";
+import { TypesetHistory } from "./TypesetHistory";
 import "../tools.css";
 import "./typeset.css";
 
@@ -32,9 +34,21 @@ function saveBlob(blob: Blob, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function TypesetIcon({ name }: { name: "back" | "upload" }) {
+// Settings read back from a history record; anything missing or out of range falls back to the default.
+function restoredSettings(raw: Partial<TypesetSettings>): TypesetSettings {
+  const numbers = (value: unknown) => Object.fromEntries(Object.entries(value && typeof value === "object" ? value : {})
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
+  return {
+    answers: raw.answers === "end" || raw.answers === "each" ? raw.answers : "none",
+    linePitch: typeof raw.linePitch === "number" ? Math.min(PITCH.max, Math.max(PITCH.min, Math.round(raw.linePitch))) : PITCH.fallback,
+    groupRoom: numbers(raw.groupRoom), ownRoom: numbers(raw.ownRoom),
+  };
+}
+
+function TypesetIcon({ name }: { name: "back" | "upload" | "history" }) {
   const paths = {
     back: <path d="m10 5-7 7 7 7M3 12h18" />,
+    history: <><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" /><path d="M3 4v4.5h4.5M12 7.5V12l3 2" /></>,
     upload: <><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5" /><path d="M4 14.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4.5" /></>,
   } as const;
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
@@ -69,12 +83,21 @@ export default function TypesetPage() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<Result | null>(null);
   const [dragging, setDragging] = useState(false);
+  // History: null when nobody is signed in. The open material saves into its record; saved holds what was last written.
+  const [records, setRecords] = useState<TypesetRecord[] | null>(null);
+  const [listedAt, setListedAt] = useState(0);
+  const [recordId, setRecordId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyNote, setHistoryNote] = useState("");
+  const saved = useRef("");
   const fileInput = useRef<HTMLInputElement>(null);
   const run = useRef(0);
 
   useEffect(() => {
     statusReady.current = import("../../../lib/handout-latex-files").then(({ latexCompilerStatus }) => latexCompilerStatus())
       .then((value) => { statusRef.current = value; setStatus(value); return value; });
+    void fetchMe().then(({ user }) => user ? fetchTypesetRecords() : null)
+      .then((result) => { if (result) { setRecords(result.records); setListedAt(Date.now()); } }).catch(() => undefined);
   }, []);
 
   const groups = useMemo(() => {
@@ -118,9 +141,10 @@ export default function TypesetPage() {
     return () => clearTimeout(timer);
   }, [source, appliedTitle, answers, spacingKey, linePitch]);
 
-  async function openFile(file: File) {
+  // A new file starts a record; a record from the history opens with the settings it was left with.
+  async function openFile(file: File, record?: TypesetRecord) {
     if (!/\.docx$/i.test(file.name)) { setError(/\.doc$/i.test(file.name) ? "暂不支持旧版 .doc，请在 Word 中另存为 .docx" : "请选择 Word（.docx）文件"); return; }
-    run.current += 1; setResult(null); setPicked(null); setError(""); setBusy("正在读取 Word…");
+    run.current += 1; setResult(null); setPicked(null); setError(""); setHistoryNote(""); setBusy("正在读取 Word…");
     try {
       const [{ renderImportFile, structuredDocxQuestions }, { leavesAnswerLines }] = await Promise.all([import("../../../lib/file-import"), import("../../../lib/handout-latex")]);
       const items = structuredDocxQuestions(await renderImportFile(file, () => {}));
@@ -128,11 +152,49 @@ export default function TypesetPage() {
       if (!items.length) { setSource(null); setError("没有从这份 Word 里读出题目。题目需要以「1.」「2.」这样的题号开头，大题用「一、选择题」这类标题。"); return; }
       // The questions are only typeset, never saved, so they carry no library fields.
       const questions: Question[] = items.map(({ questionNumber, ...item }) => ({ ...item, id: `typeset-${questionNumber}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 }));
-      const name = file.name.replace(/\.docx$/i, "").trim();
-      setTitle(name); setAppliedTitle(name); setGroupRoom({}); setOwnRoom({});
+      const name = record?.title ?? file.name.replace(/\.docx$/i, "").trim();
+      const settings = record ? restoredSettings(record.settings) : { answers, linePitch, groupRoom: {}, ownRoom: {} };
+      setTitle(name); setAppliedTitle(name); setAnswers(settings.answers); setLinePitch(settings.linePitch);
+      setGroupRoom(settings.groupRoom); setOwnRoom(Object.fromEntries(Object.entries(settings.ownRoom).map(([index, value]) => [Number(index), value])));
       setSource({ fileName: file.name, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm") });
+      setShowHistory(false);
+      saved.current = JSON.stringify({ title: name, settings });
+      setRecordId(record?.id ?? null);
+      if (record || records === null) return;
+      try {
+        const created = (await createTypesetRecord(file, { title: name, questionCount: questions.length, settings })).record;
+        setRecordId(created.id); setRecords((current) => current && [created, ...current]); setListedAt(Date.now());
+      } catch (reason) { setHistoryNote(`未保存到历史记录：${reason instanceof Error ? reason.message : "保存失败"}`); }
     } catch (reason) { setBusy(""); setError(reason instanceof Error ? reason.message : "Word 读取失败"); }
   }
+
+  async function openRecord(record: TypesetRecord) {
+    setError(""); setBusy("正在打开…");
+    try { await openFile(await fetchTypesetSource(record), record); }
+    catch (reason) { setBusy(""); setError(reason instanceof Error ? reason.message : "打开失败"); }
+  }
+
+  async function removeRecord(record: TypesetRecord) {
+    try {
+      await deleteTypesetRecord(record.id);
+      setRecords((current) => current && current.filter((item) => item.id !== record.id));
+      if (record.id === recordId) setRecordId(null);
+    } catch (reason) { setHistoryNote(reason instanceof Error ? reason.message : "删除失败"); }
+  }
+
+  // Every change of title, edition or spacing is written to the open record shortly after, which makes it the latest edit.
+  const settingsKey = JSON.stringify({ title: appliedTitle, settings: { answers, linePitch, groupRoom, ownRoom } });
+  useEffect(() => {
+    if (!recordId || settingsKey === saved.current) return;
+    const timer = setTimeout(() => {
+      const { title: changedTitle, settings } = JSON.parse(settingsKey) as { title: string; settings: TypesetSettings };
+      void updateTypesetRecord(recordId, { title: changedTitle || undefined, settings }).then(({ record }) => {
+        saved.current = settingsKey;
+        setRecords((current) => current && [record, ...current.filter((item) => item.id !== record.id)]); setListedAt(Date.now());
+      }).catch((reason) => setHistoryNote(`历史记录未更新：${reason instanceof Error ? reason.message : "保存失败"}`));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [recordId, settingsKey]);
 
   const teacher = answers === "each";
   const fileName = `${appliedTitle || "练习"}-${EDITIONS.find((item) => item.value === answers)!.label}`;
@@ -159,7 +221,11 @@ export default function TypesetPage() {
 
   return <main className="typeset">
     <aside className="typeset-panel">
-      <a className="toolbox-back" href="/tools"><TypesetIcon name="back" /><span>工具箱 · 快速排版</span></a>
+      <div className="typeset-top">
+        <a className="toolbox-back" href="/tools"><TypesetIcon name="back" /><span>工具箱 · 快速排版</span></a>
+        {records !== null && <button type="button" className={`typeset-history-toggle${showHistory || !source ? " active" : ""}`} aria-pressed={showHistory || !source}
+          onClick={() => setShowHistory((open) => source ? !open : false)}><TypesetIcon name="history" /><span>历史记录</span></button>}
+      </div>
       <button className={`typeset-drop${dragging ? " dragging" : ""}${source ? " loaded" : ""}`} disabled={busy === "正在读取 Word…"}
         onClick={() => fileInput.current?.click()}
         onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -207,11 +273,14 @@ export default function TypesetPage() {
       {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
+      {historyNote && <p className="typeset-note warn">{historyNote}</p>}
       {error && <p className="typeset-note error" role="alert">{error}</p>}
     </aside>
 
-    <section className="typeset-preview" aria-label="PDF 预览" aria-busy={Boolean(busy)}>
-      {result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
+    <section className="typeset-preview" aria-label={records !== null && (showHistory || !source) ? "历史记录" : "PDF 预览"} aria-busy={Boolean(busy)}>
+      {records !== null && (showHistory || !source && !busy) ? <TypesetHistory records={records} current={recordId} now={listedAt} busy={Boolean(busy)}
+        onOpen={(record) => void openRecord(record)} onDelete={(record) => void removeRecord(record)} onClose={source ? () => setShowHistory(false) : undefined} />
+        : result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
         label={(index) => `第 ${index + 1} 题 · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
           {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{status && !status.available && source ? "这里无法生成 PDF，请在本机用「启动知题」打开。" : "选择一份 Word 练习，排好的 PDF 会显示在这里。"}</p></>}

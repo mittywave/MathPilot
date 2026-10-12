@@ -229,6 +229,10 @@ export type HandoutModuleCounts = Record<HandoutBand | Exclude<HandoutSheet, "ha
 export type CourseLessonDetail = { id: string; title: string; grade: HandoutGrade; modules: { id: string; title: string; counts: HandoutModuleCounts }[] };
 export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
 
+// 快速排版的历史记录：只属于排它的老师。settings 是当时的排版设置；原始 Word 另行读取，打开时按原样再读一遍。
+export type TypesetSettings = { answers: "none" | "end" | "each"; linePitch: number; groupRoom: Record<string, number>; ownRoom: Record<string, number> };
+export type TypesetRecord = { id: string; title: string; fileName: string; questionCount: number; settings: Partial<TypesetSettings>; createdAt: number; updatedAt: number };
+
 // 共享办公 · 成员。停用的账号保留数据但不能登录。
 export type TeamMember = { id: string; email: string; role: "admin" | "member"; createdAt: number; disabledAt: number | null; lastLoginAt: number | null };
 // code: 页面生成的邀请码；config: 沿用配置文件里的邀请码；closed: 已关闭注册；none: 还没有邀请码。

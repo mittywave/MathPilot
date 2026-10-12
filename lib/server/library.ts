@@ -214,7 +214,8 @@ function dataUrlBytes(value: string) {
   return { contentType: match[1], bytes: Uint8Array.from(binary, (character) => character.charCodeAt(0)) };
 }
 
-async function storeAsset(contentType: string, bytes: Uint8Array, context: LibraryContext) {
+// Bytes go into the chunked asset table once per content hash; the id is returned.
+async function storeAssetBytes(contentType: string, bytes: Uint8Array) {
   const db = appEnv().DB;
   const contentHash = await sha256Bytes(bytes);
   let asset = await db.prepare("SELECT id, content_type, byte_size, content_hash FROM question_assets WHERE content_hash = ?")
@@ -238,9 +239,18 @@ async function storeAsset(contentType: string, bytes: Uint8Array, context: Libra
       .bind(contentHash).first<StoredAsset>();
     if (!asset) throw new Error("配图保存结果无法确认，请重试");
   }
-  await grantAssetAccess(asset.id, context);
-  return `/api/assets/${asset.id}`;
+  return asset.id;
 }
+
+async function storeAsset(contentType: string, bytes: Uint8Array, context: LibraryContext) {
+  const id = await storeAssetBytes(contentType, bytes);
+  await grantAssetAccess(id, context);
+  return `/api/assets/${id}`;
+}
+
+// A file only its owner reads, through their own record (快速排版's source Word): stored like any asset, but no
+// library is granted access, so /api/assets never serves it.
+export async function storePrivateFile(contentType: string, bytes: Uint8Array) { return storeAssetBytes(contentType, bytes); }
 
 async function uploadMediaValue(value: unknown, context: LibraryContext): Promise<unknown> {
   if (typeof value === "string") {
