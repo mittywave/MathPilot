@@ -1,8 +1,10 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createTypesetRecord, deleteTypesetRecord, fetchMe, fetchTypesetRecords, fetchTypesetSource, updateTypesetRecord } from "../../../lib/api-client";
+import { authorizeDownload, createTypesetRecord, deleteTypesetRecord, fetchLibrary, fetchMe, fetchTypesetRecords, fetchTypesetSource, updateTypesetRecord } from "../../../lib/api-client";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
+import type { SheetGroup } from "../../../lib/handout-latex";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
+import { groupHeading, planQuestionIds } from "../../../lib/smart-paper-contract";
 import type { Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
 import { PdfPreview } from "./PdfPreview";
 import { TypesetHistory } from "./TypesetHistory";
@@ -10,7 +12,8 @@ import "../tools.css";
 import "./typeset.css";
 
 // 快速排版: a Word 练习 read by its own structure (as 录入 reads it) and typeset with the 练习 template of the 讲义 export.
-// 组卷篮 opens the same tool on its own questions, typeset as the library holds them, with no Word in between.
+// 组卷篮 and 智能组卷 open the same tool on their own questions, typeset as the library holds them, with no Word in between;
+// 智能组卷 comes in days, each printed on its own pages. Its records reopen from the history by question ID.
 const EDITIONS: { value: WordAnswerPlacement; label: string; hint: string }[] = [
   { value: "none", label: "学生版", hint: "只有题目" },
   { value: "end", label: "附答案", hint: "答案与解析放在文末" },
@@ -23,7 +26,7 @@ const ROOM: Record<Unit, { name: string; fallback: number; step: number; max: nu
   行: { name: "作答横线", fallback: 6, step: 1, max: 20 },
   mm: { name: "题后留白", fallback: 0, step: 2, max: 80 },
 };
-type Source = { fileName: string; questions: Question[]; units: Unit[] };
+type Source = { fileName: string; questions: Question[]; units: Unit[]; groups?: SheetGroup[] };
 // The distance between answer lines, in millimetres; the template's default is 8.
 const PITCH = { fallback: 8, min: 6, max: 12 };
 type Result = { pdf: Blob; notes: string[] };
@@ -69,9 +72,23 @@ function Stepper({ value, unit, label, disabled, onChange, min = 0, max = ROOM[u
   </span>;
 }
 
-// 组卷篮 hands over its questions in order, its title and the settings it kept from the last time; closing hands
-// the title and settings back.
-export type BasketTypeset = { questions: Question[]; title: string; settings: Partial<TypesetSettings>; onClose: (title: string, settings: TypesetSettings) => void };
+// 组卷篮 (or 智能组卷) hands over its questions in order, its title and the settings it kept from the last time; closing
+// hands the title and settings back. 智能组卷 also hands over its days and its history record, which keeps the settings.
+export type BasketTypeset = {
+  questions: Question[]; title: string; settings: Partial<TypesetSettings>; onClose: (title: string, settings: TypesetSettings) => void;
+  groups?: SheetGroup[]; recordId?: string; origin?: { back: string; name: string; hint: string };
+};
+const BASKET_ORIGIN = { back: "组卷篮 · 快速排版", name: "组卷篮", hint: "点击回组卷篮调整题目" };
+
+// 第 2 天 第 3 题 in a material in days, otherwise 第 3 题.
+function questionLabel(groups: SheetGroup[] | undefined, index: number) {
+  let start = 0;
+  for (const group of groups ?? []) {
+    if (index < start + group.size) return `${group.title.split(" · ")[0]} 第 ${index - start + 1} 题`;
+    start += group.size;
+  }
+  return `第 ${index + 1} 题`;
+}
 
 export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const [status, setStatus] = useState<LatexStatus | null>(null);
@@ -92,18 +109,22 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   // History: null when nobody is signed in. The open material saves into its record; saved holds what was last written.
   const [records, setRecords] = useState<TypesetRecord[] | null>(null);
   const [listedAt, setListedAt] = useState(0);
-  const [recordId, setRecordId] = useState<string | null>(null);
+  const [recordId, setRecordId] = useState<string | null>(basket?.recordId ?? null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyNote, setHistoryNote] = useState("");
-  const saved = useRef("");
+  // A 智能组卷 record opened from the history: its card leads back to 智能组卷 to change the questions.
+  const [libraryRecord, setLibraryRecord] = useState<TypesetRecord | null>(null);
+  // What the open record last saved; a 智能组卷 plan's record opens with the title and settings it was handed.
+  const saved = useRef(basket?.recordId ? JSON.stringify({ title: basket.title, settings: restoredSettings(basket.settings) }) : "");
   const fileInput = useRef<HTMLInputElement>(null);
   const run = useRef(0);
 
   useEffect(() => {
     statusReady.current = import("../../../lib/handout-latex-files").then(({ latexCompilerStatus }) => latexCompilerStatus())
       .then((value) => { statusRef.current = value; setStatus(value); return value; });
-    // The basket's questions open at once. They stay in the basket and are not kept in the history.
-    if (basket) { void show("组卷篮", basket.questions, basket.title, restoredSettings(basket.settings)); return; }
+    // The basket's questions open at once. They stay in the basket and are not kept in the history; a 智能组卷 plan
+    // brings its own record, and settings changed here are written to it.
+    if (basket) { void show((basket.origin ?? BASKET_ORIGIN).name, basket.questions, basket.title, restoredSettings(basket.settings), basket.groups); return; }
     void fetchMe().then(({ user }) => user ? fetchTypesetRecords() : null)
       .then((result) => { if (result) { setRecords(result.records); setListedAt(Date.now()); } }).catch(() => undefined);
   // The basket is read once, when the tool opens; it is out of sight until the tool closes.
@@ -138,7 +159,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         const { buildHandoutLatexProject, compileLatexPdf } = await import("../../../lib/handout-latex-files");
         // The hosted site has no typesetter; the panel says so instead.
         if (!statusRef.current?.available) return;
-        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch });
+        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch, groups: source.groups });
         const notes = project.missingFigures ? [`${project.missingFigures} 张配图未能读取`] : [];
         const { pdf, issues } = await compileLatexPdf(project);
         if (id !== run.current) return;
@@ -152,17 +173,17 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   }, [source, appliedTitle, answers, spacingKey, linePitch]);
 
   // Puts a material on the page: its questions, with the title and the settings it opens with.
-  async function show(fileName: string, questions: Question[], name: string, settings: TypesetSettings) {
+  async function show(fileName: string, questions: Question[], name: string, settings: TypesetSettings, groups?: SheetGroup[]) {
     const { leavesAnswerLines } = await import("../../../lib/handout-latex");
     setTitle(name); setAppliedTitle(name); setAnswers(settings.answers); setLinePitch(settings.linePitch);
     setGroupRoom(settings.groupRoom); setOwnRoom(Object.fromEntries(Object.entries(settings.ownRoom).map(([index, value]) => [Number(index), value])));
-    setSource({ fileName, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm") });
+    setSource({ fileName, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm"), groups });
   }
 
   // A new file starts a record; a record from the history opens with the settings it was left with.
   async function openFile(file: File, record?: TypesetRecord) {
     if (!/\.docx$/i.test(file.name)) { setError(/\.doc$/i.test(file.name) ? "暂不支持旧版 .doc，请在 Word 中另存为 .docx" : "请选择 Word（.docx）文件"); return; }
-    run.current += 1; setResult(null); setPicked(null); setError(""); setHistoryNote(""); setBusy("正在读取 Word…");
+    run.current += 1; setResult(null); setPicked(null); setError(""); setHistoryNote(""); setLibraryRecord(null); setBusy("正在读取 Word…");
     try {
       const { renderImportFile, structuredDocxQuestions } = await import("../../../lib/file-import");
       const items = structuredDocxQuestions(await renderImportFile(file, () => {}));
@@ -184,16 +205,37 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   }
 
   async function openRecord(record: TypesetRecord) {
+    if (record.sourceKind === "library") { await openLibraryRecord(record); return; }
     setError(""); setBusy("正在打开…");
     try { await openFile(await fetchTypesetSource(record), record); }
     catch (reason) { setBusy(""); setError(reason instanceof Error ? reason.message : "打开失败"); }
+  }
+
+  // A 智能组卷 record: its questions are read from the library by ID, day by day; questions deleted since are skipped.
+  async function openLibraryRecord(record: TypesetRecord) {
+    run.current += 1; setResult(null); setPicked(null); setError(""); setHistoryNote(""); setBusy("正在从题库取题…");
+    try {
+      if (!record.plan) throw new Error("这条记录的题目清单已无法读取");
+      const byId = new Map((await fetchLibrary()).questions.map((question) => [question.id, question]));
+      const days = record.plan.groups.map((group) => ({ title: groupHeading(group), questions: group.items.flatMap((item) => byId.get(item.id) ?? []) }));
+      const questions = days.flatMap((day) => day.questions);
+      if (!questions.length) throw new Error("这份资料里的题都已不在题库中");
+      await authorizeDownload(questions.map((question) => question.id));
+      const settings = restoredSettings(record.settings);
+      await show(`智能组卷${record.studentName ? ` · ${record.studentName}` : ""}`, questions, record.title, settings, days.map((day) => ({ title: day.title, size: day.questions.length })));
+      setBusy(""); setShowHistory(false); setLibraryRecord(record);
+      saved.current = JSON.stringify({ title: record.title, settings });
+      setRecordId(record.id);
+      const missing = planQuestionIds(record.plan).length - questions.length;
+      if (missing) setHistoryNote(`有 ${missing} 道题已不在题库中，已跳过`);
+    } catch (reason) { setBusy(""); setError(reason instanceof Error ? reason.message : "打开失败"); }
   }
 
   async function removeRecord(record: TypesetRecord) {
     try {
       await deleteTypesetRecord(record.id);
       setRecords((current) => current && current.filter((item) => item.id !== record.id));
-      if (record.id === recordId) setRecordId(null);
+      if (record.id === recordId) { setRecordId(null); setLibraryRecord(null); }
     } catch (reason) { setHistoryNote(reason instanceof Error ? reason.message : "删除失败"); }
   }
 
@@ -213,6 +255,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   // Back to 组卷篮, with the title as typed and the settings as they are now.
   const close = () => basket?.onClose(title.trim(), (JSON.parse(settingsKey) as { settings: TypesetSettings }).settings);
 
+  const origin = basket?.origin ?? BASKET_ORIGIN;
+  const days = source?.groups ? ` · 分 ${source.groups.length} 天` : "";
   const teacher = answers === "each";
   const fileName = `${appliedTitle || "练习"}-${EDITIONS.find((item) => item.value === answers)!.label}`;
   const withAnswers = source?.questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length ?? 0;
@@ -223,13 +267,14 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     return next;
   });
 
+  const labelOf = (index: number) => questionLabel(source?.groups, index);
   const pickedPopover = source && picked !== null && (() => {
     const unit = source.units[picked]; const group = groupRoom[groupKey(source.questions[picked], unit)] ?? ROOM[unit].fallback;
-    return <div className="typeset-popover" role="dialog" aria-label={`第 ${picked + 1} 题的留白`}>
-      <header><b>第 {picked + 1} 题</b><small>{source.questions[picked].type}</small>
+    return <div className="typeset-popover" role="dialog" aria-label={`${labelOf(picked)}的留白`}>
+      <header><b>{labelOf(picked)}</b><small>{source.questions[picked].type}</small>
         <button type="button" className="typeset-close" aria-label="关闭" onClick={() => setPicked(null)}>×</button></header>
       {teacher ? <p>教师版每题后紧跟答案，不留白。</p> : <>
-        <label><span>{ROOM[unit].name}</span><Stepper value={roomOf(picked)} unit={unit} label={`第 ${picked + 1} 题${ROOM[unit].name}`} onChange={(value) => setOwn(picked, value)} /></label>
+        <label><span>{ROOM[unit].name}</span><Stepper value={roomOf(picked)} unit={unit} label={`${labelOf(picked)}${ROOM[unit].name}`} onChange={(value) => setOwn(picked, value)} /></label>
         {picked in ownRoom ? <button type="button" className="typeset-link" onClick={() => setOwn(picked, null)}>跟随{source.questions[picked].type}（{group} {unit}）</button>
           : <small>跟随{source.questions[picked].type}的设置</small>}
       </>}
@@ -239,15 +284,21 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   return <main className="typeset">
     <aside className="typeset-panel">
       <div className="typeset-top">
-        {basket ? <button type="button" className="toolbox-back" onClick={close}><TypesetIcon name="back" /><span>组卷篮 · 快速排版</span></button>
+        {basket ? <button type="button" className="toolbox-back" onClick={close}><TypesetIcon name="back" /><span>{origin.back}</span></button>
           : <a className="toolbox-back" href="/tools"><TypesetIcon name="back" /><span>工具箱 · 快速排版</span></a>}
         {records !== null && <button type="button" className={`typeset-history-toggle${showHistory || !source ? " active" : ""}`} aria-pressed={showHistory || !source}
           onClick={() => setShowHistory((open) => source ? !open : false)}><TypesetIcon name="history" /><span>历史记录</span></button>}
       </div>
       {basket ? <button type="button" className="typeset-drop loaded" onClick={close}>
         <TypesetIcon name="list" />
-        <span><b>组卷篮</b><small>{basket.questions.length} 道题{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · 点击回组卷篮调整题目</small></span>
-      </button> : <>
+        <span><b>{origin.name}</b><small>{basket.questions.length} 道题{days}{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · {origin.hint}</small></span>
+      </button> : libraryRecord && source ? <>
+        <a className="typeset-drop loaded" href={`/tools/smart-paper?record=${encodeURIComponent(libraryRecord.id)}`}>
+          <TypesetIcon name="list" />
+          <span><b>{source.fileName}</b><small>{source.questions.length} 道题{days}{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · 点击回智能组卷调整题目</small></span>
+        </a>
+        <button type="button" className="typeset-link" onClick={() => fileInput.current?.click()}>改排一份 Word 练习</button>
+      </> : <>
         <button className={`typeset-drop${dragging ? " dragging" : ""}${source ? " loaded" : ""}`} disabled={busy === "正在读取 Word…"}
           onClick={() => fileInput.current?.click()}
           onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -256,9 +307,9 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
           {source ? <span><b>{source.fileName}</b><small>{source.questions.length} 道题{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · 点击换一份</small></span>
             : <span><b>选择或拖入 Word 练习</b><small>.docx，按题号读出题目、配图、答案与解析</small></span>}
         </button>
-        <input ref={fileInput} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden
-          onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void openFile(file); }} />
       </>}
+      {!basket && <input ref={fileInput} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden
+        onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void openFile(file); }} />}
 
       <label className="typeset-field"><span>标题</span>
         <input value={title} disabled={!source} placeholder="练习标题" onChange={(event) => setTitle(event.target.value)}
@@ -285,8 +336,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
           </li>)}
           </ul>
           {own.length ? <div className="typeset-own" aria-label="单独调整的题">{own.map((index) => <span key={index}>
-            <button type="button" onClick={() => setPicked(index)}>第 {index + 1} 题 {ownRoom[index]} {source.units[index]}</button>
-            <button type="button" aria-label={`第 ${index + 1} 题跟随题型`} onClick={() => setOwn(index, null)}>×</button>
+            <button type="button" onClick={() => setPicked(index)}>{labelOf(index)} {ownRoom[index]} {source.units[index]}</button>
+            <button type="button" aria-label={`${labelOf(index)}跟随题型`} onClick={() => setOwn(index, null)}>×</button>
           </span>)}</div> : null}
         </>}
       </section>}
@@ -303,7 +354,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       {records !== null && (showHistory || !source && !busy) ? <TypesetHistory records={records} current={recordId} now={listedAt} busy={Boolean(busy)}
         onOpen={(record) => void openRecord(record)} onDelete={(record) => void removeRecord(record)} onClose={source ? () => setShowHistory(false) : undefined} />
         : result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
-        label={(index) => `第 ${index + 1} 题 · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
+        label={(index) => `${labelOf(index)} · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
           {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在本机用「启动知题」打开。" : "排好的 PDF 会显示在这里。"}</p></>}
         </div>}

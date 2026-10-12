@@ -12,7 +12,9 @@ import type { HandoutBand, Question } from "./types";
 // question blank millimetres. Without it a 解答题 gets six lines and other questions none. linePitch is the distance
 // between answer lines in millimetres (the class default is 8).
 export const DEFAULT_ANSWER_LINES = 6;
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number });
+// A sheet may come in groups (智能组卷 by day): the questions are listed in group order and each group takes the next `size`.
+export type SheetGroup = { title: string; size: number };
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[] });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -457,9 +459,11 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   const { title, answers } = input;
   const heading = splitHandoutTitle(title || "讲义");
   const list = "questions" in input ? input : null;
-  const fields = list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
+  const groups = list ? sheetGroups(list.questions.length, list.groups) : null;
+  // A sheet in days scores each day under its own heading, so the title keeps only name and class.
+  const fields = groups ? "姓名,班级" : list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
   const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
-  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing) : moduleBody(input.modules, answers, figureName);
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups) : moduleBody(input.modules, answers, figureName);
   return [
     "\\documentclass{mitty-handout}",
     series ? `\\handoutseries{${series}}` : "",
@@ -474,15 +478,30 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   ].filter(Boolean).join("\n") + "\n";
 }
 
-// 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers.
-function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[]) {
+// Groups are used only when they account for every question; empty groups print nothing.
+function sheetGroups(count: number, groups?: SheetGroup[]) {
+  const used = (groups ?? []).filter((group) => group.size > 0);
+  return used.length && used.reduce((sum, group) => sum + group.size, 0) === count ? used : null;
+}
+
+// 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers. In groups (days) each group starts
+// on a new page under its heading and numbers from 1 again; the key repeats the group headings.
+function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], groups?: SheetGroup[] | null) {
   if (!questions.length) return [];
-  const body = [`\\handoutnumberwidth{${questions.length}}`]; const keys: string[] = [];
-  questions.forEach((question, index) => {
-    const label = String(index + 1);
-    body.push(questionLatex(question, label, "practice", answers, figureName, false, spacing?.[index]));
-    if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(question, figureName), "\\end{handoutkey}");
-  });
+  const parts = groups ?? [{ title: "", size: questions.length }];
+  const body = [`\\handoutnumberwidth{${Math.max(...parts.map((part) => part.size))}}`]; const keys: string[] = [];
+  let index = 0;
+  for (const part of parts) {
+    if (groups) {
+      body.push(`\\handoutgroup{${latexPlain(part.title)}}{${part.size}}`);
+      if (answers === "end") keys.push(`\\handoutkeygroup{${latexPlain(part.title)}}{${part.size}}`);
+    }
+    for (let number = 1; number <= part.size; number += 1, index += 1) {
+      const label = String(number);
+      body.push(questionLatex(questions[index], label, "practice", answers, figureName, false, spacing?.[index]));
+      if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(questions[index], figureName), "\\end{handoutkey}");
+    }
+  }
   return keys.length ? [...body, "\\handoutanswerkey", ...keys] : body;
 }
 

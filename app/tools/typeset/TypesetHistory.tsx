@@ -30,7 +30,7 @@ export function TypesetHistory({ records, current, now, busy, onOpen, onDelete, 
     {records.length ? <ul>{records.map((record) => <li key={record.id} className={record.id === current ? "current" : ""}>
       <button type="button" className="typeset-history-open" disabled={busy} onClick={() => onOpen(record)}>
         <span className="typeset-history-name"><b>{record.title}</b>{record.id === current && <em>正在编辑</em>}</span>
-        <small>{record.fileName} · {record.questionCount} 道题 · {EDITION_LABELS[record.settings.answers ?? "none"] ?? "学生版"}</small>
+        <small>{record.sourceKind === "library" ? `智能组卷${record.studentName ? ` · ${record.studentName}` : ""}${record.plan ? ` · 分 ${record.plan.groups.length} 天` : ""}` : record.fileName} · {record.questionCount} 道题 · {EDITION_LABELS[record.settings.answers ?? "none"] ?? "学生版"}</small>
       </button>
       <span className="typeset-history-time"><b>{historyTime(record.updatedAt, now)} 编辑</b><small>{historyTime(record.createdAt, now)} 首次排版</small></span>
       <button type="button" className={`typeset-history-delete${confirming === record.id ? " confirming" : ""}`} disabled={busy}

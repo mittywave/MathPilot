@@ -53,3 +53,8 @@ export function normalizeSmartPaperPlan(value: unknown): SmartPaperPlan | null {
 export function planQuestionIds(plan: Pick<SmartPaperPlan, "groups">) {
   return plan.groups.flatMap((group) => group.items.map((item) => item.id));
 }
+
+// The heading a day prints with: 第 1 天 · 去括号热身.
+export function groupHeading(group: Pick<SmartPaperGroup, "title" | "theme">) {
+  return group.theme ? `${group.title} · ${group.theme}` : group.title;
+}

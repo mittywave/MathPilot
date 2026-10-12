@@ -111,7 +111,7 @@ export function PdfPreview({ pdf, count, picked, onPick, label, popover }: {
     {layout?.pages.map((page, position) => <PdfPage key={position} layout={layout} number={position + 1} width={width}>
       {page.regions.map((region) => <div key={region.index} data-question={region.index} className={`typeset-region${picked === region.index ? " picked" : ""}`}
         style={{ top: `${region.top * 100}%`, height: `${(region.bottom - region.top) * 100}%` }}>
-        <button type="button" className="typeset-region-hit" aria-label={`调整第 ${region.index + 1} 题的留白`} aria-expanded={picked === region.index}
+        <button type="button" className="typeset-region-hit" aria-label={`调整${label(region.index).split(" · ")[0]}的留白`} aria-expanded={picked === region.index}
           onClick={() => onPick(picked === region.index ? null : region.index)}><span>{label(region.index)}</span></button>
         {picked === region.index && popover}
       </div>)}
