@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+import { openPdf } from "../../../lib/pdfjs";
 
 // The typeset PDF drawn page by page, so the reader keeps their place when a new version replaces the old one.
 // The class puts a PDF destination q1, q2… at each question number; from them every question gets a clickable area.
@@ -13,10 +14,7 @@ const ABOVE_BASELINE = 5.5 * MM;
 const BOTTOM_MARGIN = 22 * MM;
 
 async function readLayout(pdf: Blob, count: number): Promise<Layout> {
-  const pdfjs = await import("pdfjs-dist");
-  pdfjs.GlobalWorkerOptions.workerSrc = `/pdfjs/${pdfjs.version}/pdf.worker.min.mjs`;
-  // The class's sans and math fonts are CID-keyed; PDF.js needs the CMaps to draw them.
-  const task = pdfjs.getDocument({ data: new Uint8Array(await pdf.arrayBuffer()), cMapUrl: `/pdfjs/${pdfjs.version}/cmaps/`, cMapPacked: true });
+  const task = await openPdf(new Uint8Array(await pdf.arrayBuffer()));
   const doc = await task.promise;
   const pages: Layout["pages"] = [];
   for (let number = 1; number <= doc.numPages; number += 1) {

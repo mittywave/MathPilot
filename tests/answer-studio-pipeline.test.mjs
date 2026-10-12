@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {createRequire} from 'node:module';
 import {preparePdfWorker} from '../scripts/prepare-pdf-worker.mjs';
 const require=createRequire(import.meta.url);
@@ -95,10 +95,19 @@ test('PDF worker preparation serves exactly the package bytes under a versioned 
   const actual=await readFile(join(dir,'public',url));
   const original=await readFile(require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'));
   assert.deepEqual(actual,original);assert.doesNotMatch(actual.toString(),/dev-error-overlay|\/@vite\/client/);
-  // Every PDF reader uses this copy: a ?url worker gets Vite's page-only client injected in development.
-  for(const file of ['lib/answer-studio-images.ts','lib/file-import.ts']){
+  // The data PDF.js loads on demand is served beside it; without it Chinese text in a font that is not embedded and
+  // JPEG 2000 scans render as blank pages.
+  const folder=dirname(join(dir,'public',url)),pkg=dirname(require.resolve('pdfjs-dist/package.json'));
+  for(const [data,sample] of [['cmaps','UniGB-UTF16-H.bcmap'],['standard_fonts','FoxitSerif.pfb'],['wasm','openjpeg.wasm'],['iccs','CGATS001Compat-v2-micro.icc']])
+    assert.deepEqual(await readFile(join(folder,data,sample)),await readFile(join(pkg,data,sample)),data);
+  // Every PDF reader opens PDFs through lib/pdfjs.ts, which uses this copy: a ?url worker gets Vite's page-only client
+  // injected in development.
+  const opener=await readFile('lib/pdfjs.ts','utf8');
+  assert.match(opener,/workerSrc\s*=\s*`\$\{base\}pdf\.worker\.min\.mjs`/);
+  for(const option of ['cMapUrl','standardFontDataUrl','wasmUrl','iccUrl'])assert.match(opener,new RegExp(`${option}: \`\\$\\{base\\}`),option);
+  for(const file of ['lib/answer-studio-images.ts','lib/file-import.ts','app/tools/typeset/PdfPreview.tsx']){
     const source=await readFile(file,'utf8');
-    assert.doesNotMatch(source,/pdf\.worker\.min\.mjs\?url/,file);assert.match(source,/workerSrc\s*=\s*`\/pdfjs\/\$\{pdfjs\.version\}\/pdf\.worker\.min\.mjs`/,file);
+    assert.doesNotMatch(source,/pdf\.worker\.min\.mjs|getDocument\(/,file);assert.match(source,/openPdf\(/,file);
   }
 });
 test('JSON control escapes are repaired only for known commands inside explicit math',async t=>{

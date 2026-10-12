@@ -1,6 +1,7 @@
 import { parseStudioPages, type StudioBox, type StudioPage, type StudioDiagram } from "./answer-studio";
 import { randomClientId } from "./client-random-id.mjs";
 import { contentFingerprint } from "./content-fingerprint.mjs";
+import { openPdf } from "./pdfjs";
 
 /** Asynchronous encoding avoids synchronous JPEG work on the UI thread.
  * Preserve existing dimensions and quality; release backing canvas memory.
@@ -45,12 +46,7 @@ export async function readStudioFilesInBatches(files:File[],role:StudioPage["rol
       target.push({id:randomClientId(),role,name:file.name,page,image,hash:await contentFingerprint(image),selected:true});
     };
     if (/\.pdf$/i.test(file.name)) {
-      // ?url still transforms this .mjs in development, injecting page-only
-      // HMR into a Worker (window is undefined). Config prepares a versioned,
-      // untransformed public asset for both dev and production.
-      const pdfjs=await import("pdfjs-dist");
-      pdfjs.GlobalWorkerOptions.workerSrc=`/pdfjs/${pdfjs.version}/pdf.worker.min.mjs`;
-      const task=pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())});
+      const task=await openPdf(new Uint8Array(await file.arrayBuffer()));
       try {
         const pdf=await task.promise,selected=parseStudioPages(range,pdf.numPages),batchCount=Math.max(1,Math.ceil(selected.length/batchSize));
         for (let offset=0;offset<selected.length;offset+=batchSize) {

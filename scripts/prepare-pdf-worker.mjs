@@ -2,7 +2,7 @@ import { copyFile, cp, mkdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
-/** Serve PDF.js byte-for-byte from public, outside Vite's page/HMR transform. The CMaps let it draw CID-keyed CJK fonts. */
+/** Serve PDF.js byte-for-byte from public, outside Vite's page/HMR transform, with the data it loads on demand (see lib/pdfjs.ts). */
 export async function preparePdfWorker(root = process.cwd()) {
   const require = createRequire(import.meta.url);
   const pkg = require.resolve('pdfjs-dist/package.json');
@@ -10,6 +10,6 @@ export async function preparePdfWorker(root = process.cwd()) {
   const folder = join(root, 'public', 'pdfjs', version);
   await mkdir(folder, { recursive: true });
   await copyFile(join(dirname(pkg), 'build/pdf.worker.min.mjs'), join(folder, 'pdf.worker.min.mjs'));
-  await cp(join(dirname(pkg), 'cmaps'), join(folder, 'cmaps'), { recursive: true });
+  for (const data of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) await cp(join(dirname(pkg), data), join(folder, data), { recursive: true });
   return `/pdfjs/${version}/pdf.worker.min.mjs`;
 }
