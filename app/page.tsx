@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
@@ -23,9 +23,34 @@ import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData,
 const NEW_STUDENT_OPTION = "__new_student__";
 const TRASH_HINT = "可在“分类与数据管理”的回收站恢复";
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
+// The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
+// (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
+const LIBRARY_PAGE = 40;
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
+
+type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void };
+
+// One card of the library list. It re-renders only when its own question or state changes, so ticking one question
+// in a long category does not rebuild every other card on the page.
+const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, path, checked, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
+  question: Question; index: number; isLast: boolean; path: string; checked: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
+  canDelete: boolean; isExporting: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
+}) {
+  const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
+  const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
+  return <article className={`question-card ${checked ? "checked" : ""}`}>
+    {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
+    <div className="question-main">
+      <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{path || question.source}</em></div>
+      <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
+      {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
+      {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
+      <div className="question-actions"><button onClick={() => actions.toggleAnswer(question.id)}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{question.createdByEmail && <small>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button>}</>}{basket && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
+    </div>
+  </article>;
+});
 
 export default function Home() {
   const [alevelPageLocale, setAlevelPageLocale] = useState<AlevelPageLocale>("zh");
@@ -176,8 +201,22 @@ export default function Home() {
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode]);
+  // A new filter starts again from the first 40; the end marker loads the next 40 while it is still well below the screen.
+  const listKey = `${activeModuleId}|${activeCategory}|${typeFilter}|${query}|${showSelected}`;
+  const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
+  const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_PAGE;
+  const listEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const end = listEndRef.current;
+    if (!end) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setListPaging({ key: listKey, count: visibleCount + LIBRARY_PAGE });
+    }, { rootMargin: "0px 0px 1600px 0px" });
+    observer.observe(end);
+    return () => observer.disconnect();
+  }, [listKey, visibleCount, filteredQuestions.length]);
 
-  const activeName = showSelected ? "我的组卷" : byCode ? `ID ${byCode.code}` : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
+  const activeName =showSelected ? "我的组卷" : byCode ? `ID ${byCode.code}` : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
   const activeWrongEntries = wrongEntries.filter(entry => entry.archivedAt == null);
   const historicalWrongEntries = wrongEntries.filter(entry => entry.archivedAt != null);
   const filteredWrongEntries = useMemo(() => {
@@ -285,6 +324,18 @@ export default function Home() {
     try { await deleteCloudQuestion(question.id); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice(`试题已删除，${TRASH_HINT}`); }
     catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); }
   }
+
+  // Cards keep one stable set of actions; each call reaches this render's handlers, so a card need not re-render for them.
+  const cardHandlers = useRef({ toggleSelected, openEditQuestion, deleteQuestion });
+  useEffect(() => { cardHandlers.current = { toggleSelected, openEditQuestion, deleteQuestion }; });
+  const cardActions = useMemo<CardActions>(() => ({
+    toggleSelected: (id) => cardHandlers.current.toggleSelected(id),
+    toggleAnswer: (id) => setExpandedAnswers((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]),
+    edit: (question) => cardHandlers.current.openEditQuestion(question),
+    remove: (question) => { void cardHandlers.current.deleteQuestion(question); },
+    move: (id, direction) => setSelectedIds((ids) => moveBasketQuestion(ids, id, direction)),
+    drop: (id) => setSelectedIds((ids) => ids.filter((item) => item !== id)),
+  }), []);
 
   async function deleteWrongEntries(entries: WrongQuestionEntry[]) {
     try {
@@ -502,20 +553,11 @@ export default function Home() {
           </>}
           <div className="question-list">
             {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : `${activeModule.name}${pageLocale === "en" ? " " : ""}${pageCopy.noQuestions}`}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
-            {filteredQuestions.map((question, index) => {
-              const checked = selectedIds.includes(question.id); const answerOpen = expandedAnswers.includes(question.id); const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
-              return <article className={`question-card ${checked ? "checked" : ""}`} key={question.id}>
-                {authUser && !showSelected && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
-                <div className="question-main">
-                  <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{pathOf(question.categoryId) || question.source}</em></div>
-                  <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
-                  {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
-                  {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
-                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(question.id) ? current.filter((id) => id !== question.id) : [...current, question.id])}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{question.createdByEmail && <small>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</small>}<span></span>{!showSelected && question.canEdit && <><button onClick={() => openEditQuestion(question)}>{pageCopy.edit}</button>{canDelete && <button className="danger-text" onClick={() => deleteQuestion(question)}>{pageCopy.delete}</button>}</>}{showSelected && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => moveBasketQuestion(ids, question.id, -1))}>↑ 上移</button><button disabled={index === filteredQuestions.length - 1 || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => moveBasketQuestion(ids, question.id, 1))}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => setSelectedIds((ids) => ids.filter((id) => id !== question.id))}>移除</button></div>}</div>
-                </div>
-              </article>;
-            })}
+            {filteredQuestions.slice(0, visibleCount).map((question, index) => <LibraryQuestionCard key={question.id} question={question} index={index} isLast={index === filteredQuestions.length - 1}
+              path={pathOf(question.categoryId)} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+              basket={showSelected} canDelete={canDelete} isExporting={isExporting} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />)}
           </div>
+          {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}
           </>}
         </section>
       </section>
