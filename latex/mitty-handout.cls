@@ -176,8 +176,8 @@
 % 题后留白（毫米）：排在题目里，和题目一起换页
 \newcommand\handoutgap[1]{\par\vspace{#1mm}}
 \newcommand\handoutsource[1]{\mbox{\sffamily\footnotesize\color{mhmuted}\tikz[baseline=(s.base)]\node[draw=mhline,line width=0.5pt,rounded corners=1.2mm,inner xsep=1.4mm,inner ysep=0.6mm](s){#1};}\enspace}
-% 填空横线：一行放不下时最多缩短四成，不伸出版心
-\newcommand\handoutblank[1]{\uline{\hspace{#1 minus \dimexpr#1*4/10\relax}}}
+% 填空横线：一行放不下时最多缩短四成，不伸出版心；换到行首时 \hspace* 不会像普通空白那样被丢掉
+\newcommand\handoutblank[1]{\uline{\hspace*{#1 minus \dimexpr#1*4/10\relax}}}
 % 考点：题库里这道题自带的知识点标签
 \newcommand\handoutpoints[1]{\par\vspace{0.4mm}{\sffamily\footnotesize\color{mhmuted}考点\enspace #1\par}}
 % 学生版例题：跟着老师记思路和步骤的笔记区
