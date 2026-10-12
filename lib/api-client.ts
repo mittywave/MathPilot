@@ -1,4 +1,4 @@
-import type { AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, Student, StudentSummary, TeamInvite, TeamMember, WrongQuestionEntry } from "./types";
+import type { AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, Student, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -31,6 +31,18 @@ export function createHandout(handout: Pick<Handout, "title" | "items"> & Partia
 export function arrangeHandouts(group: HandoutGroup, ids: string[]) { return request<HandoutGroup & { ids: string[] }>("/api/handouts", { method: "PATCH", body: JSON.stringify({ ...group, ids }) }); }
 export function updateHandout(handout: Pick<Handout, "id" | "title" | "items">) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(handout.id)}`, { method: "PUT", body: JSON.stringify({ handout }) }); }
 export function deleteHandout(id: string) { return request<{ ok: boolean }>(`/api/handouts/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export function fetchTypesetRecords() { return request<{ records: TypesetRecord[] }>("/api/typeset-records"); }
+export async function createTypesetRecord(file: File, record: Pick<TypesetRecord, "title" | "questionCount"> & { settings: TypesetSettings }) {
+  const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); });
+  return request<{ record: TypesetRecord }>("/api/typeset-records", { method: "POST", body: JSON.stringify({ ...record, fileName: file.name, file: data }) });
+}
+export function updateTypesetRecord(id: string, change: { title?: string; settings?: TypesetSettings }) { return request<{ record: TypesetRecord }>(`/api/typeset-records/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }); }
+export function deleteTypesetRecord(id: string) { return request<{ ok: boolean }>(`/api/typeset-records/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+export async function fetchTypesetSource(record: Pick<TypesetRecord, "id" | "fileName">) {
+  const response = await fetch(`/api/typeset-records/${encodeURIComponent(record.id)}/source`);
+  if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || `Word 读取失败（${response.status}）`);
+  return new File([await response.blob()], record.fileName, { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
 export function uploadHandoutImage(image: string) { return request<{ url: string }>("/api/handout-images", { method: "POST", body: JSON.stringify({ image }) }); }
 export function fetchStudents() { return request<{ students: StudentSummary[] }>("/api/students"); }
 export function createStudent(student: Pick<Student, "name" | "className" | "notes">) { return request<{ student: Student }>("/api/students", { method: "POST", body: JSON.stringify({ student }) }); }
