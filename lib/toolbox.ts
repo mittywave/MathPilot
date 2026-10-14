@@ -4,7 +4,7 @@ export type ToolboxTool = { key: string; href: string; name: string; summary: st
 export const TOOLBOX_TOOLS: ToolboxTool[] = [
   {
     key: "homework", href: "/tools/homework", name: "作业批改", icon: "check",
-    summary: "上传学生已完成的作业，自动批改；可选写入错题本、生成错题报告或整合到学生画像。",
+    summary: "上传学生已完成的作业，自动批改；可选写入错题本、生成错题报告或计入定档。",
     tags: ["照片", "PDF", "自动批改"],
   },
   {

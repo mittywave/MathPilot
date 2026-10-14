@@ -494,6 +494,16 @@ html[data-theme="dark"]
 .review-status.failed { color:var(--danger); }
 .review-summary h1 { margin:10px 0 8px; font:700 32px/1.25 "Songti SC",serif; letter-spacing:.01em; }
 .review-summary p { margin:0; color:var(--muted); font-size:14px; }
+.review-outputs { display:flex; flex-wrap:wrap; align-items:center; gap:8px 24px; min-width:0; margin-left:auto; padding:8px 16px; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); color:var(--muted); font-size:13px; }
+.review-outputs>div,.review-outputs>label { display:flex; align-items:center; gap:10px; min-height:32px; }
+.review-outputs a { margin-left:auto; color:var(--green); text-decoration:none; white-space:nowrap; }
+.review-outputs small { flex-basis:100%; font-size:12px; }
+.review-outputs input[role=switch] { appearance:none; position:relative; flex:0 0 32px; width:32px; height:18px; margin:0; border:0; border-radius:999px; background:color-mix(in srgb,var(--ink) 22%,var(--surface)); cursor:pointer; }
+.review-outputs input[role=switch]::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--surface); transition:transform .15s; }
+.review-outputs input[role=switch]:checked { background:var(--accent-strong); }
+.review-outputs input[role=switch]:checked::after { transform:translateX(14px); }
+.review-outputs input[role=switch]:disabled { opacity:.6; cursor:default; }
+.review-outputs input[role=switch]:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
 .review-score { display:grid; grid-template-columns:auto auto; align-items:baseline; column-gap:6px; text-align:right; font-variant-numeric:tabular-nums; }
 .review-score b { font:700 46px/1 "Songti SC",serif; color:var(--ink); }
 .review-score span { color:var(--muted); font-size:16px; }
@@ -553,6 +563,7 @@ html[data-theme="dark"]
   .review-topbar>a { min-width:0; }
   .review-summary { align-items:flex-start; flex-direction:column; gap:16px; padding:26px 16px 20px; }
   .review-score { text-align:left; }
+  .review-outputs { min-width:0; width:100%; margin-left:0; }
   .review-upload { width:calc(100% - 26px); padding:15px; }
   
   
@@ -1235,7 +1246,6 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .page-chips .blank { background:var(--surface-soft); color:var(--muted); }
 .review-ledger { display:flex; align-items:center; gap:28px; padding:18px 22px; }
 .review-ledger .verdict-tally { flex:1; min-width:0; }
-.review-ledger a { color:var(--green); font-size:13px; text-decoration:none; white-space:nowrap; }
 /* 布置的作业：整份题目清单，每题一格，颜色是它最近一次批改的结果，灰色是还没交。 */
 .assigned-sheet { max-width:1180px; margin:0 auto 20px; padding:18px 22px; border:1px solid var(--line); border-radius:calc(14px*var(--radius-scale)); background:var(--surface); }
 .assigned-sheet>header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }

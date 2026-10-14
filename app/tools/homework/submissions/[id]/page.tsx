@@ -12,7 +12,7 @@ const STATUS: Record<string, string> = {
   draft: "待上传", submitted: "已提交", processing: "自动批改中", review_required: "旧版待复核",
   ready: "旧版待发布", published: "结果已发布", failed: "处理失败",
 };
-const OUTPUT_LABELS = [["wrongBook", "写入错题本"], ["report", "生成错题报告"], ["profile", "整合到学生画像"]] as const;
+const OUTPUT_LABELS = [["wrongBook", "写入错题本"], ["report", "生成错题报告"], ["profile", "计入定档"]] as const;
 const VERDICT: Record<string, string> = { correct: "正确", partial: "部分正确", incorrect: "错误", unreadable: "待补图", review_required: "待核实" };
 function verdictLabel(item: GradingItem, international: boolean) {
   const label = international && item.verdict === "unreadable" ? "看不清" : VERDICT[item.verdict] ?? item.verdict;
@@ -163,6 +163,27 @@ export default function TeacherSubmissionPage() {
     try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage("日期已改好"); return true; }
     catch (error) { setMessage(error instanceof Error ? error.message : "日期没有改成"); return false; }
     finally { setBusy(false); }
+  }
+  async function changeProfile(profile: boolean) {
+    if (!submission || busy || submission.assigned) return;
+    const previous = submission.outputs.profile;
+    setBusy(true);
+    setSubmission({ ...submission, outputs: { ...submission.outputs, profile } });
+    try {
+      const result = await homeworkApi.updateSubmission(submission.id, { action: "profile", profile });
+      setSubmission(result.submission);
+      setMessage(profile ? "已计入定档" : "已从定档移出");
+    } catch (error) {
+      setSubmission((current) => current && { ...current, outputs: { ...current.outputs, profile: previous } });
+      const reason = error instanceof TypeError ? "网络连接中断" : error instanceof Error ? error.message : "定档设置保存失败，请重试";
+      setMessage(reason);
+      // A lost response can follow a committed transaction; read the saved flag without replacing an editing draft.
+      try {
+        const saved = (await homeworkApi.submission(submission.id)).submission;
+        setSubmission(saved);
+        setMessage(`${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`);
+      } catch { /* Keep the previous flag and the error. */ }
+    } finally { setBusy(false); }
   }
   async function reprocessPending() {
     if (!submission) return;
@@ -333,7 +354,13 @@ export default function TeacherSubmissionPage() {
     <header className="review-topbar">{assigned ? <a href={`${archiveLink}&tab=homework`}>← {submission.studentName}的作业</a> : submission.outputs.wrongBook && !submission.outputs.report && !submission.outputs.profile ? <a href={archiveLink}>← 学生错题本</a> : <a href="/tools/homework">← 作业批改</a>}<button onClick={refresh} disabled={busy}>刷新</button></header>
     {message && <div className="homework-notice" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">×</button></div>}
     <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
-      {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}</section>
+      {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
+      <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
+        {submission.outputs.wrongBook && <div><span>写入错题本</span><a href={archiveLink}>已归档错题 {summary?.archived ?? 0} 道 →</a></div>}
+        <label><input type="checkbox" role="switch" aria-label="计入定档" checked={submission.outputs.profile} disabled={busy || Boolean(assigned) || live || submission.status === "ready"}
+          aria-describedby={assigned ? "profile-inclusion-note" : undefined} onChange={(event) => void changeProfile(event.target.checked)} /><span>计入定档</span></label>
+        {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
+      </div></section>
 
     {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onReschedule={reschedule}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
@@ -341,7 +368,7 @@ export default function TeacherSubmissionPage() {
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}
     {/* An assigned question keeps the figures it was handed out with; only questions read off the page have figures to check. */}
     {!assigned && ["published","ready"].includes(submission.status) && <section className="review-callout"><div><b>{submission.figuresPending ? `${submission.figuresPending} 道题配图待核对` : "原卷题图"}</b><p>重新检查图源、共用题图与手写覆盖，并同步到错题本。</p></div><button onClick={attachFigures} disabled={busy}>校对原卷配图</button></section>}
-    {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} />{submission.outputs.wrongBook && <a href={`/?view=wrong-book&studentId=${submission.studentId}`}>已归档错题 {summary.archived} 道 →</a>}</section>}
+    {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} /></section>}
     {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
 

@@ -602,7 +602,30 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   return readTeacherSubmission(id,user);
 }
 
-export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; start?: string }, user: AuthUser) {
+export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; start?: string; profile?: boolean }, user: AuthUser) {
+  if (body.action === "profile") {
+    const row = await teacherSubmissionRow(id, user);
+    if (typeof body.profile !== "boolean") throw responseError("计入定档必须为开或关", 400);
+    if (await assignedHomework(row)) throw responseError("布置的作业总是计入定档", 400);
+    const db = appEnv().DB;
+    const active = db.prepare("SELECT id FROM homework_submissions WHERE assignment_id=? AND status IN ('submitted','processing','ready') LIMIT 1").bind(row.assignment_id);
+    if (await active.first()) throw responseError("这份作业正在批改或发布，请完成后再调整定档", 409);
+    const statements = [db.prepare("UPDATE homework_assignments SET outputs_json=json_set(outputs_json,'$.profile',json(?)),updated_at=? WHERE id=? AND owner_user_id=?")
+      .bind(body.profile ? "true" : "false", Date.now(), row.assignment_id, user.id)];
+    if (body.profile) {
+      const published = await db.prepare("SELECT id,submitted_at,created_at FROM homework_submissions WHERE assignment_id=? AND status='published' ORDER BY version")
+        .bind(row.assignment_id).all<{ id: string; submitted_at: number | null; created_at: number }>();
+      const { replaceSubmissionCapabilityEvidence } = await import("./homework-capabilities");
+      for (const upload of published.results) {
+        const submission = await readTeacherSubmission(upload.id, user);
+        await replaceSubmissionCapabilityEvidence({ ownerUserId: user.id, studentId: submission.studentId, assignmentId: submission.assignmentId,
+          submissionId: submission.id, gradingItems: submission.gradingItems, at: Number(upload.submitted_at ?? upload.created_at) }, statements);
+      }
+    } else statements.push(db.prepare("DELETE FROM student_capability_evidence WHERE assignment_id=? AND owner_user_id=?").bind(row.assignment_id, user.id));
+    if (await active.first()) throw responseError("这份作业正在批改或发布，请完成后再调整定档", 409);
+    await db.batch(statements);
+    return readTeacherSubmission(id, user);
+  }
   if (body.action === "save-pages") return replaceSubmissionPages(id, body.pages ?? [], user);
   if (body.action === "schedule") return rescheduleAssignedHomework(id, body.start, user);
   if (body.action === "submit") return submitHomeworkSubmission(id, user);

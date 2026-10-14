@@ -8,12 +8,12 @@ import type { HomeworkCurriculum, HomeworkOutputs, StudentSummary } from '../../
 const OUTPUT_OPTIONS:Array<[keyof HomeworkOutputs,string,string]>=[
   ['wrongBook','加入学生错题本','完全错误的题目归入该学生的错题本'],
   ['report','生成批改报告','汇总本次作业的薄弱点与下一步建议'],
-  ['profile','整合到学生画像','把本次结果计入该学生的知识图谱掌握情况'],
+  ['profile','计入定档','把这次的知识点和题型正确率计入该学生的定档'],
 ];
 export default function CompletedHomeworkUpload(){
   const [students,setStudents]=useState<StudentSummary[]>([]),[studentId,setStudentId]=useState(''),[title,setTitle]=useState(''),[pages,setPages]=useState<HomeworkPage[]>([]),[references,setReferences]=useState<File[]>([]),[documents,setDocuments]=useState<File[]>([]);
   const [pickerBusy,setPickerBusy]=useState(false);
-  const [outputs,setOutputs]=useState<HomeworkOutputs>({wrongBook:true,report:true,profile:false});
+  const [outputs,setOutputs]=useState<HomeworkOutputs>({wrongBook:true,report:true,profile:true});
   const upload=useHomeworkUpload(),{curriculum,busy,draft,referencesSaved}=upload;
   const international=curriculum==='international';
   const [loading,setLoading]=useState(true),[loadError,setLoadError]=useState('');

@@ -31,7 +31,7 @@ function KnowledgePanel({ profile }: { profile: StudentProfileSummary }) {
   const domains = profile.knowledge.filter((item) => item.level === "domain");
   const answered = profile.types.reduce((sum, item) => sum + total(item), 0);
   const correct = profile.types.reduce((sum, item) => sum + item.correct, 0);
-  if (!profile.knowledge.length && !answered) return <div className="student-panel-empty"><b>还没有批改结果</b><p>布置的作业批改后会自动累计到这里；直接上传批改的作业，上传时勾选“整合到学生画像”才计入。</p></div>;
+  if (!profile.knowledge.length && !answered) return <div className="student-panel-empty"><b>还没有批改结果</b><p>布置的作业批改后会自动计入；直接上传的作业，在批改详情页打开“计入定档”。</p></div>;
   return <>
     <p className="profile-headline"><b>{answered}</b> 道题 · 正确率 <b>{answered ? Math.round(correct / answered * 100) : 0}%</b></p>
     {!!profile.types.length && <ul className="profile-types">{profile.types.map((item) => <li key={item.type}><span>{item.type.replace("单选题", "选择题")}</span><Tally tally={item} /></li>)}</ul>}
