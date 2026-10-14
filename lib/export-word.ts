@@ -569,6 +569,15 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
       // control character. XML 1.0 rejects that byte, so restore the original
       // backslash sequence before transplanting the otherwise untouched paragraph.
       let safeParagraphXml = sanitizeXml10(replacement.xml);
+      // Some external generators nest OMML in a Word text run. Equations belong
+      // beside runs: LibreOffice otherwise silently drops them. Split mixed runs
+      // without changing equation contents, surrounding text or text formatting.
+      safeParagraphXml = safeParagraphXml.replace(/(<w:r\b[^>]*>)([\s\S]*?)<\/w:r>/g, (run, open: string, body: string) => {
+        if (!/<m:oMath(?:Para)?\b/.test(body)) return run;
+        const properties = body.match(/^\s*(<w:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:rPr>))/)?.[0] ?? "";
+        return body.slice(properties.length).split(/(<m:oMathPara\b[^>]*>[\s\S]*?<\/m:oMathPara>|<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>)/g)
+          .map((part) => !part.trim() ? "" : /^<m:oMath(?:Para)?\b/.test(part) ? part : `${open}${properties}${part}</w:r>`).join("");
+      });
       if (replacement.questionNumber != null) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}[.．、]/, `$1${replacement.questionNumber}．`);
       for (const oldId of new Set(Array.from(safeParagraphXml.matchAll(/r:(?:embed|id)="([^"]+)"/g), (match) => match[1]))) {
         const source = replacement.assets?.[oldId]; if (!source) continue;

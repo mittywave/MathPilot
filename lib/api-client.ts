@@ -27,9 +27,9 @@ export function importCloudLibrary(data: LibraryData) { return request<{ importe
 export function authorizeDownload(questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ questionIds }) }); }
 export function fetchHandouts() { return request<{ handouts: HandoutSummary[] }>("/api/handouts"); }
 export function fetchHandout(id: string) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(id)}`); }
-export function createHandout(handout: Pick<Handout, "title" | "items"> & Partial<HandoutGroup>) { return request<{ handout: Handout }>("/api/handouts", { method: "POST", body: JSON.stringify({ handout }) }); }
+export function createHandout(handout: Pick<Handout, "title" | "items"> & Partial<HandoutGroup & Pick<Handout, "temporaryQuestions">>) { return request<{ handout: Handout }>("/api/handouts", { method: "POST", body: JSON.stringify({ handout }) }); }
 export function arrangeHandouts(group: HandoutGroup, ids: string[]) { return request<HandoutGroup & { ids: string[] }>("/api/handouts", { method: "PATCH", body: JSON.stringify({ ...group, ids }) }); }
-export function updateHandout(handout: Pick<Handout, "id" | "title" | "items">) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(handout.id)}`, { method: "PUT", body: JSON.stringify({ handout }) }); }
+export function updateHandout(handout: Pick<Handout, "id" | "title" | "items"> & Partial<Pick<Handout, "temporaryQuestions">>) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(handout.id)}`, { method: "PUT", body: JSON.stringify({ handout }) }); }
 export function deleteHandout(id: string) { return request<{ ok: boolean }>(`/api/handouts/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 export function fetchTypesetRecords() { return request<{ records: TypesetRecord[] }>("/api/typeset-records"); }
 export async function createTypesetRecord(file: File, record: Pick<TypesetRecord, "title" | "questionCount"> & { settings: TypesetSettings }) {

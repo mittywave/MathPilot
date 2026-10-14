@@ -1,7 +1,8 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { arrangeHandouts, authorizeDownload, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
+import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
+import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_GRADES, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, HANDOUT_TERMS, UNSORTED_TOPIC_LABEL, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
@@ -23,7 +24,7 @@ import "./handouts.css";
 import "../../components/note-editor.css";
 
 type SaveState = "saved" | "editing" | "saving" | "failed";
-type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand; sheet: HandoutSheet };
+type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand; sheet: HandoutSheet; temporary?: boolean };
 type SectionItem = Extract<HandoutItem, { kind: "section" }>;
 type QuestionItem = Extract<HandoutItem, { kind: "question" }>;
 type ListSheet = Exclude<HandoutSheet, "handout">;
@@ -159,7 +160,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     try {
       const draft = source ? (await fetchHandout(source.id)).handout : null;
       const { handout } = await createHandout(draft
-        ? { title: `${draft.title}（副本）`, items: copyHandoutItems(draft.items, newId), ...group }
+        ? { title: `${draft.title}（副本）`, items: copyHandoutItems(draft.items, newId), temporaryQuestions: draft.temporaryQuestions, ...group }
         : { title: DEFAULT_HANDOUT_TITLE, items: [], ...group });
       window.location.assign(`/tools/handouts?id=${encodeURIComponent(handout.id)}`);
     } catch (error) { onNotice(error instanceof Error ? error.message : "讲义创建失败"); setBusy(false); }
@@ -199,7 +200,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   }
 
   async function remove(handout: HandoutSummary) {
-    if (!window.confirm(`删除“${handout.title}”？题目仍保留在题库中。`)) return;
+    if (!window.confirm(`删除“${handout.title}”？本讲临时题库也会删除，已存入正式题库的题不受影响。`)) return;
     try { await deleteHandout(handout.id); setHandouts((current) => current?.filter((item) => item.id !== handout.id) ?? null); onNotice("讲义已删除"); }
     catch (error) { onNotice(error instanceof Error ? error.message : "讲义删除失败"); }
   }
@@ -313,10 +314,11 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
 }
 
 function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: string) => void }) {
-  const [doc, setDoc] = useState<Pick<Handout, "title" | "items"> | null>(null);
+  const [doc, setDoc] = useState<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
   const [home, setHome] = useState<HandoutGroup & { studentName: string | null }>({ ...NOWHERE, studentName: null });
   const [missing, setMissing] = useState(false);
   const [library, setLibrary] = useState<LibraryData | null>(null);
+  const [bankSource, setBankSource] = useState<"library" | "temporary">("library");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   // A link from the course knowledge graph (?module=) opens the handout at that module, ready to add questions to it.
   const [focusModule] = useState(() => new URLSearchParams(window.location.search).get("module"));
@@ -329,8 +331,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const [answers, setAnswers] = useState<WordAnswerPlacement>("end");
   const [exporting, setExporting] = useState<ExportFormat | "source" | null>(null);
   const [latexStatus, setLatexStatus] = useState<LatexStatus | null>(null);
-  const latest = useRef<Pick<Handout, "title" | "items"> | null>(null);
-  const saving = useRef(false);
+  const latest = useRef<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
+  const saving = useRef<Promise<void> | null>(null);
   const pending = useRef(false);
   const [noteImport, setNoteImport] = useState<string | null>(null);
   const [dropNote, setDropNote] = useState<string | null>(null);
@@ -339,7 +341,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
 
   useEffect(() => {
-    void fetchHandout(id).then(({ handout }) => { setHome({ grade: handout.grade, term: handout.term, domain: handout.domain, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()) }; setDoc(latest.current); }).catch(() => setMissing(true));
+    void fetchHandout(id).then(({ handout }) => { setHome({ grade: handout.grade, term: handout.term, domain: handout.domain, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()), temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current); }).catch(() => setMissing(true));
     void fetchLibrary().then(setLibrary).catch(() => setLibrary({ scope: "public", modules: [], categories: [], questions: [] }));
   }, [id]);
 
@@ -363,23 +365,34 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   }, [saveState]);
 
   // Items saved before the two libraries merged may still say scope "mine"; the id alone finds the question.
-  const questionIndex = useMemo(() => new Map((library?.questions ?? []).map((question) => [question.id, question])), [library]);
+  const questionIndex = useMemo(() => new Map([...(library?.questions ?? []), ...(doc?.temporaryQuestions ?? [])].map((question) => [question.id, question])), [library, doc?.temporaryQuestions]);
   const resolve = (questionId: string) => questionIndex.get(questionId);
   const libraryReady = Boolean(library);
 
   // One request at a time; whatever is newest when it finishes is sent next.
-  async function flush() {
-    if (saving.current) { pending.current = true; return; }
-    saving.current = true; setSaveState("saving");
-    try {
-      do { pending.current = false; await updateHandout({ id, ...latest.current! }); } while (pending.current);
-      setSaveState("saved");
-    } catch { setSaveState("failed"); }
-    finally { saving.current = false; }
+  function flush(): Promise<void> {
+    if (saving.current) { pending.current = true; return saving.current; }
+    setSaveState("saving");
+    saving.current = (async () => {
+      try {
+        do {
+          pending.current = false;
+          const sent = latest.current!;
+          const { handout } = await updateHandout({ id, ...sent });
+          // Replace uploaded data URLs only if no newer temporary edit has superseded this save.
+          if (latest.current!.temporaryQuestions === sent.temporaryQuestions) {
+            latest.current = { ...latest.current!, temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current);
+          }
+        } while (pending.current);
+        setSaveState("saved");
+      } catch (error) { setSaveState("failed"); throw error; }
+      finally { saving.current = null; }
+    })();
+    return saving.current;
   }
-  function edit(next: Partial<Pick<Handout, "title" | "items">>, save = true) {
+  function edit(next: Partial<Pick<Handout, "title" | "items" | "temporaryQuestions">>, save = true) {
     latest.current = { ...latest.current!, ...next }; setDoc(latest.current);
-    if (save) void flush(); else setSaveState("editing");
+    if (save) void flush().catch(() => {}); else setSaveState("editing");
   }
   const setItems = (items: HandoutItem[], save = true) => edit({ items }, save);
   const updateSection = (itemId: string, changes: { title?: string; note?: string }) => setItems(latest.current!.items.map((item) => item.id === itemId && item.kind === "section" ? { ...item, ...changes } : item), false);
@@ -449,10 +462,40 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
   function openEditEntry(question: Question) {
     const questionModule = library?.modules.find((item) => item.id === question.moduleId);
-    setEntry({ draft: editableQuestionDraft(question, questionModule), sectionId: null, band: "example", sheet });
+    setEntry({ draft: editableQuestionDraft(question, questionModule), sectionId: null, band: "example", sheet, temporary: latest.current!.temporaryQuestions.some((item) => item.id === question.id) });
+  }
+
+  function openTemporaryImport() {
+    const targetModule = library?.modules[0];
+    const draft: Question = targetModule ? newQuestionDraft(targetModule, targetModule.id) : { id: "", categoryId: "", type: "解答题", difficulty: "中等", stem: "", options: [], answer: "", analysis: "", source: "", createdAt: 0, updatedAt: 0 };
+    setEntry({ draft, sectionId: null, band: "example", sheet, temporary: true });
+  }
+
+  async function saveTemporaryQuestions(questions: Question[]) {
+    const updated = [...latest.current!.temporaryQuestions];
+    for (const question of questions) {
+      const index = updated.findIndex((item) => item.id === question.id);
+      if (index < 0) updated.push(question); else updated[index] = question;
+    }
+    if (updated.length > 400) throw new Error("临时题库最多保存 400 道题，请拆分讲义");
+    edit({ temporaryQuestions: updated }, false);
+    await flush();
+    return latest.current!.temporaryQuestions.filter((item) => questions.some((question) => question.id === item.id));
+  }
+
+  async function archiveTemporaryQuestions(ids: string[], categoryId: string) {
+    const moduleId = library?.categories.find((item) => item.id === categoryId)?.moduleId ?? categoryId;
+    if (!library?.modules.some((item) => item.id === moduleId)) throw new Error("请先选择正式题库的保存分类");
+    const questions = latest.current!.temporaryQuestions.filter((question) => ids.includes(question.id) && !library.questions.some((item) => item.id === question.id));
+    const result = await saveQuestionImportBatch(questions, async (question) => (await createCloudQuestion({ ...question, categoryId, moduleId })).question);
+    const saved = result.saved.map((item) => item.question);
+    setLibrary((current) => current && { ...current, questions: [...saved, ...current.questions.filter((item) => !saved.some((question) => question.id === item.id))] });
+    onNotice(`已将 ${saved.length} 道题加入正式题库${result.failed.length ? `；${result.failed.length} 道失败，可重试：${result.failed[0].error}` : ""}`);
+    return saved.map((question) => question.id);
   }
 
   function entrySaved(current: EntryState, saved: Question[]) {
+    if (current.temporary) return; // Already saved with this handout; choosing a lane is a separate action.
     setLibrary((value) => value && { ...value, questions: [...saved, ...value.questions.filter((item) => !saved.some((entryQuestion) => entryQuestion.id === item.id))] });
     // Editing an existing question only refreshes it; anything newly created joins the handout.
     const created = saved.filter((question) => question.id !== current.draft.id);
@@ -511,7 +554,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       const handout = sheet === "handout" ? handoutSections(doc.items, find) : null;
       const list = sheet === "handout" ? null : sheetQuestions(doc.items, sheet, find);
       const missingCount = (handout ?? list)!.missingCount;
-      const ids = [...new Set(doc.items.flatMap((item) => item.kind === (sheet === "handout" ? "question" : sheet) && resolve(item.questionId) ? [item.questionId] : []))];
+      const temporaryIds = new Set(doc.temporaryQuestions.map((question) => question.id));
+      const ids = [...new Set(doc.items.flatMap((item) => item.kind === (sheet === "handout" ? "question" : sheet) && resolve(item.questionId) && !temporaryIds.has(item.questionId) ? [item.questionId] : []))];
       if (ids.length) await authorizeDownload(ids);
       const notes = missingCount ? [`跳过 ${missingCount} 道无法读取的题`] : [];
       const fileName = list ? `${doc.title}-${sheetLabel(sheet)}` : doc.title;
@@ -569,12 +613,13 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
   const questionCard = (item: QuestionItem, band: HandoutBand, laneIndex: number, laneSize: number) => {
     const question = resolve(item.questionId);
+    const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = numbers.get(item.id) ?? ""; const name = band === "practice" ? `练习 ${label}` : label;
     const points = question ? questionPoints(question) : [];
     return <article className="handout-question" key={item.id}>
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
-        {question && library && <small>{question.type} · {categoryPath(library.modules, library.categories, question.categoryId)}</small>}
+        {question && library && <small>{question.type} · {temporary ? "临时题库" : categoryPath(library.modules, library.categories, question.categoryId)}</small>}
         {question && <span className="handout-points">{points.length
           ? points.map((point) => <b key={point}>{point}</b>)
           : question.canEdit ? <button className="text-button" onClick={() => openEditEntry(question)}>未标知识点 · 补充</button> : <em>未标知识点</em>}</span>}
@@ -584,7 +629,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
           <PaperMoreMenu label="题目更多操作">
             {HANDOUT_BANDS.filter((other) => other !== band).map((other) => <button key={other} onClick={() => changeBand(item.id, other)}>改为{HANDOUT_PARTS[other].label}</button>)}
-            {question?.canEdit && <button onClick={() => openEditEntry(question)}>编辑原题</button>}
+            {question?.canEdit && <button onClick={() => openEditEntry(question)}>{temporary ? "编辑临时题" : "编辑原题"}</button>}
           </PaperMoreMenu>
           <button className="danger" aria-label={`${name} 移出讲义`} onClick={() => setItems(doc.items.filter((entryItem) => entryItem.id !== item.id))}>移出讲义</button>
         </div>
@@ -595,11 +640,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   // A 小测 or 作业 question: numbered in its list, with the module it tests in place of the 考点.
   const listCard = (item: ListItem, index: number, size: number) => {
     const question = resolve(item.questionId);
+    const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = String(index + 1); const list = sheetLabel(item.kind); const name = `${list} ${label}`;
     return <article className="handout-question" key={item.id}>
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
-        {question && library && <small>{question.type} · {categoryPath(library.modules, library.categories, question.categoryId)}</small>}
+        {question && library && <small>{question.type} · {temporary ? "临时题库" : categoryPath(library.modules, library.categories, question.categoryId)}</small>}
         <label className="handout-tests">考查
           <select aria-label={`${name} 考查模块`} value={item.moduleId ?? ""} onChange={(event) => setItems(doc.items.map((entry) => entry.id === item.id ? { ...item, moduleId: event.target.value || null } : entry))}>
             {!item.moduleId && <option value="">未选模块</option>}
@@ -610,7 +656,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           <button aria-label={`${name} 上移`} disabled={index === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
           <button aria-label={`${name} 下移`} disabled={index === size - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
           <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
-          {question?.canEdit && <PaperMoreMenu label="题目更多操作"><button onClick={() => openEditEntry(question)}>编辑原题</button></PaperMoreMenu>}
+          {question?.canEdit && <PaperMoreMenu label="题目更多操作"><button onClick={() => openEditEntry(question)}>{temporary ? "编辑临时题" : "编辑原题"}</button></PaperMoreMenu>}
           <button className="danger" aria-label={`${name} 移出${list}`} onClick={() => setItems(doc.items.filter((entry) => entry.id !== item.id))}>移出{list}</button>
         </div>
       </div>
@@ -623,16 +669,21 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
         <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
+          source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
+          onEdit={openEditEntry} onRemove={(questionId) => {
+            if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }
+            if (window.confirm("从当前讲义的临时题库删除这道题？已保存到正式题库的内容不受影响。")) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
+          }}
           sections={moduleOptions}
           footer={<div className="handout-bar">
             <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><BackIcon /><span>{backLabel}</span></a>
-            <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush()}>重试</button>}</span>
+            <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
             <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
           </div>} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
     <div className="handout-draft-head">
-      <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush()} />
+      <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush().catch(() => {})} />
       <div className="handout-sheets" role="tablist" aria-label="本讲资料">
         {HANDOUT_SHEETS.map((item) => <button key={item.value} role="tab" aria-selected={sheet === item.value} onClick={() => openSheet(item.value)}>
           {item.label}<span className={`handout-count${sizes[item.value] ? "" : " zero"}`} aria-label={`${sizes[item.value]} 道题`}>{sizes[item.value]}</span>
@@ -656,7 +707,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       return <section className="handout-module" key={section.id} id={`module-${section.id}`} aria-label={badge}>
         <div className="handout-module-head">
           <span className="handout-module-no" aria-hidden="true">{heading.numeral}</span>
-          <input aria-label={`${badge}名称`} value={section.title} placeholder="模块名称，如：平行四边形的性质" onChange={(event) => updateSection(section.id, { title: event.target.value })} onBlur={() => void flush()} />
+          <input aria-label={`${badge}名称`} value={section.title} placeholder="模块名称，如：平行四边形的性质" onChange={(event) => updateSection(section.id, { title: event.target.value })} onBlur={() => void flush().catch(() => {})} />
           <PaperMoreMenu label="模块更多操作">
             {modules.length > 1 && <>
               <button disabled={moduleIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, section.id, -1))}>上移</button>
@@ -675,7 +726,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
             {dropNote === section.id ? <em>松开即可识别截图</em> : <button className="text-button" title="选择、拖入或粘贴知识点截图" disabled={Boolean(noteImport)} onClick={() => chooseNoteScreenshot(section.id)}>{noteImport === section.id ? "正在识别截图…" : "截图识别"}</button>}
           </div>
           <Suspense fallback={<div className="note-editor"><div className="note-editor-body"><NotePreview note={section.note} /></div></div>}>
-            <NoteEditor value={section.note} label={`${badge}知识点`} placeholder={HANDOUT_PARTS.knowledge.hint} onChange={(note) => updateSection(section.id, { note })} onCommit={() => void flush()} />
+            <NoteEditor value={section.note} label={`${badge}知识点`} placeholder={HANDOUT_PARTS.knowledge.hint} onChange={(note) => updateSection(section.id, { note })} onCommit={() => void flush().catch(() => {})} />
           </Suspense>
         </div>
 
@@ -703,7 +754,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
     <input ref={noteFile} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file && noteTarget.current) void importNoteScreenshot(noteTarget.current, file); event.target.value = ""; }} />
     {entry && library && <QuestionEntry initial={entry.draft} modules={library.modules} categories={library.categories}
-      moduleIds={entry.draft.id ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
+      moduleIds={entry.draft.id && !entry.temporary ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
+      saveTemporaryQuestions={entry.temporary ? saveTemporaryQuestions : undefined} startWithFile={entry.temporary && !entry.draft.id}
       onSaved={(saved) => entrySaved(entry, saved)} onClose={() => setEntry(null)} onNotice={onNotice} />}
     {exportOpen && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="导出讲义">
       <div className="modal-head"><div><span className="eyebrow">导出{sheet === "handout" ? "" : sheetLabel(sheet)} · {questionCount} 题</span><h2>{doc.title}</h2></div><button className="close" aria-label="关闭" disabled={Boolean(exporting)} onClick={() => setExportOpen(false)}>×</button></div>
