@@ -6,6 +6,7 @@ import type { SheetGroup } from "../../../lib/handout-latex";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
 import { groupHeading, planQuestionIds } from "../../../lib/smart-paper-contract";
 import type { Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
+import { AssignHomework } from "./AssignHomework";
 import { PdfPreview } from "./PdfPreview";
 import { TypesetHistory } from "./TypesetHistory";
 import "../tools.css";
@@ -73,10 +74,11 @@ function Stepper({ value, unit, label, disabled, onChange, min = 0, max = ROOM[u
 }
 
 // 组卷篮 (or 智能组卷) hands over its questions in order, its title and the settings it kept from the last time; closing
-// hands the title and settings back. 智能组卷 also hands over its days and its history record, which keeps the settings.
+// hands the title and settings back. 智能组卷 also hands over its days, its history record, which keeps the settings,
+// and the student it was made for, who is chosen first when the material is assigned.
 export type BasketTypeset = {
   questions: Question[]; title: string; settings: Partial<TypesetSettings>; onClose: (title: string, settings: TypesetSettings) => void;
-  groups?: SheetGroup[]; recordId?: string; origin?: { back: string; name: string; hint: string };
+  groups?: SheetGroup[]; recordId?: string; studentId?: string; origin?: { back: string; name: string; hint: string };
 };
 const BASKET_ORIGIN = { back: "组卷篮 · 快速排版", name: "组卷篮", hint: "点击回组卷篮调整题目" };
 
@@ -118,6 +120,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const saved = useRef(basket?.recordId ? JSON.stringify({ title: basket.title, settings: restoredSettings(basket.settings) }) : "");
   const fileInput = useRef<HTMLInputElement>(null);
   const run = useRef(0);
+  const [assigning, setAssigning] = useState(false);
+  const closeAssign = useCallback(() => setAssigning(false), []);
 
   useEffect(() => {
     statusReady.current = import("../../../lib/handout-latex-files").then(({ latexCompilerStatus }) => latexCompilerStatus())
@@ -343,6 +347,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       </section>}
 
       <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
+      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} onClose={closeAssign} />}
       {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}

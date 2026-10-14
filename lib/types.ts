@@ -273,6 +273,38 @@ export type StudentSummary = Student & {
   wrongCount: number;
 };
 
+// 定档: what the archive knows about a student. 客观 comes from graded homework (knowledge points and question types),
+// 主观 from what the teacher said after a lesson, read against five fixed abilities.
+export type AbilityKey = "careless" | "calculation" | "thinking-reverse" | "thinking-analysis" | "thinking-transform";
+export type AbilityNote = { key: AbilityKey; polarity: "strength" | "weakness"; evidence: string };
+/** One lesson's feedback: the teacher's words and what was read from them (extractedAt is null until a reading succeeds). */
+export type StudentObservation = {
+  id: string; studentId: string; observedAt: number; text: string; abilities: AbilityNote[]; keywords: string[];
+  extractedAt: number | null; createdAt: number; updatedAt: number;
+};
+/** Graded answers on one knowledge point (or its topic or domain) and one question type. */
+export type KnowledgeTally = { key: string; label: string; level: "domain" | "topic" | "point"; parentKey: string | null; correct: number; partial: number; incorrect: number; lastAt: number };
+export type StudentProfileSummary = {
+  since: number | null;
+  knowledge: KnowledgeTally[];
+  types: Array<{ type: QuestionType; correct: number; partial: number; incorrect: number }>;
+  observations: StudentObservation[];
+};
+
+/**
+ * 学情报告 for parents over one period. `data` is a snapshot of what the archive held when the report was made (so a
+ * report sent stays as it was); `text` is what the model wrote from it and the teacher may edit.
+ */
+export type StudentReportData = {
+  studentName: string; className: string;
+  homework: Array<Pick<StudentHomework, "title" | "assigned" | "createdAt" | "total" | "done" | "correct" | "incorrect" | "pending">>;
+  knowledge: KnowledgeTally[]; types: StudentProfileSummary["types"];
+  observations: Array<Pick<StudentObservation, "observedAt" | "text" | "abilities">>;
+  wrongAdded: number;
+};
+export type StudentReportText = { overview: string; knowledge: string; abilities: string; plan: string[]; message: string };
+export type StudentReport = { id: string; studentId: string; periodStart: number; periodEnd: number; data: StudentReportData; text: StudentReportText; createdAt: number; updatedAt: number };
+
 /** archiveReason of a wrong question the teacher deleted. It waits in 历史记录 and can be restored; other archived entries follow grading. */
 export const WRONG_QUESTION_DELETED = "老师删除";
 
@@ -338,9 +370,30 @@ export type AssignmentQuestion = {
   taxonomyKeys: string[];
   capabilityKeys: string[];
   figures?: HomeworkQuestionFigure[];
+  /** An assigned homework's question as it was handed out: the library question or the one read from the Word. */
+  source?: Question | null;
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
+};
+
+/** How an assigned material is split (智能组卷 by day); no groups means one run of questions numbered 1, 2, 3…. */
+export type HomeworkSheetGroup = { title: string; size: number };
+/**
+ * An assigned homework: its questions were known when it was handed out, and it may come back in several uploads.
+ * Each question carries its latest graded result over the uploads so far; one never handed in has none.
+ */
+export type AssignedHomework = {
+  groups: HomeworkSheetGroup[];
+  questions: Array<{ id: string; number: string; question: Question; result: { verdict: GradingVerdict; requiresReview: boolean; submissionId: string } | null }>;
+  uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
+};
+
+/** One homework of a student as the archive lists it: assigned ones count the whole sheet, uploaded ones their last upload. */
+export type StudentHomework = {
+  assignmentId: string; title: string; assigned: boolean; createdAt: number;
+  total: number; done: number; correct: number; incorrect: number; pending: number;
+  latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
 };
 
 export type SubmissionPage = {
@@ -575,6 +628,8 @@ export type HomeworkSubmission = {
   pages: SubmissionPage[];
   gradingItems: GradingItem[];
   report: SubmissionReport | null;
+  /** Present on an assigned homework: the whole sheet with each question's latest result. */
+  assigned?: AssignedHomework | null;
   createdAt: number;
   updatedAt: number;
 };

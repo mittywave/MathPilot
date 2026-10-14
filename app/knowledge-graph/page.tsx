@@ -89,8 +89,12 @@ export default function KnowledgeGraphPage() {
       void homeworkApi.me().then(async ({ user: currentUser }) => {
         setUser(currentUser);
         if (!currentUser) return;
-        const [studentData, graphData] = await Promise.all([homeworkApi.students().catch(() => ({ students: [] as StudentSummary[] })), knowledgeGraphApi.overview(graphId)]);
-        setStudents(studentData.students); setOverview(graphData);
+        // A link from 学生档案 · 定档 (?student=) opens with that student overlaid.
+        const studentData = await homeworkApi.students().catch(() => ({ students: [] as StudentSummary[] }));
+        const wanted = new URLSearchParams(window.location.search).get("student") ?? "";
+        const linked = studentData.students.some((item) => item.id === wanted) ? wanted : "";
+        const graphData = await knowledgeGraphApi.overview(graphId, linked);
+        setStudents(studentData.students); setOverview(graphData); if (linked) setStudentId(linked);
       }).catch((error) => showNotice(error instanceof Error ? error.message : "知识图谱读取失败", "error")).finally(() => setLoading(false));
     });
     return () => cancelAnimationFrame(frame);

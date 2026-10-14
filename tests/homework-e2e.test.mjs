@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -114,6 +114,24 @@ function startMockModel(port) {
     }
     if (state.failAll && prompt.includes("只识别学生已完成的数学作业")) {
       state.failureCalls += 1; response.writeHead(503, { "Content-Type": "application/json" }); response.end(JSON.stringify({ error: { message: "mock grading unavailable" } })); return;
+    }
+    // 定档 · 主观: the teacher's words read against the five abilities; one judgement and one keyword quote nothing the teacher said.
+    if (prompt.includes("老师课后口述了一段对学生的观察")) {
+      if (state.failObservation) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock observation refused"}}));return; }
+      state.observationPrompts.push(prompt);
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({abilities:[{key:"careless",polarity:"weakness",evidence:"还是粗心"},{key:"thinking-reverse",polarity:"strength",evidence:"逆向思维 不错"},{key:"calculation",polarity:"weakness",evidence:"老师没说过的话"}],keywords:["丢负号","老师没说的词"]})}));return;
+    }
+    // 学情报告: the text is written from the data in the prompt only.
+    if (prompt.includes("替老师写一份给家长看的学情报告")) {
+      if (state.failReport) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock report refused"}}));return; }
+      state.reportPrompts.push(prompt);
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({overview:"这段时间完成了布置的计算打卡。",knowledge:"加法掌握较好。",abilities:"老师反馈逆向思维不错。",plan:["每天练 5 道去括号","订正错题本里的题"],message:"请家长每天检查打卡。"})}));return;
+    }
+    // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
+    if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
+      state.assignedPrompts.push(prompt);
+      const questions=state.assignedPage.map(q=>({page_numbers:[1],type:"填空题",stem:"",options:[],student_answer:"",answer_state:"readable",question_complete:true,max_score:null,bbox:{x:90,y:120,width:700,height:90},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none",...q}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("IGCSE / A Level 英文试卷")) {
       const questions=[
@@ -203,8 +221,8 @@ function startMockModel(port) {
     }
     if (numbers.includes("D2")) assert.match(prompt, /题号 D2\n题型：解答题\n满分：4/);
     const results = numbers.map((number, index) => ({
-      question_number: number, page_number: 1, student_answer: state.teacherMarked && /^1-4(?:\(1\))?$/.test(number) ? "9" : /^[1-5]-[1-5]$/.test(number) ? "6" : number === "D1" ? "6" : number === "D4" ? "8" : number === "D2" ? "移项到x=2" : "B",
-      verdict: number === "D2" ? "partial" : "incorrect", score: number === "D2" ? 2.5 : 0, feedback: number === "D2" ? "推导未完成" : "结果与参考答案不同",
+      question_number: number, page_number: 1, student_answer: state.assignedAnswers[number] ?? (state.teacherMarked && /^1-4(?:\(1\))?$/.test(number) ? "9" : /^[1-5]-[1-5]$/.test(number) ? "6" : number === "D1" ? "6" : number === "D4" ? "8" : number === "D2" ? "移项到x=2" : "B"),
+      verdict: state.assignedVerdicts[number] ?? (number === "D2" ? "partial" : "incorrect"), score: number === "D2" ? 2.5 : 0, feedback: number === "D2" ? "推导未完成" : "结果与参考答案不同",
       error_type: number === "D2" ? "步骤" : "计算", confidence: .98,
       step_analysis: number === "D2" ? ["正确写出了部分移项过程", "缺少最终验算"] : [], evidence_summary: "学生作答与参考答案不同",
       capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190 }, warnings: [],
@@ -544,6 +562,135 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(mock.state.referenceNumbers,["1-3(1)"]);
     assert.deepEqual(mock.state.gradedNumbers,[]);
     mock.state.teacherMarked="";
+
+    // 布置作业: a material handed out with its answers is graded against them, upload by upload; what has not come back is 未交, not wrong.
+    const PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const sheetQuestion=(id,stem,answer,extra={})=>({id,type:"填空题",difficulty:"基础",stem,options:[],answer,analysis:"",source:"",categoryId:"",createdAt:0,updatedAt:0,...extra});
+    const sheetBody={studentIds:[studentOneId],title:"两天计算打卡",groups:[{title:"第 1 天 · 热身",size:2},{title:"第 2 天 · 加深",size:2}],questions:[
+      sheetQuestion("typeset-1","计算 $1+1$","2",{contentImages:[`data:image/png;base64,${PNG}`]}),
+      sheetQuestion("typeset-2","计算 $2+2$","4",{analysis:"【点评】本题考查有理数的加法．"}),
+      sheetQuestion("typeset-3","计算 $3\\times 3$","",{type:"解答题"}),
+      sheetQuestion("typeset-4","计算 $4+4$","8"),
+    ]};
+    assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherTwo,method:"POST",body:sheetBody})).response.status,404,"only the student's own teacher assigns to them");
+    assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{...sheetBody,groups:[{title:"第 1 天",size:3}]}})).response.status,400,"groups must account for every question");
+    const assignedHomework=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:sheetBody});
+    assert.equal(assignedHomework.response.status,201,JSON.stringify(assignedHomework.payload));
+    const firstUpload=assignedHomework.payload.assigned[0].id;
+    assert.equal((await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherTwo})).response.status,404);
+    let sheet=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission;
+    assert.equal(sheet.status,"draft");
+    assert.deepEqual(sheet.assigned.questions.map(q=>[q.number,q.result]),[["D1-1",null],["D1-2",null],["D2-1",null],["D2-2",null]]);
+    assert.deepEqual(sheet.assigned.groups.map(g=>g.title),["第 1 天 · 热身","第 2 天 · 加深"]);
+    assert.deepEqual(sheet.outputs,{wrongBook:true,report:false,profile:true});
+    assert.equal(sheet.processingProgress.identified,0,"nothing is identified before a page is read");
+    // A picture that came with the material is stored for this teacher only.
+    const sheetPicture=sheet.assigned.questions[0].question.contentImages[0];
+    assert.match(sheetPicture,/^\/api\/assets\/[0-9a-f-]{36}$/);
+    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherOne}})).status,200);
+    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherTwo}})).status,404);
+    const sheetRows=d1Rows(stateDir,"SELECT question_number,reference_source,reference_verified,taxonomy_keys_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order",[sheet.assignmentId]);
+    assert.deepEqual(sheetRows.map(r=>[r.question_number,r.reference_source,r.reference_verified]),[["D1-1","provided",1],["D1-2","provided",1],["D2-1","unresolved",0],["D2-2","provided",1]]);
+    assert.ok(JSON.parse(sheetRows[1].taxonomy_keys_json).length,"a question the library never saw is tagged from what its analysis says it tests");
+    let listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.title,listed.total,listed.done,listed.latest.status],["两天计算打卡",4,0,"draft"]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherTwo})).response.status,404);
+
+    // The first upload brings day 1 back; the page also shows a stray question that is not on the sheet.
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    mock.state.assignedPage=[{question_number:"D1-1",student_answer:"2"},{question_number:"1-2",student_answer:"5"},{question_number:"9",student_answer:"7"}];
+    mock.state.assignedAnswers={"D1-1":"2","D1-2":"5"};mock.state.assignedVerdicts={"D1-1":"correct","D1-2":"incorrect"};
+    await submitPages(base,teacherOne,firstUpload,[await uploadPage(base,teacherOne,firstUpload,bytes)]);
+    sheet=await waitForSubmission(base,teacherOne,firstUpload,["published"],worker);
+    assert.match(mock.state.assignedPrompts.at(-1),/D2-1｜第 2 天 第 1 题｜解答题｜计算 \$3\\times 3\$/);
+    assert.deepEqual(sheet.gradingItems.map(i=>[i.questionNumber,i.verdict]),[["D1-1","correct"],["D1-2","incorrect"]],"a stray question is left out and 1-2 is read as D1-2");
+    assert.deepEqual(mock.state.referenceNumbers,[],"answers handed out with the sheet are not solved again");
+    assert.deepEqual(sheet.assigned.questions.map(q=>q.result?.verdict??null),["correct","incorrect",null,null]);
+    assert.equal(sheet.gradingItems.find(i=>i.questionNumber==="D1-1").stem,"计算 $1+1$","the assigned stem stays as it was handed out");
+    const sheetWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===sheet.assignmentId);
+    assert.deepEqual(sheetWrong.map(e=>[e.question.stem,e.question.analysis]),[["计算 $2+2$","【点评】本题考查有理数的加法．"]],"the wrong book keeps the question as it was handed out");
+    assert.ok(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=? AND dimension='knowledge'",[firstUpload])[0].count>0,"an assigned homework feeds the knowledge profile");
+    listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
+
+    // The next upload brings day 2: the question handed out without an answer is solved and checked first.
+    const nextUpload=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}})).payload.submission;
+    assert.equal(nextUpload.version,2);assert.equal(nextUpload.status,"draft");
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    mock.state.assignedPage=[{question_number:"D2-1",student_answer:"9"},{question_number:"第2天第2题",student_answer:"8"}];
+    mock.state.assignedAnswers={"D2-1":"9","D2-2":"8"};mock.state.assignedVerdicts={"D2-1":"correct","D2-2":"correct"};
+    await submitPages(base,teacherOne,nextUpload.id,[await uploadPage(base,teacherOne,nextUpload.id,bytes)]);
+    sheet=await waitForSubmission(base,teacherOne,nextUpload.id,["published"],worker);
+    assert.deepEqual(mock.state.referenceNumbers,["D2-1"]);
+    assert.deepEqual(sheet.gradingItems.map(i=>i.questionNumber),["D2-1","D2-2"]);
+    assert.deepEqual(sheet.assigned.questions.map(q=>[q.result?.verdict,q.result?.submissionId===firstUpload]),[["correct",true],["incorrect",true],["correct",false],["correct",false]],"each question keeps its result from the upload that found it");
+    assert.deepEqual(sheet.assigned.uploads.map(u=>[u.version,u.status]),[[1,"published"],[2,"published"]]);
+    listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.done,listed.correct,listed.incorrect,listed.latest.version],[4,3,1,2]);
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
+
+    // 定档: graded knowledge from the assigned homework, and the teacher's lesson feedback with the abilities read from it.
+    let profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
+    assert.ok(profile.knowledge.some(item=>item.level==="domain"),"knowledge tallies carry their place in the graph");
+    assert.ok(profile.types.some(item=>item.type==="填空题"&&item.correct>=2),"question types count only the work let into the profile");
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherTwo})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherTwo,method:"POST",body:{text:"越权"}})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"  "}})).response.status,400);
+    const lesson=await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"今天讲去括号，他计算还是粗心，丢负号。不过逆向思维不错。",observedAt:Date.now()-86_400_000}});
+    assert.equal(lesson.response.status,201,JSON.stringify(lesson.payload));
+    assert.equal(lesson.payload.notice,"");
+    assert.deepEqual(lesson.payload.observation.abilities.map(note=>[note.key,note.polarity]),[["careless","weakness"],["thinking-reverse","strength"]],"a judgement that quotes nothing the teacher said is dropped");
+    assert.deepEqual(lesson.payload.observation.keywords,["丢负号"]);
+    assert.ok(lesson.payload.observation.extractedAt);
+    assert.match(mock.state.observationPrompts.at(-1),/thinking-transform（思维能力 · 转化）/);
+    const lessonId=lesson.payload.observation.id;
+    // The teacher removes a judgement; a failed reading of new words keeps the words and clears the old reading.
+    const trimmed=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{abilities:[lesson.payload.observation.abilities[1]]}});
+    assert.deepEqual(trimmed.payload.observation.abilities.map(note=>note.key),["thinking-reverse"]);
+    mock.state.failObservation=true;
+    const reworded=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{text:"今天状态很好。"}});
+    assert.equal(reworded.response.status,200);assert.ok(reworded.payload.notice);
+    assert.deepEqual([reworded.payload.observation.text,reworded.payload.observation.abilities,reworded.payload.observation.extractedAt],["今天状态很好。",[],null]);
+    mock.state.failObservation=false;
+    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${Date.now()-3_600_000}`,{cookie:teacherOne})).payload.profile;
+    assert.equal(profile.observations.length,0,"a lesson before the period is left out");
+    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
+    assert.deepEqual(profile.observations.map(item=>item.id),[lessonId]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherTwo,method:"DELETE",body:{}})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile.observations.length,0);
+
+    // 学情报告: a snapshot of the period, written up by the model from that snapshot alone; without a model, plain facts.
+    await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"逆向思维不错，计算还是粗心。",observedAt:Date.now()}});
+    const period={periodStart:Date.now()-7*86_400_000,periodEnd:Date.now(),timeZone:"Asia/Shanghai"};
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo,method:"POST",body:period})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:{periodStart:period.periodEnd,periodEnd:period.periodStart}})).response.status,400);
+    const made=await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:period});
+    assert.equal(made.response.status,201,JSON.stringify(made.payload));
+    const report=made.payload.report;
+    assert.equal(made.payload.notice,"");
+    assert.deepEqual(report.text.plan,["每天练 5 道去括号","订正错题本里的题"]);
+    assert.ok(report.data.homework.some(item=>item.title==="两天计算打卡"&&item.assigned&&item.done===4&&item.total===4),"the assigned homework of the period is in the snapshot");
+    assert.ok(report.data.knowledge.length&&report.data.types.length);
+    assert.deepEqual(report.data.observations.map(item=>item.text),["逆向思维不错，计算还是粗心。"]);
+    const reportPrompt=mock.state.reportPrompts.at(-1);
+    assert.match(reportPrompt,/两天计算打卡（.+布置）：共 4 题，交了 4 题，对 3，错 1/);
+    assert.match(reportPrompt,/逆向思维不错，计算还是粗心。/);
+    assert.match(reportPrompt,/不能自己从作业结果推断粗心/);
+    mock.state.failReport=true;
+    const plain=await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:period});
+    mock.state.failReport=false;
+    assert.equal(plain.response.status,201);assert.ok(plain.payload.notice);
+    assert.match(plain.payload.report.text.overview,/共完成 \d+ 份作业，批改 \d+ 道题，正确率 \d+%/);
+    const edited=await jsonRequest(base,`/api/students/${studentOneId}/reports/${report.id}`,{cookie:teacherOne,method:"PUT",body:{text:{...report.text,message:"老师改过的话"}}});
+    assert.equal(edited.payload.report.text.message,"老师改过的话");assert.deepEqual(edited.payload.report.data,report.data,"editing never changes the data snapshot");
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports/${report.id}`,{cookie:teacherTwo,method:"PUT",body:{text:{}}})).response.status,404);
+    let reportList=(await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne})).payload.reports;
+    assert.equal(reportList.length,2);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports/${plain.payload.report.id}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
+    reportList=(await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne})).payload.reports;
+    assert.deepEqual(reportList.map(item=>item.id),[report.id]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo})).response.status,404);
 
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});

@@ -1,10 +1,12 @@
 import { env } from "cloudflare:workers";
 import type {
-  AssignmentQuestion, AuthUser, GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkSubmission, QuestionType, SubmissionPage, SubmissionStatus,
+  AssignedHomework, AssignmentQuestion, AuthUser, GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkSheetGroup, HomeworkSubmission, Question, QuestionType,
+  StudentHomework, SubmissionPage, SubmissionStatus,
 } from "../types";
 import { homeworkAssetsBucket, requireHomeworkEnabled, scheduleHomeworkAssetCleanup } from "./homework-assets";
 import { normalizeHomeworkOutputs } from "./homework-outputs";
 import { normalizeMaxScore, reconcileHomeworkScore, summarizeHomeworkScore } from "../homework-grading-rules.mjs";
+import { resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
 
 type HomeworkQueueMessage =
   | { kind: "grade_submission"; submissionId: string }
@@ -52,6 +54,7 @@ function assignmentQuestion(row: Record<string, unknown>): AssignmentQuestion {
     knowledgeTags: parseJson<string[]>(row.knowledge_tags_json, []), taxonomyKeys: parseJson<string[]>(row.taxonomy_keys_json, []),
     capabilityKeys: parseJson<string[]>(row.capability_keys_json, []), figures: questionFigures(row.input_evidence_json),
     referenceSource: row.reference_source as AssignmentQuestion["referenceSource"], referenceVerified: Number(row.reference_verified) === 1, referenceEvidence: String(row.reference_evidence ?? ""),
+    source: row.source_json ? parseJson<Question | null>(row.source_json, null) : null,
     sortOrder: Number(row.sort_order), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
 }
@@ -113,10 +116,12 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   const pageCoverage = await (await import("./homework-page-coverage")).readPageCoverage(id);
   const recognized=await (await import("./homework-page-coverage")).readRecognizedQuestionNumbers(id);
   if(recognized)grading.results=grading.results.filter(item=>recognized.has(String(item.question_number)) || [...recognized].some(number=>String(item.question_number).startsWith(`${number}(`)));
-  const inventory=recognized?JSON.stringify([...recognized]):null;
+  const assigned = await assignedHomework(row);
+  // An assigned sheet lists every question from the start; until the pages are read, none of them is identified yet.
+  const inventory=recognized?JSON.stringify([...recognized]):assigned?"[]":null;
   const processingProgress = await appEnv().DB.prepare(`SELECT
     (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?)))) AS identified,
-    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR json_extract(input_evidence_json,'$.question_complete')=0 OR (json_extract(input_evidence_json,'$.teacher_mark')='correct' AND NOT EXISTS (SELECT 1 FROM grading_items g WHERE g.assignment_question_id=assignment_questions.id AND g.submission_id=? AND g.verdict IN ('incorrect','partial'))))) AS referenceChecked,
+    (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND ((reference_fingerprint<>'' AND reference_fingerprint NOT LIKE 'pending:%') OR reference_evidence LIKE '教师补充并确认%' OR (source_json<>'' AND reference_verified=1) OR json_extract(input_evidence_json,'$.question_complete')=0 OR (json_extract(input_evidence_json,'$.teacher_mark')='correct' AND NOT EXISTS (SELECT 1 FROM grading_items g WHERE g.assignment_question_id=assignment_questions.id AND g.submission_id=? AND g.verdict IN ('incorrect','partial'))))) AS referenceChecked,
     (SELECT COUNT(*) FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id=? AND (? IS NULL OR q.question_number IN (SELECT value FROM json_each(?))) AND (g.updated_at>=? OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))) AS graded`)
     .bind(row.assignment_id,inventory,inventory,row.assignment_id,inventory,inventory,id,id,inventory,inventory,row.submitted_at??0).first<{identified:number;referenceChecked:number;graded:number}>() ?? undefined;
   // Questions read before figures were located; their figures can be filled in from the submission page.
@@ -136,14 +141,51 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
     failureReason: String(row.failure_reason ?? ""),
     originalDocuments: documents.results.map(d=>({name:d.original_name,url:`/api/homework-assets/${d.id}`})),
     pageRevisions: revisions.results.map(r=>({pageId:String(r.page_id),originalUrl:`/api/homework-assets/${r.original_asset_id}`,processedUrl:`/api/homework-assets/${r.processed_asset_id}`,createdAt:Number(r.created_at)})),
-    pages: pages.results.map(submissionPage), gradingItems, report,
+    pages: pages.results.map(submissionPage), gradingItems, report, assigned,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  };
+}
+
+type UploadRow = { id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
+type ResultRow = { assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number };
+
+// The published results of one upload, without questions a later reading of its pages no longer finds.
+async function uploadResults(submissionId: string) {
+  const [rows, recognized] = await Promise.all([
+    appEnv().DB.prepare(`SELECT g.assignment_question_id, q.question_number, g.verdict, g.requires_review FROM grading_items g
+      JOIN assignment_questions q ON q.id = g.assignment_question_id WHERE g.submission_id = ?`).bind(submissionId).all<ResultRow>(),
+    import("./homework-page-coverage").then(({ readRecognizedQuestionNumbers }) => readRecognizedQuestionNumbers(submissionId)),
+  ]);
+  return (rows.results as ResultRow[]).filter((row) => !recognized || recognized.has(row.question_number));
+}
+
+/**
+ * An assigned homework comes back in as many uploads as the student hands it in: each question shows its result from
+ * the latest published upload that found it, and a question no upload found yet has none (未提交, not wrong).
+ */
+async function assignedHomework(row: Record<string, unknown>): Promise<AssignedHomework | null> {
+  if (!row.sheet_json) return null;
+  const [questions, uploads] = await Promise.all([
+    appEnv().DB.prepare("SELECT id, question_number, source_json FROM assignment_questions WHERE assignment_id = ? AND source_json <> '' ORDER BY sort_order")
+      .bind(row.assignment_id).all<{ id: string; question_number: string; source_json: string }>(),
+    appEnv().DB.prepare(`SELECT id, version, status, created_at, submitted_at, (SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id = s.id) AS page_count
+      FROM homework_submissions s WHERE assignment_id = ? AND student_id = ? ORDER BY version`).bind(row.assignment_id, row.student_id).all<UploadRow>(),
+  ]);
+  const sheet = questions.results as Array<{ id: string; question_number: string; source_json: string }>, handedIn = uploads.results as UploadRow[];
+  const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
+  for (const upload of handedIn.filter((item) => item.status === "published")) {
+    for (const result of await uploadResults(upload.id)) results.set(result.assignment_question_id, { verdict: result.verdict, requiresReview: Number(result.requires_review) === 1, submissionId: upload.id });
+  }
+  return {
+    groups: parseJson<{ groups?: HomeworkSheetGroup[] }>(row.sheet_json, {}).groups ?? [],
+    questions: sheet.map((question) => ({ id: question.id, number: question.question_number, question: parseJson<Question>(question.source_json, {} as Question), result: results.get(question.id) ?? null })),
+    uploads: handedIn.map((upload) => ({ id: upload.id, version: Number(upload.version), status: upload.status, pageCount: Number(upload.page_count), createdAt: Number(upload.created_at), submittedAt: upload.submitted_at == null ? null : Number(upload.submitted_at) })),
   };
 }
 
 // Only homework uploaded after it was completed is graded; legacy assignment templates stay out of every list and action.
 const SUBMISSION_SELECT = `SELECT homework_submissions.*, homework_assignments.title AS assignment_title, homework_assignments.outputs_json, homework_assignments.curriculum,
-  homework_assignments.owner_user_id AS owner_user_id, students.name AS student_name
+  homework_assignments.sheet_json, homework_assignments.created_at AS assignment_created_at, homework_assignments.owner_user_id AS owner_user_id, students.name AS student_name
   FROM homework_submissions JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id
   JOIN students ON students.id = homework_submissions.student_id
   WHERE homework_assignments.input_mode = 'completed_homework'`;
@@ -171,6 +213,123 @@ export async function createCompletedSubmission(input: { studentId: string; titl
     appEnv().DB.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,?,?,1,'draft','teacher',?,?,?)").bind(id,assignmentId,input.studentId,user.id,now,now),
   ]);
   return readTeacherSubmission(id,user);
+}
+
+const MAX_ASSIGNED_QUESTIONS = 300;
+// An assigned homework feeds the wrong book and the student's knowledge profile; its own per-homework report stays off,
+// since the 学情报告 covers a whole period.
+const ASSIGNED_OUTPUTS = { wrongBook: true, report: false, profile: true };
+// Fields that belong to a library record or an account, not to the question a student is given.
+const RECORD_FIELDS = ["canEdit", "createdBy", "createdByEmail", "moduleId", "categoryId", "optimizedAt", "recognitionDurationMs", "diagramReconstructionDurationMs", "importFileName"] as const;
+const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
+
+function assignedGroups(value: unknown, count: number): HomeworkSheetGroup[] {
+  const groups = (Array.isArray(value) ? value : []).map((group) => ({ title: text((group as { title?: unknown })?.title, 60), size: Math.floor(Number((group as { size?: unknown })?.size) || 0) }))
+    .filter((group) => group.size > 0);
+  if (!groups.length) return [];
+  if (groups.length > 31 || groups.reduce((sum, group) => sum + group.size, 0) !== count) throw responseError("分组与题目数量不一致", 400);
+  return groups.map((group, index) => ({ title: group.title || `第 ${index + 1} 天`, size: group.size }));
+}
+
+// The printed number of each question: 1, 2, 3… or, in days, D2-3 for 第 2 天 第 3 题 (each day numbers from 1).
+function assignedNumbers(groups: HomeworkSheetGroup[], count: number) {
+  if (!groups.length) return Array.from({ length: count }, (_, index) => String(index + 1));
+  return groups.flatMap((group, day) => Array.from({ length: group.size }, (_, index) => `D${day + 1}-${index + 1}`));
+}
+
+// 菁优网 analyses say what a question tests (【点评】本题考查去括号的方法…); those words tag a question the library never saw.
+function testedTopics(analysis: string) {
+  return [...analysis.matchAll(/本题(?:主要)?考查(?:了)?([^。．；;\n]{2,60})/g)].map((match) => match[1]);
+}
+
+// A question has a reference when its answer says more than 见解析, or an analysis holds the working.
+function hasReference(question: Pick<Question, "answer" | "analysis">) {
+  const answer = String(question.answer ?? "").trim();
+  return Boolean(answer && answer !== "见解析" || String(question.analysis ?? "").trim());
+}
+
+/**
+ * 布置作业: a material from 快速排版 handed to one or more students. Each student gets a homework of their own whose
+ * questions and answers are stored now, waiting for the work to come back. A library question is copied from the
+ * library itself; any other question (one read from a Word, a wrong-book snapshot) as the browser sent it, its
+ * pictures stored for this teacher only.
+ */
+export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown }, user: AuthUser) {
+  requireHomeworkEnabled();
+  const studentIds = [...new Set(Array.isArray(input.studentIds) ? input.studentIds.map((id) => String(id)) : [])];
+  if (!studentIds.length || studentIds.length > 50) throw responseError("请选择要布置的学生", 400);
+  const students = await Promise.all(studentIds.map((id) => ownedStudent(id, user.id)));
+  const title = text(input.title, 120); if (!title) throw responseError("请填写作业名称", 400);
+  const raw = Array.isArray(input.questions) ? input.questions.filter((item): item is Question => Boolean(item) && typeof item === "object") : [];
+  if (!raw.length) throw responseError("这份资料里没有题目", 400);
+  if (raw.length > MAX_ASSIGNED_QUESTIONS) throw responseError(`一份作业最多 ${MAX_ASSIGNED_QUESTIONS} 道题`, 400);
+  const groups = assignedGroups(input.groups, raw.length);
+  const numbers = assignedNumbers(groups, raw.length);
+  const { readLibrary, storeTeacherQuestionMedia } = await import("./library");
+  const library = new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
+  const { index: graph } = await (await import("./knowledge-graph")).loadPublishedKnowledgeGraph();
+  const questions = [];
+  for (const item of raw) {
+    const fromLibrary = library.get(String(item.id ?? ""));
+    const copy: Record<string, unknown> = { ...(fromLibrary ?? item) };
+    for (const field of RECORD_FIELDS) delete copy[field];
+    if (new TextEncoder().encode(JSON.stringify(copy)).byteLength > MAX_SOURCE_BYTES) throw responseError("有一道题的内容过大，无法布置", 413);
+    const source = fromLibrary ? copy as Question : await storeTeacherQuestionMedia(copy as Question, user);
+    const type = QUESTION_TYPES.includes(source.type) ? source.type : "解答题";
+    const stem = text(source.stem, 100_000), answer = text(source.answer, 100_000), analysis = text(source.analysis, 100_000);
+    const tags = Array.isArray(source.tags) ? source.tags.map((tag) => text(tag, 120)).filter(Boolean) : [];
+    const taxonomyKeys = fromLibrary && Array.isArray(source.taxonomyKeys) && source.taxonomyKeys.length ? source.taxonomyKeys
+      : resolveKnowledgeTaxonomyKeys([...tags, ...testedTopics(analysis)], stem, graph);
+    questions.push({ source, type, stem, answer, analysis, tags, taxonomyKeys, options: Array.isArray(source.options) ? source.options.map((option) => text(option, 2_000)) : [],
+      reference: hasReference({ answer, analysis }), fromLibrary: Boolean(fromLibrary) });
+  }
+  const db = appEnv().DB;
+  const created: Array<{ id: string; studentId: string; studentName: string }> = [];
+  for (const student of students) {
+    const assignmentId = crypto.randomUUID(), submissionId = crypto.randomUUID(), now = Date.now();
+    const statements = [
+      db.prepare(`INSERT INTO homework_assignments(id,owner_user_id,title,instructions,status,template_confirmed,created_at,updated_at,input_mode,outputs_json,curriculum,sheet_json)
+        VALUES(?,?,?,'','published',0,?,?,'completed_homework',?,'school',?)`).bind(assignmentId, user.id, title, now, now, JSON.stringify(ASSIGNED_OUTPUTS), JSON.stringify({ groups })),
+      ...questions.map((question, index) => db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,
+          knowledge_tags_json,taxonomy_keys_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,reference_evidence,input_evidence_json,source_json)
+        VALUES(?,?,?,0,?,?,?,?,?,NULL,1,'[]',?,?,'[]',?,?,?,?,?,?,'{}',?)`).bind(crypto.randomUUID(), assignmentId, numbers[index], question.type, question.stem,
+          JSON.stringify(question.options), question.answer, question.analysis, JSON.stringify(question.tags), JSON.stringify(question.taxonomyKeys), index, now, now,
+          question.reference ? "provided" : "unresolved", question.reference ? 1 : 0,
+          question.reference ? question.fromLibrary ? "题库原题答案" : "布置时资料自带的答案" : "布置时没有答案，批改时由 AI 解题并核验", JSON.stringify(question.source))),
+    ];
+    for (let start = 0; start < statements.length; start += 50) await db.batch(statements.slice(start, start + 50));
+    // The waiting upload is written last: until it exists, a half-written homework shows up nowhere.
+    await db.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,?,?,1,'draft','teacher',?,?,?)")
+      .bind(submissionId, assignmentId, student.id, user.id, now, now).run();
+    created.push({ id: submissionId, studentId: student.id, studentName: student.name });
+  }
+  return created;
+}
+
+/**
+ * A student's homework for the archive, newest first: an assigned homework counts its whole sheet (handed-in questions
+ * against all of them), an uploaded one the questions its last upload found.
+ */
+export async function readStudentHomework(studentId: string, user: AuthUser): Promise<StudentHomework[]> {
+  await ownedStudent(studentId, user.id);
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.owner_user_id = ? AND homework_submissions.student_id = ?
+    ORDER BY homework_assignments.created_at DESC, homework_submissions.version DESC`).bind(user.id, studentId).all<Record<string, unknown>>();
+  const latest = new Map<string, Record<string, unknown>>();
+  for (const row of rows.results as Array<Record<string, unknown>>) if (!latest.has(String(row.assignment_id))) latest.set(String(row.assignment_id), row);
+  return Promise.all([...latest.values()].map(async (row) => {
+    const assigned = await assignedHomework(row);
+    const results: Array<{ verdict: GradingVerdict; requiresReview: boolean }> = assigned ? assigned.questions.flatMap((question) => question.result ?? [])
+      : row.status === "published" ? (await uploadResults(String(row.id))).map((result) => ({ verdict: result.verdict, requiresReview: Number(result.requires_review) === 1 })) : [];
+    const settled = results.filter((result) => !result.requiresReview);
+    return {
+      assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
+      total: assigned ? assigned.questions.length : results.length, done: results.length,
+      correct: settled.filter((result) => result.verdict === "correct").length,
+      incorrect: settled.filter((result) => result.verdict === "incorrect" || result.verdict === "partial").length,
+      pending: results.filter((result) => result.requiresReview || result.verdict === "unreadable" || result.verdict === "review_required").length,
+      latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
+    };
+  }));
 }
 
 /** A new version of a graded homework keeps the earlier version and its results untouched. */

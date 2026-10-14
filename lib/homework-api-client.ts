@@ -1,4 +1,4 @@
-import type { AuthUser, GradingItem, HomeworkAsset, HomeworkCurriculum, HomeworkOutputs, HomeworkSubmission, StudentSummary } from "./types";
+import type { AuthUser, GradingItem, HomeworkAsset, HomeworkCurriculum, HomeworkOutputs, HomeworkSheetGroup, HomeworkSubmission, Question, StudentHomework, StudentSummary } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -13,6 +13,9 @@ export const homeworkApi = {
   createSubmission: (studentId: string, title: string, outputs: HomeworkOutputs, curriculum: HomeworkCurriculum) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ studentId, title, outputs, curriculum }) }),
   submission: (id: string) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`),
   updateSubmission: (id: string, body: { action: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }> }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  /** 布置作业: one homework per student, each waiting for the student's work to be uploaded. */
+  assign: (body: { studentIds: string[]; title: string; questions: Question[]; groups?: HomeworkSheetGroup[] }) => request<{ assigned: Array<{ id: string; studentId: string; studentName: string }> }>("/api/submissions", { method: "POST", body: JSON.stringify(body) }),
+  studentHomework: (studentId: string) => request<{ homework: StudentHomework[] }>(`/api/students/${encodeURIComponent(studentId)}/homework`),
 };
 
 /** Reference answers attach to the homework (assignmentId); pages and the source PDF attach to one submission. */

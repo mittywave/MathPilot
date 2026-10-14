@@ -148,6 +148,13 @@ export async function teacherNamespaceId(user: AuthUser) {
   return id;
 }
 
+// A question one teacher hands to a student without it entering the library (a Word's question in 布置作业): its
+// pictures are stored like library pictures, but only that teacher's namespace may read them.
+export async function storeTeacherQuestionMedia<T>(value: T, user: AuthUser): Promise<T> {
+  const context: LibraryContext = { libraryId: await teacherNamespaceId(user), scope: "mine", publicationId: null, ownerUserId: user.id, writable: true, publishedAt: null };
+  return await uploadMediaValue(value, context) as T;
+}
+
 export function requireWritable(context: LibraryContext) {
   if (!context.writable) {
     throw new Response(JSON.stringify({ error: "请先登录" }), { status: 401, headers: { "Content-Type": "application/json" } });
