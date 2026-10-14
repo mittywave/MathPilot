@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchLibrary, fetchTypesetRecords } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
+import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
@@ -115,7 +116,7 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
-            <span className="homework-title"><b>{item.title}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
+            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
               : days.length ? `交作业日期 ${shortDate(days[0].date)} · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
             {(days.length > 1 || graded > 0) && <span className="homework-tally">
               {days.length > 1 && <span className="homework-days" aria-label="每天交没交">{days.map((entry, index) => {

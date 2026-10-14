@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { SiteHeader } from "../../components/SiteHeader";
 import { homeworkApi } from "../../../lib/homework-api-client";
+import { titleWithoutStudent } from "../../../lib/homework-grading-rules.mjs";
 import type { AuthUser, HomeworkSubmission } from "../../../lib/types";
 
 const SUBMISSION_STATUS: Record<string, string> = {
@@ -30,6 +31,6 @@ export default function HomeworkTeacherPage() {
   return <><SiteHeader active="tools" user={user} loading={loading} /><main className="homework-shell">
     {notice && <div className="homework-notice" role="status">{notice}<button onClick={() => setNotice("")} aria-label="关闭提示">×</button></div>}
     <section className="completed-homework-entry"><div><h1>作业批改</h1><p>上传学生已完成的作业，Agent 自动批改；可选择写入错题本、生成错题报告或整合到学生画像。</p></div><a className="primary" href="/tools/homework/upload">上传作业并批改</a></section>
-    {loading ? <p className="homework-records-empty">正在读取作业记录…</p> : records.length ? <details className="homework-panel completed-records" open><summary>已上传作业记录（{records.length}）</summary><div>{records.map(record=><a className="completed-record" key={record.id} href={`/tools/homework/submissions/${record.id}`}><span><b>{record.studentName} · {record.assignmentTitle}</b><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><span>{SUBMISSION_STATUS[record.status]}{record.gradingSummary && <small>{record.gradingSummary.marks?.percentage != null && `得分 ${record.gradingSummary.marks.score}/${record.gradingSummary.marks.maxScore} · `}对 {record.gradingSummary.correct} · 错 {record.gradingSummary.partial + record.gradingSummary.incorrect} · 待处理 {record.gradingSummary.unresolved}</small>}</span></a>)}</div></details> : <p className="homework-records-empty">还没有上传过作业。</p>}
+    {loading ? <p className="homework-records-empty">正在读取作业记录…</p> : records.length ? <details className="homework-panel completed-records" open><summary>已上传作业记录（{records.length}）</summary><div>{records.map(record=><a className="completed-record" key={record.id} href={`/tools/homework/submissions/${record.id}`}><span><b>{record.studentName} · {titleWithoutStudent(record.assignmentTitle, record.studentName)}</b><small>{new Date(record.createdAt).toLocaleString("zh-CN")}</small></span><span>{SUBMISSION_STATUS[record.status]}{record.gradingSummary && <small>{record.gradingSummary.marks?.percentage != null && `得分 ${record.gradingSummary.marks.score}/${record.gradingSummary.marks.maxScore} · `}对 {record.gradingSummary.correct} · 错 {record.gradingSummary.partial + record.gradingSummary.incorrect} · 待处理 {record.gradingSummary.unresolved}</small>}</span></a>)}</div></details> : <p className="homework-records-empty">还没有上传过作业。</p>}
   </main></>;
 }

@@ -1,5 +1,6 @@
 import type { GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkScoreSummary, QuestionType } from "./types";
 export function isPendingGradingItem(item: Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified">): boolean;
+export function titleWithoutStudent(title: string, studentName?: string | null): string;
 export function normalizeHomeworkAnswer(value: unknown): string;
 export function isSimpleObjectiveAnswer(type: QuestionType, answer: string): boolean;
 export function finalizeHomeworkVerdict(input: {

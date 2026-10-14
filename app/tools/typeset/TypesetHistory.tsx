@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { TypesetRecord } from "../../../lib/types";
+import { titleWithoutStudent } from "../../../lib/homework-grading-rules.mjs";
 
 // 历史记录: the materials this teacher has typeset, last edited first. A row reopens the material as it was left.
 const EDITION_LABELS: Record<string, string> = { none: "学生版", end: "附答案", each: "教师版" };
@@ -29,7 +30,7 @@ export function TypesetHistory({ records, current, now, busy, onOpen, onDelete, 
     </header>
     {records.length ? <ul>{records.map((record) => <li key={record.id} className={record.id === current ? "current" : ""}>
       <button type="button" className="typeset-history-open" disabled={busy} onClick={() => onOpen(record)}>
-        <span className="typeset-history-name"><b>{record.title}</b>{record.id === current && <em>正在编辑</em>}</span>
+        <span className="typeset-history-name"><b>{titleWithoutStudent(record.title, record.studentName)}</b>{record.id === current && <em>正在编辑</em>}</span>
         <small>{record.sourceKind === "library" ? `智能组卷${record.studentName ? ` · ${record.studentName}` : ""}${record.plan ? ` · 分 ${record.plan.groups.length} 天` : ""}` : record.fileName} · {record.questionCount} 道题 · {EDITION_LABELS[record.settings.answers ?? "none"] ?? "学生版"}</small>
       </button>
       <span className="typeset-history-time"><b>{historyTime(record.updatedAt, now)} 编辑</b><small>{historyTime(record.createdAt, now)} 首次排版</small></span>
