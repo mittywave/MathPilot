@@ -133,7 +133,7 @@ export async function generateSmartPaper(user: AuthUser, raw: unknown, signal?: 
   const outline = libraryOutline(library);
   const digest = student ? await studentDigest(user, student) : "";
 
-  const reading = await callModel(buildSmartPaperBriefPrompt({ request, instruction: current ? instruction : undefined, studentName: student?.name, digest, outline }),
+  const reading = await callModel(buildSmartPaperBriefPrompt({ request, instruction: current ? instruction : undefined, current: current?.brief, studentName: student?.name, digest, outline }),
     smartPaperBriefSchema, "smart_paper_brief", signal);
   const { brief, findings } = normalizeSmartPaperBriefResult(reading, new Set(outline.map((item) => item.id)));
   if (!brief.categoryIds.length) throw responseError("没能在题库目录里找到对应的内容范围，请在要求里写明是哪部分内容", 422);
@@ -159,7 +159,7 @@ export async function generateSmartPaper(user: AuthUser, raw: unknown, signal?: 
   const byId = new Map(candidates.map((item) => [item.id, item]));
   const previous = current?.groups.map((group) => ({ theme: group.theme, codes: group.items.flatMap((item) => byId.get(item.id)?.code ?? []) }));
 
-  const selection = await callModel(buildSmartPaperSelectPrompt({ brief, candidates, current: previous, instruction }), smartPaperSelectSchema, "smart_paper_select", signal);
+  const selection = await callModel(buildSmartPaperSelectPrompt({ request, brief, candidates, current: previous, instruction }), smartPaperSelectSchema, "smart_paper_select", signal);
   const plan = assembleSmartPaperPlan({ request, studentId: student?.id ?? null, brief, findings, avoided: inScope.length - open.length, selection, candidates });
   return { plan, exclude: [...met].filter((id) => !keep.has(id)) };
 }

@@ -5,7 +5,7 @@ import { loadSource } from "./load-source.mjs";
 // 智能组卷 rules that need no model: how a question's calculation is read, how a focus maps onto it, and how the model's
 // answer is checked and completed.
 const contract = await loadSource("lib/smart-paper-contract.ts");
-const { questionFeatures, focusFeatures, assembleSmartPaperPlan, normalizeSmartPaperBriefResult, normalizeSmartPaperPlan, buildSmartPaperSelectPrompt } = contract;
+const { questionFeatures, focusFeatures, assembleSmartPaperPlan, normalizeSmartPaperBriefResult, normalizeSmartPaperPlan, buildSmartPaperBriefPrompt, buildSmartPaperSelectPrompt } = contract;
 
 test("features are read from the calculation itself", () => {
   assert.deepEqual(questionFeatures("$(-6)\\div(-\\frac{1}{3})^{2}-7^{2}+2\\times(-3)^{2}$"), ["分数", "乘方", "除法"], "2×(−3)² multiplies a number, not a sum");
@@ -65,8 +65,82 @@ test("the model's answer is checked: unknown and repeated codes go, days are cut
 });
 
 test("the select prompt lists candidates by code and carries the previous plan when revising", () => {
-  const prompt = buildSmartPaperSelectPrompt({ brief, candidates: candidates.slice(0, 2), current: [{ theme: "热身", codes: ["0001"] }], instruction: "第 2 天难一点" });
+  const prompt = buildSmartPaperSelectPrompt({ request: "各天难度平均，不要递进", brief, candidates: candidates.slice(0, 2), current: [{ theme: "热身", codes: ["0001"] }], instruction: "第 2 天难一点" });
   assert.match(prompt, /0001｜基础｜繁度1｜括号前负号｜\$1\$/);
   assert.match(prompt, /第 1 天（热身）：0001/);
   assert.match(prompt, /第 2 天难一点/);
+  assert.match(prompt, /老师的原始要求：各天难度平均，不要递进/);
+  assert.match(prompt, /未限定难度安排/);
+  assert.doesNotMatch(prompt, /后几天的繁度整体高于前几天|最后一天以繁度 3—5/);
+});
+
+test("revisions retain the previous difficulty request unless the latest instruction changes it", () => {
+  const prompt = buildSmartPaperBriefPrompt({ request: "出 3 天练习", current: { ...brief, difficulty: "各天持平，不递进" }, instruction: "标题改为计算练习", digest: "", outline: [] });
+  assert.match(prompt, /各天持平，不递进/);
+  assert.match(prompt, /标题改为计算练习/);
+  assert.match(prompt, /其余沿用上一版要求/);
+});
+
+test("balanced days correct a model's progression and preserve every selected question and reason", () => {
+  const pool = Array.from({ length: 15 }, (_, index) => ({ ...candidate(index + 1, "基础", []), level: Math.floor(index / 3) + 1 }));
+  const selection = { days: Array.from({ length: 3 }, (_, day) => ({ theme: ["热身", "进阶", "挑战"][day], items: pool.slice(day * 5, day * 5 + 5).map((question) => ({ code: question.code, focus: "计算", reason: `依据 ${question.code}` })) })) };
+  for (const difficulty of ["难度平均，各天难度持平且不用递进", "各天难度相当，不逐日加深", "各天难度相近", "各天持平，每天内部由易到难"]) {
+    const plan = assembleSmartPaperPlan({ request: "平均", studentId: null, brief: { ...brief, days: 3, perDay: 5, difficulty }, findings: [], avoided: 0, selection, candidates: pool });
+    const byId = new Map(pool.map((question) => [question.id, question]));
+    assert.deepEqual(plan.groups.map((day) => day.items.map((item) => byId.get(item.id).level).sort()), [[1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5]], difficulty);
+    assert.equal(new Set(plan.groups.flatMap((day) => day.items.map((item) => item.id))).size, 15);
+    assert.ok(plan.groups.flatMap((day) => day.items).every((item) => item.reason === `依据 ${byId.get(item.id).code}`));
+    assert.ok(plan.groups.every((day) => day.theme.startsWith("均衡练习")));
+  }
+});
+
+test("balanced filling distributes all available bands, including when candidates are insufficient", () => {
+  const pool = Array.from({ length: 9 }, (_, index) => candidate(index + 1, ["基础", "中等", "提高"][Math.floor(index / 3)], ["分数"]));
+  for (const available of [pool, pool.slice(0, 8)]) {
+    const plan = assembleSmartPaperPlan({ request: "平均", studentId: null, brief: { ...brief, days: 3, perDay: 3, difficulty: "各天难度平均" }, findings: [], avoided: 0, selection: {}, candidates: available });
+    const byId = new Map(available.map((question) => [question.id, question]));
+    assert.equal(new Set(plan.groups.flatMap((day) => day.items.map((item) => item.id))).size, available.length);
+    assert.ok(plan.groups.every((day) => day.items.length >= 2 && day.items.length <= 3));
+    for (const label of ["基础", "中等", "提高"]) {
+      const counts = plan.groups.map((day) => day.items.filter((item) => byId.get(item.id).difficulty === label).length);
+      assert.ok(Math.max(...counts) - Math.min(...counts) <= 1);
+    }
+    assert.ok(plan.groups.flatMap((day) => day.items).every((item) => item.reason.startsWith("系统补选")));
+  }
+});
+
+test("equal means alone do not hide different difficulty distributions", () => {
+  const levels = [1, 1, 5, 5, 3, 3, 3, 3];
+  const pool = levels.map((level, index) => ({ ...candidate(index + 1, "基础", []), level }));
+  const selection = { days: [0, 1].map((day) => ({ theme: "计算", items: pool.slice(day * 4, day * 4 + 4).map((item) => ({ code: item.code })) })) };
+  const plan = assembleSmartPaperPlan({ request: "平均", studentId: null, brief: { ...brief, perDay: 4, difficulty: "难度平均" }, findings: [], avoided: 0, selection, candidates: pool });
+  const byId = new Map(pool.map((item) => [item.id, item]));
+  assert.deepEqual(plan.groups.map((day) => day.items.map((item) => byId.get(item.id).level).sort()), [[1, 3, 3, 5], [1, 3, 3, 5]]);
+});
+
+test("already balanced days keep their original order and themes", () => {
+  const pool = [candidate(1, "中等", []), candidate(2, "基础", []), candidate(3, "基础", []), candidate(4, "中等", [])];
+  const selection = { days: [{ theme: "复习 A", items: [{ code: "0001" }, { code: "0002" }] }, { theme: "复习 B", items: [{ code: "0003" }, { code: "0004" }] }] };
+  const plan = assembleSmartPaperPlan({ request: "平均", studentId: null, brief: { ...brief, perDay: 2, difficulty: "各天难度一致" }, findings: [], avoided: 0, selection, candidates: pool });
+  assert.deepEqual(plan.groups.map((day) => ({ theme: day.theme, ids: day.items.map((item) => item.id) })), [{ theme: "复习 A", ids: ["id-1", "id-2"] }, { theme: "复习 B", ids: ["id-3", "id-4"] }]);
+});
+
+test("redistribution keeps the working load close without concentrating one focus on a single day", () => {
+  const levels = [3, 3, 3, 3, 3, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4];
+  const focuses = ["去括号", "去括号", "去括号", "去括号", "去括号", "去括号", "分配律", "分配律", "通分", "分配律", "分配律", "通分", "通分", "分配律", "分配律"];
+  const pool = levels.map((level, index) => ({ ...candidate(index + 1, "基础", []), level }));
+  const selection = { days: [0, 1, 2].map((day) => ({ theme: "计算", items: pool.slice(day * 5, day * 5 + 5).map((item, index) => ({ code: item.code, focus: focuses[day * 5 + index] })) })) };
+  const plan = assembleSmartPaperPlan({ request: "平均", studentId: null, brief: { ...brief, days: 3, perDay: 5, difficulty: "难度平均" }, findings: [], avoided: 0, selection, candidates: pool });
+  const byId = new Map(pool.map((item) => [item.id, item]));
+  assert.deepEqual(plan.groups.map((day) => day.items.reduce((sum, item) => sum + byId.get(item.id).level, 0)), [15, 15, 15]);
+  assert.ok(plan.groups.every((day) => new Set(day.items.map((item) => item.focus)).size >= 2));
+});
+
+test("progressive, unspecified and explicitly unequal requests are not flattened", () => {
+  const selection = { days: [{ theme: "基础", items: [{ code: "0001" }, { code: "0003" }] }, { theme: "提高", items: [{ code: "0002" }, { code: "0004" }] }] };
+  for (const difficulty of ["", "未限定难度安排", "逐日递进", "不要求难度平均，各天递进", "不需要各天持平", "各天均匀递增"]) {
+    const plan = assembleSmartPaperPlan({ request: "练习", studentId: null, brief: { ...brief, perDay: 2, difficulty }, findings: [], avoided: 0, selection, candidates });
+    assert.deepEqual(plan.groups.map((day) => day.items.map((item) => item.id)), [["id-1", "id-3"], ["id-2", "id-4"]], difficulty);
+    assert.deepEqual(plan.groups.map((day) => day.theme), ["基础", "提高"]);
+  }
 });
