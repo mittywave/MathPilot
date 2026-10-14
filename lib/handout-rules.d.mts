@@ -1,18 +1,18 @@
-import type { HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutOutline, HandoutSheet, HandoutShelf, HandoutTerm, LibraryScope, Question } from './types';
+import type { HandoutCourseNode, HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutOutline, HandoutSheet, HandoutShelf, LibraryScope, Question } from './types';
 
 export type HandoutPart = { label: string; tagline: string; prefix?: string };
 export const HANDOUT_LIMITS: { title: number; items: number; id: number; sectionTitle: number; note: number };
 export const DEFAULT_HANDOUT_TITLE: string;
 export const HANDOUT_GRADES: { value: HandoutGrade; label: string }[];
-export const HANDOUT_TERMS: { value: HandoutTerm; label: string }[];
 export const HANDOUT_DOMAINS: { value: HandoutDomain; label: string }[];
 export const HANDOUT_SHELVES: { value: HandoutShelf; label: string }[];
 export const UNSORTED_TOPIC_LABEL: string;
-type GroupLike = { grade?: HandoutGrade | null; term?: HandoutTerm | null; domain?: HandoutDomain | null; studentId?: string | null; studentName?: string | null } | null | undefined;
+type GroupLike = { courseUnitId?: string | null; coursePath?: HandoutCourseNode[]; domain?: HandoutDomain | null; studentId?: string | null; studentName?: string | null } | null | undefined;
 export function shelfOf(group: GroupLike): HandoutShelf;
 export function normalizeHandoutGroup(raw: unknown): HandoutGroup | null;
 export function sameGroup(a: GroupLike, b: GroupLike): boolean;
 export function groupLabel(group: GroupLike): string;
+export function coursePath(nodes: HandoutCourseNode[], id: string | null): HandoutCourseNode[];
 export const HANDOUT_BANDS: HandoutBand[];
 export const HANDOUT_PARTS: { knowledge: HandoutPart & { hint: string } } & Record<HandoutBand, HandoutPart & { prefix: string }>;
 export const HANDOUT_SHEETS: { value: HandoutSheet; label: string }[];

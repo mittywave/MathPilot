@@ -1,9 +1,9 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
+import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
-import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_GRADES, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, HANDOUT_TERMS, UNSORTED_TOPIC_LABEL, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
+import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
@@ -12,7 +12,7 @@ import { clipboardImage } from "../../../lib/image-tools";
 import { randomClientId } from "../../../lib/client-random-id.mjs";
 import { droppedImage, readScreenshot, recognizeScreenshot } from "../../../lib/screenshot-recognition";
 import type { NoteRecognitionResult } from "../../../lib/recognition-contract";
-import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutGrade, HandoutGroup, HandoutItem, HandoutSheet, HandoutShelf, HandoutTerm, HandoutSummary, LibraryData, Question, StudentSummary } from "../../../lib/types";
+import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutCourseNode, HandoutGroup, HandoutItem, HandoutSheet, HandoutShelf, HandoutSummary, LibraryData, Question, StudentSummary } from "../../../lib/types";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
@@ -89,14 +89,14 @@ export default function HandoutsPage() {
 }
 
 const SHELF_KEY = "mitty-handout-shelf";
-const GRADE_KEY = "mitty-handout-grade";
+const COURSE_KEY = "mitty-handout-course";
+const STAGE_KEY = "mitty-handout-stage";
 const STUDENT_KEY = "mitty-handout-student";
-type MoveState = { handout: HandoutSummary; shelf: HandoutShelf; grade: HandoutGrade; term: HandoutTerm; domain: HandoutDomain; studentId: string };
+type MoveState = { handout: HandoutSummary; shelf: HandoutShelf; courseUnitId: string; domain: HandoutDomain; studentId: string };
 const lessonName = (index: number) => `第${index + 1}讲`;
-const NOWHERE: HandoutGroup = { grade: null, term: null, domain: null, studentId: null };
-const groupOf = ({ grade, term, domain, studentId }: HandoutGroup): HandoutGroup => ({ grade, term, domain, studentId });
+const NOWHERE: HandoutGroup = { courseUnitId: null, domain: null, studentId: null };
+const groupOf = ({ courseUnitId, domain, studentId }: HandoutGroup): HandoutGroup => ({ courseUnitId, domain, studentId });
 const knownShelf = (value: string | null) => HANDOUT_SHELVES.find((item) => item.value === value)?.value;
-const knownGrade = (value: string | null) => HANDOUT_GRADES.find((item) => item.value === Number(value))?.value;
 const questionTotal = (handout: HandoutSummary) => handout.outline.reduce((sum, module) => sum + module.questionIds.length, 0);
 // 有理数的分类；数轴；相反数: module titles without any number typed in front, split by ； because titles use 、 themselves; untitled modules are left out.
 const moduleList = (handout: HandoutSummary) => handout.outline.map((module) => moduleHeading(module.title, 0).title).filter(Boolean).join("；");
@@ -105,19 +105,29 @@ const shortDate = (time: number) => new Date(time).toLocaleDateString("zh-CN", {
 // The group a handout joins from the move dialog's choices.
 function movedGroup(state: MoveState): HandoutGroup {
   if (state.shelf === "student") return { ...NOWHERE, studentId: state.studentId || null };
-  if (state.shelf === "course") return { ...NOWHERE, grade: state.grade, term: state.term };
+  if (state.shelf === "course") return { ...NOWHERE, courseUnitId: state.courseUnitId || null };
   return { ...NOWHERE, domain: state.domain };
 }
 
 // 课程体系和专题库全员共用：任何老师都能新建、编辑、调整顺序，删除只开放给管理员。学生讲义只有学生的老师能看到和管理。
-// 左侧是书架导航，右侧用满整个宽度：一个年级的四个学期、全部年级的专题、或一位学生的讲义并排列出。
+// 左侧选择体系和阶段，右侧并列单元；每讲继续使用同一个编辑器。
 function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (message: string) => void }) {
   const [link] = useState(() => new URLSearchParams(window.location.search));
   const linkShelf = knownShelf(link.get("shelf"));
   const [handouts, setHandouts] = useState<HandoutSummary[] | null>(null);
   const [students, setStudents] = useState<StudentSummary[] | null>(null);
   const [shelf, setShelf] = useState<HandoutShelf>(() => linkShelf ?? knownShelf(readStored(SHELF_KEY)) ?? "course");
-  const [grade, setGrade] = useState<HandoutGrade>(() => (linkShelf === "course" && knownGrade(link.get("grade"))) || knownGrade(readStored(GRADE_KEY)) || HANDOUT_GRADES[0].value);
+  const [courseNodes, setCourseNodes] = useState<HandoutCourseNode[] | null>(null);
+  const [courseId, setCourseId] = useState(() => link.get("course") || (link.get("grade") ? "course-default" : readStored(COURSE_KEY)));
+  const [stageId, setStageId] = useState(() => link.get("stage") || (link.get("grade") ? `course-grade-${link.get("grade")}` : readStored(STAGE_KEY)));
+  const [outlineEdit, setOutlineEdit] = useState<{ id?: string; parentId: string | null; name: string; label: string; error: string } | null>(null);
+  const [lessonDraft, setLessonDraft] = useState<{ group: HandoutGroup; title: string; modules: string; error: string } | null>(null);
+  const systems = (courseNodes ?? []).filter((node) => !node.parentId);
+  const activeSystem = systems.find((node) => node.id === courseId) ?? systems[0];
+  const stages = (courseNodes ?? []).filter((node) => node.parentId === activeSystem?.id);
+  const activeStage = stages.find((node) => node.id === stageId) ?? stages[0];
+  const units = (courseNodes ?? []).filter((node) => node.parentId === activeStage?.id);
+  const labelGroup = (group: HandoutGroup & { studentName?: string | null }) => groupLabel({ ...group, coursePath: coursePath(courseNodes ?? [], group.courseUnitId) });
   const [studentId, setStudentId] = useState(() => (linkShelf === "student" && link.get("student")) || readStored(STUDENT_KEY));
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -125,25 +135,70 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const activeStudent = students?.find((item) => item.id === studentId) ?? students?.[0] ?? null;
 
   useEffect(() => {
-    void fetchHandouts().then((result) => setHandouts(result.handouts)).catch((error) => { setHandouts([]); onNotice(error instanceof Error ? error.message : "讲义列表读取失败"); });
+    void fetchHandouts().then((result) => { setHandouts(result.handouts); setCourseNodes(result.courseNodes); }).catch((error) => { setHandouts([]); onNotice(error instanceof Error ? error.message : "讲义列表读取失败"); });
     void fetchStudents().then((result) => setStudents(result.students)).catch(() => setStudents([]));
   }, [onNotice]);
 
   // The address and storage follow the view, so reloading, coming back from the editor and returning later all land here.
   useEffect(() => {
-    writeStored(SHELF_KEY, shelf); writeStored(GRADE_KEY, String(grade));
+    if (!courseNodes) return;
+    writeStored(SHELF_KEY, shelf);
+    if (activeSystem) writeStored(COURSE_KEY, activeSystem.id);
+    if (activeStage) writeStored(STAGE_KEY, activeStage.id);
     if (activeStudent) writeStored(STUDENT_KEY, activeStudent.id);
     const params = new URLSearchParams({ shelf });
-    if (shelf === "course") params.set("grade", String(grade));
-    else if (shelf === "student" && activeStudent) params.set("student", activeStudent.id);
+    if (shelf === "course" && activeSystem) {
+      params.set("course", activeSystem.id);
+      if (activeStage) params.set("stage", activeStage.id);
+    } else if (shelf === "student" && activeStudent) params.set("student", activeStudent.id);
     window.history.replaceState(null, "", `/tools/handouts?${params}`);
-  }, [shelf, grade, activeStudent]);
+  }, [shelf, courseNodes, activeSystem, activeStage, activeStudent]);
 
-  function choose(next: HandoutShelf, value?: HandoutGrade | string) {
+  function choose(next: HandoutShelf, value?: string) {
     setShelf(next); setQuery("");
-    if (next === "course" && typeof value === "number") setGrade(value);
-    if (next === "student" && typeof value === "string") setStudentId(value);
+    if (next === "course" && value) {
+      const node = courseNodes?.find((item) => item.id === value);
+      if (node?.parentId) { setCourseId(node.parentId); setStageId(node.id); }
+      else { setCourseId(value); setStageId(""); }
+    }
+    if (next === "student" && value) setStudentId(value);
   }
+
+  async function saveOutline() {
+    if (!outlineEdit || busy) return;
+    setBusy(true);
+    try {
+      const result = await saveHandoutCourse({ id: outlineEdit.id, parentId: outlineEdit.parentId, name: outlineEdit.name });
+      setCourseNodes(result.courseNodes); setOutlineEdit(null); setShelf("course"); setQuery("");
+      const path = coursePath(result.courseNodes, result.id);
+      setCourseId(path[0].id); setStageId(path[1]?.id ?? "");
+      onNotice("大纲已保存");
+    } catch (error) { setOutlineEdit({ ...outlineEdit, error: error instanceof Error ? error.message : "大纲保存失败" }); }
+    finally { setBusy(false); }
+  }
+
+  async function changeNode(node: HandoutCourseNode, direction?: -1 | 1) {
+    if (busy) return;
+    if (!direction && !window.confirm(`删除“${node.name}”？只可删除没有下级目录、没有讲义的空目录。`)) return;
+    setBusy(true);
+    try {
+      const result = direction ? await saveHandoutCourse({ id: node.id, direction }) : await deleteHandoutCourse(node.id);
+      setCourseNodes(result.courseNodes); onNotice(direction ? "顺序已调整" : "空目录已删除");
+    } catch (error) { onNotice(error instanceof Error ? error.message : "大纲调整失败"); }
+    finally { setBusy(false); }
+  }
+
+  const nodeMenu = (node: HandoutCourseNode) => {
+    const siblings = (courseNodes ?? []).filter((item) => item.parentId === node.parentId);
+    const index = siblings.findIndex((item) => item.id === node.id);
+    return <PaperMoreMenu label={`${node.name} 目录操作`}>
+      <button disabled={busy} onClick={() => setOutlineEdit({ id: node.id, parentId: node.parentId, name: node.name, label: "目录", error: "" })}>重命名</button>
+      <button disabled={busy || index === 0} onClick={() => changeNode(node, -1)}>上移</button>
+      <button disabled={busy || index === siblings.length - 1} onClick={() => changeNode(node, 1)}>下移</button>
+      {isAdmin && <button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录</button>}
+    </PaperMoreMenu>;
+  };
+  const addNode = (parentId: string | null, label: string) => setOutlineEdit({ parentId, label, name: "", error: "" });
 
   // The server lists by position, so every group is already in order.
   const inGroup = (group: HandoutGroup) => (handouts ?? []).filter((item) => sameGroup(item, group));
@@ -151,23 +206,34 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const studentName = (id: string | null) => students?.find((item) => item.id === id)?.name ?? "";
   // 初一暑假 第1讲 / 几何专题 / 某某
   const placeLabel = (group: HandoutGroup & { studentName?: string | null }, index: number) =>
-    group.studentId ? group.studentName || studentName(group.studentId) : group.term ? `${groupLabel(group)} ${lessonName(index)}` : groupLabel(group);
+    group.studentId ? group.studentName || studentName(group.studentId) : group.courseUnitId ? `${labelGroup(group)} ${lessonName(index)}` : labelGroup(group);
 
   // A new handout goes to the end of its group; a copy goes to the end of the original's group.
-  async function create(group: HandoutGroup, source?: HandoutSummary) {
+  async function create(group: HandoutGroup, source?: HandoutSummary, outline?: { title: string; modules: string; open: boolean }) {
     if (busy) return;
+    if (group.courseUnitId && !source && !outline) { setLessonDraft({ group, title: "", modules: "", error: "" }); return; }
+    const moduleTitles = (outline?.modules ?? "").split("\n").map((title) => title.trim()).filter(Boolean);
+    if (outline && (moduleTitles.length > HANDOUT_LIMITS.items || moduleTitles.some((title) => title.length > HANDOUT_LIMITS.sectionTitle))) {
+      setLessonDraft((current) => current && { ...current, error: `每讲最多 ${HANDOUT_LIMITS.items} 个模块，每个模块名最多 ${HANDOUT_LIMITS.sectionTitle} 字` }); return;
+    }
     setBusy(true);
     try {
       const draft = source ? (await fetchHandout(source.id)).handout : null;
       const { handout } = await createHandout(draft
         ? { title: `${draft.title}（副本）`, items: copyHandoutItems(draft.items, newId), temporaryQuestions: draft.temporaryQuestions, ...group }
-        : { title: DEFAULT_HANDOUT_TITLE, items: [], ...group });
+        : { title: outline?.title.trim() || DEFAULT_HANDOUT_TITLE, items: moduleTitles.map((title) => ({ id: newId(), kind: "section" as const, title, note: "" })), ...group });
+      if (outline && !outline.open) {
+        setHandouts((current) => [...(current ?? []), { ...handout, outline: handout.items.filter((item) => item.kind === "section").map((item) => ({ title: item.title, questionIds: [] })), sheetCounts: { quiz: 0, homework: 0 } }]);
+        setLessonDraft(null); setBusy(false); onNotice("本讲大纲已保存，点击讲名可继续编写讲义"); return;
+      }
       window.location.assign(`/tools/handouts?id=${encodeURIComponent(handout.id)}`);
-    } catch (error) { onNotice(error instanceof Error ? error.message : "讲义创建失败"); setBusy(false); }
+    } catch (error) { const message = error instanceof Error ? error.message : "讲义创建失败"; if (lessonDraft) setLessonDraft({ ...lessonDraft, error: message }); else onNotice(message); setBusy(false); }
   }
 
   // Positions follow the order sent; the list updates first and rolls back if the server refuses.
   async function arrange(group: HandoutGroup, ids: string[], message: string) {
+    if (busy) return;
+    setBusy(true);
     const before = handouts;
     const position = new Map(ids.map((id, index) => [id, index]));
     const name = group.studentId ? studentName(group.studentId) : null;
@@ -175,6 +241,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       .sort((a, b) => a.position - b.position || a.createdAt - b.createdAt));
     try { await arrangeHandouts(group, ids); onNotice(message); }
     catch (error) { setHandouts(before); onNotice(error instanceof Error ? error.message : "讲义调整失败"); }
+    finally { setBusy(false); }
   }
 
   function shift(handout: HandoutSummary, direction: -1 | 1) {
@@ -183,12 +250,12 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     const from = ids.indexOf(handout.id); const to = from + direction;
     if (from < 0 || to < 0 || to >= ids.length) return;
     [ids[from], ids[to]] = [ids[to], ids[from]];
-    void arrange(group, ids, group.term ? `已调到${lessonName(to)}` : "已调整顺序");
+    void arrange(group, ids, group.courseUnitId ? `已调到${lessonName(to)}` : "已调整顺序");
   }
 
   function openMove(handout: HandoutSummary) {
     const from = shelfOf(handout);
-    setMoving({ handout, shelf: from, grade: handout.grade ?? grade, term: handout.term ?? HANDOUT_TERMS[0].value, domain: handout.domain ?? HANDOUT_DOMAINS[0].value, studentId: handout.studentId ?? activeStudent?.id ?? "" });
+    setMoving({ handout, shelf: from, courseUnitId: handout.courseUnitId ?? units[0]?.id ?? "", domain: handout.domain ?? HANDOUT_DOMAINS[0].value, studentId: handout.studentId ?? activeStudent?.id ?? "" });
   }
 
   function move(state: MoveState) {
@@ -209,7 +276,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const entry = (handout: HandoutSummary, order: { index: number; size: number } | null, place?: string) => {
     const modules = moduleList(handout);
     const counts = [questionTotal(handout), handout.sheetCounts.quiz, handout.sheetCounts.homework];
-    const numbered = Boolean(order && handout.term && !place);
+    const numbered = Boolean(order && handout.courseUnitId && !place);
     return <li className="handout-entry" key={handout.id}>
       <a className={numbered ? "numbered" : undefined} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
         {numbered && order ? <span className="handout-entry-no" aria-label={lessonName(order.index)}>{order.index + 1}</span> : null}
@@ -224,8 +291,8 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       </a>
       <PaperMoreMenu label={`${handout.title} 更多操作`}>
         {order && order.size > 1 && <>
-          <button disabled={order.index === 0} onClick={() => shift(handout, -1)}>上移</button>
-          <button disabled={order.index === order.size - 1} onClick={() => shift(handout, 1)}>下移</button>
+          <button disabled={busy || order.index === 0} onClick={() => shift(handout, -1)}>上移</button>
+          <button disabled={busy || order.index === order.size - 1} onClick={() => shift(handout, 1)}>下移</button>
         </>}
         <button disabled={busy} onClick={() => create(groupOf(handout), handout)}>复制一份</button>
         <button onClick={() => openMove(handout)}>移到…</button>
@@ -234,10 +301,10 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     </li>;
   };
   // addLabel null: nothing new is started here (the unsorted topics only wait to be moved).
-  const column = (key: string, title: string, unit: string, group: HandoutGroup, addLabel: string | null, dated = false) => {
+  const column = (key: string, title: string, unit: string, group: HandoutGroup, addLabel: string | null, dated = false, node?: HandoutCourseNode) => {
     const items = inGroup(group);
-    return <section className="handout-column" key={key} aria-label={groupLabel({ ...group, studentName: title })}>
-      <header><h2>{title}</h2>{!!items.length && <span>{items.length} {unit}</span>}</header>
+    return <section className="handout-column" key={key} aria-label={labelGroup({ ...group, studentName: title })}>
+      <header><h2>{title}</h2>{!!items.length && <span>{items.length} {unit}</span>}{node && nodeMenu(node)}</header>
       <ol>
         {items.map((item, index) => entry(item, { index, size: items.length }, dated ? `更新于 ${shortDate(item.updatedAt)}` : undefined))}
         {addLabel && <li className="handout-entry-add"><button disabled={busy} onClick={() => create(group)}>＋ {addLabel}</button></li>}
@@ -258,7 +325,14 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <input className="handout-find" type="search" aria-label="查找讲义" placeholder="查找讲义或模块" value={query} onChange={(event) => setQuery(event.target.value)} />
       <nav>
         {navItem("course", "课程体系", 0, false, () => choose("course"), true)}
-        {HANDOUT_GRADES.map((item) => navItem(`course-${item.value}`, item.label, all.filter((handout) => handout.grade === item.value && handout.term && !handout.studentId).length, viewing === "course" && grade === item.value, () => choose("course", item.value)))}
+        <button className="handout-outline-add" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋ 新建体系</button>
+        {systems.map((system) => <div key={system.id}>
+          <div className="handout-nav-row">{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id, () => choose("course", system.id))}{nodeMenu(system)}</div>
+          {activeSystem?.id === system.id && <div className="handout-stage-nav">
+            {stages.map((stage) => <div className="handout-nav-row" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
+            <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>
+          </div>}
+        </div>)}
         {navItem("topic", "专题库", all.filter((item) => shelfOf(item) === "topic").length, viewing === "topic", () => choose("topic"), true)}
         {navItem("student", "学生讲义", 0, false, () => choose("student"), true)}
         {students?.map((item) => navItem(`student-${item.id}`, item.name, countIn({ ...NOWHERE, studentId: item.id }), viewing === "student" && activeStudent?.id === item.id, () => choose("student", item.id)))}
@@ -272,9 +346,16 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
           {all.some(matches) ? <ol>{all.filter(matches).map((item) => entry(item, null, placeLabel(item, inGroup(item).indexOf(item))))}</ol>
             : <p className="handout-board-note">没有标题或模块名包含“{query.trim()}”的讲义。</p>}
         </section>
-        : shelf === "course" ? <div className="handout-columns">
-          {HANDOUT_TERMS.map((term) => column(term.value, term.label, "讲", { ...NOWHERE, grade, term: term.value }, `添加${lessonName(countIn({ ...NOWHERE, grade, term: term.value }))}`))}
-        </div>
+        : shelf === "course" ? <>
+          <div className="handout-course-head"><div><h1>{activeSystem?.name || "课程体系"}</h1><p>{activeStage ? `${activeStage.name} · 先写大纲，再逐讲编撰讲义` : "从一个体系名称开始，安排年级、阶段和每一讲。"}</p></div>
+            {activeStage ? <button className="secondary" disabled={busy} onClick={() => addNode(activeStage.id, "学期 / 单元")}>＋ 添加学期 / 单元</button>
+              : <button className="primary-button" disabled={busy} onClick={() => addNode(activeSystem?.id ?? null, activeSystem ? "年级 / 阶段" : "体系")}>{activeSystem ? "添加年级 / 阶段" : "新建体系"}</button>}
+          </div>
+          {activeStage && !units.length && <p className="handout-board-note">还没有学期或单元。可以添加“暑假”“基础篇”“第一单元”等，再安排每一讲。</p>}
+          <div className="handout-columns course-columns">
+            {units.map((unit) => column(unit.id, unit.name, "讲", { ...NOWHERE, courseUnitId: unit.id }, `添加${lessonName(countIn({ ...NOWHERE, courseUnitId: unit.id }))}`, false, unit))}
+          </div>
+        </>
         : shelf === "topic" ? <div className={`handout-columns topics${unsorted ? " with-unsorted" : ""}`}>
           {HANDOUT_DOMAINS.map((item) => column(item.value, item.label, "个", { ...NOWHERE, domain: item.value }, "新建专题"))}
           {!!unsorted && column("unsorted", UNSORTED_TOPIC_LABEL, "份", NOWHERE, null)}
@@ -285,10 +366,10 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     {moving && (() => {
       const target = movedGroup(moving);
       const here = sameGroup(moving.handout, target);
-      const ready = moving.shelf !== "student" || Boolean(moving.studentId);
-      const hint = here ? "已在这里。" : !ready ? "还没有学生档案，先到学生档案里建立学生。"
+      const ready = moving.shelf === "student" ? Boolean(moving.studentId) : moving.shelf !== "course" || coursePath(courseNodes ?? [], moving.courseUnitId).length === 3;
+      const hint = here ? "已在这里。" : !ready ? "请先建立并选择目标目录或学生档案。"
         : target.studentId ? `将放到${studentName(target.studentId)}的讲义末尾，只有你能看到。`
-        : target.term ? `将成为${groupLabel(target)}的${lessonName(countIn(target))}。` : `将放到${groupLabel(target)}末尾。`;
+        : target.courseUnitId ? `将成为${labelGroup(target)}的${lessonName(countIn(target))}。` : `将放到${labelGroup(target)}末尾。`;
       return <div className="modal-backdrop"><section className="modal handout-move" role="dialog" aria-modal="true" aria-label="移到">
         <div className="modal-head"><div><span className="eyebrow">移到…</span><h2>{moving.handout.title}</h2></div><button className="close" aria-label="关闭" onClick={() => setMoving(null)}>×</button></div>
         <fieldset className="handout-answer-choice"><legend>书架</legend>
@@ -297,12 +378,12 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         {moving.shelf === "topic" && <fieldset className="handout-answer-choice"><legend>板块</legend>
           <div className="wrap">{HANDOUT_DOMAINS.map((item) => <label key={item.value} className={moving.domain === item.value ? "active" : ""}><input type="radio" name="handout-move-domain" checked={moving.domain === item.value} onChange={() => setMoving({ ...moving, domain: item.value })} />{item.label}</label>)}</div>
         </fieldset>}
-        {moving.shelf === "course" && <fieldset className="handout-answer-choice"><legend>年级</legend>
-          <div>{HANDOUT_GRADES.map((item) => <label key={item.value} className={moving.grade === item.value ? "active" : ""}><input type="radio" name="handout-move-grade" checked={moving.grade === item.value} onChange={() => setMoving({ ...moving, grade: item.value })} />{item.label}</label>)}</div>
-        </fieldset>}
-        {moving.shelf === "course" && <fieldset className="handout-answer-choice"><legend>学期</legend>
-          <div className="four">{HANDOUT_TERMS.map((item) => <label key={item.value} className={moving.term === item.value ? "active" : ""}><input type="radio" name="handout-move-term" checked={moving.term === item.value} onChange={() => setMoving({ ...moving, term: item.value })} />{item.label}</label>)}</div>
-        </fieldset>}
+        {moving.shelf === "course" && <label className="handout-course-field">体系 / 年级或阶段 / 学期或单元
+          <select aria-label="目标课程单元" value={moving.courseUnitId} onChange={(event) => setMoving({ ...moving, courseUnitId: event.target.value })}>
+            <option value="">选择学期或单元</option>
+            {(courseNodes ?? []).filter((node) => coursePath(courseNodes ?? [], node.id).length === 3).map((node) => <option key={node.id} value={node.id}>{coursePath(courseNodes ?? [], node.id).map((item) => item.name).join(" / ")}</option>)}
+          </select>
+        </label>}
         {moving.shelf === "student" && !!students?.length && <fieldset className="handout-answer-choice"><legend>学生</legend>
           <div className="wrap">{students.map((item) => <label key={item.id} className={moving.studentId === item.id ? "active" : ""}><input type="radio" name="handout-move-student" checked={moving.studentId === item.id} onChange={() => setMoving({ ...moving, studentId: item.id })} />{item.name}</label>)}</div>
         </fieldset>}
@@ -310,12 +391,26 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         <div className="modal-actions"><button className="secondary" onClick={() => setMoving(null)}>取消</button><button className="primary-button" disabled={here || !ready} onClick={() => move(moving)}>确定</button></div>
       </section></div>;
     })()}
+    {outlineEdit && <div className="modal-backdrop"><form className="modal handout-move" role="dialog" aria-modal="true" aria-label={outlineEdit.id ? "重命名目录" : `新建${outlineEdit.label}`} onSubmit={(event) => { event.preventDefault(); void saveOutline(); }}>
+      <div className="modal-head"><h2>{outlineEdit.id ? "重命名" : "新建"}{outlineEdit.label}</h2><button type="button" className="close" aria-label="关闭" disabled={busy} onClick={() => setOutlineEdit(null)}>×</button></div>
+      <label className="handout-course-field">名称<input required maxLength={80} value={outlineEdit.name} onChange={(event) => setOutlineEdit({ ...outlineEdit, name: event.target.value, error: "" })} placeholder={outlineEdit.label === "体系" ? "例如：校内同步、竞赛提高、A Level" : "填写你自己的目录名称"} /></label>
+      {outlineEdit.error && <p role="alert" className="handout-warning">{outlineEdit.error}</p>}
+      <div className="modal-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOutlineEdit(null)}>取消</button><button className="primary-button" disabled={busy || !outlineEdit.name.trim()}>{busy ? "正在保存…" : "保存"}</button></div>
+    </form></div>}
+    {lessonDraft && <div className="modal-backdrop"><form className="modal handout-move" role="dialog" aria-modal="true" aria-label="新建一讲" onSubmit={(event) => { event.preventDefault(); void create(lessonDraft.group, undefined, { ...lessonDraft, open: false }); }}>
+      <div className="modal-head"><div><h2>添加{lessonName(countIn(lessonDraft.group))}</h2><p className="handout-move-hint">{labelGroup(lessonDraft.group)}</p></div><button type="button" className="close" aria-label="关闭" disabled={busy} onClick={() => setLessonDraft(null)}>×</button></div>
+      <label className="handout-course-field">本讲标题<input required maxLength={120} value={lessonDraft.title} onChange={(event) => setLessonDraft({ ...lessonDraft, title: event.target.value, error: "" })} placeholder="例如：一元一次方程" /></label>
+      <label className="handout-course-field">模块大纲（选填，每行一个）<textarea rows={6} maxLength={20000} value={lessonDraft.modules} onChange={(event) => setLessonDraft({ ...lessonDraft, modules: event.target.value, error: "" })} placeholder={"方程的概念\n等式的基本性质\n一元一次方程的解法"} /></label>
+      {lessonDraft.error && <p role="alert" className="handout-warning">{lessonDraft.error}</p>}
+      <div className="modal-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setLessonDraft(null)}>取消</button><button className="secondary" disabled={busy || !lessonDraft.title.trim()}>保存大纲</button><button type="button" className="primary-button" disabled={busy || !lessonDraft.title.trim()} onClick={() => create(lessonDraft.group, undefined, { ...lessonDraft, open: true })}>保存并编写讲义</button></div>
+    </form></div>}
+
   </main>;
 }
 
 function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: string) => void }) {
   const [doc, setDoc] = useState<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
-  const [home, setHome] = useState<HandoutGroup & { studentName: string | null }>({ ...NOWHERE, studentName: null });
+  const [home, setHome] = useState<HandoutGroup & { studentName: string | null; coursePath: HandoutCourseNode[] }>({ ...NOWHERE, studentName: null, coursePath: [] });
   const [missing, setMissing] = useState(false);
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [bankSource, setBankSource] = useState<"library" | "temporary">("library");
@@ -341,7 +436,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
 
   useEffect(() => {
-    void fetchHandout(id).then(({ handout }) => { setHome({ grade: handout.grade, term: handout.term, domain: handout.domain, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()), temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current); }).catch(() => setMissing(true));
+    void fetchHandout(id).then(({ handout }) => { setHome({ courseUnitId: handout.courseUnitId, coursePath: handout.coursePath, domain: handout.domain, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()), temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current); }).catch(() => setMissing(true));
     void fetchLibrary().then(setLibrary).catch(() => setLibrary({ scope: "public", modules: [], categories: [], questions: [] }));
   }, [id]);
 
@@ -607,7 +702,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   // The back link names where this handout lives and returns to that shelf.
   const homeShelf = shelfOf(home);
   const backLabel = groupLabel(home);
-  const backHref = homeShelf === "student" ? `/tools/handouts?shelf=student&student=${encodeURIComponent(home.studentId ?? "")}` : homeShelf === "course" ? `/tools/handouts?shelf=course&grade=${home.grade}` : "/tools/handouts?shelf=topic";
+  const backHref = homeShelf === "student" ? `/tools/handouts?shelf=student&student=${encodeURIComponent(home.studentId ?? "")}` : homeShelf === "course" ? `/tools/handouts?shelf=course&course=${encodeURIComponent(home.coursePath[0]?.id ?? "")}&stage=${encodeURIComponent(home.coursePath[1]?.id ?? "")}` : "/tools/handouts?shelf=topic";
 
   // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
   // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.

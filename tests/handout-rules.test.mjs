@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HANDOUT_SHEETS, chineseNumeral, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetCounts, sheetLabel, sheetQuestions, shelfOf } from "../lib/handout-rules.mjs";
+import { HANDOUT_SHEETS, chineseNumeral, coursePath, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetCounts, sheetLabel, sheetQuestions, shelfOf } from "../lib/handout-rules.mjs";
 
 const q = (id, band = "example", questionId = id, scope = "mine") => ({ id, kind: "question", scope, questionId, band });
 const t = (id, moduleId = null, kind = "quiz", questionId = id) => ({ id, kind, scope: "public", questionId, moduleId });
@@ -96,19 +96,24 @@ test("loose questions and empty handouts get a first module", () => {
 });
 
 test("a group is a term, a topic domain or a student, and the shelf follows from it", () => {
-  const none = { grade: null, term: null, domain: null, studentId: null };
-  assert.deepEqual(normalizeHandoutGroup({ grade: 8, term: "autumn" }), { ...none, grade: 8, term: "autumn" });
-  assert.deepEqual(normalizeHandoutGroup({ grade: "9", term: "summer" }), { ...none, grade: 9, term: "summer" }, "a numeric string from a query reads as a grade");
+  const none = { courseUnitId: null, domain: null, studentId: null };
+  assert.deepEqual(normalizeHandoutGroup({ courseUnitId: "course-8-autumn" }), { ...none, courseUnitId: "course-8-autumn" });
+  assert.deepEqual(normalizeHandoutGroup({ courseUnitId: " custom-unit " }), { ...none, courseUnitId: "custom-unit" });
   assert.deepEqual(normalizeHandoutGroup({ domain: "geometry" }), { ...none, domain: "geometry" });
   assert.deepEqual(normalizeHandoutGroup({ domain: "number", grade: 8, term: "autumn" }), { ...none, domain: "number" }, "a domain places a topic, whatever else is sent");
   assert.deepEqual(normalizeHandoutGroup({ studentId: " s1 ", domain: "function", grade: 8, term: "autumn" }), { ...none, studentId: "s1" }, "a student handout belongs to the student alone");
   for (const raw of [null, {}, { grade: null, term: null }, { title: "x", items: [] }]) assert.deepEqual(normalizeHandoutGroup(raw), none, "nothing given is the unsorted part of the topic library");
-  for (const raw of [{ term: "spring" }, { grade: 8 }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { domain: "physics" }, { studentId: 5 }, { studentId: "x".repeat(201) }]) assert.equal(normalizeHandoutGroup(raw), null, JSON.stringify(raw));
-  assert.equal(shelfOf({ ...none, grade: 8, term: "autumn" }), "course");
+  for (const raw of [{ courseUnitId: 7 }, { courseUnitId: "x".repeat(201) }, { courseUnitId: "  " }, { term: "spring" }, { grade: 8 }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { domain: "physics" }, { studentId: 5 }, { studentId: "x".repeat(201) }]) assert.equal(normalizeHandoutGroup(raw), null, JSON.stringify(raw));
+  assert.equal(shelfOf({ ...none, courseUnitId: "course-8-autumn" }), "course");
   assert.equal(shelfOf({ ...none, domain: "algebra" }), "topic");
   assert.equal(shelfOf(none), "topic", "old unfiled handouts wait in the topic library");
   assert.equal(shelfOf({ ...none, studentId: "s1" }), "student");
-  assert.equal(groupLabel({ grade: 7, term: "winter" }), "初一寒假");
+  const nodes = [{ id: "system", parentId: null, name: "自编体系", position: 0 }, { id: "stage", parentId: "system", name: "进阶", position: 0 }, { id: "unit", parentId: "stage", name: "代数", position: 0 }];
+  assert.deepEqual(coursePath(nodes, "unit").map((node) => node.id), ["system", "stage", "unit"]);
+  assert.equal(groupLabel({ courseUnitId: "unit", coursePath: coursePath(nodes, "unit") }), "自编体系 / 进阶 / 代数");
+  assert.deepEqual(coursePath(nodes, "missing"), []);
+  assert.deepEqual(coursePath([{ id: "loop", parentId: "loop" }], "loop"), []);
+  assert.ok(!sameGroup({ courseUnitId: "unit" }, { courseUnitId: "different" }));
   assert.equal(groupLabel({ domain: "geometry" }), "几何专题");
   assert.equal(groupLabel({ domain: "thinking" }), "数学思想专题");
   assert.equal(groupLabel(none), "未分板块");

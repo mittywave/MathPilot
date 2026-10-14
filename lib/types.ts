@@ -201,23 +201,24 @@ export type HandoutItem =
   | { id: string; kind: "section"; title: string; note: string }
   | { id: string; kind: Exclude<HandoutSheet, "handout">; scope: LibraryScope; questionId: string; moduleId: string | null };
 
-// 初一至初三记为 7–9；一学年依次是暑假、秋季、寒假、春季。
+// 已有深圳创新知识图谱中的初一至初三记为 7–9。
 export type HandoutGrade = 7 | 8 | 9;
-export type HandoutTerm = "summer" | "autumn" | "winter" | "spring";
 export type HandoutShelf = "course" | "topic" | "student";
 // 专题库的五个板块：函数、几何、代数、数论、数学思想。
 export type HandoutDomain = "function" | "geometry" | "algebra" | "number" | "thinking";
-// 课程体系 = grade + term；专题库 = domain（都为空的是未分板块）；学生讲义 = studentId。
-export type HandoutGroup = { grade: HandoutGrade | null; term: HandoutTerm | null; domain: HandoutDomain | null; studentId: string | null };
+// 课程体系指向自定义树的单元；专题库和学生讲义沿用原来的位置。
+export type HandoutCourseNode = { id: string; parentId: string | null; name: string; position: number };
+export type HandoutGroup = { courseUnitId: string | null; domain: HandoutDomain | null; studentId: string | null };
 
 export type Handout = HandoutGroup & {
+  coursePath: HandoutCourseNode[];
   id: string;
   title: string;
   items: HandoutItem[];
   temporaryQuestions: Question[];
   // Only the student's own teacher ever receives a student handout, so the name travels with it.
   studentName: string | null;
-  // position orders a group: the 课次 of a term, the topics of a grade, a student's handouts.
+  // position orders lessons in a unit, topics in a domain, or a student's handouts.
   position: number;
   createdAt: number;
   updatedAt: number;

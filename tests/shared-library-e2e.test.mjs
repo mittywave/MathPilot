@@ -196,7 +196,7 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.deepEqual(after.payload.modules.map((item) => item.sortOrder), after.payload.modules.map((_, index) => index), "module order closes the gap");
 
     // Handouts are shared the same way.
-    const handout = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "第1讲", items: [{ id: "i1", kind: "question", scope: "public", questionId: "shared-question" }], grade: 8, term: "autumn" } } });
+    const handout = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "第1讲", items: [{ id: "i1", kind: "question", scope: "public", questionId: "shared-question" }], courseUnitId: "course-8-autumn" } } });
     assert.equal(handout.response.status, 201);
     const handoutId = handout.payload.handout.id;
     assert.deepEqual((await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.map((item) => item.id), [handoutId]);

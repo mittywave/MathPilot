@@ -240,6 +240,143 @@ async function verifyTemporaryLibrary() {
   step('390px no page overflow; copying a handout preserves the temporary bank and all three sheets');
 }
 
+// Real browser + isolated D1: custom outlines share the existing handout editor.
+async function verifyCourses() {
+  await page.goto(base + '/tools/handouts');
+  await page.getByRole('heading', { name: '深圳创新体系', exact: true }).waitFor();
+  assert.equal((await api('/api/handouts')).courseNodes.length, 16);
+  const addNode = async (button, name) => {
+    await page.getByRole('button', { name: button, exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('名称', { exact: true }).fill(name);
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+  };
+  const nodeMenu = async name => {
+    await page.locator('.handout-nav-row').filter({ has: page.getByRole('button', { name: new RegExp('^' + name) }) }).getByRole('button', { name: '更多', exact: true }).click();
+    return page.getByRole('group', { name: `${name} 目录操作`, exact: true });
+  };
+  const lessonMenu = async title => {
+    await page.locator('.handout-entry').filter({ hasText: title }).getByRole('button', { name: '更多', exact: true }).click();
+    return page.getByRole('group', { name: `${title} 更多操作`, exact: true });
+  };
+  await addNode('＋ 新建体系', 'DIY 数学');
+  await addNode('＋ 添加年级 / 阶段', '基础阶段');
+  await addNode('＋ 添加学期 / 单元', '代数单元');
+  const originUrl = page.url();
+  const systemId = new URL(originUrl).searchParams.get('course');
+  const stageId = new URL(originUrl).searchParams.get('stage');
+  await page.reload();
+  await page.getByRole('heading', { name: 'DIY 数学', exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('stage'), stageId);
+  await page.getByRole('heading', { name: '代数单元', exact: true }).waitFor();
+  await page.goto(base + '/tools/handouts?shelf=course&grade=8');
+  await page.getByRole('heading', { name: '深圳创新体系', exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('stage'), 'course-grade-8');
+  await page.goto(originUrl);
+  await page.getByRole('heading', { name: 'DIY 数学', exact: true }).waitFor();
+  step('create an empty system, custom stage and custom unit; reload retains names and active location; old grade links still select the original course');
+
+  await page.getByRole('button', { name: '＋ 添加第1讲', exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: '新建一讲' });
+  await dialog.getByLabel('本讲标题').fill('代数基础');
+  await dialog.getByLabel('模块大纲', { exact: false }).fill('整式的概念\n合并同类项');
+  let fail = true;
+  await page.route('**/api/handouts', route => {
+    if (route.request().method() === 'POST' && fail) { fail = false; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '验收注入：暂时无法保存' }) }); }
+    return route.continue();
+  });
+  await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
+  await dialog.getByRole('alert').filter({ hasText: '暂时无法保存' }).waitFor();
+  assert.equal(await dialog.getByLabel('本讲标题').inputValue(), '代数基础');
+  await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await page.unroute('**/api/handouts');
+  await page.locator('.handout-entry').filter({ hasText: '代数基础' }).waitFor();
+  assert.equal((await api('/api/handouts')).handouts.length, 1);
+  await page.getByRole('button', { name: '＋ 添加第2讲', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '新建一讲' });
+  await dialog.getByLabel('本讲标题').fill('函数初步');
+  await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await (await lessonMenu('函数初步')).getByRole('button', { name: '上移', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.handout-entry strong')?.textContent === '函数初步');
+  await page.reload();
+  await page.locator('.handout-entry').first().waitFor();
+  assert.equal(await page.locator('.handout-entry strong').first().innerText(), '函数初步');
+  step('write lesson outlines without opening editor; failed save retains input; retry and lesson ordering persist');
+
+  await page.locator('.handout-entry').filter({ hasText: '代数基础' }).getByRole('link').click();
+  await page.locator('.handout-module').nth(1).waitFor();
+  assert.deepEqual(await page.locator('.handout-module-head input').evaluateAll(inputs => inputs.map(input => input.value)), ['整式的概念', '合并同类项']);
+  const lessonId = new URL(page.url()).searchParams.get('id');
+  const saved = page.waitForResponse(response => response.url().endsWith(`/api/handouts/${lessonId}`) && response.request().method() === 'PUT' && response.ok());
+  await page.locator('.handout-module-head input').first().fill('整式与多项式');
+  await page.locator('.handout-module-head input').first().blur();
+  await saved;
+  await page.reload();
+  await page.locator('.handout-module').nth(1).waitFor();
+  assert.equal(await page.locator('.handout-module-head input').first().inputValue(), '整式与多项式');
+  for (const name of ['小测', '作业', '讲义']) await page.locator('.handout-draft-head').getByRole('tab', { name: new RegExp(name) }).click();
+  await page.locator('.handout-back').first().click();
+  await page.getByRole('heading', { name: 'DIY 数学', exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('course'), systemId);
+  assert.equal(new URL(page.url()).searchParams.get('stage'), stageId);
+  await (await nodeMenu('DIY 数学')).getByRole('button', { name: '重命名', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '重命名目录' });
+  await dialog.getByLabel('名称', { exact: true }).fill('我的数学体系');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal((await api(`/api/handouts/${lessonId}`)).handout.coursePath[0].name, '我的数学体系');
+  await (await nodeMenu('我的数学体系')).getByRole('button', { name: '删除空目录', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '请先移走讲义' }).waitFor();
+  assert.equal((await api('/api/handouts')).handouts.length, 2);
+  await addNode('＋ 添加学期 / 单元', '几何单元');
+  await page.getByRole('region', { name: '我的数学体系 / 基础阶段 / 几何单元', exact: true }).getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('group', { name: '几何单元 目录操作' }).getByRole('button', { name: '上移', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.handout-column h2')?.textContent === '几何单元');
+  await page.reload();
+  await page.locator('.handout-column h2').first().waitFor();
+  assert.equal(await page.locator('.handout-column h2').first().innerText(), '几何单元');
+  step('edit and reload a lesson; return to its system; rename leaves content attached; nonempty deletion is refused; unit order persists');
+
+  await addNode('＋ 新建体系', '另一套课程');
+  await addNode('＋ 添加年级 / 阶段', '进阶阶段');
+  await addNode('＋ 添加学期 / 单元', '第一单元');
+  const targetUrl = page.url();
+  await page.goto(originUrl);
+  await page.locator('.handout-entry').filter({ hasText: '代数基础' }).waitFor();
+  await (await lessonMenu('代数基础')).getByRole('button', { name: '复制一份', exact: true }).click();
+  await page.locator('.handout-module').nth(1).waitFor();
+  const copyId = new URL(page.url()).searchParams.get('id');
+  assert.notEqual(copyId, lessonId);
+  await page.locator('.handout-back').first().click();
+  await page.locator('.handout-entry').filter({ hasText: '代数基础（副本）' }).waitFor();
+  await (await lessonMenu('代数基础（副本）')).getByRole('button', { name: '移到…', exact: true }).click();
+  await page.getByLabel('目标课程单元').selectOption({ label: '另一套课程 / 进阶阶段 / 第一单元' });
+  await page.getByRole('dialog', { name: '移到', exact: true }).getByRole('button', { name: '确定', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '已移到' }).waitFor();
+  await page.goto(targetUrl);
+  await page.locator('.handout-entry').filter({ hasText: '代数基础（副本）' }).waitFor();
+  assert.equal((await api(`/api/handouts/${lessonId}`)).handout.coursePath[0].id, systemId);
+  assert.equal((await api(`/api/handouts/${copyId}`)).handout.coursePath[0].name, '另一套课程');
+  await page.screenshot({ path: join(out, 'courses-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.locator('.handout-entry').filter({ hasText: '代数基础（副本）' }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.getByRole('button', { name: '＋ 添加第2讲', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '新建一讲' });
+  await dialog.getByLabel('本讲标题').fill('手机上新建的一讲');
+  await dialog.getByRole('button', { name: '保存并编写讲义', exact: true }).click();
+  await page.locator('.handout-module').first().waitFor();
+  await page.locator('.handout-back').first().click();
+  await page.locator('.handout-entry').filter({ hasText: '手机上新建的一讲' }).waitFor();
+  await page.screenshot({ path: join(out, 'courses-mobile.png'), fullPage: true });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  step('copy and move a lesson across systems without affecting source; 390px can create, edit and return without horizontal overflow');
+}
+
 try {
   for (let i = 0; i < 200; i++) {
     if (worker.exitCode !== null) throw Error(workerLog);
@@ -264,7 +401,9 @@ try {
   const png = Buffer.from(pngUrl.split(',')[1], 'base64');
   await writeFile(join(out, 'diagram.png'), png);
   await writeFile(join(out, 'fixture.docx'), await wordFixture(png));
-  if (process.argv.includes('--temporary')) {
+  if (process.argv.includes('--courses')) {
+    await verifyCourses();
+  } else if (process.argv.includes('--temporary')) {
     await verifyTemporaryLibrary();
   } else {
 
