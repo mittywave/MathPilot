@@ -291,6 +291,20 @@ export type StudentProfileSummary = {
   observations: StudentObservation[];
 };
 
+/**
+ * 学情报告 for parents over one period. `data` is a snapshot of what the archive held when the report was made (so a
+ * report sent stays as it was); `text` is what the model wrote from it and the teacher may edit.
+ */
+export type StudentReportData = {
+  studentName: string; className: string;
+  homework: Array<Pick<StudentHomework, "title" | "assigned" | "createdAt" | "total" | "done" | "correct" | "incorrect" | "pending">>;
+  knowledge: KnowledgeTally[]; types: StudentProfileSummary["types"];
+  observations: Array<Pick<StudentObservation, "observedAt" | "text" | "abilities">>;
+  wrongAdded: number;
+};
+export type StudentReportText = { overview: string; knowledge: string; abilities: string; plan: string[]; message: string };
+export type StudentReport = { id: string; studentId: string; periodStart: number; periodEnd: number; data: StudentReportData; text: StudentReportText; createdAt: number; updatedAt: number };
+
 /** archiveReason of a wrong question the teacher deleted. It waits in 历史记录 and can be restored; other archived entries follow grading. */
 export const WRONG_QUESTION_DELETED = "老师删除";
 

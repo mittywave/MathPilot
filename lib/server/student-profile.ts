@@ -2,8 +2,11 @@ import { env } from "cloudflare:workers";
 import { callStructuredAi } from "./ai-gateway";
 import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
 import { parseRecognitionModelText } from "./recognition-model";
-import { buildObservationPrompt, normalizeAbilityNotes, normalizeObservationResult, observationSchema, OBSERVATION_LIMITS } from "../student-profile-contract";
-import type { AbilityNote, AuthUser, KnowledgeTally, QuestionType, StudentObservation, StudentProfileSummary } from "../types";
+import {
+  buildObservationPrompt, buildStudentReportPrompt, fallbackStudentReportText, normalizeAbilityNotes, normalizeObservationResult, normalizeStudentReportText,
+  observationSchema, OBSERVATION_LIMITS, reportTimeZone, studentReportSchema,
+} from "../student-profile-contract";
+import type { AbilityNote, AuthUser, KnowledgeTally, QuestionType, StudentHomework, StudentObservation, StudentProfileSummary, StudentReport, StudentReportData } from "../types";
 
 // 定档: the archive's reading of one student. 客观 is the graded homework the teacher let into the profile (assigned
 // homework always is): every knowledge point it touched and every question type, right, partly right or wrong.
@@ -25,7 +28,7 @@ function parseJson<T>(value: unknown, fallback: T): T {
 }
 
 async function ownedStudent(studentId: string, user: AuthUser) {
-  const row = await db().prepare("SELECT id, name FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first<{ id: string; name: string }>();
+  const row = await db().prepare("SELECT id, name, class_name FROM students WHERE id = ? AND owner_user_id = ?").bind(studentId, user.id).first<{ id: string; name: string; class_name: string }>();
   if (!row) throw responseError("学生档案不存在", 404);
   return row;
 }
@@ -39,20 +42,21 @@ function toObservation(row: ObservationRow): StudentObservation {
   };
 }
 
-/** 客观 and 主观 for one student, from `since` on (null: everything). */
-export async function readStudentProfile(studentId: string, user: AuthUser, since: number | null): Promise<StudentProfileSummary> {
+/** 客观 and 主观 for one student, from `since` on (null: from the start) up to `until` (null: now). */
+export async function readStudentProfile(studentId: string, user: AuthUser, since: number | null, until: number | null = null): Promise<StudentProfileSummary> {
   await ownedStudent(studentId, user);
   const [evidence, types, observations, graph] = await Promise.all([
     db().prepare(`SELECT capability_key AS key, MAX(capability_label) AS label, verdict, COUNT(*) AS count, MAX(created_at) AS last
-      FROM student_capability_evidence WHERE owner_user_id = ? AND student_id = ? AND dimension = 'knowledge' AND (?3 IS NULL OR created_at >= ?3)
-      GROUP BY capability_key, verdict`).bind(user.id, studentId, since).all<{ key: string; label: string; verdict: string; count: number; last: number }>(),
+      FROM student_capability_evidence WHERE owner_user_id = ? AND student_id = ? AND dimension = 'knowledge' AND (?3 IS NULL OR created_at >= ?3) AND (?4 IS NULL OR created_at <= ?4)
+      GROUP BY capability_key, verdict`).bind(user.id, studentId, since, until).all<{ key: string; label: string; verdict: string; count: number; last: number }>(),
     db().prepare(`SELECT q.type, g.verdict, COUNT(*) AS count FROM grading_items g JOIN assignment_questions q ON q.id = g.assignment_question_id
       JOIN homework_submissions s ON s.id = g.submission_id JOIN homework_assignments a ON a.id = s.assignment_id
       WHERE a.owner_user_id = ? AND s.student_id = ? AND s.status = 'published' AND json_extract(a.outputs_json, '$.profile') = 1
         AND g.requires_review = 0 AND g.verdict IN ('correct', 'partial', 'incorrect') AND (?3 IS NULL OR COALESCE(s.submitted_at, s.created_at) >= ?3)
-      GROUP BY q.type, g.verdict`).bind(user.id, studentId, since).all<{ type: QuestionType; verdict: string; count: number }>(),
-    db().prepare(`SELECT * FROM student_observations WHERE owner_user_id = ? AND student_id = ? AND (?3 IS NULL OR observed_at >= ?3)
-      ORDER BY observed_at DESC, created_at DESC LIMIT 200`).bind(user.id, studentId, since).all<ObservationRow>(),
+        AND (?4 IS NULL OR COALESCE(s.submitted_at, s.created_at) <= ?4)
+      GROUP BY q.type, g.verdict`).bind(user.id, studentId, since, until).all<{ type: QuestionType; verdict: string; count: number }>(),
+    db().prepare(`SELECT * FROM student_observations WHERE owner_user_id = ? AND student_id = ? AND (?3 IS NULL OR observed_at >= ?3) AND (?4 IS NULL OR observed_at <= ?4)
+      ORDER BY observed_at DESC, created_at DESC LIMIT 200`).bind(user.id, studentId, since, until).all<ObservationRow>(),
     loadPublishedKnowledgeGraph(),
   ]);
   const tallies = new Map<string, KnowledgeTally>();
@@ -142,4 +146,85 @@ export async function deleteObservation(studentId: string, id: string, user: Aut
   await ownedStudent(studentId, user);
   const result = await db().prepare("DELETE FROM student_observations WHERE id = ? AND student_id = ? AND owner_user_id = ?").bind(id, studentId, user.id).run();
   if (!result.meta.changes) throw responseError("这条反馈不存在", 404);
+}
+
+// ---- 学情报告 ----
+
+type ReportRow = { id: string; student_id: string; period_start: number; period_end: number; data_json: string; text_json: string; created_at: number; updated_at: number };
+function toReport(row: ReportRow): StudentReport {
+  return {
+    id: row.id, studentId: row.student_id, periodStart: Number(row.period_start), periodEnd: Number(row.period_end),
+    data: parseJson<StudentReportData>(row.data_json, { studentName: "", className: "", homework: [], knowledge: [], types: [], observations: [], wrongAdded: 0 }),
+    text: normalizeStudentReportText(parseJson(row.text_json, {})), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+  };
+}
+
+export async function listStudentReports(studentId: string, user: AuthUser) {
+  await ownedStudent(studentId, user);
+  const rows = await db().prepare("SELECT * FROM student_reports WHERE owner_user_id = ? AND student_id = ? ORDER BY period_end DESC, created_at DESC LIMIT 100")
+    .bind(user.id, studentId).all<ReportRow>();
+  return (rows.results as ReportRow[]).map(toReport);
+}
+
+// A period runs from the start of its first day to the end of its last, at most a year, ending no later than today.
+function reportPeriod(raw: { periodStart?: unknown; periodEnd?: unknown }) {
+  const start = Number(raw.periodStart), end = Number(raw.periodEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) throw responseError("请选择报告的起止日期", 400);
+  if (end - start > 370 * DAY) throw responseError("一份学情报告最长一年", 400);
+  return { start: Math.round(start), end: Math.round(Math.min(end, Date.now() + DAY)) };
+}
+
+/**
+ * Makes a 学情报告: the archive over the period is copied into the report (homework given or handed in, knowledge and
+ * question types graded, lesson feedback, new wrong-book entries), and the model writes the text from that copy alone.
+ * Without a model the report still holds the facts in plain sentences, with `notice` saying why.
+ */
+export async function createStudentReport(studentId: string, user: AuthUser, raw: unknown) {
+  const student = await ownedStudent(studentId, user);
+  const body = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const { start, end } = reportPeriod(body);
+  const { readStudentHomework } = await import("./homework");
+  const [profile, homework, wrong]: [StudentProfileSummary, StudentHomework[], { count: number } | null] = await Promise.all([
+    readStudentProfile(studentId, user, start, end),
+    readStudentHomework(studentId, user),
+    db().prepare("SELECT COUNT(*) AS count FROM student_wrong_questions WHERE owner_user_id = ? AND student_id = ? AND archived_at IS NULL AND last_wrong_at BETWEEN ? AND ?")
+      .bind(user.id, studentId, start, end).first<{ count: number }>(),
+  ]);
+  const inPeriod = (time: number) => time >= start && time <= end;
+  const data: StudentReportData = {
+    studentName: student.name, className: student.class_name ?? "",
+    homework: homework.filter((item) => inPeriod(item.createdAt) || inPeriod(item.latest.updatedAt))
+      .map(({ title, assigned, createdAt, total, done, correct, incorrect, pending }) => ({ title, assigned, createdAt, total, done, correct, incorrect, pending })),
+    knowledge: profile.knowledge, types: profile.types,
+    observations: profile.observations.map(({ observedAt, text, abilities }) => ({ observedAt, text, abilities })).reverse(),
+    wrongAdded: Number(wrong?.count ?? 0),
+  };
+  let text = fallbackStudentReportText(data), notice = "";
+  try {
+    const result = await callStructuredAi({ role: "text", prompt: buildStudentReportPrompt({ data, periodStart: start, periodEnd: end, timeZone: reportTimeZone(body.timeZone) }), schema: studentReportSchema, schemaName: "student_report", missingMessage: "尚未配置写学情报告所用的 AI" });
+    if (result.text) text = normalizeStudentReportText(parseRecognitionModelText(result.text));
+    else notice = result.error || "AI 没有返回可用结果";
+  } catch (error) { notice = error instanceof Error ? error.message : "AI 写报告失败"; }
+  const id = crypto.randomUUID(); const now = Date.now();
+  await db().prepare(`INSERT INTO student_reports (id, owner_user_id, student_id, period_start, period_end, data_json, text_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, user.id, studentId, start, end, JSON.stringify(data), JSON.stringify(text), now, now).run();
+  const row = await db().prepare("SELECT * FROM student_reports WHERE id = ?").bind(id).first<ReportRow>();
+  return { report: toReport(row!), notice: notice ? `AI 没写成，报告里先放了数据摘要：${notice}` : "" };
+}
+
+/** The teacher's edits of the report's text; the data it was written from stays as it was. */
+export async function updateStudentReport(studentId: string, id: string, user: AuthUser, raw: unknown) {
+  await ownedStudent(studentId, user);
+  const body = raw && typeof raw === "object" ? raw as { text?: unknown } : {};
+  const result = await db().prepare("UPDATE student_reports SET text_json = ?, updated_at = ? WHERE id = ? AND student_id = ? AND owner_user_id = ?")
+    .bind(JSON.stringify(normalizeStudentReportText(body.text)), Date.now(), id, studentId, user.id).run();
+  if (!result.meta.changes) throw responseError("这份学情报告不存在", 404);
+  const row = await db().prepare("SELECT * FROM student_reports WHERE id = ?").bind(id).first<ReportRow>();
+  return toReport(row!);
+}
+
+export async function deleteStudentReport(studentId: string, id: string, user: AuthUser) {
+  await ownedStudent(studentId, user);
+  const result = await db().prepare("DELETE FROM student_reports WHERE id = ? AND student_id = ? AND owner_user_id = ?").bind(id, studentId, user.id).run();
+  if (!result.meta.changes) throw responseError("这份学情报告不存在", 404);
 }

@@ -1,4 +1,4 @@
-import type { AbilityNote, AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
+import type { AbilityNote, AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentReport, StudentReportText, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -61,6 +61,11 @@ export function fetchStudentProfile(studentId: string, since: number | null) { r
 export function createObservation(studentId: string, observation: { text: string; observedAt: number }) { return request<{ observation: StudentObservation; notice: string }>(`/api/students/${encodeURIComponent(studentId)}/observations`, { method: "POST", body: JSON.stringify(observation) }); }
 export function updateObservation(studentId: string, id: string, change: { text?: string; observedAt?: number; abilities?: AbilityNote[]; keywords?: string[]; extract?: boolean }) { return request<{ observation: StudentObservation; notice: string }>(`/api/students/${encodeURIComponent(studentId)}/observations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(change) }); }
 export function deleteObservation(studentId: string, id: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/observations/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+// 学情报告: made from the archive over a period (the AI writes the text; `notice` says why it fell back to a plain summary).
+export function fetchStudentReports(studentId: string) { return request<{ reports: StudentReport[] }>(`/api/students/${encodeURIComponent(studentId)}/reports`); }
+export function createStudentReport(studentId: string, period: { periodStart: number; periodEnd: number; timeZone: string }) { return request<{ report: StudentReport; notice: string }>(`/api/students/${encodeURIComponent(studentId)}/reports`, { method: "POST", body: JSON.stringify(period) }); }
+export function updateStudentReport(studentId: string, id: string, text: StudentReportText) { return request<{ report: StudentReport }>(`/api/students/${encodeURIComponent(studentId)}/reports/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ text }) }); }
+export function deleteStudentReport(studentId: string, id: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/reports/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
 export type PublicationProgress = {
   phase: "snapshot" | "compare" | "assets" | "commit" | "complete";

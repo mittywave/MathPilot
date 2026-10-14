@@ -1,9 +1,10 @@
 import { latexInline, latexPlain } from "./handout-latex";
 import { mainQuestionNumber } from "./homework-report.mjs";
-import type { GradingItem, HomeworkSubmission, InternationalReport } from "./types";
+import { ABILITY_DIMENSIONS, abilityStateLabel, reportKnowledgePoints, reportTotals } from "./student-profile-contract";
+import type { GradingItem, HomeworkSubmission, InternationalReport, StudentReport } from "./types";
 
-// IGCSE / A Level 批改报告 → one self-contained TeX file, read by parents and students together.
-// The visual language follows the confirmed Alevel report: navy headings, teal accents, a pale score banner.
+// Reports parents read, each one self-contained TeX file: the IGCSE / A Level 批改报告 of one homework, and the 学情报告
+// of a period. The visual language follows the confirmed Alevel report: navy headings, teal accents, a pale banner.
 export const HOMEWORK_REPORT_MAIN = "report.tex";
 
 const PREAMBLE = String.raw`% 知题作业批改生成的批改报告。编译：tectonic report.tex，或 xelatex report.tex 两遍。
@@ -134,6 +135,99 @@ export function buildHomeworkReportLatex(submission: HomeworkSubmission) {
     ...(report.practice.length ? [practiceTable(report)] : []),
     ...(report.checklist ? [String.raw`\banner{${latexInline(report.checklist)}}`] : []),
     String.raw`\note{以上为订正建议。未记录用时或独立完成情况，本报告不对答题速度或独立掌握程度作判断，成绩也不直接换算正式考试等级。}`,
+    String.raw`\end{document}`,
+  ];
+  return `${body.join("\n\n")}\n`;
+}
+
+// ---- 学情报告 ----
+
+function shortDate(value: number) { const day = new Date(value); return `${day.getMonth() + 1}月${day.getDate()}日`; }
+function share(correct: number, total: number) { return total ? `${Math.round(correct / total * 100)}\\%` : "—"; }
+
+function homeworkTable(report: StudentReport) {
+  const rows = report.data.homework.map((item) => `${cell(item.title)} & ${shortDate(item.createdAt)}${item.assigned ? "布置" : "批改"} & ${item.assigned ? `${item.done}/${item.total} 题` : `${item.done} 题`} & ${item.correct} / ${item.incorrect}${item.pending ? `（待核 ${item.pending}）` : ""}\\\\`);
+  return String.raw`\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}X c c c@{}}
+\toprule
+\textbf{作业} & \textbf{日期} & \textbf{完成} & \textbf{对 / 错}\\
+\midrule
+${rows.join("\n")}
+\bottomrule
+\end{tabularx}`;
+}
+
+function knowledgeTable(report: StudentReport) {
+  const points = reportKnowledgePoints(report.data).slice(0, 12);
+  if (!points.length) return "";
+  const rows = points.map((item) => { const total = item.correct + item.partial + item.incorrect; return `${cell(item.label)} & ${total} & ${item.correct} & ${share(item.correct, total)}\\\\`; });
+  return String.raw`\renewcommand{\arraystretch}{1.28}
+\begin{tabularx}{\linewidth}{@{}X c c c@{}}
+\toprule
+\textbf{知识点（正确率从低到高）} & \textbf{做题} & \textbf{做对} & \textbf{正确率}\\
+\midrule
+${rows.join("\n")}
+\bottomrule
+\end{tabularx}`;
+}
+
+function abilityTable(report: StudentReport) {
+  const rows = ABILITY_DIMENSIONS.flatMap((dimension) => {
+    const notes = report.data.observations.flatMap((item) => item.abilities.filter((note) => note.key === dimension.key).map((note) => ({ ...note, at: item.observedAt })));
+    if (!notes.length) return [];
+    const weak = notes.filter((note) => note.polarity === "weakness").length, strong = notes.length - weak;
+    const state = weak && strong ? `短板 ${weak} 次 · ${abilityStateLabel(dimension.key, "strength")} ${strong} 次` : abilityStateLabel(dimension.key, weak ? "weakness" : "strength");
+    const latest = notes[notes.length - 1];
+    return [`${latexPlain(dimension.label)} & ${state} & ${cell(`“${latest.evidence}”（${shortDate(latest.at)}）`)}\\\\`];
+  });
+  if (!rows.length) return "";
+  return String.raw`\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}p{30mm} p{30mm} X@{}}
+\toprule
+\textbf{能力} & \textbf{老师的判断} & \textbf{最近一次反馈}\\
+\midrule
+${rows.join("\n")}
+\bottomrule
+\end{tabularx}`;
+}
+
+/** 学情报告 → TeX: the teacher's (or the model's) text around tables built from the report's own data snapshot. */
+export function buildStudentReportLatex(report: StudentReport) {
+  const { data, text } = report; const totals = reportTotals(data);
+  const name = latexPlain(data.studentName);
+  const period = `${date(report.periodStart)}—${date(report.periodEnd)}`;
+  const banner = String.raw`\banner{\begin{tabularx}{\linewidth}{@{}XXXX@{}}
+\small 作业 & \small 批改题数 & \small 正确率 & \small 课后反馈\\[3pt]
+{\LARGE\bfseries ${totals.homework} 份} & {\LARGE\bfseries ${totals.total} 题} & {\LARGE\bfseries ${totals.total ? totals.rate.replace("%", "\\%") : "—"}} & {\LARGE\bfseries ${totals.lessons} 次}
+\end{tabularx}}`;
+  const body = [
+    PREAMBLE,
+    String.raw`\hypersetup{pdftitle={${name} 学情报告},pdfauthor={学习反馈}}`,
+    String.raw`\fancyhead[L]{\small\color{muted}${name}\quad / \quad 学情报告}`,
+    String.raw`\fancyhead[R]{\small\color{muted}${period}}`,
+    String.raw`\fancyfoot[L]{\footnotesize\color{muted}学习反馈 · 写给家长}`,
+    String.raw`\fancyfoot[R]{\footnotesize\color{muted}\thepage\ / \pageref{LastPage}}`,
+    String.raw`\begin{document}`,
+    String.raw`{\small\color{accent}\bfseries MATHEMATICS \quad / \quad 学情报告}
+\vspace{7pt}
+
+{\Huge\bfseries\color{ink}${name}}${data.className ? String.raw`\quad{\large\color{muted}${latexPlain(data.className)}}` : ""}\\[4pt]
+{\LARGE\color{ink}${period}}`,
+    banner,
+    String.raw`\section{总体情况}`,
+    paragraph(text.overview || "—"),
+    String.raw`\section{作业情况}`,
+    data.homework.length ? homeworkTable(report) : "这段时间没有作业记录。",
+    ...(data.wrongAdded ? [String.raw`\note{这段时间新进错题本 ${data.wrongAdded} 题，已按月整理，可以随时组卷重练。}`] : []),
+    String.raw`\section{知识掌握}`,
+    paragraph(text.knowledge || "—"),
+    knowledgeTable(report),
+    String.raw`\section{能力表现}`,
+    paragraph(text.abilities || "—"),
+    abilityTable(report),
+    ...(text.plan.length ? [String.raw`\section{下一步安排}`, String.raw`\begin{enumerate}\setlength{\itemsep}{2pt}`, ...text.plan.map((item) => String.raw`\item ${latexInline(item)}`), String.raw`\end{enumerate}`] : []),
+    ...(text.message ? [String.raw`\banner{\textbf{给家长的话}\quad ${latexInline(text.message)}}`] : []),
+    String.raw`\note{知识掌握来自这段时间批改过的作业；能力表现来自老师的课后反馈。正确率只统计已确认对错的题，待核实的题不计入。}`,
     String.raw`\end{document}`,
   ];
   return `${body.join("\n\n")}\n`;

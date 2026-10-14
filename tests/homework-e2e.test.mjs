@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -120,6 +120,12 @@ function startMockModel(port) {
       if (state.failObservation) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock observation refused"}}));return; }
       state.observationPrompts.push(prompt);
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({abilities:[{key:"careless",polarity:"weakness",evidence:"还是粗心"},{key:"thinking-reverse",polarity:"strength",evidence:"逆向思维 不错"},{key:"calculation",polarity:"weakness",evidence:"老师没说过的话"}],keywords:["丢负号","老师没说的词"]})}));return;
+    }
+    // 学情报告: the text is written from the data in the prompt only.
+    if (prompt.includes("替老师写一份给家长看的学情报告")) {
+      if (state.failReport) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock report refused"}}));return; }
+      state.reportPrompts.push(prompt);
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({overview:"这段时间完成了布置的计算打卡。",knowledge:"加法掌握较好。",abilities:"老师反馈逆向思维不错。",plan:["每天练 5 道去括号","订正错题本里的题"],message:"请家长每天检查打卡。"})}));return;
     }
     // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
@@ -653,6 +659,38 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherTwo,method:"DELETE",body:{}})).response.status,404);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile.observations.length,0);
+
+    // 学情报告: a snapshot of the period, written up by the model from that snapshot alone; without a model, plain facts.
+    await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"逆向思维不错，计算还是粗心。",observedAt:Date.now()}});
+    const period={periodStart:Date.now()-7*86_400_000,periodEnd:Date.now(),timeZone:"Asia/Shanghai"};
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo,method:"POST",body:period})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:{periodStart:period.periodEnd,periodEnd:period.periodStart}})).response.status,400);
+    const made=await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:period});
+    assert.equal(made.response.status,201,JSON.stringify(made.payload));
+    const report=made.payload.report;
+    assert.equal(made.payload.notice,"");
+    assert.deepEqual(report.text.plan,["每天练 5 道去括号","订正错题本里的题"]);
+    assert.ok(report.data.homework.some(item=>item.title==="两天计算打卡"&&item.assigned&&item.done===4&&item.total===4),"the assigned homework of the period is in the snapshot");
+    assert.ok(report.data.knowledge.length&&report.data.types.length);
+    assert.deepEqual(report.data.observations.map(item=>item.text),["逆向思维不错，计算还是粗心。"]);
+    const reportPrompt=mock.state.reportPrompts.at(-1);
+    assert.match(reportPrompt,/两天计算打卡（.+布置）：共 4 题，交了 4 题，对 3，错 1/);
+    assert.match(reportPrompt,/逆向思维不错，计算还是粗心。/);
+    assert.match(reportPrompt,/不能自己从作业结果推断粗心/);
+    mock.state.failReport=true;
+    const plain=await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:period});
+    mock.state.failReport=false;
+    assert.equal(plain.response.status,201);assert.ok(plain.payload.notice);
+    assert.match(plain.payload.report.text.overview,/共完成 \d+ 份作业，批改 \d+ 道题，正确率 \d+%/);
+    const edited=await jsonRequest(base,`/api/students/${studentOneId}/reports/${report.id}`,{cookie:teacherOne,method:"PUT",body:{text:{...report.text,message:"老师改过的话"}}});
+    assert.equal(edited.payload.report.text.message,"老师改过的话");assert.deepEqual(edited.payload.report.data,report.data,"editing never changes the data snapshot");
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports/${report.id}`,{cookie:teacherTwo,method:"PUT",body:{text:{}}})).response.status,404);
+    let reportList=(await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne})).payload.reports;
+    assert.equal(reportList.length,2);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports/${plain.payload.report.id}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
+    reportList=(await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne})).payload.reports;
+    assert.deepEqual(reportList.map(item=>item.id),[report.id]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo})).response.status,404);
 
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});

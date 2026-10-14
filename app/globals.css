@@ -791,6 +791,40 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .observation-pending button { margin-left:6px; border:0; background:none; color:var(--green); font-size:12px; font-weight:600; }
 .observation-empty { margin:12px 0 0; color:var(--muted); font-size:12px; }
 @media (max-width:1100px) { .profile-columns { grid-template-columns:1fr; } }
+/* 学生档案 · 学情报告：左边历次报告，右边可修改的报告正文和数据表。 */
+.student-reports { margin-top:16px; }
+.report-generate { flex-wrap:wrap; justify-content:flex-start; gap:10px 14px; padding:12px 14px; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); }
+.report-generate label { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; }
+.report-generate input { height:32px; padding:0 8px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--ink); font:inherit; font-size:13px; }
+.report-generate small { flex-basis:100%; color:var(--muted); font-size:11.5px; }
+.report-layout { display:grid; grid-template-columns:200px minmax(0,1fr); gap:16px; align-items:start; }
+.report-list { display:grid; align-content:start; align-self:start; gap:4px; }
+.report-list button { display:grid; gap:2px; padding:9px 12px; border:1px solid transparent; border-radius:calc(9px*var(--radius-scale)); background:none; color:var(--ink); text-align:left; }
+.report-list button:hover { background:var(--surface-soft); }
+.report-list button.active { border-color:color-mix(in srgb,var(--green) 29%,var(--green-soft)); background:var(--green-soft); box-shadow:inset 3px 0 0 var(--green); }
+.report-list b { font-size:13px; }
+.report-list small { color:var(--muted); font-size:11px; }
+.report-view { min-width:0; display:grid; gap:12px; padding:18px 20px; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); }
+.report-view>header { display:flex; align-items:center; gap:10px; }
+.report-view>header>div { display:grid; gap:2px; margin-right:auto; }
+.report-view h3 { margin:0; font:700 18px "Songti SC",serif; }
+.report-view>header small { color:var(--muted); font-size:11.5px; }
+.report-banner { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; padding:12px 14px; border-radius:calc(10px*var(--radius-scale)); background:color-mix(in srgb,var(--green-soft) 60%,var(--surface)); }
+.report-banner dt { color:var(--muted); font-size:11.5px; }
+.report-banner dd { margin:2px 0 0; color:var(--ink); font:700 20px "Songti SC",serif; }
+.report-field { display:grid; gap:5px; margin:0; }
+.report-field>span { color:var(--green); font-size:12.5px; font-weight:700; }
+.report-field textarea { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--ink); font:inherit; font-size:13.5px; line-height:1.7; resize:vertical; field-sizing:content; outline:none; }
+.report-field textarea:focus { border-color:var(--green); box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 10%,transparent); }
+.report-plan { display:grid; gap:6px; margin:0; padding-left:20px; }
+.report-plan .report-field>span { display:none; }
+.report-plan textarea { min-height:38px; }
+.report-data h4 { margin:0 0 6px; color:var(--green); font-size:12.5px; }
+.report-data table { width:100%; border-collapse:collapse; font-size:12.5px; }
+.report-data th { padding:6px 8px; border-bottom:1px solid var(--line); color:var(--muted); font-weight:600; text-align:left; white-space:nowrap; }
+.report-data td { padding:6px 8px; border-bottom:1px dashed var(--line); color:var(--ink); }
+.report-data p,.report-data small { margin:0; color:var(--muted); font-size:12px; }
+@media (max-width:900px) { .report-layout { grid-template-columns:1fr; } .report-list { grid-auto-flow:column; grid-auto-columns:max-content; overflow-x:auto; } .report-banner { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; } .report-data { overflow-x:auto; } }
 @media (max-width:760px) { .ability-summary li { grid-template-columns:96px 52px minmax(0,1fr); } .profile-topic,.profile-points li { grid-template-columns:minmax(0,1fr) 128px; } .observation-compose>div { align-items:stretch; flex-direction:column; } }
 .wrong-question-list { margin-top:20px; }
 .wrong-month { display:grid; gap:12px; }.wrong-month + .wrong-month { margin-top:16px; }.wrong-month-head { display:flex; align-items:baseline; gap:8px; margin:0; font-family:"Songti SC",serif; font-size:16px; color:var(--ink); }.wrong-month-head span { font-family:inherit; font-size:11px; font-weight:400; color:var(--muted); }
