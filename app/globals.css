@@ -1018,6 +1018,7 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-workspace .meta em { display:block; font-size:11px; }
 .basket-empty { margin-top:24px; min-height:300px; border:1px dashed var(--line); border-radius:calc(12px*var(--radius-scale)); }
 .paper-dock .export-button { white-space:nowrap; flex:0 0 auto; }
+.paper-dock .ghost-button { height:43px; margin-right:10px; padding:0 18px; border:1px solid color-mix(in srgb, var(--on-inverse) 65%, transparent); border-radius:calc(9px*var(--radius-scale)); color:var(--on-inverse); font-size:12px; font-weight:700; white-space:nowrap; flex:0 0 auto; }
 @media (max-width:650px) {
   .basket-workspace .content { padding:24px 16px 50px; }
   .basket-heading { gap:10px; align-items:flex-start; }.basket-heading h1 { font-size:25px; gap:10px; }
