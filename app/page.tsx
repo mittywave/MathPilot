@@ -6,6 +6,7 @@ import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
 import { PaperMoreMenu } from "./components/PaperMoreMenu";
+import { useConfirm } from "./components/ConfirmDialog";
 import { SiteHeader } from "./components/SiteHeader";
 import { StudentHomework } from "./components/StudentHomework";
 import { StudentProfile } from "./components/StudentProfile";
@@ -114,8 +115,9 @@ export default function Home() {
   const [moduleName, setModuleName] = useState("");
   const [moduleSubtitle, setModuleSubtitle] = useState("");
   const [draggedModuleId, setDraggedModuleId] = useState("");
-  const [deleteModuleTarget, setDeleteModuleTarget] = useState<LibraryModule | null>(null);
-  const [deleteModuleConfirmation, setDeleteModuleConfirmation] = useState("");
+  const [confirmDialog, confirm] = useConfirm();
+  const deleting = useRef(false);
+  const moduleManager = useRef<HTMLButtonElement>(null);
   const [showWrongBook, setShowWrongBook] = useState(false);
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [activeStudentId, setActiveStudentId] = useState("");
@@ -323,11 +325,25 @@ export default function Home() {
   }
 
   async function removeStudent(student: StudentSummary) {
-    if (!window.confirm(`删除“${student.name}”及其 ${student.wrongCount} 道错题记录？此操作无法撤销。`)) return;
+    if (deleting.current) return;
+    deleting.current = true;
     try {
-      await deleteStudentProfile(student.id); await loadStudents(activeStudentId === student.id ? "" : activeStudentId);
+      if (!await confirm({ title: `删除学生档案「${student.name}」`,
+        items: ["学生讲义", "作业与批改记录，包括上传的照片", `错题本（${student.wrongCount} 道）`, "课后反馈和学情报告"],
+        body: "这些内容会一起永久删除，无法恢复。", typeToConfirm: student.name, confirmLabel: "永久删除", danger: true })) return;
+      const index = students.findIndex((item) => item.id === student.id);
+      const nextId = activeStudentId === student.id ? students[index + 1]?.id ?? students[index - 1]?.id ?? "" : activeStudentId;
+      await deleteStudentProfile(student.id);
+      const remaining = await loadStudents(nextId);
+      if (activeStudentId === student.id) {
+        const selectedId = remaining.some((item) => item.id === nextId) ? nextId : remaining[0]?.id;
+        const url = new URL(window.location.href);
+        if (selectedId) url.searchParams.set("studentId", selectedId); else url.searchParams.delete("studentId");
+        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
       setNotice(`已删除学生档案：${student.name}`);
     } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案删除失败"); }
+    finally { deleting.current = false; }
   }
 
   const toggleSelected = (id: string) => { if (!requireLogin()) return; setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); };
@@ -492,19 +508,25 @@ export default function Home() {
     catch (error) { await refreshLibrary(true); setNotice(error instanceof Error ? error.message : "模块排序失败"); }
   }
 
-  async function confirmDeleteModule() {
-    if (!deleteModuleTarget) return;
+  async function removeModule(module: LibraryModule) {
+    if (deleting.current) return;
+    deleting.current = true;
     try {
-      await deleteCloudModule(deleteModuleTarget.id, deleteModuleConfirmation);
-      const removedId = deleteModuleTarget.id;
+      if (!await confirm({ title: `删除模块「${module.name}」`,
+        items: [`${questions.filter((item) => item.moduleId === module.id).length} 道题`, `${categories.filter((item) => item.moduleId === module.id).length} 个分类`],
+        body: "模块及其内容会一起永久删除，无法恢复。", typeToConfirm: module.name, confirmLabel: "确认删除", danger: true })) return;
+      await deleteCloudModule(module.id, module.name);
+      const removedId = module.id;
       const next = modules.filter((item) => item.id !== removedId);
       const removedQuestions = questions.filter((item) => item.moduleId === removedId).map((item) => item.id);
       setModules(next); setCategories((current) => current.filter((item) => item.moduleId !== removedId)); setQuestions((current) => current.filter((item) => item.moduleId !== removedId));
       setSelectedIds((current) => current.filter((id) => !removedQuestions.includes(id)));
-      setDeleteModuleTarget(null); setDeleteModuleConfirmation(""); setModuleDialog(null);
+      setModuleDialog(null);
       setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
       setNotice("模块及其内容已删除");
+      requestAnimationFrame(() => moduleManager.current?.focus());
     } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
+    finally { deleting.current = false; }
   }
 
   const typesetIds = selectedQuestions.map((question) => question.id).join(",");
@@ -526,7 +548,6 @@ export default function Home() {
             <div className="sidebar-heading"><div><span className="eyebrow">学生专属空间</span><h2>学生档案</h2></div><button className="icon-button" aria-label="新建学生" title="新建学生" onClick={() => openStudentDialog()}>＋</button></div>
             <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}</b><small>{student.className || "未填写班级"}</small></div><em>{student.wrongCount}</em></button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
             <button className="manage-button" onClick={() => openStudentDialog()}>＋ 新建学生档案</button>
-            {activeStudent && <div className="student-profile-actions"><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><button className="danger-text" onClick={() => removeStudent(activeStudent)}>删除</button></div>}
           </> : <>
           <div className="sidebar-heading"><div><span className="eyebrow">{activeModule?.name ?? pageCopy.publicLibrary}</span><h2>{pageCopy.knowledgeDirectory}</h2></div>{canManageLibrary && activeModule && <button className="icon-button" aria-label={pageCopy.addCategory} title={pageCopy.addCategory} onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋</button>}</div>
           <CategoryTree module={activeModule} categories={categories} activeId={showSelected ? null : activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setShowSelected(false); }} />
@@ -538,7 +559,7 @@ export default function Home() {
           {showWrongBook ? <>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => { if (event.target.value === NEW_STUDENT_OPTION) openStudentDialog(); else selectStudent(event.target.value); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}<option value={NEW_STUDENT_OPTION}>＋ 新建学生</option></select></label>}
             {activeStudent ? <>
-              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}</h1>{activeStudent.notes && <p className="subtext">{activeStudent.notes}</p>}</div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} target="_blank" rel="noreferrer" title="按这位学生的档案从题库挑题、按天排好">智能组卷</a></div></div>
+              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}</h1>{activeStudent.notes && <p className="subtext">{activeStudent.notes}</p>}</div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} target="_blank" rel="noreferrer" title="按这位学生的档案从题库挑题、按天排好">智能组卷</a><PaperMoreMenu label={`${activeStudent.name}的档案操作`}><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><hr /><button className="danger-text" onClick={() => void removeStudent(activeStudent)}>删除档案…</button></PaperMoreMenu></div></div>
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
               {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
               <div className="content-head wrong-book-head"><div><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label></div>
@@ -582,7 +603,7 @@ export default function Home() {
               <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><PaperMoreMenu><button disabled={isExporting} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu><button className="secondary" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><button className="primary-button" disabled={isExporting} onClick={() => void openTypeset()}>快速排版</button></div>
             </>}
           </> : <>
-          <div className="library-context-bar"><div><b>{pageCopy.publicLibrary}</b><span>{authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess}</span></div>{canManageLibrary && <button className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
+          <div className="library-context-bar"><div><b>{pageCopy.publicLibrary}</b><span>{authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess}</span></div>{canManageLibrary && <button ref={moduleManager} className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
           <div className="module-switcher" aria-label={pageCopy.moduleSwitcher}>
             {modules.map((examModule, index) => <button key={examModule.id} className={activeModule?.id === examModule.id && !showSelected ? "active" : ""} onClick={() => switchExamModule(examModule.id)}>
               <span>{String(index + 1).padStart(2, "0")}</span><div><b>{examModule.name}</b><small>{examModule.subtitle || pageCopy.noSubtitle}</small></div><em>{pageLocale === "en" ? alevelQuestionCount(countFor(examModule.id), pageLocale) : `${countFor(examModule.id)} ${pageCopy.questionUnit}`}</em>
@@ -639,17 +660,10 @@ export default function Home() {
           <div className="modal-actions"><button className="secondary" onClick={() => setModuleDialog(moduleDraft ? "manage" : null)}>取消</button><button className="primary-button" onClick={saveModule}>{moduleDraft ? "保存修改" : "创建模块"}</button></div>
         </> : <>
           <div className="module-manage-list">{modules.map((item, index) => <div key={item.id} draggable onDragStart={() => setDraggedModuleId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => dropModule(item.id)}>
-            <span className="drag-handle" title="拖动排序">⋮⋮</span><span><b>{item.name}</b><small>{item.subtitle || "未设置副标题"} · {countFor(item.id)} 题</small></span><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" onClick={() => { setDeleteModuleTarget(item); setDeleteModuleConfirmation(""); }}>删除</button>}</div>
+            <span className="drag-handle" title="拖动排序">⋮⋮</span><span><b>{item.name}</b><small>{item.subtitle || "未设置副标题"} · {countFor(item.id)} 题</small></span><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" onClick={() => void removeModule(item)}>删除</button>}</div>
           </div>)}</div>
           <div className="modal-actions"><button className="secondary" onClick={openNewModule}>＋ 新建模块</button><button className="primary-button" onClick={() => setModuleDialog(null)}>完成</button></div>
         </>}
-      </section></div>}
-
-      {deleteModuleTarget && <div className="modal-backdrop modal-backdrop-raised"><section className="modal delete-modal" role="dialog" aria-modal="true" aria-label="删除模块">
-        <div className="modal-head"><div><span className="eyebrow">危险操作</span><h2>删除“{deleteModuleTarget.name}”</h2></div><button className="close" onClick={() => setDeleteModuleTarget(null)}>×</button></div>
-        <div className="delete-summary"><strong>{questions.filter((item) => item.moduleId === deleteModuleTarget.id).length}</strong><div><b>道题及 {categories.filter((item) => item.moduleId === deleteModuleTarget.id).length} 个分类将一并删除</b><p>该操作无法撤销。请输入完整模块名称确认。</p></div></div>
-        <label className="field">输入“{deleteModuleTarget.name}”<input value={deleteModuleConfirmation} onChange={(event) => setDeleteModuleConfirmation(event.target.value)} /></label>
-        <div className="modal-actions"><button className="secondary" onClick={() => setDeleteModuleTarget(null)}>取消</button><button className="danger-button" disabled={deleteModuleConfirmation !== deleteModuleTarget.name} onClick={confirmDeleteModule}>确认删除</button></div>
       </section></div>}
 
       {studentDialog && <div className="modal-backdrop"><section className="modal student-modal" role="dialog" aria-modal="true" aria-label={studentDraft ? "编辑学生档案" : "新建学生档案"}>
@@ -674,6 +688,7 @@ export default function Home() {
         <p className="auth-note">访客无需登录即可浏览题目；注册后可以录题、组卷和下载 Word。普通会员只能修改自己录入的题目。</p>
         <div className="modal-actions"><button className="secondary" onClick={() => setAuthDialog(false)}>取消</button><button className="primary-button" disabled={authSubmitting || !authEmail || !authPassword || (authMode === "register" && !authInvite)} onClick={submitAuth}>{authSubmitting ? "请稍候…" : authMode === "login" ? "登录" : "注册并登录"}</button></div>
       </section></div>}
+      {confirmDialog}
       {notice && <div className="toast">✓ {notice}</div>}
     </main>
   );
