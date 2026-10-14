@@ -1,10 +1,11 @@
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
-import { arrangeHandouts, createHandout, listHandouts } from "../../../lib/server/handouts";
+import { arrangeHandouts, createHandout, listHandoutCourses, listHandouts } from "../../../lib/server/handouts";
 
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
-    return Response.json({ handouts: await listHandouts(user) });
+    const [handouts, courseNodes] = await Promise.all([listHandouts(user), listHandoutCourses()]);
+    return Response.json({ handouts, courseNodes });
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "讲义列表读取失败" }, { status: 500 });

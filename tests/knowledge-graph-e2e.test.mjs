@@ -159,7 +159,7 @@ test("teachers edit the knowledge graph as a guarded draft, publish versions and
     // The course graph: its lessons and modules come from the 课程体系 handouts; the graph keeps domains, mastery and relations.
     const COURSE = "sz-innovation-course";
     const lesson = async (title, sections) => (await jsonRequest(localBase, "/api/handouts", { method: "POST", body: { handout: {
-      title, grade: 7, term: "summer", items: sections.map(([id, sectionTitle]) => ({ id, kind: "section", title: sectionTitle, note: "" })),
+      title, courseUnitId: "course-7-summer", items: sections.map(([id, sectionTitle]) => ({ id, kind: "section", title: sectionTitle, note: "" })),
     } } })).payload.handout;
     const first = await lesson("正负数", [["s1", "正负数与数轴"], ["s2", "绝对值"]]);
     const second = await lesson("有理数运算", [["s3", "加减乘除"]]);

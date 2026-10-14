@@ -7,8 +7,6 @@
 .handout-question-foot small,.picker-item-foot small{color:color-mix(in srgb,var(--ink,#24352f) 58%,var(--surface,#fff));font-size:12.5px}
 .handouts .basket-more .more-toggle{min-height:44px}
 
-.handout-answer-choice>div.four{grid-template-columns:repeat(4,minmax(0,1fr))}
-
 .handout-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:10px 12px 12px;border-top:1px solid var(--line,#e4e9e6);background:color-mix(in srgb,var(--surface-soft,#eef3f0) 55%,var(--surface,#fff))}
 .handout-bar .primary-button{grid-column:1/-1;width:100%;margin-left:0;height:38px;padding:0 18px}
 .handout-back{display:inline-flex;flex:none;justify-self:start;align-items:center;gap:6px;min-height:36px;padding:0 10px 0 6px;border-radius:calc(8px*var(--radius-scale));color:var(--green,#2f6b53);font-size:13.5px;font-weight:600;text-decoration:none;white-space:nowrap}
@@ -244,6 +242,28 @@
   .handout-entry>a{padding-right:64px}
 }
 @media (prefers-reduced-motion:reduce){.handout-entry .basket-more{transition:none}}
+.handout-nav-row{display:flex;align-items:center;min-width:0}
+.handout-nav-row>.item{flex:1;min-width:0;padding-left:10px}
+.handout-nav-row>.item>span{overflow:hidden;text-overflow:ellipsis}
+.handout-nav-row>.basket-more{flex:none}
+.handout-nav-row .more-toggle{width:30px;min-height:32px;padding:0 6px;justify-content:center}
+.handout-nav-row .basket-more>div{left:auto;right:0;min-width:140px}
+.handout-stage-nav{margin-left:12px;padding-left:4px;border-left:1px solid var(--line)}
+.handout-nav .handout-outline-add{width:auto;min-height:36px;padding:0 10px;color:var(--green);font-size:12px}
+.handout-course-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 6px 18px}
+.handout-course-head h1{margin:0;font:700 24px/1.4 "Songti SC",serif;overflow-wrap:anywhere}
+.handout-course-head p{margin:4px 0 0;color:var(--muted);font-size:13px}
+.handout-columns.course-columns{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}
+.handout-column>header>.basket-more{margin-left:auto;flex:none}
+.handout-column>header h2{min-width:0;overflow-wrap:anywhere}
+.handout-column>header>span{white-space:nowrap}
+.handout-course-field{display:grid;gap:8px;margin:14px 0;font-size:14px}
+.handout-course-field input,.handout-course-field select,.handout-course-field textarea{width:100%;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit}
+.handout-course-field textarea{resize:vertical;line-height:1.7}
+.handout-move .modal-actions{flex-wrap:wrap}
+.handout-back{white-space:normal;overflow-wrap:anywhere}
+@media(max-width:900px){.handout-nav nav>div{width:100%}.handout-stage-nav{display:flex;flex-wrap:wrap;gap:4px}.handout-nav-row .item{width:auto}.handout-nav-row .basket-more>div{left:auto;right:0}}
+
 @media(max-width:1280px){.handout-columns{grid-template-columns:repeat(2,minmax(0,1fr));gap:28px}.handout-columns.topics,.handout-columns.topics.with-unsorted{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){
   .handout-home{grid-template-columns:minmax(0,1fr)}

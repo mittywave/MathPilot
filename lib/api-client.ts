@@ -1,4 +1,4 @@
-import type { AbilityNote, AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentReport, StudentReportText, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
+import type { AbilityNote, AuthUser, Category, Handout, HandoutCourseNode, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentReport, StudentReportText, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -25,7 +25,9 @@ export function reorderCloudModules(order: string[]) { return request<{ ok: bool
 export function deleteCloudModule(id: string, confirmation: string) { return request<{ ok: boolean; questionCount: number; categoryCount: number }>(`/api/modules/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ confirmation }) }); }
 export function importCloudLibrary(data: LibraryData) { return request<{ imported: number; modules: number; categories: number }>("/api/library/import", { method: "POST", body: JSON.stringify(data) }); }
 export function authorizeDownload(questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ questionIds }) }); }
-export function fetchHandouts() { return request<{ handouts: HandoutSummary[] }>("/api/handouts"); }
+export function fetchHandouts() { return request<{ handouts: HandoutSummary[]; courseNodes: HandoutCourseNode[] }>("/api/handouts"); }
+export function saveHandoutCourse(change: { id?: string; parentId?: string | null; name?: string; direction?: -1 | 1 }) { return request<{ id: string; courseNodes: HandoutCourseNode[] }>("/api/handout-courses", { method: "POST", body: JSON.stringify(change) }); }
+export function deleteHandoutCourse(id: string) { return request<{ courseNodes: HandoutCourseNode[] }>("/api/handout-courses", { method: "DELETE", body: JSON.stringify({ id }) }); }
 export function fetchHandout(id: string) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(id)}`); }
 export function createHandout(handout: Pick<Handout, "title" | "items"> & Partial<HandoutGroup & Pick<Handout, "temporaryQuestions">>) { return request<{ handout: Handout }>("/api/handouts", { method: "POST", body: JSON.stringify({ handout }) }); }
 export function arrangeHandouts(group: HandoutGroup, ids: string[]) { return request<HandoutGroup & { ids: string[] }>("/api/handouts", { method: "PATCH", body: JSON.stringify({ ...group, ids }) }); }
