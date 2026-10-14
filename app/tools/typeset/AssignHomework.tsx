@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { calendarDay, laterDay, shortDate } from "../../components/AssignedHomeworkSheet";
 import { homeworkApi } from "../../../lib/homework-api-client";
 import type { SheetGroup } from "../../../lib/handout-latex";
 import type { Question, StudentSummary } from "../../../lib/types";
@@ -8,12 +9,14 @@ type Assigned = Array<{ id: string; studentId: string; studentName: string }>;
 
 // 布置给学生: the material on screen becomes a homework of each chosen student, its questions and answers stored now.
 // What the student hands in is uploaded later from the student's archive, in one go or day by day, and graded against them.
+// 第 1 天 is today unless the teacher picks another date; each further day is due on the next.
 export function AssignHomework({ title, questions, groups, studentId, onClose }: {
   title: string; questions: Question[]; groups?: SheetGroup[]; studentId?: string | null; onClose: () => void;
 }) {
   const [students, setStudents] = useState<StudentSummary[] | null>(null);
   const [chosen, setChosen] = useState<string[]>(studentId ? [studentId] : []);
   const [name, setName] = useState(title);
+  const [start, setStart] = useState(() => calendarDay());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [assigned, setAssigned] = useState<Assigned | null>(null);
@@ -26,12 +29,14 @@ export function AssignHomework({ title, questions, groups, studentId, onClose }:
   }, [onClose]);
 
   const answered = questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length;
+  const days = groups?.length ?? 0;
+  const lastDay = start && days > 1 ? laterDay(start, days - 1) : start;
   const toggle = (id: string) => setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   async function assign() {
-    if (!chosen.length || !name.trim() || busy) return;
+    if (!chosen.length || !name.trim() || !start || busy) return;
     setBusy(true); setError("");
-    try { setAssigned((await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions, groups })).assigned); }
+    try { setAssigned((await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions, groups, start })).assigned); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "布置失败"); }
     finally { setBusy(false); }
   }
@@ -44,7 +49,10 @@ export function AssignHomework({ title, questions, groups, studentId, onClose }:
         <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`} target="_blank" rel="noreferrer">打开{item.studentName}的档案</a>)}</div>
         <div className="modal-actions"><button className="primary-button" onClick={onClose}>完成</button></div>
       </> : <>
-        <label className="field">作业名称<input value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+        <div className="assign-fields">
+          <label className="field">作业名称<input value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+          <label className="field">{days > 1 ? "第 1 天" : "交作业日期"}<input type="date" value={start} required disabled={busy} onChange={(event) => setStart(event.target.value)} /></label>
+        </div>
         <fieldset className="assign-students" disabled={busy}>
           <legend>布置给</legend>
           {students === null ? <p>正在读取学生档案…</p> : students.length ? students.map((student) => <label key={student.id} className={chosen.includes(student.id) ? "on" : ""}>
@@ -52,11 +60,11 @@ export function AssignHomework({ title, questions, groups, studentId, onClose }:
             <b>{student.name}</b>{student.className && <small>{student.className}</small>}
           </label>) : <p>还没有学生档案，请先在“学生档案”里新建学生。</p>}
         </fieldset>
-        <p className="assign-summary">{questions.length} 道题{groups?.length ? ` · 分 ${groups.length} 天` : ""} · {answered === questions.length ? "全部带答案" : `${answered} 道带答案，其余 ${questions.length - answered} 道批改时由 AI 解题`}</p>
-        <p className="assign-hint">题目和答案现在就存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。</p>
+        <p className="assign-summary">{questions.length} 道题{days > 1 && start ? ` · 分 ${days} 天，${shortDate(start)}–${shortDate(lastDay)} 每天一份` : start ? ` · ${shortDate(start)} 交` : ""} · {answered === questions.length ? "全部带答案" : `${answered} 道带答案，其余 ${questions.length - answered} 道批改时由 AI 解题`}</p>
+        <p className="assign-hint">题目和答案现在就存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。{days > 1 ? "到了哪天还没交那天的，" : "过了交作业日期还没交的，"}学生档案里会标出“没交”。</p>
         {error && <p className="assign-error" role="alert">{error}</p>}
         <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={busy || !chosen.length || !name.trim()} onClick={() => void assign()}>{busy ? "正在布置…" : chosen.length > 1 ? `布置给 ${chosen.length} 位学生` : "布置"}</button></div>
+          <button className="primary-button" disabled={busy || !chosen.length || !name.trim() || !start} onClick={() => void assign()}>{busy ? "正在布置…" : chosen.length > 1 ? `布置给 ${chosen.length} 位学生` : "布置"}</button></div>
       </>}
     </section>
   </div>;

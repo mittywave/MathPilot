@@ -380,11 +380,20 @@ export type AssignmentQuestion = {
 /** How an assigned material is split (智能组卷 by day); no groups means one run of questions numbered 1, 2, 3…. */
 export type HomeworkSheetGroup = { title: string; size: number };
 /**
+ * One day of an assigned homework (a sheet without days is one day): the calendar date it is due, YYYY-MM-DD — 第 1 天
+ * on the date the teacher set, each further day on the next — and what of it has come back so far.
+ */
+export type HomeworkDay = HomeworkSheetGroup & {
+  date: string; done: number; correct: number; incorrect: number; pending: number;
+  /** When the first upload that found any of its questions was handed in. */
+  handedInAt: number | null;
+};
+/**
  * An assigned homework: its questions were known when it was handed out, and it may come back in several uploads.
  * Each question carries its latest graded result over the uploads so far; one never handed in has none.
  */
 export type AssignedHomework = {
-  groups: HomeworkSheetGroup[];
+  days: HomeworkDay[];
   questions: Array<{ id: string; number: string; question: Question; result: { verdict: GradingVerdict; requiresReview: boolean; submissionId: string } | null }>;
   uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
 };
@@ -394,6 +403,8 @@ export type StudentHomework = {
   assignmentId: string; title: string; assigned: boolean; createdAt: number;
   total: number; done: number; correct: number; incorrect: number; pending: number;
   latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
+  /** An assigned homework's days; null for an uploaded one. */
+  days: HomeworkDay[] | null;
 };
 
 export type SubmissionPage = {

@@ -28,6 +28,8 @@
 .typeset-panel .typeset-download{margin:0;font-size:13.5px}
 .typeset-panel .typeset-assign{margin-top:-8px;height:38px;color:var(--green,#2f6b53);font-size:13.5px;font-weight:600}
 .assign-modal{width:min(560px,100%)}
+.assign-fields{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:12px}
+@media (max-width:560px){.assign-fields{grid-template-columns:1fr;gap:0}}
 .assign-students{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;padding:0;border:0}
 .assign-students legend{margin-bottom:7px;padding:0;color:color-mix(in srgb,var(--ink) 23%,var(--muted));font-size:11px}
 .assign-students p{margin:0;color:var(--muted);font-size:12px}
