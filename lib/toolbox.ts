@@ -23,6 +23,11 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
     tags: ["学生档案", "按天打卡", "快速排版"],
   },
   {
+    key: "ai-settings", href: "/settings/ai", name: "AI 配置中心", icon: "spark", adminOnly: true,
+    summary: "管理 AI 服务连接、模型目录和任务分配，查看连接诊断。",
+    tags: ["服务连接", "模型", "任务分配"],
+  },
+  {
     key: "sharing", href: "/tools/sharing", name: "共享办公", icon: "share", adminOnly: true,
     summary: "在公司把知题共享给同事：一键开关、记住公司网络，管理邀请码和同事账号。",
     tags: ["局域网", "邀请码", "成员"],

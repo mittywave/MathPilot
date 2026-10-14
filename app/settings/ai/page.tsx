@@ -1,6 +1,7 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import Link from 'next/link';
+import {useRouter} from 'next/navigation';
 import type {AiCenterPublic,AiRoutingConfig,ProviderConfig,ProviderDiagnostic,ProviderKind,ProviderWrite} from '../../../lib/ai-provider-types';
 import {KIND_LABELS,newProvider} from '../../../lib/ai-provider-presets';
 import {api,ConfirmDialog,providerDraft} from './_components/common';
@@ -14,6 +15,7 @@ type Operation='save'|'model'|'discover'|'test'|'route'|'delete';
 type Confirmation={title:string;message:string;accept:()=>void};
 const endpoint='/api/admin/ai-providers';
 export default function AiSettingsPage(){
+ const router=useRouter();
  const [data,setData]=useState<AiCenterPublic|null>(null),[selected,setSelected]=useState(''),[draft,setDraft]=useState<ProviderWrite|null>(null),[routing,setRouting]=useState<AiRoutingConfig|null>(null);
  const [view,setView]=useState<'providers'|'routing'>('providers'),[tab,setTab]=useState<'connection'|'models'|'diagnostics'>('connection'),[search,setSearch]=useState('');
  const [records,setRecords]=useState<ProviderDiagnostic[]>([]),[notice,setNotice]=useState(''),[error,setError]=useState(''),[field,setField]=useState<string>(),[confirm,setConfirm]=useState<Confirmation|null>(null);
@@ -43,7 +45,7 @@ export default function AiSettingsPage(){
  const providerPath=saved?`${endpoint}/${saved.id}`:'';
  const visible=data?.providers.filter(p=>`${p.name} ${p.baseUrl}`.toLowerCase().includes(search.toLowerCase()))||[];
  const selector=<label>当前提供方<select aria-label="当前提供方" value={selected} onChange={e=>choose(e.target.value)}><option value="">{draft?'新建连接':'选择提供方'}</option>{data?.providers.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>;
- return <main className={css.root} ref={root}><div className={css.shell}><div className={css.toolbar}><Link href="/" onClick={e=>{if(dirty){e.preventDefault();move(()=>{window.location.href='/';});}}}>← 返回题库</Link><AppearancePicker label="外观" /></div>
+ return <main className={css.root} ref={root}><div className={css.shell}><div className={css.toolbar}><Link href="/tools" onClick={e=>{if(dirty){e.preventDefault();move(()=>router.push('/tools'));}}}>← 返回工具箱</Link><AppearancePicker label="外观" /></div>
  <header className={css.header}><div><p className={css.eyebrow}>AI / Provider center</p><h1>AI 配置中心</h1><p className={css.hint}>管理接入服务，明确每种任务的模型与数据去向。</p></div><div className={css.actions}>{data&&<span className={css.badge}>{data.encryptionReady?'密钥加密可用':'密钥加密未就绪'}</span>}{Boolean(data?.providers.length)&&<button data-primary disabled={working} onClick={()=>add()}>添加提供方</button>}</div></header>
  {error&&<div role="alert" className={css.warning}>{error}<div className={css.actions}><button onClick={()=>move(()=>{window.location.reload();})}>重新加载</button></div></div>}{notice&&<div role="status" className={css.notice}>{notice}</div>}
  {!data&&!error&&<p role="status">正在读取配置…</p>}
