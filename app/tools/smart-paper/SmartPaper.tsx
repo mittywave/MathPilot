@@ -4,7 +4,7 @@ import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { authorizeDownload, createSmartPaperRecord, fetchLibrary, fetchMe, fetchStudents, fetchTypesetRecords, generateSmartPaper, updateTypesetRecord } from "../../../lib/api-client";
 import { categoryDescendants, categoryPath } from "../../../lib/library-tree";
-import { focusFeatures, groupHeading, planQuestionIds, questionComplexity, questionFeatures } from "../../../lib/smart-paper-contract";
+import { focusFeatures, planDays, planQuestionIds, questionComplexity, questionFeatures } from "../../../lib/smart-paper-contract";
 import type { AuthUser, LibraryData, Question, SmartPaperGroup, SmartPaperPlan, StudentSummary, TypesetSettings } from "../../../lib/types";
 import "../tools.css";
 import "./smart-paper.css";
@@ -134,7 +134,7 @@ export default function SmartPaper() {
   }
 
   if (typesetting && plan && recordId) {
-    const days = plan.groups.map((group) => ({ title: groupHeading(group), questions: group.items.flatMap((item) => byId.get(item.id) ?? []) })).filter((day) => day.questions.length);
+    const days = planDays(plan, byId);
     return <Suspense fallback={<div className="smart-paper-loading"><i className="smart-paper-spinner" />正在打开快速排版…</div>}>
       <Typesetter basket={{
         questions: days.flatMap((day) => day.questions), title, settings, recordId, studentId: studentId || undefined,

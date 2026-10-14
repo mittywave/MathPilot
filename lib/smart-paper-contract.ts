@@ -1,4 +1,4 @@
-import type { QuestionType, SmartPaperBrief, SmartPaperGroup, SmartPaperPlan } from "./types";
+import type { Question, QuestionType, SmartPaperBrief, SmartPaperGroup, SmartPaperPlan } from "./types";
 
 // 智能组卷 shared rules: what a plan may hold when it is stored, reopened or sent back by the agent.
 export const SMART_PAPER_LIMITS = { days: 14, perDay: 40, questions: 300, request: 2000 };
@@ -57,6 +57,12 @@ export function planQuestionIds(plan: Pick<SmartPaperPlan, "groups">) {
 // The heading a day prints with: 第 1 天 · 去括号热身.
 export function groupHeading(group: Pick<SmartPaperGroup, "title" | "theme">) {
   return group.theme ? `${group.title} · ${group.theme}` : group.title;
+}
+
+// A plan's days as they are printed and handed out: each day's heading and its questions found in the library; questions
+// deleted since are skipped, and a day left with none is dropped.
+export function planDays(plan: Pick<SmartPaperPlan, "groups">, byId: Map<string, Question>) {
+  return plan.groups.map((group) => ({ title: groupHeading(group), questions: group.items.flatMap((item) => byId.get(item.id) ?? []) })).filter((day) => day.questions.length);
 }
 
 // ---- 选题 agent：题目特征、两次模型调用的约定、结果的校验与补齐 ----

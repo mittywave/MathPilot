@@ -156,6 +156,14 @@ export default function TeacherSubmissionPage() {
     if(!submission)return;setBusy(true);
     try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage(error instanceof Error?error.message:"创建重交版本失败");setBusy(false);}
   }
+  // 改日期 of an assigned homework: the days move, the grading stays as it is.
+  async function reschedule(start: string) {
+    if (!submission) return false;
+    setBusy(true);
+    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage("日期已改好"); return true; }
+    catch (error) { setMessage(error instanceof Error ? error.message : "日期没有改成"); return false; }
+    finally { setBusy(false); }
+  }
   async function reprocessPending() {
     if (!submission) return;
     setBusy(true); setMessage("正在补充待处理题目的材料…");
@@ -327,7 +335,7 @@ export default function TeacherSubmissionPage() {
     <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues.length} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}</section>
 
-    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion}
+    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onReschedule={reschedule}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
     {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}

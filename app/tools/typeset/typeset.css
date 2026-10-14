@@ -27,20 +27,6 @@
 .typeset-editions b{font-size:13.5px}
 .typeset-panel .typeset-download{margin:0;font-size:13.5px}
 .typeset-panel .typeset-assign{margin-top:-8px;height:38px;color:var(--green,#2f6b53);font-size:13.5px;font-weight:600}
-.assign-modal{width:min(560px,100%)}
-.assign-students{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;padding:0;border:0}
-.assign-students legend{margin-bottom:7px;padding:0;color:color-mix(in srgb,var(--ink) 23%,var(--muted));font-size:11px}
-.assign-students p{margin:0;color:var(--muted);font-size:12px}
-.assign-students label{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:13px;cursor:pointer}
-.assign-students label.on{border-color:var(--green);background:var(--green-soft);color:var(--green)}
-.assign-students input{width:15px;height:15px;margin:0;padding:0;accent-color:var(--green)}
-.assign-students small{color:var(--muted);font-size:11.5px}
-.assign-summary{margin:0 0 6px;font-size:13px;font-weight:600}
-.assign-hint,.assign-done{margin:0 0 14px;color:color-mix(in srgb,var(--ink) 30%,var(--muted));font-size:12.5px;line-height:1.7}
-.assign-done{color:var(--ink);font-size:14px}
-.assign-error{margin:0 0 12px;padding:8px 11px;border-radius:calc(8px*var(--radius-scale));background:var(--danger-soft);color:var(--danger);font-size:12.5px}
-.assign-links{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
-.assign-links a{color:var(--green);font-size:13px;font-weight:600}
 .typeset-note{margin:0;padding:9px 11px;border-radius:calc(8px*var(--radius-scale));background:color-mix(in srgb,var(--green-soft,#edf5f0) 60%,var(--surface,#fff));color:color-mix(in srgb,var(--ink,#24352f) 72%,var(--surface,#fff));font-size:12.5px}
 .typeset-note.warn{background:var(--amber-soft,#fbf3e2)}
 .typeset-note.error{background:var(--danger-soft,#fbecea);color:var(--danger,#b4442f)}

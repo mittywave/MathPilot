@@ -12,9 +12,9 @@ export const homeworkApi = {
   submissions: () => request<{ submissions: HomeworkSubmission[] }>("/api/submissions"),
   createSubmission: (studentId: string, title: string, outputs: HomeworkOutputs, curriculum: HomeworkCurriculum) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ studentId, title, outputs, curriculum }) }),
   submission: (id: string) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`),
-  updateSubmission: (id: string, body: { action: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }> }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
-  /** 布置作业: one homework per student, each waiting for the student's work to be uploaded. */
-  assign: (body: { studentIds: string[]; title: string; questions: Question[]; groups?: HomeworkSheetGroup[] }) => request<{ assigned: Array<{ id: string; studentId: string; studentName: string }> }>("/api/submissions", { method: "POST", body: JSON.stringify(body) }),
+  updateSubmission: (id: string, body: { action: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; start?: string }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  /** 布置作业: one homework per student, each waiting for the student's work to be uploaded; start is 第 1 天, YYYY-MM-DD. */
+  assign: (body: { studentIds: string[]; title: string; questions: Question[]; groups?: HomeworkSheetGroup[]; start: string; recordId?: string | null }) => request<{ assigned: Array<{ id: string; studentId: string; studentName: string }> }>("/api/submissions", { method: "POST", body: JSON.stringify(body) }),
   studentHomework: (studentId: string) => request<{ homework: StudentHomework[] }>(`/api/students/${encodeURIComponent(studentId)}/homework`),
 };
 
