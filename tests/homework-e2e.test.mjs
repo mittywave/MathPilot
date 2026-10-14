@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{} };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -114,6 +114,12 @@ function startMockModel(port) {
     }
     if (state.failAll && prompt.includes("只识别学生已完成的数学作业")) {
       state.failureCalls += 1; response.writeHead(503, { "Content-Type": "application/json" }); response.end(JSON.stringify({ error: { message: "mock grading unavailable" } })); return;
+    }
+    // 定档 · 主观: the teacher's words read against the five abilities; one judgement and one keyword quote nothing the teacher said.
+    if (prompt.includes("老师课后口述了一段对学生的观察")) {
+      if (state.failObservation) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock observation refused"}}));return; }
+      state.observationPrompts.push(prompt);
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({abilities:[{key:"careless",polarity:"weakness",evidence:"还是粗心"},{key:"thinking-reverse",polarity:"strength",evidence:"逆向思维 不错"},{key:"calculation",polarity:"weakness",evidence:"老师没说过的话"}],keywords:["丢负号","老师没说的词"]})}));return;
     }
     // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
@@ -616,6 +622,37 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.done,listed.correct,listed.incorrect,listed.latest.version],[4,3,1,2]);
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
+
+    // 定档: graded knowledge from the assigned homework, and the teacher's lesson feedback with the abilities read from it.
+    let profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
+    assert.ok(profile.knowledge.some(item=>item.level==="domain"),"knowledge tallies carry their place in the graph");
+    assert.ok(profile.types.some(item=>item.type==="填空题"&&item.correct>=2),"question types count only the work let into the profile");
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherTwo})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherTwo,method:"POST",body:{text:"越权"}})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"  "}})).response.status,400);
+    const lesson=await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"今天讲去括号，他计算还是粗心，丢负号。不过逆向思维不错。",observedAt:Date.now()-86_400_000}});
+    assert.equal(lesson.response.status,201,JSON.stringify(lesson.payload));
+    assert.equal(lesson.payload.notice,"");
+    assert.deepEqual(lesson.payload.observation.abilities.map(note=>[note.key,note.polarity]),[["careless","weakness"],["thinking-reverse","strength"]],"a judgement that quotes nothing the teacher said is dropped");
+    assert.deepEqual(lesson.payload.observation.keywords,["丢负号"]);
+    assert.ok(lesson.payload.observation.extractedAt);
+    assert.match(mock.state.observationPrompts.at(-1),/thinking-transform（思维能力 · 转化）/);
+    const lessonId=lesson.payload.observation.id;
+    // The teacher removes a judgement; a failed reading of new words keeps the words and clears the old reading.
+    const trimmed=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{abilities:[lesson.payload.observation.abilities[1]]}});
+    assert.deepEqual(trimmed.payload.observation.abilities.map(note=>note.key),["thinking-reverse"]);
+    mock.state.failObservation=true;
+    const reworded=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{text:"今天状态很好。"}});
+    assert.equal(reworded.response.status,200);assert.ok(reworded.payload.notice);
+    assert.deepEqual([reworded.payload.observation.text,reworded.payload.observation.abilities,reworded.payload.observation.extractedAt],["今天状态很好。",[],null]);
+    mock.state.failObservation=false;
+    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${Date.now()-3_600_000}`,{cookie:teacherOne})).payload.profile;
+    assert.equal(profile.observations.length,0,"a lesson before the period is left out");
+    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
+    assert.deepEqual(profile.observations.map(item=>item.id),[lessonId]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherTwo,method:"DELETE",body:{}})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile.observations.length,0);
 
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});

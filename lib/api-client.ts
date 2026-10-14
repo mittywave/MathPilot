@@ -1,4 +1,4 @@
-import type { AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
+import type { AbilityNote, AuthUser, Category, Handout, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -56,6 +56,11 @@ export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQ
 export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
 export function restoreWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PATCH" }); }
 export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions?includeHistory=true`); }
+// 定档: graded knowledge and question types, and the teacher's lesson feedback; `notice` says why a reading of the words failed.
+export function fetchStudentProfile(studentId: string, since: number | null) { return request<{ profile: StudentProfileSummary }>(`/api/students/${encodeURIComponent(studentId)}/profile${since ? `?since=${since}` : ""}`); }
+export function createObservation(studentId: string, observation: { text: string; observedAt: number }) { return request<{ observation: StudentObservation; notice: string }>(`/api/students/${encodeURIComponent(studentId)}/observations`, { method: "POST", body: JSON.stringify(observation) }); }
+export function updateObservation(studentId: string, id: string, change: { text?: string; observedAt?: number; abilities?: AbilityNote[]; keywords?: string[]; extract?: boolean }) { return request<{ observation: StudentObservation; notice: string }>(`/api/students/${encodeURIComponent(studentId)}/observations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(change) }); }
+export function deleteObservation(studentId: string, id: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/observations/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
 export type PublicationProgress = {
   phase: "snapshot" | "compare" | "assets" | "commit" | "complete";

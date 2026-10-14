@@ -273,6 +273,24 @@ export type StudentSummary = Student & {
   wrongCount: number;
 };
 
+// 定档: what the archive knows about a student. 客观 comes from graded homework (knowledge points and question types),
+// 主观 from what the teacher said after a lesson, read against five fixed abilities.
+export type AbilityKey = "careless" | "calculation" | "thinking-reverse" | "thinking-analysis" | "thinking-transform";
+export type AbilityNote = { key: AbilityKey; polarity: "strength" | "weakness"; evidence: string };
+/** One lesson's feedback: the teacher's words and what was read from them (extractedAt is null until a reading succeeds). */
+export type StudentObservation = {
+  id: string; studentId: string; observedAt: number; text: string; abilities: AbilityNote[]; keywords: string[];
+  extractedAt: number | null; createdAt: number; updatedAt: number;
+};
+/** Graded answers on one knowledge point (or its topic or domain) and one question type. */
+export type KnowledgeTally = { key: string; label: string; level: "domain" | "topic" | "point"; parentKey: string | null; correct: number; partial: number; incorrect: number; lastAt: number };
+export type StudentProfileSummary = {
+  since: number | null;
+  knowledge: KnowledgeTally[];
+  types: Array<{ type: QuestionType; correct: number; partial: number; incorrect: number }>;
+  observations: StudentObservation[];
+};
+
 /** archiveReason of a wrong question the teacher deleted. It waits in 历史记录 and can be restored; other archived entries follow grading. */
 export const WRONG_QUESTION_DELETED = "老师删除";
 

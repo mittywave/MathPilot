@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { callStructuredAi } from "./ai-gateway";
+import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
 import { readLibrary } from "./library";
 import { parseRecognitionModelText } from "./recognition-model";
 import { usedQuestionIds } from "./typeset-records";
@@ -9,6 +10,7 @@ import {
   planQuestionIds, questionComplexity, questionFeatures, smartPaperBriefSchema, smartPaperSelectSchema, SMART_PAPER_LIMITS,
   type SmartPaperCandidate, type SmartPaperOutline,
 } from "../smart-paper-contract";
+import { abilityNoteLabel, normalizeAbilityNotes } from "../student-profile-contract";
 import type { AuthUser, LibraryData } from "../types";
 
 // 智能组卷: the teacher's sentence, read against one student's archive, becomes days of questions from the library.
@@ -48,10 +50,26 @@ async function ownStudent(user: AuthUser, id: string) {
   return row;
 }
 
-// What the archive says about this student's mistakes, newest first and kept short: error types with counts, the graded
-// answers that were wrong or partly wrong (feedback and steps), weak points the capability evidence and reports name,
-// and the teacher's own notes.
+// What the archive says about this student, newest first and kept short: the teacher's notes and lesson feedback (定档 ·
+// 主观, with the abilities read from it), the knowledge points graded work shows weakest (定档 · 客观), error types with
+// counts, the graded answers that were wrong or partly wrong (feedback and steps), and weak points the reports name.
 async function studentDigest(user: AuthUser, student: { id: string; notes: string }) {
+  const [observations, points, { index: graph }] = await Promise.all([
+    db().prepare("SELECT observed_at, text, abilities_json FROM student_observations WHERE student_id = ? AND owner_user_id = ? ORDER BY observed_at DESC, created_at DESC LIMIT 6")
+      .bind(student.id, user.id).all<{ observed_at: number; text: string; abilities_json: string }>(),
+    db().prepare(`SELECT capability_key AS key, MAX(capability_label) AS label, SUM(verdict = 'correct') AS correct, COUNT(*) AS total FROM student_capability_evidence
+      WHERE student_id = ? AND owner_user_id = ? AND dimension = 'knowledge' GROUP BY capability_key HAVING COUNT(*) >= 2`).bind(student.id, user.id).all<{ key: string; label: string; correct: number; total: number }>(),
+    loadPublishedKnowledgeGraph(),
+  ]);
+  const lead: string[] = [];
+  if (observations.results.length) lead.push("老师课后反馈（原话，新的在前）：");
+  for (const row of observations.results as Array<{ observed_at: number; text: string; abilities_json: string }>) {
+    const abilities = normalizeAbilityNotes(jsonList(row.abilities_json)).map(abilityNoteLabel);
+    lead.push(`- ${new Date(row.observed_at).toLocaleDateString("zh-CN")}：${text(row.text.replace(/\s+/g, " "), 160)}${abilities.length ? `｜能力：${abilities.join("、")}` : ""}`);
+  }
+  const weakest = (points.results as Array<{ key: string; label: string; correct: number; total: number }>).filter((row) => graph.node(row.key)?.level === "point")
+    .sort((a, b) => a.correct / a.total - b.correct / b.total).slice(0, 8);
+  if (weakest.length) lead.push(`批改出来的知识点正确率（从低到高）：${weakest.map((row) => `${row.label} 对 ${row.correct}/${row.total}`).join("；")}`);
   const [types, items, evidence, reports] = await Promise.all([
     db().prepare(`SELECT g.error_type AS type, COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id = g.submission_id
       WHERE s.student_id = ? AND g.verdict IN ('incorrect', 'partial') AND g.error_type <> '' GROUP BY g.error_type ORDER BY count DESC LIMIT 12`).bind(student.id).all<{ type: string; count: number }>(),
@@ -66,6 +84,7 @@ async function studentDigest(user: AuthUser, student: { id: string; notes: strin
   ]);
   const lines: string[] = [];
   if (student.notes.trim()) lines.push(`老师备注：${student.notes.trim()}`);
+  lines.push(...lead);
   if (types.results.length) lines.push(`错误类型统计：${types.results.map((row: { type: string; count: number }) => `${row.type} ${row.count} 次`).join("，")}`);
   const gaps = reports.results.flatMap((row: { gaps_json: string }) => jsonList(row.gaps_json).map((gap) => text(record(gap).title, 60))).filter(Boolean);
   if (gaps.length) lines.push(`作业报告里的薄弱点：${[...new Set(gaps)].join("；")}`);

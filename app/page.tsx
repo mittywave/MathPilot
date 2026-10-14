@@ -8,6 +8,7 @@ import { StudioSolution } from "./components/StudioSolution";
 import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { SiteHeader } from "./components/SiteHeader";
 import { StudentHomework } from "./components/StudentHomework";
+import { StudentProfile } from "./components/StudentProfile";
 import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
 import WrongQuestionUpload from "./components/WrongQuestionUpload";
 import { QuestionBody } from "./components/QuestionBody";
@@ -23,8 +24,8 @@ import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData,
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
 // 学生档案 opens on the tab last used (or the one a link names, ?tab=homework).
-type ArchiveTab = "homework" | "wrong";
-const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["wrong", "错题本"]];
+type ArchiveTab = "homework" | "profile" | "wrong";
+const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["profile", "定档"], ["wrong", "错题本"]];
 const ARCHIVE_TAB_KEY = "student-archive-tab";
 const TRASH_HINT = "可在“分类与数据管理”的回收站恢复";
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
@@ -538,7 +539,7 @@ export default function Home() {
             {activeStudent ? <>
               <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}</h1>{activeStudent.notes && <p className="subtext">{activeStudent.notes}</p>}</div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} target="_blank" rel="noreferrer" title="按这位学生的档案从题库挑题、按天排好">智能组卷</a></div></div>
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
-              {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : <>
+              {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : <>
               <div className="content-head wrong-book-head"><div><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label></div>
               {!!activeWrongEntries.length && <div className="filters">
                 <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => setWrongMonth("全部")}>全部 <span>{activeWrongEntries.length}</span></button>
