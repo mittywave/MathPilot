@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { appearanceBootstrapScript } from "../lib/appearance";
+import { DialogEscape } from "./components/DialogEscape";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 import "./math-typography.css";
@@ -11,5 +12,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: appearanceBootstrapScript }} /></head><body>{children}</body></html>;
+  return <html lang="zh-CN" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: appearanceBootstrapScript }} /></head><body>{children}<DialogEscape /></body></html>;
 }

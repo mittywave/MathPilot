@@ -42,10 +42,8 @@ function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: Stud
     let current = true;
     fetchTypesetRecords().then(({ records }) => { if (current) setPlans(records.filter((record) => record.plan && record.studentId === student.id && !handedOut.includes(record.id))); })
       .catch((reason) => { if (current) { setPlans([]); setError(reason instanceof Error ? reason.message : "组卷记录读取失败"); } });
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector(".assign-modal[aria-busy=true]")) onClose(); };
-    document.addEventListener("keydown", close);
-    return () => { current = false; document.removeEventListener("keydown", close); };
-  }, [student.id, handedOut, onClose]);
+    return () => { current = false; };
+  }, [student.id, handedOut]);
 
   async function open(record: TypesetRecord) {
     if (!record.plan) return;

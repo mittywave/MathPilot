@@ -15,7 +15,8 @@ export function PaperMoreMenu({ children, className = "", label = "组卷更多�
       if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      event.preventDefault();
       setOpen(false);
       menuRef.current?.querySelector("button")?.focus();
     };
@@ -25,12 +26,12 @@ export function PaperMoreMenu({ children, className = "", label = "组卷更多�
     };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("focusin", focusOutside);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", escape, true);
     document.addEventListener("click", choose);
     return () => {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("focusin", focusOutside);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", escape, true);
       document.removeEventListener("click", choose);
     };
   }, [open]);

@@ -26,10 +26,7 @@ export function AssignHomework({ title, questions, groups, studentId, recordId, 
 
   useEffect(() => {
     void homeworkApi.students().then((result) => setStudents(result.students)).catch((reason) => setError(reason instanceof Error ? reason.message : "学生档案读取失败"));
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector(".assign-modal[aria-busy=true]")) onClose(); };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, []);
 
   const answered = questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length;
   const days = groups?.length ?? 0;

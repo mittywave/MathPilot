@@ -20,17 +20,18 @@ export function AppearancePicker({ label, locale = "zh" }: { label: string; loca
     rootRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
     const outside = (event: Event) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      event.preventDefault();
       setOpen(false);
       toggleRef.current?.focus();
     };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("focusin", outside);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", escape, true);
     return () => {
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("focusin", outside);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", escape, true);
     };
   }, [open]);
 
