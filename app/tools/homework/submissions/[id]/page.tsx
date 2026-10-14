@@ -5,7 +5,7 @@ import { AssignedHomeworkSheet } from "../../../../components/AssignedHomeworkSh
 import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../../../../components/HomeworkPagePicker";
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
-import { homeworkQuestionLabel, reconcileHomeworkScore } from "../../../../../lib/homework-grading-rules.mjs";
+import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore } from "../../../../../lib/homework-grading-rules.mjs";
 import type { GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
 
 const STATUS: Record<string, string> = {
@@ -22,7 +22,7 @@ type Bucket = "correct" | "partial" | "incorrect" | "pending";
 const BUCKETS: Array<[Bucket, string]> = [["correct", "正确"], ["partial", "部分正确"], ["incorrect", "错误"], ["pending", "待处理"]];
 // Matches the server summary: anything still awaiting review counts as pending, whatever its verdict.
 function bucket(item: GradingItem): Bucket {
-  return item.requiresReview || item.verdict === "unreadable" || item.verdict === "review_required" ? "pending" : item.verdict;
+  return isPendingGradingItem(item) ? "pending" : item.verdict as Bucket;
 }
 type Coverage = NonNullable<HomeworkSubmission["pageCoverage"]>;
 type PageInfo = Coverage["pages"][number];
@@ -322,8 +322,8 @@ export default function TeacherSubmissionPage() {
   const coverage = submission.pageCoverage;
   const incomplete = !!coverage && coverage.processed < coverage.total;
   const pendingPages = coverage?.pages.filter(page=>page.kind === "unreadable") ?? [];
-  const pending = items.filter(item=>item.requiresReview || ["unreadable","review_required"].includes(item.verdict) || (["incorrect","partial"].includes(item.verdict) && (!item.standardAnswer || item.referenceVerified === false)));
-  const issues = items.filter((item) => item.verdict === "partial" || item.verdict === "incorrect");
+  const pending = items.filter(isPendingGradingItem);
+  const issues = items.filter((item) => !isPendingGradingItem(item) && (item.verdict === "partial" || item.verdict === "incorrect")).length;
   const outputs = OUTPUT_LABELS.filter(([key])=>submission.outputs[key]).map(([,label])=>label);
   const status = incomplete && submission.status === "published" ? "结果不完整" : submission.status === "published" && coverage?.unreadable ? "有页面待补图" : STATUS[submission.status] ?? submission.status;
 
@@ -332,7 +332,7 @@ export default function TeacherSubmissionPage() {
   return <main className="review-shell">
     <header className="review-topbar">{assigned ? <a href={`${archiveLink}&tab=homework`}>← {submission.studentName}的作业</a> : submission.outputs.wrongBook && !submission.outputs.report && !submission.outputs.profile ? <a href={archiveLink}>← 学生错题本</a> : <a href="/tools/homework">← 作业批改</a>}<button onClick={refresh} disabled={busy}>刷新</button></header>
     {message && <div className="homework-notice" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">×</button></div>}
-    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues.length} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
+    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}</section>
 
     {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onReschedule={reschedule}
@@ -342,7 +342,7 @@ export default function TeacherSubmissionPage() {
     {/* An assigned question keeps the figures it was handed out with; only questions read off the page have figures to check. */}
     {!assigned && ["published","ready"].includes(submission.status) && <section className="review-callout"><div><b>{submission.figuresPending ? `${submission.figuresPending} 道题配图待核对` : "原卷题图"}</b><p>重新检查图源、共用题图与手写覆盖，并同步到错题本。</p></div><button onClick={attachFigures} disabled={busy}>校对原卷配图</button></section>}
     {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} />{submission.outputs.wrongBook && <a href={`/?view=wrong-book&studentId=${submission.studentId}`}>已归档错题 {summary.archived} 道 →</a>}</section>}
-    {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>已有结果会保留；需要补图或核实判定的题目暂不计入错题本，已按老师批改归档的题目会保留并补齐参考答案。</p><label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
+    {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
 
     {submission.status === "draft" && <section className="review-upload"><div><h2>上传学生作业</h2><p>{assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页作业`}</button></section>}

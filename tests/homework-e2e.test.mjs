@@ -529,6 +529,29 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual([unmarked.feedback,unmarked.stepAnalysis,unmarked.errorType,unmarked.standardAnswer,unmarked.standardAnalysis],["",[],"","5",""],"school homework keeps only the verdict and the final answer");
     assert.equal(markedResult.gradingSummary.archived,2,"the teacher's cross still files the sub-question after its answer is prepared");
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===markedResult.assignmentId).length,2);
+    // Historical marks can lack a reference: the teacher's cross is settled, an unmarked error is pending.
+    const markedWrong=markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='',reference_verified=0 WHERE id IN ('${markedWrong.assignmentQuestionId}','${unmarked.assignmentQuestionId}')`]);
+    const unsettled=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([unsettled.gradingSummary.correct,unsettled.gradingSummary.partial,unsettled.gradingSummary.incorrect,unsettled.gradingSummary.unresolved],[1,0,1,1]);
+    assert.equal(unsettled.gradingSummary.archived,1,"the teacher-marked error stays archived without a reference");
+    const unsettledList=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne})).payload.submissions.find(s=>s.id===markedId);
+    assert.deepEqual(unsettledList.gradingSummary,unsettled.gradingSummary,"the grading list uses the detail summary");
+    const unsettledStudent=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===markedResult.assignmentId);
+    assert.deepEqual([unsettledStudent.total,unsettledStudent.correct,unsettledStudent.incorrect,unsettledStudent.pending],[3,1,1,1]);
+    // A page inventory may name the parent while the saved grading contains its sub-questions.
+    const markedExtraction=d1Rows(stateDir,"SELECT page_id,result_json FROM submission_page_extractions WHERE submission_id=?",[markedId])[0];
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE submission_page_extractions SET result_json=json_set(result_json,'$.questions[0].question_number','1-3','$.questions[1].question_number','1-3') WHERE page_id='${markedExtraction.page_id}'`]);
+    const parentDetail=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne})).payload.submission;
+    const parentStudent=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===markedResult.assignmentId);
+    assert.equal(parentDetail.gradingItems.length,3);
+    assert.deepEqual([parentStudent.total,parentStudent.correct,parentStudent.incorrect,parentStudent.pending],[3,1,1,1],"detail and student list keep the same sub-questions");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE submission_page_extractions SET result_json='${markedExtraction.result_json.replace(/'/g,"''")}' WHERE page_id='${markedExtraction.page_id}';
+       UPDATE assignment_questions SET answer='${markedWrong.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${markedWrong.assignmentQuestionId}';
+       UPDATE assignment_questions SET answer='${unmarked.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${unmarked.assignmentQuestionId}'`]);
     const misread=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").id,verdict:"correct"}]}});
     assert.equal(misread.response.status,200,"a misread mark is corrected without supplying a reference answer");
     assert.equal(misread.payload.submission.gradingSummary.archived,1);
@@ -622,6 +645,18 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
     assert.deepEqual(listed.days.map(d=>[d.done,d.correct,d.incorrect,typeof d.handedInAt]),[[2,1,1,"number"],[0,0,0,"object"]],"day 1 came back with the first upload, day 2 is still out");
     const firstHandedIn=listed.days[0].handedInAt;
+    const sheetError=sheet.gradingItems.find(i=>i.questionNumber==="D1-2");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='',reference_verified=0 WHERE id='${sheetError.assignmentQuestionId}'`]);
+    const pendingSheet=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([pendingSheet.gradingSummary.correct,pendingSheet.gradingSummary.incorrect,pendingSheet.gradingSummary.unresolved],[1,0,1]);
+    assert.deepEqual(pendingSheet.assigned.days.map(d=>[d.done,d.correct,d.incorrect,d.pending]),[[2,1,0,1],[0,0,0,0]]);
+    const pendingSheetResult=pendingSheet.assigned.questions.find(q=>q.number==="D1-2").result;
+    assert.deepEqual([pendingSheetResult.teacherMark,pendingSheetResult.standardAnswer,pendingSheetResult.referenceVerified],[null,"",false],"assigned results retain the inputs used to classify pending work");
+    const pendingSheetList=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===sheet.assignmentId);
+    assert.deepEqual([pendingSheetList.total,pendingSheetList.done,pendingSheetList.correct,pendingSheetList.incorrect,pendingSheetList.pending],[4,2,1,0,1]);
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='${sheetError.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${sheetError.assignmentQuestionId}'`]);
 
     // The next upload brings day 2: the question handed out without an answer is solved and checked first.
     const nextUpload=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}})).payload.submission;

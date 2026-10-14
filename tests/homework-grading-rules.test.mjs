@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeHomeworkVerdict, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel } from "../lib/homework-grading-rules.mjs";
+import { finalizeHomeworkVerdict, isPendingGradingItem, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel } from "../lib/homework-grading-rules.mjs";
+
+test("pending counts separate unsettled answers from the teacher's existing judgement", () => {
+  const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true };
+  for (const [patch, expected] of [
+    [{}, false],
+    [{ verdict: "correct", standardAnswer: "", referenceVerified: false }, false],
+    [{ standardAnswer: "" }, true],
+    [{ referenceVerified: false }, true],
+    [{ referenceVerified: undefined }, true],
+    [{ verdict: "partial", standardAnswer: "" }, true],
+    [{ verdict: "partial", referenceVerified: false }, true],
+    [{ verdict: "partial" }, false],
+    ...["correct", "partial", "incorrect"].map((teacherMark) => [{ teacherMark, standardAnswer: "", referenceVerified: false }, false]),
+    [{ teacherMark: "incorrect", requiresReview: true }, true],
+    [{ verdict: "correct", teacherMark: "correct", requiresReview: true }, true],
+    [{ verdict: "unreadable", teacherMark: "correct" }, true],
+    [{ verdict: "review_required", teacherMark: "incorrect" }, true],
+  ]) assert.equal(isPendingGradingItem({ ...settled, ...patch }), expected, JSON.stringify(patch));
+});
 
 test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");

@@ -5,7 +5,7 @@ import type {
 } from "../types";
 import { homeworkAssetsBucket, requireHomeworkEnabled, scheduleHomeworkAssetCleanup } from "./homework-assets";
 import { normalizeHomeworkOutputs } from "./homework-outputs";
-import { normalizeMaxScore, reconcileHomeworkScore, summarizeHomeworkScore } from "../homework-grading-rules.mjs";
+import { isPendingGradingItem, normalizeMaxScore, reconcileHomeworkScore, summarizeHomeworkScore } from "../homework-grading-rules.mjs";
 import { resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
 
 type HomeworkQueueMessage =
@@ -128,13 +128,14 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   const figuresPending = Number((await appEnv().DB.prepare(`SELECT COUNT(*) AS count FROM assignment_questions
     WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND json_type(input_evidence_json,'$.page_numbers')='array' AND json_type(input_evidence_json,'$.figures') IS NULL`).bind(row.assignment_id,inventory,inventory).first<{count:number}>())?.count ?? 0);
   const gradingItems = grading.results.map(gradingItem);
+  const settledItems = gradingItems.filter((item) => !isPendingGradingItem(item));
   return {
     outputs: normalizeHomeworkOutputs(parseJson(row.outputs_json, {})),
     curriculum: homeworkCurriculum(row.curriculum),
     processingProgress,
     pageCoverage,
     figuresPending,
-    gradingSummary: { correct: grading.results.filter(i => i.verdict === "correct" && !Number(i.requires_review)).length, partial: grading.results.filter(i => i.verdict === "partial" && !Number(i.requires_review)).length, incorrect: grading.results.filter(i => i.verdict === "incorrect" && !Number(i.requires_review)).length, unresolved: grading.results.filter(i => ["unreadable", "review_required"].includes(String(i.verdict)) || Number(i.requires_review)).length, archived: gradingItems.filter(i => i.verdict === "incorrect" && !i.requiresReview && (i.referenceVerified || i.teacherMark === "incorrect") && i.wrongBookAppliedAt != null).length, marks: summarizeHomeworkScore(gradingItems) },
+    gradingSummary: { correct: settledItems.filter(i => i.verdict === "correct").length, partial: settledItems.filter(i => i.verdict === "partial").length, incorrect: settledItems.filter(i => i.verdict === "incorrect").length, unresolved: gradingItems.length - settledItems.length, archived: gradingItems.filter(i => i.verdict === "incorrect" && !i.requiresReview && (i.referenceVerified || i.teacherMark === "incorrect") && i.wrongBookAppliedAt != null).length, marks: summarizeHomeworkScore(gradingItems) },
     id, assignmentId: String(row.assignment_id), assignmentTitle: String(row.assignment_title), studentId: String(row.student_id), studentName: String(row.student_name),
     version: Number(row.version), status: row.status as SubmissionStatus,
     submittedAt: row.submitted_at == null ? null : Number(row.submitted_at), publishedAt: row.published_at == null ? null : Number(row.published_at),
@@ -147,16 +148,22 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
 }
 
 type UploadRow = { id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
-type ResultRow = { assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number };
+type ResultRow = { assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; reference_verified: number; question_evidence_json: string };
 
 // The published results of one upload, without questions a later reading of its pages no longer finds.
 async function uploadResults(submissionId: string) {
   const [rows, recognized] = await Promise.all([
-    appEnv().DB.prepare(`SELECT g.assignment_question_id, q.question_number, g.verdict, g.requires_review FROM grading_items g
+    appEnv().DB.prepare(`SELECT g.assignment_question_id, q.question_number, g.verdict, g.requires_review,
+        q.answer AS standard_answer, q.reference_verified, q.input_evidence_json AS question_evidence_json FROM grading_items g
       JOIN assignment_questions q ON q.id = g.assignment_question_id WHERE g.submission_id = ?`).bind(submissionId).all<ResultRow>(),
     import("./homework-page-coverage").then(({ readRecognizedQuestionNumbers }) => readRecognizedQuestionNumbers(submissionId)),
   ]);
-  return (rows.results as ResultRow[]).filter((row) => !recognized || recognized.has(row.question_number));
+  return (rows.results as ResultRow[])
+    .filter((row) => !recognized || recognized.has(row.question_number) || [...recognized].some((number) => row.question_number.startsWith(`${number}(`)))
+    .map((row) => ({ assignmentQuestionId: row.assignment_question_id,
+      verdict: VERDICTS.includes(row.verdict) ? row.verdict : "review_required" as GradingVerdict,
+      requiresReview: Number(row.requires_review) === 1, teacherMark: teacherMark(row.question_evidence_json),
+      standardAnswer: String(row.standard_answer ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
 }
 
 // What an assigned homework keeps beside its questions: the days it is split into, the date of its first day, and the
@@ -179,13 +186,13 @@ function daysAfter(date: string, count: number) {
 const assignedDay = (time: number) => new Date(time).toISOString().slice(0, 10);
 
 // How the results so far add up: graded ones as right or wrong, and those a teacher still has to look at.
-function tally(results: Array<{ verdict: GradingVerdict; requiresReview: boolean }>) {
-  const settled = results.filter((result) => !result.requiresReview);
+function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
+  const settled = results.filter((result) => !isPendingGradingItem(result));
   return {
     done: results.length,
     correct: settled.filter((result) => result.verdict === "correct").length,
     incorrect: settled.filter((result) => result.verdict === "incorrect" || result.verdict === "partial").length,
-    pending: results.filter((result) => result.requiresReview || result.verdict === "unreadable" || result.verdict === "review_required").length,
+    pending: results.length - settled.length,
   };
 }
 
@@ -207,8 +214,9 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
   const firstHandedIn = new Map<string, number>();
   for (const upload of handedIn.filter((item) => item.status === "published")) {
     for (const result of await uploadResults(upload.id)) {
-      results.set(result.assignment_question_id, { verdict: result.verdict, requiresReview: Number(result.requires_review) === 1, submissionId: upload.id });
-      if (!firstHandedIn.has(result.assignment_question_id)) firstHandedIn.set(result.assignment_question_id, Number(upload.submitted_at ?? upload.created_at));
+      const { assignmentQuestionId, ...grading } = result;
+      results.set(assignmentQuestionId, { ...grading, submissionId: upload.id });
+      if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, Number(upload.submitted_at ?? upload.created_at));
     }
   }
   const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: parseJson<Question>(question.source_json, {} as Question), result: results.get(question.id) ?? null }));
@@ -366,8 +374,8 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
   for (const row of rows.results as Array<Record<string, unknown>>) if (!latest.has(String(row.assignment_id))) latest.set(String(row.assignment_id), row);
   return Promise.all([...latest.values()].map(async (row) => {
     const assigned = await assignedHomework(row);
-    const results: Array<{ verdict: GradingVerdict; requiresReview: boolean }> = assigned ? assigned.questions.flatMap((question) => question.result ?? [])
-      : row.status === "published" ? (await uploadResults(String(row.id))).map((result) => ({ verdict: result.verdict, requiresReview: Number(result.requires_review) === 1 })) : [];
+    const results = assigned ? assigned.questions.flatMap((question) => question.result ?? [])
+      : row.status === "published" ? await uploadResults(String(row.id)) : [];
     return {
       assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
