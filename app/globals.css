@@ -275,7 +275,7 @@ nav { display:flex; align-self:stretch; gap:26px; }.nav-item { position:relative
 .user-chip { display:grid; gap:2px; color:color-mix(in srgb, var(--green-soft) 44%, var(--ink)); font-size:9px; text-align:right; }
 .user-chip b { color:var(--green); font-size:10px; }
 .account-button { height:34px; border:1px solid color-mix(in srgb, var(--green) 5%, var(--line)); background:var(--surface); border-radius:calc(8px*var(--radius-scale)); padding:0 12px; color:color-mix(in srgb, var(--ink) 31%, var(--muted)); font-size:10px; white-space:nowrap; }
-.question-actions small { color:color-mix(in srgb, var(--muted) 70%, var(--page)); font-size:8px; }
+.question-actions small { min-width:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
 .auth-modal { width:min(480px,100%); }
 .auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:5px; padding:4px; margin:-5px 0 18px; background:color-mix(in srgb, var(--surface-soft) 90%, var(--line)); border-radius:calc(9px*var(--radius-scale)); }
 .auth-tabs button { border:0; border-radius:calc(7px*var(--radius-scale)); background:transparent; color:color-mix(in srgb, var(--green) 5%, var(--muted)); height:36px; font-size:11px; }
@@ -326,7 +326,6 @@ html[data-theme="dark"] .count,
 html[data-theme="dark"] .empty-tree,
 html[data-theme="dark"] .module-switcher button small,
 html[data-theme="dark"] .module-switcher button em,
-html[data-theme="dark"] .question-actions small,
 html[data-theme="dark"] .user-chip { color:var(--muted); }
 html[data-theme="dark"] .icon-button,
 html[data-theme="dark"] .manage-button,
@@ -650,8 +649,7 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
   .content-head-actions { display:grid; grid-template-columns:1fr; }
   .page-language-switch { width:max-content; }
   .page-language-switch button { min-width:64px; height:34px; }
-  .alevel-page.locale-en .question-actions { gap:10px; }
-  .alevel-page.locale-en .question-actions small { display:none; }
+  .question-actions { flex-wrap:wrap; gap:10px; }
   .module-manage-list>div>div { flex-wrap:wrap; }
   .paper-dock .dock-count { padding-right:7px; }
   .paper-dock .dock-count span { display:none; }
