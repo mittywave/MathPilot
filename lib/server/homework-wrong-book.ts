@@ -28,7 +28,9 @@ export async function syncSubmissionWrongBook(submission: HomeworkSubmission, us
       .bind(item.id,user.id).first<{active:number;evidence_json:string}>();
     const oldEvidence = previous ? JSON.parse(previous.evidence_json) as Partial<WrongQuestionEntry> : {};
     const page = submission.pages.find(p => p.id === item.pageId);
-    const question = assignmentQuestionToQuestion(template,{title:submission.assignmentTitle,createdAt:template.createdAt,updatedAt:Date.now(),originalImage:page?.originalUrl});
+    // An assigned question enters the book as it was handed out (library formatting, pictures and analysis intact).
+    const question = template.source ? { ...template.source, id: template.id, originalImage: page?.originalUrl, createdAt: template.createdAt, updatedAt: Date.now() }
+      : assignmentQuestionToQuestion(template,{title:submission.assignmentTitle,createdAt:template.createdAt,updatedAt:Date.now(),originalImage:page?.originalUrl});
     let answerCropAssetId = oldEvidence.answerCropAssetId ?? null;
     if (active && !answerCropAssetId && page && item.bbox) {
       const bytes = await homeworkAssetBytes(page.processedAssetId);

@@ -137,7 +137,7 @@ export default function SmartPaper() {
     const days = plan.groups.map((group) => ({ title: groupHeading(group), questions: group.items.flatMap((item) => byId.get(item.id) ?? []) })).filter((day) => day.questions.length);
     return <Suspense fallback={<div className="smart-paper-loading"><i className="smart-paper-spinner" />正在打开快速排版…</div>}>
       <Typesetter basket={{
-        questions: days.flatMap((day) => day.questions), title, settings, recordId,
+        questions: days.flatMap((day) => day.questions), title, settings, recordId, studentId: studentId || undefined,
         groups: days.map((day) => ({ title: day.title, size: day.questions.length })),
         origin: { back: "智能组卷 · 快速排版", name: `智能组卷${student ? ` · ${student.name}` : ""}`, hint: "点击回去调整题目" },
         onClose: (changedTitle, changedSettings) => { if (changedTitle) setTitle(changedTitle); setSettings(changedSettings); setTypesetting(false); },

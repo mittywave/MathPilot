@@ -81,7 +81,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0 };
+  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{} };
   const server = createHttpServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -114,6 +114,12 @@ function startMockModel(port) {
     }
     if (state.failAll && prompt.includes("只识别学生已完成的数学作业")) {
       state.failureCalls += 1; response.writeHead(503, { "Content-Type": "application/json" }); response.end(JSON.stringify({ error: { message: "mock grading unavailable" } })); return;
+    }
+    // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
+    if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
+      state.assignedPrompts.push(prompt);
+      const questions=state.assignedPage.map(q=>({page_numbers:[1],type:"填空题",stem:"",options:[],student_answer:"",answer_state:"readable",question_complete:true,max_score:null,bbox:{x:90,y:120,width:700,height:90},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none",...q}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("IGCSE / A Level 英文试卷")) {
       const questions=[
@@ -203,8 +209,8 @@ function startMockModel(port) {
     }
     if (numbers.includes("D2")) assert.match(prompt, /题号 D2\n题型：解答题\n满分：4/);
     const results = numbers.map((number, index) => ({
-      question_number: number, page_number: 1, student_answer: state.teacherMarked && /^1-4(?:\(1\))?$/.test(number) ? "9" : /^[1-5]-[1-5]$/.test(number) ? "6" : number === "D1" ? "6" : number === "D4" ? "8" : number === "D2" ? "移项到x=2" : "B",
-      verdict: number === "D2" ? "partial" : "incorrect", score: number === "D2" ? 2.5 : 0, feedback: number === "D2" ? "推导未完成" : "结果与参考答案不同",
+      question_number: number, page_number: 1, student_answer: state.assignedAnswers[number] ?? (state.teacherMarked && /^1-4(?:\(1\))?$/.test(number) ? "9" : /^[1-5]-[1-5]$/.test(number) ? "6" : number === "D1" ? "6" : number === "D4" ? "8" : number === "D2" ? "移项到x=2" : "B"),
+      verdict: state.assignedVerdicts[number] ?? (number === "D2" ? "partial" : "incorrect"), score: number === "D2" ? 2.5 : 0, feedback: number === "D2" ? "推导未完成" : "结果与参考答案不同",
       error_type: number === "D2" ? "步骤" : "计算", confidence: .98,
       step_analysis: number === "D2" ? ["正确写出了部分移项过程", "缺少最终验算"] : [], evidence_summary: "学生作答与参考答案不同",
       capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190 }, warnings: [],
@@ -544,6 +550,72 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(mock.state.referenceNumbers,["1-3(1)"]);
     assert.deepEqual(mock.state.gradedNumbers,[]);
     mock.state.teacherMarked="";
+
+    // 布置作业: a material handed out with its answers is graded against them, upload by upload; what has not come back is 未交, not wrong.
+    const PNG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const sheetQuestion=(id,stem,answer,extra={})=>({id,type:"填空题",difficulty:"基础",stem,options:[],answer,analysis:"",source:"",categoryId:"",createdAt:0,updatedAt:0,...extra});
+    const sheetBody={studentIds:[studentOneId],title:"两天计算打卡",groups:[{title:"第 1 天 · 热身",size:2},{title:"第 2 天 · 加深",size:2}],questions:[
+      sheetQuestion("typeset-1","计算 $1+1$","2",{contentImages:[`data:image/png;base64,${PNG}`]}),
+      sheetQuestion("typeset-2","计算 $2+2$","4",{analysis:"【点评】本题考查有理数的加法．"}),
+      sheetQuestion("typeset-3","计算 $3\\times 3$","",{type:"解答题"}),
+      sheetQuestion("typeset-4","计算 $4+4$","8"),
+    ]};
+    assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherTwo,method:"POST",body:sheetBody})).response.status,404,"only the student's own teacher assigns to them");
+    assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{...sheetBody,groups:[{title:"第 1 天",size:3}]}})).response.status,400,"groups must account for every question");
+    const assignedHomework=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:sheetBody});
+    assert.equal(assignedHomework.response.status,201,JSON.stringify(assignedHomework.payload));
+    const firstUpload=assignedHomework.payload.assigned[0].id;
+    assert.equal((await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherTwo})).response.status,404);
+    let sheet=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission;
+    assert.equal(sheet.status,"draft");
+    assert.deepEqual(sheet.assigned.questions.map(q=>[q.number,q.result]),[["D1-1",null],["D1-2",null],["D2-1",null],["D2-2",null]]);
+    assert.deepEqual(sheet.assigned.groups.map(g=>g.title),["第 1 天 · 热身","第 2 天 · 加深"]);
+    assert.deepEqual(sheet.outputs,{wrongBook:true,report:false,profile:true});
+    assert.equal(sheet.processingProgress.identified,0,"nothing is identified before a page is read");
+    // A picture that came with the material is stored for this teacher only.
+    const sheetPicture=sheet.assigned.questions[0].question.contentImages[0];
+    assert.match(sheetPicture,/^\/api\/assets\/[0-9a-f-]{36}$/);
+    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherOne}})).status,200);
+    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherTwo}})).status,404);
+    const sheetRows=d1Rows(stateDir,"SELECT question_number,reference_source,reference_verified,taxonomy_keys_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order",[sheet.assignmentId]);
+    assert.deepEqual(sheetRows.map(r=>[r.question_number,r.reference_source,r.reference_verified]),[["D1-1","provided",1],["D1-2","provided",1],["D2-1","unresolved",0],["D2-2","provided",1]]);
+    assert.ok(JSON.parse(sheetRows[1].taxonomy_keys_json).length,"a question the library never saw is tagged from what its analysis says it tests");
+    let listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.title,listed.total,listed.done,listed.latest.status],["两天计算打卡",4,0,"draft"]);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherTwo})).response.status,404);
+
+    // The first upload brings day 1 back; the page also shows a stray question that is not on the sheet.
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    mock.state.assignedPage=[{question_number:"D1-1",student_answer:"2"},{question_number:"1-2",student_answer:"5"},{question_number:"9",student_answer:"7"}];
+    mock.state.assignedAnswers={"D1-1":"2","D1-2":"5"};mock.state.assignedVerdicts={"D1-1":"correct","D1-2":"incorrect"};
+    await submitPages(base,teacherOne,firstUpload,[await uploadPage(base,teacherOne,firstUpload,bytes)]);
+    sheet=await waitForSubmission(base,teacherOne,firstUpload,["published"],worker);
+    assert.match(mock.state.assignedPrompts.at(-1),/D2-1｜第 2 天 第 1 题｜解答题｜计算 \$3\\times 3\$/);
+    assert.deepEqual(sheet.gradingItems.map(i=>[i.questionNumber,i.verdict]),[["D1-1","correct"],["D1-2","incorrect"]],"a stray question is left out and 1-2 is read as D1-2");
+    assert.deepEqual(mock.state.referenceNumbers,[],"answers handed out with the sheet are not solved again");
+    assert.deepEqual(sheet.assigned.questions.map(q=>q.result?.verdict??null),["correct","incorrect",null,null]);
+    assert.equal(sheet.gradingItems.find(i=>i.questionNumber==="D1-1").stem,"计算 $1+1$","the assigned stem stays as it was handed out");
+    const sheetWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===sheet.assignmentId);
+    assert.deepEqual(sheetWrong.map(e=>[e.question.stem,e.question.analysis]),[["计算 $2+2$","【点评】本题考查有理数的加法．"]],"the wrong book keeps the question as it was handed out");
+    assert.ok(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=? AND dimension='knowledge'",[firstUpload])[0].count>0,"an assigned homework feeds the knowledge profile");
+    listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
+
+    // The next upload brings day 2: the question handed out without an answer is solved and checked first.
+    const nextUpload=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}})).payload.submission;
+    assert.equal(nextUpload.version,2);assert.equal(nextUpload.status,"draft");
+    mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    mock.state.assignedPage=[{question_number:"D2-1",student_answer:"9"},{question_number:"第2天第2题",student_answer:"8"}];
+    mock.state.assignedAnswers={"D2-1":"9","D2-2":"8"};mock.state.assignedVerdicts={"D2-1":"correct","D2-2":"correct"};
+    await submitPages(base,teacherOne,nextUpload.id,[await uploadPage(base,teacherOne,nextUpload.id,bytes)]);
+    sheet=await waitForSubmission(base,teacherOne,nextUpload.id,["published"],worker);
+    assert.deepEqual(mock.state.referenceNumbers,["D2-1"]);
+    assert.deepEqual(sheet.gradingItems.map(i=>i.questionNumber),["D2-1","D2-2"]);
+    assert.deepEqual(sheet.assigned.questions.map(q=>[q.result?.verdict,q.result?.submissionId===firstUpload]),[["correct",true],["incorrect",true],["correct",false],["correct",false]],"each question keeps its result from the upload that found it");
+    assert.deepEqual(sheet.assigned.uploads.map(u=>[u.version,u.status]),[[1,"published"],[2,"published"]]);
+    listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
+    assert.deepEqual([listed.done,listed.correct,listed.incorrect,listed.latest.version],[4,3,1,2]);
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});

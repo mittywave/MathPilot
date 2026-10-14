@@ -1,5 +1,7 @@
-import { completedReferencePrompt, completedReferenceSchema, completedVerificationPrompt, completedVerificationSchema, normalizeCompletedReferences, normalizeCompletedVerification, type CompletedQuestion } from '../completed-homework-contract';
+import { completedReferencePrompt, completedReferenceSchema, completedVerificationPrompt, completedVerificationSchema, normalizeCompletedReferences, normalizeCompletedVerification, type CompletedQuestion, type KnownSheetQuestion } from '../completed-homework-contract';
 import { boundedMap, completedPageExtractionPrompt, conflictingPages, completedPageExtractionSchema, HOMEWORK_AI_CONCURRENCY, homeworkQuestionBatches, mergePageExtractions, normalizePageExtraction, requireExactQuestionNumbers, type PageExtraction } from '../completed-homework-coverage';
+import { homeworkQuestionLabel } from '../homework-grading-rules.mjs';
+import type { QuestionType } from '../types';
 import { AiQueueFailure } from './ai/queue-policy';
 import { homeworkCurriculum, homeworkDb } from './homework';
 import { homeworkAssetDataUrl } from './homework-assets';
@@ -21,13 +23,18 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const pageResult=await db.prepare('SELECT id,page_order,processed_asset_id,quality_json FROM submission_pages WHERE submission_id=? ORDER BY page_order').bind(submissionId).all<ExtractionPage>();
   const pages=pageResult.results as ExtractionPage[];
   if(!pages.length)throw new Error('没有已上传的作业页面');
-  const assignment=await db.prepare('SELECT template_confirmed,owner_user_id,curriculum FROM homework_assignments WHERE id=?').bind(assignmentId).first<{template_confirmed:number;owner_user_id:string;curriculum:string}>();
+  const assignment=await db.prepare('SELECT template_confirmed,owner_user_id,curriculum,sheet_json FROM homework_assignments WHERE id=?').bind(assignmentId).first<{template_confirmed:number;owner_user_id:string;curriculum:string;sheet_json:string}>();
   const curriculum=homeworkCurriculum(assignment?.curriculum);
   // An old template flag is never proof that every uploaded page was examined.
   if(assignment?.template_confirmed){try{await assertCompletePageCoverage(submissionId);return;}catch{ /* Backfill missing coverage rather than accepting an old partial extraction. */ }}
-  const storedResult=await db.prepare('SELECT id,question_number,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<{id:string;question_number:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>();
-  const stored=storedResult.results as Array<{id:string;question_number:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string}>;
+  type StoredRow={id:string;question_number:string;type:QuestionType;stem:string;options_json:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string;reference_verified:number;source_json:string};
+  const storedResult=await db.prepare('SELECT id,question_number,type,stem,options_json,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source,reference_verified,source_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<StoredRow>();
+  const stored=storedResult.results as StoredRow[];
   const oldByNumber=new Map(stored.map(q=>[q.question_number,q]));
+  // An assigned homework already holds its questions: the pages are only searched for the answers to them.
+  const sheet=assignment?.sheet_json?stored.filter(q=>q.source_json):null;
+  const knownNumbers=sheet?new Set(sheet.map(q=>q.question_number)):undefined;
+  const inventory:KnownSheetQuestion[]|undefined=sheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem.replace(/\s+/g,' ').slice(0,80)}));
   const extracted=await boundedMap(pages,HOMEWORK_AI_CONCURRENCY,async(page,index):Promise<PageExtraction>=>{
     const fingerprint=await coverageFingerprint(pages,index);
     const cached=await db.prepare('SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND page_id=? AND fingerprint=? AND status=\'complete\'').bind(submissionId,page.id,fingerprint).first<{result_json:string}>();
@@ -37,7 +44,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
     const context=curriculum==='school'?[page]:pages.slice(Math.max(0,index-1),index+2),contextNumbers=context.map(p=>p.page_order+1);
     try{
       const images=await Promise.all(context.map(p=>homeworkAssetDataUrl(p.processed_asset_id)));
-      const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum);
+      const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum,inventory),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum,knownNumbers);
       const incomplete=read.questions.filter(q=>!q.question_complete);
       if(curriculum==='school' && incomplete.length && pages.length>1){
         const neighbours=pages.slice(Math.max(0,index-1),index+2).filter(p=>p.id!==page.id);
@@ -68,7 +75,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   });
   await assertCompletePageCoverage(submissionId);
   let questions:CompletedQuestion[];
-  try{questions=mergePageExtractions(extracted);}
+  try{questions=mergePageExtractions(extracted,Boolean(sheet));}
   catch(error){
     // A misread page would otherwise be reused from cache on every retry; read the conflicting pages again.
     const misread=new Set(conflictingPages(extracted));
@@ -76,6 +83,11 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
       .bind(error instanceof Error?error.message:'页面识别不一致',submissionId,page.id)));
     invalid(error);
   }
+  // An assigned question keeps the content it was handed out with; the pages only tell where and how it was answered.
+  if(sheet)questions=questions.map(q=>{
+    const row=oldByNumber.get(q.question_number)!;
+    return {...q,type:row.type,stem:row.stem,options:JSON.parse(row.options_json||'[]') as string[],question_complete:true,max_score:null,figures:[],figure_notes:''};
+  });
   // A question read again as sub-questions (5-3 → 5-3(1), 5-3(2)) passes its record to the first sub-question.
   const numbers=new Set(questions.map(q=>q.question_number)),inherited=new Map<string,string>();
   for(const old of stored)if(!numbers.has(old.question_number)){
@@ -86,14 +98,17 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   // Old rows remain as history, but a successful reread must not resurrect
   // questions absent from its inventory (including misattributed neighbour pages).
   questions.sort((a,b)=>a.page_numbers[0]-b.page_numbers[0]||a.question_number.localeCompare(b.question_number,undefined,{numeric:true}));
-  if(!questions.length)throw new Error('全部页面已检查，但没有可识别的题目，请核对原件');
-  if(questions.length>200)throw new Error('每份作业最多200道题，当前未标记完成，请分份上传');
+  if(!questions.length)throw new Error(sheet?'上传的页面里没有找到这份作业的题目，请核对是不是这份作业':'全部页面已检查，但没有可识别的题目，请核对原件');
+  if(!sheet&&questions.length>200)throw new Error('每份作业最多200道题，当前未标记完成，请分份上传');
   const pendingPages=pendingIds.filter((id:string)=>id.startsWith('page:')).map((id:string)=>Number(id.slice(5)));
   if(pendingIds.length)questions=questions.filter(q=>pendingIds.includes(recordId(q.question_number)??'')||q.page_numbers.some(p=>pendingPages.includes(p)));
   const ids=new Map(questions.map(q=>[q.question_number,recordId(q.question_number)??crypto.randomUUID()]));
   if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
   const now=Date.now();
-  for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map((q,index)=>db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,knowledge_tags_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,input_evidence_json)
+  // An assigned question already has its row, content and place on the sheet; only where it was answered changes.
+  if(sheet)for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map(q=>db.prepare('UPDATE assignment_questions SET page_number=?,bbox_json=?,input_evidence_json=?,updated_at=? WHERE id=? AND assignment_id=?')
+    .bind(q.page_numbers[0],q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q),now,ids.get(q.question_number),assignmentId)));
+  else for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map((q,index)=>db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,knowledge_tags_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,input_evidence_json)
       VALUES(?,?,?,?,?,?,?,'','',?,0,'[]',?,?,?,?,?,'unresolved',0,?) ON CONFLICT(id) DO UPDATE SET question_number=excluded.question_number,${pendingIds.length?'':'sort_order=excluded.sort_order,'}stem=excluded.stem,options_json=excluded.options_json,type=excluded.type,page_number=excluded.page_number,bbox_json=excluded.bbox_json,input_evidence_json=excluded.input_evidence_json,updated_at=excluded.updated_at`)
       .bind(ids.get(q.question_number),assignmentId,q.question_number,q.page_numbers[0],q.type,q.stem,JSON.stringify(q.options),q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q.knowledge_tags),JSON.stringify(q.capability_keys),start+index,now,now,JSON.stringify(q))));
   // These verdicts need no model request and must not wait behind slow reference batches.
@@ -120,7 +135,8 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   for(const q of readable){
     const key=await hash({contract:'reference-batch-v1',stem:q.stem,type:q.type,options:q.options,figure_notes:q.figure_notes||undefined,referenceIds,...(curriculum==='international'?{curriculum,max_score:q.max_score}:{})});keys.set(q.question_number,key);
     const old=oldByNumber.get(q.question_number);
-    if(old?.reference_fingerprint===key || old?.reference_evidence.startsWith('教师补充并确认'))ready.push(q);
+    // An assigned question's own answer is its reference; only one handed out without an answer is solved here.
+    if(old?.reference_fingerprint===key || old?.reference_evidence.startsWith('教师补充并确认') || (old?.source_json && Number(old.reference_verified)===1))ready.push(q);
     else pendingReferences.push(q);
   }
   // Each slot owns its entire solve → verify → grade chain, so stages together never exceed four requests.

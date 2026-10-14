@@ -80,11 +80,18 @@ async function studentDigest(user: AuthUser, student: { id: string; notes: strin
   return digest.trim();
 }
 
-// Questions this student has already met: the wrong book and every earlier 智能组卷 plan for them.
+// Questions this student has already met: the wrong book, every earlier 智能组卷 plan for them, and every library question
+// assigned to them as homework (from any material).
 async function metQuestionIds(user: AuthUser, studentId: string) {
   const met = await usedQuestionIds(user, studentId);
-  const wrong = await db().prepare("SELECT source_question_id FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ?").bind(studentId, user.id).all<{ source_question_id: string }>();
+  const [wrong, assigned] = await Promise.all([
+    db().prepare("SELECT source_question_id FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ?").bind(studentId, user.id).all<{ source_question_id: string }>(),
+    db().prepare(`SELECT DISTINCT json_extract(q.source_json, '$.id') AS id FROM assignment_questions q
+      JOIN homework_assignments a ON a.id = q.assignment_id JOIN homework_submissions s ON s.assignment_id = a.id
+      WHERE s.student_id = ? AND a.owner_user_id = ? AND q.source_json <> ''`).bind(studentId, user.id).all<{ id: string | null }>(),
+  ]);
   for (const row of wrong.results) if (row.source_question_id) met.add(row.source_question_id);
+  for (const row of assigned.results) if (row.id) met.add(row.id);
   return met;
 }
 

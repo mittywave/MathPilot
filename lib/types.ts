@@ -338,9 +338,30 @@ export type AssignmentQuestion = {
   taxonomyKeys: string[];
   capabilityKeys: string[];
   figures?: HomeworkQuestionFigure[];
+  /** An assigned homework's question as it was handed out: the library question or the one read from the Word. */
+  source?: Question | null;
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
+};
+
+/** How an assigned material is split (智能组卷 by day); no groups means one run of questions numbered 1, 2, 3…. */
+export type HomeworkSheetGroup = { title: string; size: number };
+/**
+ * An assigned homework: its questions were known when it was handed out, and it may come back in several uploads.
+ * Each question carries its latest graded result over the uploads so far; one never handed in has none.
+ */
+export type AssignedHomework = {
+  groups: HomeworkSheetGroup[];
+  questions: Array<{ id: string; number: string; question: Question; result: { verdict: GradingVerdict; requiresReview: boolean; submissionId: string } | null }>;
+  uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
+};
+
+/** One homework of a student as the archive lists it: assigned ones count the whole sheet, uploaded ones their last upload. */
+export type StudentHomework = {
+  assignmentId: string; title: string; assigned: boolean; createdAt: number;
+  total: number; done: number; correct: number; incorrect: number; pending: number;
+  latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
 };
 
 export type SubmissionPage = {
@@ -575,6 +596,8 @@ export type HomeworkSubmission = {
   pages: SubmissionPage[];
   gradingItems: GradingItem[];
   report: SubmissionReport | null;
+  /** Present on an assigned homework: the whole sheet with each question's latest result. */
+  assigned?: AssignedHomework | null;
   createdAt: number;
   updatedAt: number;
 };

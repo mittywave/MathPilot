@@ -7,6 +7,7 @@ import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
 import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { SiteHeader } from "./components/SiteHeader";
+import { StudentHomework } from "./components/StudentHomework";
 import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
 import WrongQuestionUpload from "./components/WrongQuestionUpload";
 import { QuestionBody } from "./components/QuestionBody";
@@ -21,6 +22,10 @@ import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData,
 
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
+// 学生档案 opens on the tab last used (or the one a link names, ?tab=homework).
+type ArchiveTab = "homework" | "wrong";
+const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["wrong", "错题本"]];
+const ARCHIVE_TAB_KEY = "student-archive-tab";
 const TRASH_HINT = "可在“分类与数据管理”的回收站恢复";
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
@@ -114,6 +119,7 @@ export default function Home() {
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
   const [wrongBookLoading, setWrongBookLoading] = useState(false);
+  const [archiveTab, setArchiveTab] = useState<ArchiveTab>("homework");
   const [studentDialog, setStudentDialog] = useState(false);
   const [studentDraft, setStudentDraft] = useState<Student | null>(null);
   const [studentName, setStudentName] = useState("");
@@ -133,6 +139,11 @@ export default function Home() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try { setAlevelPageLocale(window.localStorage.getItem(ALEVEL_PAGE_LOCALE_KEY) === "en" ? "en" : "zh"); } catch { /* 本地存储不可用时保持中文默认值 */ }
+      const linked = new URLSearchParams(window.location.search).get("tab");
+      let remembered: string | null = null;
+      try { remembered = window.localStorage.getItem(ARCHIVE_TAB_KEY); } catch { /* 本地存储不可用时打开“作业” */ }
+      const tab = ARCHIVE_TABS.find(([key]) => key === (linked ?? remembered))?.[0];
+      if (tab) setArchiveTab(tab);
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
@@ -140,6 +151,11 @@ export default function Home() {
   function chooseAlevelPageLocale(locale: AlevelPageLocale) {
     setAlevelPageLocale(locale);
     try { window.localStorage.setItem(ALEVEL_PAGE_LOCALE_KEY, locale); } catch { /* 本地存储不可用时仍保留本次切换 */ }
+  }
+
+  function chooseArchiveTab(tab: ArchiveTab) {
+    setArchiveTab(tab);
+    try { window.localStorage.setItem(ARCHIVE_TAB_KEY, tab); } catch { /* 本地存储不可用时仍保留本次切换 */ }
   }
 
   function applyLibrary(data: LibraryData, preserveCategory = true) {
@@ -518,12 +534,12 @@ export default function Home() {
 
         <section className="content">
           {showWrongBook ? <>
-            <div className="student-archive-heading"><h1>学生档案</h1></div>
-            <div className="library-context-bar wrong-book-context"><div><b>学生专属错题本</b><span>不同学生的错题和错误次数彼此独立</span></div></div>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => { if (event.target.value === NEW_STUDENT_OPTION) openStudentDialog(); else selectStudent(event.target.value); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}<option value={NEW_STUDENT_OPTION}>＋ 新建学生</option></select></label>}
             {activeStudent ? <>
-              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}的错题本</h1><p className="subtext">{activeStudent.notes || "按月记录作业中完全错误的题目"}</p></div><div className="wrong-book-stats"><span><b>{activeStudent.wrongCount}</b>全部错题</span><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} target="_blank" rel="noreferrer" title="按这位学生的档案从题库挑题、按天排好">智能组卷</a></div></div>
-              <div className="content-head wrong-book-head"><div><p className="breadcrumb">学习记录</p><h2>{activeWrongEntries.length ? "作业错题清单" : "开始建立错题本"}</h2><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label></div>
+              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}</h1>{activeStudent.notes && <p className="subtext">{activeStudent.notes}</p>}</div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} target="_blank" rel="noreferrer" title="按这位学生的档案从题库挑题、按天排好">智能组卷</a></div></div>
+              <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
+              {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : <>
+              <div className="content-head wrong-book-head"><div><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label></div>
               {!!activeWrongEntries.length && <div className="filters">
                 <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => setWrongMonth("全部")}>全部 <span>{activeWrongEntries.length}</span></button>
                 {wrongMonths.map((month) => <button key={month} className={`filter ${activeWrongMonth === month ? "active" : ""}`} onClick={() => setWrongMonth(month)}>{month} <span>{activeWrongEntries.filter((entry) => wrongMonthOf(entry) === month).length}</span></button>)}
@@ -548,7 +564,8 @@ export default function Home() {
                 })}</section>)}
               </div>
               {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>删除、部分正确及已修正的记录保留在此，不计入当前错题统计；删除的错题可以恢复。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small>{entry.archiveReason === WRONG_QUESTION_DELETED && <button className="secondary" onClick={() => restoreWrongEntry(entry)}>恢复</button>}<WrongQuestionEvidence entry={entry} /></article>)}</details>}
-            </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立错题本"}</h3><p>每位学生都有独立的错题和错误次数。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
+              </>}
+            </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立档案"}</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
           </> : <>
           {showSelected ? <>
             <div className="basket-heading">
