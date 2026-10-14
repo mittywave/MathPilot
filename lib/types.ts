@@ -403,8 +403,8 @@ export type StudentHomework = {
   assignmentId: string; title: string; assigned: boolean; createdAt: number;
   total: number; done: number; correct: number; incorrect: number; pending: number;
   latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
-  /** An assigned homework's days; null for an uploaded one. */
-  days: HomeworkDay[] | null;
+  /** An assigned homework's days, and the 快速排版 record it was assigned from; null for an uploaded one. */
+  days: HomeworkDay[] | null; recordId: string | null;
 };
 
 export type SubmissionPage = {

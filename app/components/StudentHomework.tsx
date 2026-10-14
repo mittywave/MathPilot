@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { fetchLibrary, fetchTypesetRecords } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
-import type { StudentHomework as Homework, StudentSummary } from "../../lib/types";
+import { planDays } from "../../lib/smart-paper-contract";
+import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
+import { AssignHomework } from "./AssignHomework";
 import { calendarDay, dayNote, dayState, shortDate, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
@@ -26,18 +29,72 @@ function homeworkState(item: Homework, states: DayState[]): { label: string; ton
 
 const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 
+/**
+ * 布置作业 in the archive: the plans 智能组卷 made for this student that are not handed out yet. Picking one takes its
+ * questions from the library day by day and opens the same 布置给学生 dialog as 快速排版, with the student chosen.
+ */
+function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: StudentSummary; handedOut: string[]; onClose: () => void; onAssigned: () => void }) {
+  const [plans, setPlans] = useState<TypesetRecord[] | null>(null);
+  const [opening, setOpening] = useState("");
+  const [error, setError] = useState("");
+  const [material, setMaterial] = useState<{ record: TypesetRecord; questions: Question[]; groups: HomeworkSheetGroup[] } | null>(null);
+  useEffect(() => {
+    let current = true;
+    fetchTypesetRecords().then(({ records }) => { if (current) setPlans(records.filter((record) => record.plan && record.studentId === student.id && !handedOut.includes(record.id))); })
+      .catch((reason) => { if (current) { setPlans([]); setError(reason instanceof Error ? reason.message : "组卷记录读取失败"); } });
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector(".assign-modal[aria-busy=true]")) onClose(); };
+    document.addEventListener("keydown", close);
+    return () => { current = false; document.removeEventListener("keydown", close); };
+  }, [student.id, handedOut, onClose]);
+
+  async function open(record: TypesetRecord) {
+    if (!record.plan) return;
+    setOpening(record.id); setError("");
+    try {
+      const days = planDays(record.plan, new Map((await fetchLibrary()).questions.map((question) => [question.id, question])));
+      if (!days.length) throw new Error("这份卷里的题都已不在题库中");
+      setMaterial({ record, questions: days.flatMap((entry) => entry.questions), groups: days.map((entry) => ({ title: entry.title, size: entry.questions.length })) });
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "取题失败"); }
+    finally { setOpening(""); }
+  }
+
+  if (material) return <AssignHomework title={material.record.title} questions={material.questions} groups={material.groups} studentId={student.id}
+    recordId={material.record.id} origin="智能组卷" onClose={onClose} onAssigned={onAssigned} />;
+  return <div className="modal-backdrop">
+    <section className="modal assign-modal" role="dialog" aria-modal="true" aria-label={`给${student.name}布置作业`} aria-busy={Boolean(opening)}>
+      <div className="modal-head"><div><span className="eyebrow">学生档案</span><h2>给{student.name}布置作业</h2></div><button className="close" aria-label="关闭" disabled={Boolean(opening)} onClick={onClose}>×</button></div>
+      {plans === null ? <p className="assign-hint">正在读取给{student.name}组的卷…</p>
+        : plans.length ? <ul className="assign-plans" aria-label="组好还没布置的卷">{plans.map((plan) => <li key={plan.id}>
+          <button type="button" disabled={Boolean(opening)} onClick={() => void open(plan)}>
+            <b>{plan.title}</b><small>{day(plan.createdAt)} 智能组卷 · {plan.plan!.groups.length > 1 ? `${plan.plan!.groups.length} 天 · ` : ""}{plan.questionCount} 道题</small>
+            <span>{opening === plan.id ? "正在取题…" : "布置"}</span>
+          </button>
+        </li>)}</ul>
+        : <p className="assign-empty">没有给{student.name}组好、还没布置的卷。</p>}
+      <p className="assign-hint">要新组一份，点 <a href={`/tools/smart-paper?student=${encodeURIComponent(student.id)}`}>智能组卷</a>，排好后点“布置给学生”。Word 练习在快速排版里打开后点“布置给学生”。</p>
+      {error && <p className="assign-error" role="alert">{error}</p>}
+    </section>
+  </div>;
+}
+
 /** 学生档案 · 作业: the student's assigned and uploaded homework, newest first; each row opens its grading page. */
 export function StudentHomework({ student }: { student: StudentSummary }) {
   // What was read, and for whom: switching students shows the loading state until that student's list arrives.
   const [loaded, setLoaded] = useState<{ studentId: string; homework: Homework[] | null; error: string } | null>(null);
+  // Read again after a homework is assigned here.
+  const [reads, setReads] = useState(0);
+  const [assigning, setAssigning] = useState(false);
   useEffect(() => {
     let current = true;
     homeworkApi.studentHomework(student.id).then((result) => { if (current) setLoaded({ studentId: student.id, homework: result.homework, error: "" }); })
       .catch((reason) => { if (current) setLoaded({ studentId: student.id, homework: null, error: reason instanceof Error ? reason.message : "作业记录读取失败" }); });
     return () => { current = false; };
-  }, [student.id]);
+  }, [student.id, reads]);
   const homework = loaded?.studentId === student.id ? loaded.homework : null;
   const error = loaded?.studentId === student.id ? loaded.error : "";
+  const closeAssign = useCallback(() => setAssigning(false), []);
+  const assigned = useCallback(() => { setAssigning(false); setReads((count) => count + 1); }, []);
+  const [handedOut, setHandedOut] = useState<string[]>([]);
 
   const today = calendarDay();
   const rows = homework?.map((item) => ({ item, states: item.days?.map((entry) => dayState(entry, today)) ?? [] })) ?? [];
@@ -46,10 +103,14 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
   return <section className="student-homework" aria-label={`${student.name}的作业`}>
     <header className="student-panel-head">
       <p>{homework ? late ? `${late} 份作业过了日子没交` : waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
-      <a className="student-panel-action" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
+      <div className="student-panel-actions">
+        <button type="button" className="student-panel-action" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
+        <a className="student-panel-action" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
+      </div>
     </header>
+    {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !homework ? <div className="wrong-book-loading"><i></i><span>正在读取作业…</span></div>
-      : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>在快速排版或智能组卷里点“布置给学生”，题目和答案会存进这里；学生做完后上传学生拍好的照片或 PDF 批改。也可以直接批改一份学校发的作业。</p></div>
+      : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>点“布置作业”把给这位学生组好的卷布置下去，Word 练习在快速排版里点“布置给学生”；题目和答案会存进这里，学生做完后上传学生拍好的照片或 PDF 批改。也可以直接批改一份学校发的作业。</p></div>
       : <ol className="homework-rows">{rows.map(({ item, states }) => {
         const state = homeworkState(item, states); const graded = item.correct + item.incorrect + item.pending;
         const days = item.days ?? [];

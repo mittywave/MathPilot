@@ -725,6 +725,35 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
   .homework-tally { grid-column:1 / -1; }
   .homework-go { grid-column:1 / -1; justify-self:start; }
 }
+.student-panel-actions { display:flex; flex-wrap:wrap; gap:8px; }
+button.student-panel-action { font-family:inherit; cursor:pointer; }
+/* 布置给学生 (快速排版, and 布置作业 in the archive): the material's name and first day, the students, then what is stored. */
+.assign-modal { width:min(560px,100%); }
+.assign-fields { display:grid; grid-template-columns:minmax(0,1fr) 170px; gap:12px; }
+@media (max-width:560px) { .assign-fields { grid-template-columns:1fr; gap:0; } }
+.assign-students { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; padding:0; border:0; }
+.assign-students legend { margin-bottom:7px; padding:0; color:color-mix(in srgb,var(--ink) 23%,var(--muted)); font-size:11px; }
+.assign-students p { margin:0; color:var(--muted); font-size:12px; }
+.assign-students label { display:inline-flex; align-items:center; gap:7px; min-height:36px; padding:0 12px 0 10px; border:1px solid var(--line); border-radius:999px; background:var(--surface); font-size:13px; cursor:pointer; }
+.assign-students label.on { border-color:var(--green); background:var(--green-soft); color:var(--green); }
+.assign-students input { width:15px; height:15px; margin:0; padding:0; accent-color:var(--green); }
+.assign-students small { color:var(--muted); font-size:11.5px; }
+.assign-summary { margin:0 0 6px; font-size:13px; font-weight:600; }
+.assign-hint,.assign-done { margin:0 0 14px; color:color-mix(in srgb,var(--ink) 30%,var(--muted)); font-size:12.5px; line-height:1.7; }
+.assign-hint a { color:var(--green); font-weight:600; }
+.assign-done { color:var(--ink); font-size:14px; }
+.assign-error { margin:0 0 12px; padding:8px 11px; border-radius:calc(8px*var(--radius-scale)); background:var(--danger-soft); color:var(--danger); font-size:12.5px; }
+.assign-links { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+.assign-links a { color:var(--green); font-size:13px; font-weight:600; }
+/* The plans made for one student that are not handed out yet, in the archive's 布置作业. */
+.assign-plans { display:grid; gap:8px; margin:0 0 14px; padding:0; list-style:none; }
+.assign-plans button { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:3px 14px; width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:calc(10px*var(--radius-scale)); background:var(--surface); color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
+.assign-plans button:hover:not(:disabled) { border-color:var(--green); background:var(--green-soft); }
+.assign-plans button:disabled { cursor:progress; opacity:.7; }
+.assign-plans b { overflow:hidden; font-size:14px; text-overflow:ellipsis; white-space:nowrap; }
+.assign-plans small { grid-column:1; color:var(--muted); font-size:12px; }
+.assign-plans span { grid-column:2; grid-row:1 / span 2; color:var(--green); font-size:13px; font-weight:600; white-space:nowrap; }
+.assign-empty { margin:0 0 14px; padding:18px; border:1px dashed var(--line); border-radius:calc(10px*var(--radius-scale)); color:var(--muted); font-size:13px; text-align:center; }
 /* 学生档案 · 定档：左边知识点（客观），右边能力（主观）和课后反馈。 */
 .student-profile { margin-top:16px; }
 .profile-periods { display:inline-flex; padding:3px; border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); background:var(--surface); }

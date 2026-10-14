@@ -4,9 +4,9 @@ import { authorizeDownload, createTypesetRecord, deleteTypesetRecord, fetchLibra
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { SheetGroup } from "../../../lib/handout-latex";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
-import { groupHeading, planQuestionIds } from "../../../lib/smart-paper-contract";
+import { planDays, planQuestionIds } from "../../../lib/smart-paper-contract";
 import type { Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
-import { AssignHomework } from "./AssignHomework";
+import { AssignHomework } from "../../components/AssignHomework";
 import { PdfPreview } from "./PdfPreview";
 import { TypesetHistory } from "./TypesetHistory";
 import "../tools.css";
@@ -220,8 +220,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     run.current += 1; setResult(null); setPicked(null); setError(""); setHistoryNote(""); setBusy("正在从题库取题…");
     try {
       if (!record.plan) throw new Error("这条记录的题目清单已无法读取");
-      const byId = new Map((await fetchLibrary()).questions.map((question) => [question.id, question]));
-      const days = record.plan.groups.map((group) => ({ title: groupHeading(group), questions: group.items.flatMap((item) => byId.get(item.id) ?? []) }));
+      const days = planDays(record.plan, new Map((await fetchLibrary()).questions.map((question) => [question.id, question])));
       const questions = days.flatMap((day) => day.questions);
       if (!questions.length) throw new Error("这份资料里的题都已不在题库中");
       await authorizeDownload(questions.map((question) => question.id));
@@ -348,7 +347,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
       <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
       {(basket || records !== null) && <button type="button" className="secondary typeset-assign" disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
-      {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} onClose={closeAssign} />}
+      {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign} />}
       {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}

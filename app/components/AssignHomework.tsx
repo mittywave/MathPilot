@@ -1,17 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
-import { calendarDay, laterDay, shortDate } from "../../components/AssignedHomeworkSheet";
-import { homeworkApi } from "../../../lib/homework-api-client";
-import type { SheetGroup } from "../../../lib/handout-latex";
-import type { Question, StudentSummary } from "../../../lib/types";
+import { calendarDay, laterDay, shortDate } from "./AssignedHomeworkSheet";
+import { homeworkApi } from "../../lib/homework-api-client";
+import type { HomeworkSheetGroup, Question, StudentSummary } from "../../lib/types";
 
 type Assigned = Array<{ id: string; studentId: string; studentName: string }>;
 
-// 布置给学生: the material on screen becomes a homework of each chosen student, its questions and answers stored now.
-// What the student hands in is uploaded later from the student's archive, in one go or day by day, and graded against them.
-// 第 1 天 is today unless the teacher picks another date; each further day is due on the next.
-export function AssignHomework({ title, questions, groups, studentId, onClose }: {
-  title: string; questions: Question[]; groups?: SheetGroup[]; studentId?: string | null; onClose: () => void;
+// 布置给学生: a material becomes a homework of each chosen student, its questions and answers stored now — the one open
+// in 快速排版, or a plan picked in the student's archive. What the student hands in is uploaded later from the
+// student's archive, in one go or day by day, and graded against them. 第 1 天 is today unless the teacher picks another
+// date; each further day is due on the next. The 快速排版 record it came from is remembered, so the archive knows it is out.
+export function AssignHomework({ title, questions, groups, studentId, recordId, origin = "快速排版", onClose, onAssigned }: {
+  title: string; questions: Question[]; groups?: HomeworkSheetGroup[]; studentId?: string | null; recordId?: string | null; origin?: string;
+  onClose: () => void;
+  /** Called instead of showing the confirmation, when the caller shows the new homework itself. */
+  onAssigned?: () => void;
 }) {
   const [students, setStudents] = useState<StudentSummary[] | null>(null);
   const [chosen, setChosen] = useState<string[]>(studentId ? [studentId] : []);
@@ -36,14 +39,17 @@ export function AssignHomework({ title, questions, groups, studentId, onClose }:
   async function assign() {
     if (!chosen.length || !name.trim() || !start || busy) return;
     setBusy(true); setError("");
-    try { setAssigned((await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions, groups, start })).assigned); }
+    try {
+      const result = await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions, groups, start, recordId });
+      if (onAssigned) onAssigned(); else setAssigned(result.assigned);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "布置失败"); }
     finally { setBusy(false); }
   }
 
   return <div className="modal-backdrop">
     <section className="modal assign-modal" role="dialog" aria-modal="true" aria-label="布置给学生" aria-busy={busy}>
-      <div className="modal-head"><div><span className="eyebrow">快速排版</span><h2>布置给学生</h2></div><button className="close" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
+      <div className="modal-head"><div><span className="eyebrow">{origin}</span><h2>布置给学生</h2></div><button className="close" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
       {assigned ? <>
         <p className="assign-done">已布置给 {assigned.map((item) => item.studentName).join("、")}。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF。</p>
         <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`} target="_blank" rel="noreferrer">打开{item.studentName}的档案</a>)}</div>
@@ -60,7 +66,7 @@ export function AssignHomework({ title, questions, groups, studentId, onClose }:
             <b>{student.name}</b>{student.className && <small>{student.className}</small>}
           </label>) : <p>还没有学生档案，请先在“学生档案”里新建学生。</p>}
         </fieldset>
-        <p className="assign-summary">{questions.length} 道题{days > 1 && start ? ` · 分 ${days} 天，${shortDate(start)}–${shortDate(lastDay)} 每天一份` : start ? ` · ${shortDate(start)} 交` : ""} · {answered === questions.length ? "全部带答案" : `${answered} 道带答案，其余 ${questions.length - answered} 道批改时由 AI 解题`}</p>
+        <p className="assign-summary">{questions.length} 道题{days > 1 && start ? ` · 分 ${days} 天，${shortDate(start)}–${shortDate(lastDay)} 每天一份` : start ? ` · ${shortDate(start)} 要交` : ""} · {answered === questions.length ? "全部带答案" : `${answered} 道带答案，其余 ${questions.length - answered} 道批改时由 AI 解题`}</p>
         <p className="assign-hint">题目和答案现在就存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。{days > 1 ? "到了哪天还没交那天的，" : "过了交作业日期还没交的，"}学生档案里会标出“没交”。</p>
         {error && <p className="assign-error" role="alert">{error}</p>}
         <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button>

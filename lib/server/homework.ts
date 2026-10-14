@@ -159,8 +159,9 @@ async function uploadResults(submissionId: string) {
   return (rows.results as ResultRow[]).filter((row) => !recognized || recognized.has(row.question_number));
 }
 
-// What an assigned homework keeps beside its questions: the days it is split into and the date of its first day.
-type HomeworkSheet = { groups?: HomeworkSheetGroup[]; start?: string };
+// What an assigned homework keeps beside its questions: the days it is split into, the date of its first day, and the
+// 快速排版 record it was assigned from.
+type HomeworkSheet = { groups?: HomeworkSheetGroup[]; start?: string; recordId?: string };
 
 // The teacher's calendar dates are kept as YYYY-MM-DD; a day later is one calendar day on, in any time zone.
 function calendarDate(value: unknown) {
@@ -296,7 +297,7 @@ function hasReference(question: Pick<Question, "answer" | "analysis">) {
  * library itself; any other question (one read from a Word, a wrong-book snapshot) as the browser sent it, its
  * pictures stored for this teacher only. 第 1 天 (or, without days, the day it is due) is the date the teacher set.
  */
-export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; start?: unknown }, user: AuthUser) {
+export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; start?: unknown; recordId?: unknown }, user: AuthUser) {
   requireHomeworkEnabled();
   const studentIds = [...new Set(Array.isArray(input.studentIds) ? input.studentIds.map((id) => String(id)) : [])];
   if (!studentIds.length || studentIds.length > 50) throw responseError("请选择要布置的学生", 400);
@@ -308,7 +309,10 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
   const groups = assignedGroups(input.groups, raw.length);
   const numbers = assignedNumbers(groups, raw.length);
   const start = calendarDate(input.start); if (!start) throw responseError("请选择有效的日期", 400);
-  const sheet: HomeworkSheet = { groups, start };
+  // The record is remembered only when it is this teacher's; the archive then knows the plan is handed out.
+  const record = typeof input.recordId === "string" && input.recordId ? await appEnv().DB.prepare("SELECT id FROM typeset_records WHERE id = ? AND owner_user_id = ?")
+    .bind(input.recordId, user.id).first<{ id: string }>() : null;
+  const sheet: HomeworkSheet = { groups, start, ...(record ? { recordId: record.id } : {}) };
   const { readLibrary, storeTeacherQuestionMedia } = await import("./library");
   const library = new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
   const { index: graph } = await (await import("./knowledge-graph")).loadPublishedKnowledgeGraph();
@@ -368,7 +372,7 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
       assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
       latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
-      days: assigned?.days ?? null,
+      days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
     };
   }));
 }
