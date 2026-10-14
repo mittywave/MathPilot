@@ -1,11 +1,11 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import { randomClientId } from "../../lib/client-random-id.mjs";
 
 export type HomeworkPage = { id: string; blob: Blob; url: string };
-/** empty: content of a drop zone shown while no page is chosen yet; the 新建错题 dialog styles it. */
-type Props = { pages: HomeworkPage[]; onChange(pages: HomeworkPage[]): void; disabled?: boolean; limit?: number; onBusyChange?(busy: boolean): void; onSourceFile?(file: File): void; empty?: ReactNode };
+/** label: what the entry asks for while no page is chosen yet (by default the student's homework). */
+type Props = { pages: HomeworkPage[]; onChange(pages: HomeworkPage[]): void; disabled?: boolean; limit?: number; onBusyChange?(busy: boolean): void; onSourceFile?(file: File): void; label?: string };
 
 const MAX_EDGE = 2400;
 
@@ -26,9 +26,15 @@ export async function homeworkPage(source: Blob): Promise<HomeworkPage> {
 
 export function releaseHomeworkPages(pages: HomeworkPage[]) { for (const page of pages) URL.revokeObjectURL(page.url); }
 
-export default function HomeworkPagePicker({ pages, onChange, disabled = false, limit = 30, onBusyChange, onSourceFile, empty }: Props) {
-  const fileRef = useRef<HTMLInputElement>(null); const pagesRef = useRef(pages);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+const isPageFile = (file: File) => file.type.startsWith("image/") || file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+// Pages come in the way questions are entered (录入题目): pasted (⌘V), dragged in, or chosen from a folder by clicking the
+// entry. Photos and PDFs may come several at a time; a PDF becomes one page per sheet.
+export default function HomeworkPagePicker({ pages, onChange, disabled = false, limit = 30, onBusyChange, onSourceFile, label = "粘贴或拖入学生的作业" }: Props) {
+  const fileRef = useRef<HTMLInputElement>(null); const pagesRef = useRef(pages); const entryRef = useRef<HTMLButtonElement>(null);
+  const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [dragging, setDragging] = useState(false);
+  // Files arriving while others are still being read wait their turn, so pages keep the order they came in.
+  const queue = useRef(Promise.resolve());
   useEffect(() => { pagesRef.current = pages; }, [pages]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
 
@@ -37,7 +43,7 @@ export default function HomeworkPagePicker({ pages, onChange, disabled = false, 
     if (pagesRef.current.length >= limit) throw new Error(`最多 ${limit} 页`);
     commit([...pagesRef.current, await homeworkPage(blob)]);
   }
-  async function addFiles(files: File[]) {
+  async function readFiles(files: File[]) {
     setBusy(true); setError("");
     try {
       for (const file of files) {
@@ -51,16 +57,45 @@ export default function HomeworkPagePicker({ pages, onChange, disabled = false, 
     } catch (caught) { setError(caught instanceof Error ? caught.message : "文件读取失败"); }
     finally { setBusy(false); }
   }
+  const readRef = useRef(readFiles);
+  useEffect(() => { readRef.current = readFiles; });
+  const addFiles = (files: File[]) => { if (files.length) queue.current = queue.current.then(() => readRef.current(files)); };
+
+  // ⌘V anywhere on the page adds the pasted screenshot or copied files, as long as this entry is on screen (one inside a
+  // closed panel is not) and the clipboard holds files; pasted text still goes where it is typed.
+  useEffect(() => {
+    if (disabled) return;
+    const paste = (event: ClipboardEvent) => {
+      const files = [...(event.clipboardData?.files ?? [])].filter(isPageFile);
+      const entry = entryRef.current;
+      if (!files.length || !entry || entry.closest("details:not([open])") || !entry.getClientRects().length) return;
+      event.preventDefault();
+      queue.current = queue.current.then(() => readRef.current(files));
+    };
+    document.addEventListener("paste", paste);
+    return () => document.removeEventListener("paste", paste);
+  }, [disabled]);
+
   function remove(page: HomeworkPage) { URL.revokeObjectURL(page.url); commit(pagesRef.current.filter((candidate) => candidate.id !== page.id)); }
   function move(page: HomeworkPage, offset: number) {
     const next = [...pagesRef.current]; const index = next.findIndex((candidate) => candidate.id === page.id); const target = index + offset;
     if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; commit(next);
   }
+  const carriesFiles = (event: DragEvent) => [...event.dataTransfer.types].includes("Files");
+  const full = pages.length >= limit;
 
-  return <section className="homework-pages" aria-label="作业页面" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (!disabled && !busy) void addFiles([...event.dataTransfer.files]); }}>
-    <input ref={fileRef} hidden type="file" accept="image/*,application/pdf" multiple onChange={(event) => { void addFiles([...(event.target.files ?? [])]); event.target.value = ""; }} />
-    {empty && !pages.length ? <button type="button" className="file-dropzone" onClick={() => fileRef.current?.click()} disabled={disabled || busy}>{busy ? <strong>正在读取…</strong> : empty}</button>
-      : <div className="homework-pages-actions"><button type="button" onClick={() => fileRef.current?.click()} disabled={disabled || busy}>选择照片或 PDF</button><span>{busy ? "正在读取…" : `已准备 ${pages.length} 页`}</span></div>}
+  return <section className="homework-pages" aria-label="作业页面"
+    onDragOver={(event) => { if (!carriesFiles(event)) return; event.preventDefault(); if (!disabled && !full) setDragging(true); }}
+    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+    onDrop={(event) => { event.preventDefault(); setDragging(false); if (!disabled) addFiles([...event.dataTransfer.files]); }}>
+    <input ref={fileRef} hidden type="file" accept="image/*,application/pdf" multiple={limit > 1} onChange={(event) => { addFiles([...(event.target.files ?? [])]); event.target.value = ""; }} />
+    <button ref={entryRef} type="button" className={`drop-entry${pages.length ? " compact" : ""}${dragging ? " dragging" : ""}`} disabled={disabled || busy || full} onClick={() => fileRef.current?.click()}>
+      <kbd>⌘V</kbd>
+      {busy ? <span><b>正在读取…</b><small>PDF 会按页拆开</small></span>
+        : full ? <span><b>已放入 {pages.length} 页</b><small>最多 {limit} 页，删掉一页后可以再添加</small></span>
+        : pages.length ? <span><b>继续粘贴、拖入，或点击从文件夹添加</b><small>已准备 {pages.length} 页，最多 {limit} 页</small></span>
+        : <span><b>{label}</b><small>直接粘贴截图或复制的文件，或把照片、PDF 拖到这里；也可以点击从文件夹选择</small><em>{limit > 1 ? `可以一次放入多张，最多 ${limit} 页` : "只需要一页"}</em></span>}
+    </button>
     {error && <p className="homework-pages-error">{error}</p>}
     {!!pages.length && <ol className="homework-pages-list">{pages.map((page, index) => <li key={page.id}>
       <img src={page.url} alt={`作业第 ${index + 1} 页`} /><b>第 {index + 1} 页</b>

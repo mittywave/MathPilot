@@ -67,7 +67,7 @@ export default function WrongQuestionUpload({ student, onClose, onGraded }: { st
     <div className="wrong-entry-modes" role="tablist" aria-label="录入方式">{MODES.map(([value, label]) => <button key={value} role="tab" aria-selected={mode === value} disabled={mode !== value && (busy || !!draft)} onClick={() => switchMode(value)}>{label}</button>)}</div>
     {upload.message && <div className="homework-notice" role="status">{upload.message}</div>}
     {mode === "screenshot" ? <>
-      {!pages.length ? <button type="button" className="wrong-entry-drop" onClick={() => captureRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = droppedImage(event); if (file) void capture(file); else setCaptureError("请选择图片文件"); }}>
+      {!pages.length ? <button type="button" className="drop-entry" onClick={() => captureRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = droppedImage(event); if (file) void capture(file); else setCaptureError("请选择图片文件"); }}>
         <kbd>⌘V</kbd><span><b>粘贴错题截图</b><small>或点击选择、拖入图片。截图要包含题目和学生的作答。</small></span>
       </button> : <div className="recognition-source">
         <div className="source-image"><img src={pages[0].url} alt="学生作答截图" />{(busy || grading) && !failed && <div className="recognizing"><i></i><b>{grading ? "正在批改…" : "正在上传…"}</b><span>判错后自动收录进错题本</span></div>}</div>
@@ -76,7 +76,7 @@ export default function WrongQuestionUpload({ student, onClose, onGraded }: { st
       <input ref={captureRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void capture(file); event.target.value = ""; }} />
       {captureError && <div className="recognition-error"><b>图片未能读取</b><span>{captureError}</span></div>}
     </> : submitted ? <div className="file-processing homework-upload-status" role="status">{grading && <div className="file-spinner"><i></i>批改中</div>}<h3>{failed ? "自动批改遇到问题" : grading ? "正在自动批改" : "批改完成"}</h3><p>{failed ? submitted.failureReason || "可在批改详情中重新批改" : `已批改 ${submitted.processingProgress?.graded ?? 0} 道，完成后错题自动收录，可以先关闭窗口`}</p>{details}</div>
-      : <HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onBusyChange={setPickerBusy} onSourceFile={(file) => setDocuments((current) => [...current, file])} empty={<><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h7l4 4v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" /><path d="M15 3v4h4M9 12h6M9 16h6" /></svg><span><b>选择或拖入整份作业</b><small>照片或 PDF，最多 30 页。看不清的题单独待处理。</small></span></>} />}
+      : <HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onBusyChange={setPickerBusy} onSourceFile={(file) => setDocuments((current) => [...current, file])} label="粘贴或拖入整份作业" />}
     {fields}
     {!submitted && <footer className="wrong-entry-foot"><p>{mode === "screenshot" ? "判错的题自动收录进错题本" : "完全错误的题按月收录进错题本"}</p><button className="primary-button" disabled={busy || pickerBusy || !pages.length || !title.trim()} onClick={submit}>{busy ? "正在提交…" : "批改并收录"}</button></footer>}
   </section></div>;

@@ -448,7 +448,7 @@ html[data-theme="dark"]
 .wrong-evidence-links a { display:flex; align-items:center; min-height:44px; color:var(--green); text-decoration:none; }
 
 .homework-shell,.review-shell { min-height:100vh; background:var(--page); color:var(--ink); }
-.homework-shell button,.review-shell button,.homework-upload-page button,.homework-pages-actions button,.homework-pages-list button { border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); background:var(--surface); }
+.homework-shell button,.review-shell button,.homework-upload-page button,.homework-pages-list button { border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); background:var(--surface); }
 .homework-shell button.primary,.review-shell button.primary,.homework-upload-page button.primary { border-color:var(--accent-strong); background:var(--accent-strong); color:var(--on-accent); font-weight:700; }
 .homework-upload-page button.primary:disabled,.review-shell button.primary:disabled { opacity:.55; cursor:not-allowed; }
 .homework-shell input,.homework-shell textarea,.homework-shell select,.review-shell input,.review-shell textarea,.review-shell select { width:100%; border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); outline:0; background:var(--surface); color:var(--ink); }
@@ -1050,9 +1050,6 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .homework-outputs span { display:grid; gap:2px; font-size:13px; }
 .homework-outputs small { color:var(--muted); font-size:12px; }
 .homework-pages { display:grid; gap:12px; }
-.homework-pages-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
-.homework-pages-actions button { min-height:44px; padding:0 16px; font-size:13px; white-space:nowrap; }
-.homework-pages-actions span { margin-left:auto; color:var(--muted); font-size:12px; }
 .homework-pages-error { margin:0; padding:9px 11px; border-radius:calc(8px*var(--radius-scale)); background:var(--danger-soft); color:var(--c-a65d3d); font-size:12px; }
 .homework-pages-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:10px; margin:0; padding:0; list-style:none; }
 .homework-pages-list li { min-width:0; display:grid; gap:6px; padding:8px; border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); background:var(--surface); }
@@ -1072,13 +1069,20 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .wrong-entry-modes { display:inline-flex; gap:2px; padding:3px; margin-bottom:14px; border-radius:calc(9px*var(--radius-scale)); background:var(--surface-soft); }
 .wrong-entry-modes button { min-height:34px; padding:0 18px; border:0; border-radius:calc(7px*var(--radius-scale)); background:transparent; color:var(--muted); font-size:12px; font-weight:600; white-space:nowrap; }
 .wrong-entry-modes button[aria-selected="true"] { background:var(--surface); color:var(--green); box-shadow:0 1px 3px color-mix(in srgb, var(--inverse) 10%, transparent); }
-.wrong-entry-drop,.wrong-entry .file-dropzone { width:100%; min-height:148px; display:flex; align-items:center; justify-content:flex-start; gap:20px; padding:22px 26px; text-align:left; border:1.5px dashed color-mix(in srgb, var(--green) 32%, var(--line)); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); color:var(--ink); cursor:pointer; transition:border-color .15s ease, background-color .15s ease; }
-.wrong-entry-drop:hover,.wrong-entry .file-dropzone:hover { border-color:var(--green); background:color-mix(in srgb, var(--surface-soft) 45%, var(--surface)); }
-.wrong-entry-drop:focus-visible,.wrong-entry .file-dropzone:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
-.wrong-entry kbd { flex:none; display:grid; place-items:center; width:66px; height:58px; border:1px solid color-mix(in srgb, var(--green) 28%, var(--line)); border-bottom-width:4px; border-radius:calc(11px*var(--radius-scale)); background:var(--surface); color:var(--green); font:700 18px/1 system-ui,sans-serif; box-shadow:0 6px 14px color-mix(in srgb, var(--green) 10%, transparent); }
-.wrong-entry .file-dropzone svg { flex:none; width:58px; height:58px; padding:13px; border-radius:calc(11px*var(--radius-scale)); background:var(--surface-soft); fill:none; stroke:var(--green); stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
-.wrong-entry-drop b,.wrong-entry .file-dropzone b { display:block; font:700 16px/1.4 "Songti SC",serif; color:var(--ink); }
-.wrong-entry-drop small,.wrong-entry .file-dropzone small { display:block; margin-top:5px; color:var(--muted); font-size:11px; line-height:1.6; }
+/* 放入作业或截图的入口，和录入题目一样：粘贴（⌘V）、拖入，或点击从文件夹选择。已有页面时缩成一行。 */
+button.drop-entry { width:100%; min-height:148px; display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; column-gap:20px; padding:22px 26px; text-align:left; border:1.5px dashed color-mix(in srgb, var(--green) 38%, var(--line)); border-radius:calc(12px*var(--radius-scale)); background:linear-gradient(135deg,color-mix(in srgb, var(--surface-soft) 69%, var(--page)),color-mix(in srgb, var(--surface) 34%, var(--page))); color:var(--ink); cursor:pointer; transition:border-color .15s ease, background-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+button.drop-entry:hover:not(:disabled),.drop-entry.dragging { border-color:var(--green); background:color-mix(in srgb, var(--green-soft) 70%, var(--surface)); box-shadow:0 8px 25px color-mix(in srgb, var(--inverse) 7%, transparent); transform:translateY(-1px); }
+button.drop-entry.dragging { border-style:solid; }
+button.drop-entry:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
+button.drop-entry:disabled { cursor:default; opacity:.65; }
+button.drop-entry kbd { flex:none; display:grid; place-items:center; width:58px; height:58px; border-radius:calc(12px*var(--radius-scale)); background:var(--accent-strong); color:var(--on-accent); font:700 15px/1 system-ui,sans-serif; box-shadow:0 8px 18px color-mix(in srgb, var(--green) 18%, transparent); }
+button.drop-entry span { display:grid; gap:5px; min-width:0; }
+button.drop-entry b { font:700 17px/1.4 "Songti SC",serif; color:var(--ink); }
+button.drop-entry small { color:var(--muted); font-size:12px; line-height:1.6; }
+button.drop-entry em { color:color-mix(in srgb, var(--green) 70%, var(--muted)); font-size:12px; font-style:normal; }
+button.drop-entry.compact { min-height:0; column-gap:14px; padding:11px 16px; }
+button.drop-entry.compact kbd { width:40px; height:40px; font-size:12px; box-shadow:none; }
+button.drop-entry.compact b { font-size:14px; }
 .wrong-entry .homework-pages { gap:10px; }
 .wrong-entry .recognition-source { grid-template-columns:minmax(0,1.3fr) minmax(170px,1fr); margin-bottom:0; }
 .wrong-entry .source-status>b { margin-top:0; }
@@ -1088,7 +1092,7 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .wrong-entry-foot { display:flex; align-items:center; gap:14px; margin-top:16px; }
 .wrong-entry-foot p { margin:0 auto 0 0; color:var(--muted); font-size:11px; }
 .wrong-entry-foot .primary-button { min-height:42px; padding:0 20px; white-space:nowrap; }
-@media (max-width:560px) { .wrong-entry { padding:18px 16px 16px; }.wrong-entry-drop,.wrong-entry .file-dropzone { gap:14px; padding:18px; }.wrong-entry .recognition-source { grid-template-columns:1fr; }.wrong-entry-foot p { font-size:10px; } }.wrong-history { margin:24px 0; border:1px solid var(--line); border-radius:calc(10px*var(--radius-scale)); padding:16px; }.wrong-history p { font-size:12px; color:var(--muted); line-height:1.7; }.wrong-history article { border-top:1px solid var(--line); padding:16px 0; }.wrong-history small { color:var(--muted); }.wrong-history .secondary { height:32px; margin-left:10px; }
+@media (max-width:560px) { .wrong-entry { padding:18px 16px 16px; }button.drop-entry { column-gap:14px; padding:18px; }.wrong-entry .recognition-source { grid-template-columns:1fr; }.wrong-entry-foot p { font-size:10px; } }.wrong-history { margin:24px 0; border:1px solid var(--line); border-radius:calc(10px*var(--radius-scale)); padding:16px; }.wrong-history p { font-size:12px; color:var(--muted); line-height:1.7; }.wrong-history article { border-top:1px solid var(--line); padding:16px 0; }.wrong-history small { color:var(--muted); }.wrong-history .secondary { height:32px; margin-left:10px; }
 @media(max-width:650px){.homework-upload-page { padding:16px; }.homework-records-empty { padding:0 16px; }.completed-upload-fields { grid-template-columns:1fr; }.completed-homework-entry { align-items:flex-start; flex-direction:column; padding:0 16px; }.completed-homework-entry .primary { width:100%; }.completed-records { margin:0 16px 20px; }.completed-record { flex-direction:column; gap:8px; }.pending-homework { margin:0 12px 16px; }}
 .review-shell .diagnosis-grid { grid-template-columns:minmax(0,1fr); }
 .review-archive-panel { max-width:1180px; margin:16px auto; }
