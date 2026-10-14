@@ -178,6 +178,42 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one, method: "DELETE", body: {} })).response.status, 403);
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one })).response.status, 404);
+
+    const tempQuestion = { id: "temp-equation", categoryId: "", type: "解答题", difficulty: "中等", stem: "解方程 $x+2=5$。", options: [], answer: "3", analysis: "移项得 $x=3$。", source: "", importFileName: "外部试卷.docx", contentImages: [pixel],
+      stemDocxXml: ['<w:p><m:oMath><m:r><m:t>x+2=5</m:t></m:r></m:oMath></w:p>'], createdAt: Date.now(), updatedAt: Date.now() };
+    const temporary = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "临时题库验证", grade: 7, term: "summer", temporaryQuestions: [tempQuestion], items: [
+      { id: "ts", kind: "section", title: "方程", note: "" }, { id: "tq", kind: "question", questionId: tempQuestion.id, scope: "public", band: "example" },
+      { id: "tquiz", kind: "quiz", questionId: tempQuestion.id, scope: "public", moduleId: "ts" },
+    ] } } });
+    assert.equal(temporary.response.status, 201);
+    const temp = temporary.payload.handout;
+    assert.equal(temp.temporaryQuestions.length, 1);
+    assert.match(temp.temporaryQuestions[0].contentImages[0], /^\/api\/assets\//);
+    assert.deepEqual(temp.temporaryQuestions[0].stemDocxXml, tempQuestion.stemDocxXml);
+    assert.ok(!(await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((q) => q.id === tempQuestion.id), "temporary questions never leak into the formal library");
+    const roundtrip = (await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: two })).payload.handout;
+    assert.deepEqual(roundtrip.temporaryQuestions, temp.temporaryQuestions);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.find((h) => h.id === temp.id).temporaryQuestions, undefined);
+    const legacyUpdate = await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: one, method: "PUT", body: { handout: { title: temp.title, items: temp.items } } });
+    assert.deepEqual(legacyUpdate.payload.handout.temporaryQuestions, temp.temporaryQuestions, "updates by older clients retain the temporary library");
+    const copy = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "副本", items: temp.items, temporaryQuestions: temp.temporaryQuestions } } })).payload.handout;
+    assert.equal(copy.temporaryQuestions[0].id, tempQuestion.id);
+    for (const temporaryQuestions of [[{ ...tempQuestion, stem: "" }], [tempQuestion, tempQuestion], {}, Array.from({ length: 401 }, (_, i) => ({ ...tempQuestion, id: `many-${i}` }))]) {
+      assert.equal((await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: one, method: "PUT", body: { handout: { title: temp.title, items: temp.items, temporaryQuestions } } })).response.status, 400);
+    }
+    assert.equal((await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: one })).payload.handout.temporaryQuestions.length, 1, "invalid saves leave the prior library intact");
+    await jsonRequest(base, `/api/handouts/${copy.id}`, { cookie: admin, method: "DELETE", body: {} });
+    assert.equal((await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: one })).payload.handout.temporaryQuestions.length, 1, "removing a copy never removes source questions");
+    const privateStudent = (await jsonRequest(base, "/api/students", { cookie: one, method: "POST", body: { student: { name: "临时题权限验证" } } })).payload.student;
+    const privateImage = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>').toString('base64')}`;
+    const privateHandout = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "私有临时题", studentId: privateStudent.id, items: [], temporaryQuestions: [{ ...tempQuestion, contentImages: [privateImage] }] } } })).payload.handout;
+    const privateUrl = privateHandout.temporaryQuestions[0].contentImages[0];
+    assert.equal((await fetch(base + privateUrl, { headers: { Cookie: one } })).status, 200);
+    assert.equal((await fetch(base + privateUrl, { headers: { Cookie: two } })).status, 404, "student temporary figures remain private");
+    await jsonRequest(base, "/api/handouts", { cookie: two, method: "PATCH", body: { domain: "function", ids: [privateHandout.id] } });
+    assert.equal((await fetch(base + privateUrl, { headers: { Cookie: two } })).status, 404, "an unauthorized move cannot grant figure access");
+    await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: "function", ids: [privateHandout.id] } });
+    assert.equal((await fetch(base + privateUrl, { headers: { Cookie: two } })).status, 200, "an authorized move to the shared shelf shares its figures too");
   } finally {
     worker.kill("SIGINT");
     await Promise.race([new Promise((done) => worker.once("exit", done)), new Promise((done) => setTimeout(done, 3_000))]);

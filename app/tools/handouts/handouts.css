@@ -111,6 +111,16 @@
 .picker-tree h2{margin:16px 16px 8px;font-family:"Songti SC",serif;font-size:16px}
 .picker-tree .tree{flex:1;min-height:0;padding:0 8px 12px 6px;overscroll-behavior:contain}
 .picker-main{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;padding:12px;container-type:inline-size}
+.picker-source{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.picker-source>.secondary{min-height:36px;font-size:13px}
+.picker-temporary-help{flex:1;padding:0 16px;color:color-mix(in srgb,var(--ink,#24352f) 62%,var(--surface,#fff));font-size:13px;line-height:1.8}
+.picker-archive-item{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 0 2px;font-size:12px}
+.picker-archive-item label{display:flex;align-items:center;gap:6px;margin-right:auto;min-height:36px}
+.picker-archive-item input{accent-color:var(--green,#2f6b53)}
+.picker-archive-item .text-button{min-height:36px;color:var(--green,#2f6b53)}
+.picker-archive{display:flex;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--line,#e4e9e6)}
+.picker-archive select{flex:1;min-width:0;max-width:100%;height:36px;border:1px solid var(--line,#e4e9e6);border-radius:8px;background:var(--surface,#fff);color:var(--ink,#24352f)}
+.picker-archive .secondary{height:36px;font-size:13px}
 .picker-target{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(96px,auto);align-items:center;gap:6px;padding:6px 6px 6px 12px;background:var(--green-soft,#edf5f0);border-radius:calc(10px*var(--radius-scale))}
 .picker-target span{color:var(--green,#2f6b53);font-size:13px;font-weight:600}
 .picker-target.list{grid-template-columns:auto minmax(0,1fr)}
@@ -144,7 +154,7 @@
   .handout-workspace{grid-template-columns:minmax(340px,2fr) minmax(0,3fr)}
   .handout-bank{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
   .picker-tree{border-right:0}
-  .picker-tree h2,.picker-tree .tree{display:none}
+  .picker-tree h2,.picker-tree .tree,.picker-temporary-help{display:none}
   .handout-bar{display:flex;padding:8px 12px;border-top:0;border-bottom:1px solid var(--line,#e4e9e6)}
   .handout-bar .handout-save{margin-left:auto}
   .handout-bar .primary-button{width:auto;height:36px}

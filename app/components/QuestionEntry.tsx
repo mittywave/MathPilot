@@ -112,9 +112,12 @@ type QuestionEntryProps = {
   onSaved: (questions: Question[]) => void;
   onClose: () => void;
   onNotice: (message: string) => void;
+  // Handout imports reuse the same parser/editor, but save to the handout instead of the library.
+  saveTemporaryQuestions?: (questions: Question[]) => Promise<Question[]>;
+  startWithFile?: boolean;
 };
 
-export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice }: QuestionEntryProps) {
+export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice, saveTemporaryQuestions, startWithFile = false }: QuestionEntryProps) {
   const [questionDraft, setQuestionDraft] = useState<Question | null>(initial);
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isReconstructingDiagram, setIsReconstructingDiagram] = useState(false);
@@ -128,10 +131,10 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   const [cropDialog, setCropDialog] = useState(false);
   const [cropSelection, setCropSelection] = useState<NormalizedBox | null>(null);
   const [cropStart, setCropStart] = useState<{ x: number; y: number } | null>(null);
-  const [fileImportOpen, setFileImportOpen] = useState(false);
+  const [fileImportOpen, setFileImportOpen] = useState(startWithFile);
   const [fileImportStep, setFileImportStep] = useState<FileImportStep>("choose");
   const [fileImportName, setFileImportName] = useState("");
-  const [fileImportCategory, setFileImportCategory] = useState("");
+  const [fileImportCategory, setFileImportCategory] = useState(initial.categoryId);
   const [fileImportProgress, setFileImportProgress] = useState({ current: 0, total: 0, label: "" });
   const [fileImportDrafts, setFileImportDrafts] = useState<FileImportDraft[]>([]);
   const [fileImportErrors, setFileImportErrors] = useState<string[]>([]);
@@ -160,9 +163,9 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
 
   function openFileImport() {
-    if (!entryModules.length) return;
+    if (!entryModules.length && !saveTemporaryQuestions) return;
     // Imported questions go to the module (or category) the entry was opened from.
-    setFileImportCategory(initial.categoryId || entryModules[0].id);
+    setFileImportCategory(initial.categoryId || entryModules[0]?.id || "");
     setFileImportOpen(true); setFileImportStep("choose"); setFileImportName(""); setFileImportDrafts([]); setFileImportErrors([]);
     setFileImportProgress({ current: 0, total: 0, label: "" });
   }
@@ -302,7 +305,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     setFileImportDrafts((current) => current.map((item) => item.importId === importId ? {
       ...item,
       ...changes,
-      ...(changes.stem === undefined ? {} : { stemDocxXml: undefined, stemDocxAssets: undefined }),
+      ...(changes.stem === undefined ? {} : { stemParagraphs: undefined, stemDocxXml: undefined, stemDocxAssets: undefined }),
       ...(changes.options === undefined ? {} : { optionsDocxXml: undefined, optionsDocxAssets: undefined }),
       ...(changes.analysis === undefined ? {} : { analysisDocxXml: undefined, analysisDocxAssets: undefined }),
     } : item));
@@ -310,7 +313,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   async function saveImportedQuestions() {
     if (fileImportSavingRef.current) return;
-    const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && item.categoryId);
+    const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && (item.categoryId || saveTemporaryQuestions));
     if (!selected.length) { setNotice("请至少选择一道题，并确认题干和分类"); return; }
     const incompleteIndex = selected.findIndex((item) => { if (!isAlevelCategory(item.categoryId)) return false; const versions = alevelTagVersions(item); return versions.zh.length !== versions.en.length; });
     if (incompleteIndex >= 0) { setNotice(`第 ${incompleteIndex + 1} 道已选题目的中英文知识点数量不一致，请按顺序配对`); return; }
@@ -322,6 +325,11 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     });
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true); setFileImportErrors([]);
     try {
+      if (saveTemporaryQuestions) {
+        const uploaded = await saveTemporaryQuestions(saved);
+        onSaved(uploaded); setFileImportOpen(false); setNotice(`已加入 ${uploaded.length} 道临时题目，尚未加入正式题库`); onClose();
+        return;
+      }
       const result = await saveQuestionImportBatch(saved, async (question) => (await createCloudQuestion(question)).question);
       const uploaded = result.saved.map((item) => item.question);
       const savedIds = new Set(result.saved.map((item) => item.draft.id));
@@ -334,7 +342,8 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       } else {
         setFileImportOpen(false); setNotice(`已从文件录入 ${uploaded.length} 道云端试题`); onClose();
       }
-    } finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
+    } catch (error) { setFileImportErrors([error instanceof Error ? error.message : "临时题目保存失败，请重试"]); }
+    finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
   }
 
   async function requestVectorDiagramReconstruction(stem: string, image: string, quality: DiagramQuality | undefined | null) {
@@ -463,6 +472,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     setQuestionDraft({
       ...questionDraft,
       stem: optimizationPreview.stem,
+      stemParagraphs: undefined,
       options: optimizationPreview.options.length ? optimizationPreview.options : questionDraft.options,
       answer: optimizationPreview.answer,
       analysis: optimizationPreview.analysis,
@@ -496,21 +506,25 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   }
 
   async function persistQuestion() {
-    if (!questionDraft || !questionDraft.stem.trim() || !questionDraft.categoryId) { setNotice("请填写题干并选择分类"); return; }
+    if (fileImportSavingRef.current) return;
+    if (!questionDraft || !questionDraft.stem.trim() || (!questionDraft.categoryId && !saveTemporaryQuestions)) { setNotice("请填写题干并选择分类"); return; }
     const tagVersions = alevelTagVersions(questionDraft);
     if (questionDraftIsAlevel && tagVersions.zh.length !== tagVersions.en.length) { setNotice("请让中文和 English 知识点一一对应；不填写时两边都留空"); return; }
     const timestamp = currentTimestamp();
     const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), moduleId: questionDraftModule?.id || questionDraft.moduleId, examYear: questionDraft.examYear?.trim(), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), ...(questionDraftIsAlevel ? { tags: tagVersions.zh, tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
+    fileImportSavingRef.current = true; setIsSavingImportedQuestions(true);
     try {
+      if (saveTemporaryQuestions) { onSaved(await saveTemporaryQuestions([saved])); setNotice("临时题目已保存"); onClose(); return; }
       const result = questionDraft.id ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
       onSaved([result.question]); setNotice(questionDraft.id ? "云端试题已更新" : "试题已保存到云端"); onClose();
     } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败"); }
+    finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
   }
 
   return <>
     {questionDraft && !fileImportOpen && <div className="modal-backdrop">
       <section className="modal question-modal" role="dialog" aria-modal="true" aria-label="试题编辑" onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); if (screenshotEntry) handleQuestionImage(file); else handleManualImages([file]); } }}>
-        <div className="modal-head"><div><span className="eyebrow">智能录题</span><h2>{questionDraft.id ? "编辑并校对试题" : "截图自动录题"}</h2></div><button className="close" onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><span className="eyebrow">智能录题</span><h2>{questionDraft.id ? "编辑并校对试题" : "截图自动录题"}</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={onClose}>×</button></div>
         {!questionDraft.id && <div className="entry-mode" role="tablist" aria-label="录题方式"><button className="active"><b>AI 截图录入</b><span>识别单道题目截图</span></button><button onClick={openFileImport}><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>}
         {screenshotEntry && (!questionDraft.originalImage ? <button type="button" className="smart-capture" onClick={() => questionImageRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = droppedImage(event); if (file) handleQuestionImage(file); else setRecognitionError("请选择图片文件"); }}>
           <div className="capture-icon">⌘V</div><div><b>直接粘贴题目截图</b><p>也可以点击选择图片，或把图片拖到这里</p></div><span>自动识别题干、公式、答案与配图</span>
@@ -525,7 +539,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         <div className="review-divider"><span>{screenshotEntry ? "识别结果 · 保存前请检查" : "题目内容"}</span></div>
         <div className="form-grid two"><label>题型<select value={questionDraft.type} onChange={(event) => setQuestionDraft({ ...questionDraft, type: event.target.value as QuestionType })}>{questionTypes.map((item) => <option key={item}>{item}</option>)}</select></label><label>难度<select value={questionDraft.difficulty} onChange={(event) => setQuestionDraft({ ...questionDraft, difficulty: event.target.value as Difficulty })}>{difficulties.map((item) => <option key={item}>{item}</option>)}</select></label></div>
         <div className="form-grid two"><label>所属分类<select value={questionDraft.categoryId} onChange={(event) => setQuestionDraft({ ...questionDraft, categoryId: event.target.value })}><option value="">请选择</option>{categoryOptions}</select></label><label>年份 / 场次（选填）<input value={questionDraft.examYear ?? ""} onChange={(event) => setQuestionDraft({ ...questionDraft, examYear: event.target.value })} placeholder="如：2025 第一场" /></label></div>
-        <div className="field"><span>题干</span><TextField value={questionDraft.stem} label="题干" placeholder="识别后的题干会出现在这里，也可以直接输入…" onChange={(stem) => setQuestionDraft((current) => current ? { ...current, stem, stemDocxXml: undefined, stemDocxAssets: undefined } : current)} /></div>
+        <div className="field"><span>题干</span><TextField value={questionDraft.stem} label="题干" placeholder="识别后的题干会出现在这里，也可以直接输入…" onChange={(stem) => setQuestionDraft((current) => current ? { ...current, stem, stemParagraphs: undefined, stemDocxXml: undefined, stemDocxAssets: undefined } : current)} /></div>
         {!screenshotEntry && <div className="manual-image-editor" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); handleManualImages(Array.from(event.dataTransfer.files)); }}>
           <div className="manual-image-head"><div><span className="eyebrow">题目配图（选填）</span><p>可添加几何图、函数图像或表格，最多 4 张；也支持直接粘贴。</p></div><button className="secondary" onClick={() => manualImagesRef.current?.click()}>＋ 添加图片</button></div>
           {questionDraft.contentImages?.length ? <div className="manual-image-grid">{questionDraft.contentImages.map((image, index) => <figure key={`manual-${index}`}><img src={image} alt={`人工添加的题目配图 ${index + 1}`} /><button aria-label={`移除第 ${index + 1} 张配图`} onClick={() => setQuestionDraft({ ...questionDraft, contentImages: questionDraft.contentImages?.filter((_, imageIndex) => imageIndex !== index) })}>×</button><figcaption>配图 {index + 1}</figcaption></figure>)}</div> : <button className="manual-image-empty" onClick={() => manualImagesRef.current?.click()}><span>＋</span> 点击、拖入或粘贴题目配图</button>}
@@ -548,19 +562,19 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
           <div className="optimization-changes"><b>本次调整</b><span>{optimizationPreview.changes.join("；")}</span></div>
           <div className="optimization-actions"><button className="text-button" onClick={() => setOptimizationPreview(null)}>暂不采用</button><button className="primary-button" onClick={applyOptimization}>采用优化结果</button></div>
         </section>}
-        <div className="modal-actions"><button className="ai-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" onClick={onClose}>取消</button><button className="primary-button" disabled={isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>确认并保存</button></div>
+        <div className="modal-actions"><button className="ai-button" disabled={isSavingImportedQuestions || isRecognizing || isOptimizing || isReconstructingDiagram} onClick={optimizeDraft}>{isOptimizing ? <><i></i>AI 正在优化…</> : "✦ AI 优化排版"}</button><button className="secondary" disabled={isSavingImportedQuestions} onClick={onClose}>取消</button><button className="primary-button" disabled={isSavingImportedQuestions || isRecognizing || isOptimizing || isReconstructingDiagram} onClick={persistQuestion}>{isSavingImportedQuestions ? "正在保存…" : "确认并保存"}</button></div>
       </section>
     </div>}
 
     {fileImportOpen && <div className="modal-backdrop"><section className="modal file-import-modal" role="dialog" aria-modal="true" aria-label="文件批量录入" aria-busy={isSavingImportedQuestions}>
-      <div className="modal-head"><div><span className="eyebrow">智能录题</span><h2>PDF / Word 批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
+      <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "当前讲义 · 临时题库" : "智能录题"}</span><h2>PDF / Word / 图片批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
       {fileImportStep === "choose" && <>
         <div className="entry-mode" role="tablist" aria-label="录题方式"><button onClick={backToScreenshotEntry}><b>AI 截图录入</b><span>识别单道题目截图</span></button><button className="active"><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>
         <div className="file-import-intro"><div><b>整份文件逐页识别</b><p>自动拆分题目、选项、答案和配图，识别后统一校对再保存。</p></div></div>
-        <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择或拖入文件</strong><span>支持 PDF、Word（.docx），最多 80 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
-        <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
+        <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void handleImportDocument(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择、拖入文件或粘贴图片</strong><span>支持 PDF、Word（.docx）、PNG / JPEG / WebP，最多 80 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
+        <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
         {!!fileImportErrors.length && <div className="recognition-error"><b>文件未能读取</b><span>{fileImportErrors.join("；")}</span></div>}
-        <div className="file-privacy-note">文件只在当前页面转换；正式题库仅保存你确认过的题目内容。</div>
+        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对后保存到当前讲义的临时题库，不自动进入正式题库；可稍后勾选入库。" : "文件只在当前页面转换；正式题库仅保存你确认过的题目内容。"}</div>
       </>}
       {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{fileImportStep === "rendering" ? "读取文件" : "AI 拆分题目"}</span></div><h3>{fileImportProgress.label}</h3><div className="progress-track"><i style={{ width: `${fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div><p>{fileImportStep === "rendering" ? "正在把页面还原成清晰图片" : "正在识别题干、选项、答案、分类与配图"}</p><button className="secondary" onClick={closeFileImport}>取消导入</button></div>}
       {fileImportStep === "review" && <>

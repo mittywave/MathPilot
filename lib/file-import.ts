@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
 import { openPdf } from "./pdfjs";
+import { readScreenshot } from "./screenshot-recognition";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
 import type { QuestionType } from "./types";
 
@@ -140,7 +141,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     const block = blocks[index]; const detectedType = sectionQuestionType(block.text);
     if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentQuestion = null; continue; }
     if (index > 0 && block.text === blocks[0]?.text) continue;
-    const numberMatch = block.kind === "p" ? block.text.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/) : null;
+    const numberMatch = block.kind === "p" ? block.text.match(/^\s*(\d{1,3})(?:[．、]|\.(?!\d))\s*([\s\S]*)$/) : null;
     if (numberMatch && currentType) {
       const firstParagraph = numberMatch[2].trim();
       currentQuestion = { questionNumber: numberMatch[1], type: currentType, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, firstParagraph, blocks: [block] };
@@ -162,7 +163,9 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   const answers: Record<string, string> = {}; const repeatedQuestionText: Record<string, string> = {}; const analysisParts: Record<string, string[]> = {}; const analysisXml: Record<string, string[]> = {}; let currentNumber = ""; let collectingAnalysis = false;
   for (let index = Math.max(0, answerBlockStart); index < blocks.length; index += 1) {
     const block = blocks[index]; const paragraph = block.text;
-    const numberMatch = block.kind === "p" ? paragraph.match(/^\s*(\d{1,3})[.．、]\s*([\s\S]*)$/) : null;
+    // A line beginning with a decimal (0.71x...) continues the current answer,
+    // not a new question 0; the same boundary rule is used for stems above.
+    const numberMatch = block.kind === "p" ? paragraph.match(/^\s*(\d{1,3})(?:[．、]|\.(?!\d))\s*([\s\S]*)$/) : null;
     const number = numberMatch?.[1];
     if (number) { currentNumber = number; collectingAnalysis = false; repeatedQuestionText[number] = numberMatch?.[2].trim() ?? ""; }
     const choice = paragraph.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase();
@@ -310,8 +313,13 @@ export function structuredDocxQuestions(pages: ImportPage[]) {
 
 export async function renderImportFile(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
   const extension = file.name.split(".").pop()?.toLowerCase();
+  if (["png", "jpg", "jpeg", "webp"].includes(extension ?? "") || ["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    const image = await readScreenshot(file);
+    onProgress(1, 1);
+    return [{ pageNumber: 1, image }];
+  }
   if (extension === "pdf" || file.type === "application/pdf") return renderPdf(file, onProgress);
   if (extension === "docx" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return renderDocx(file, onProgress);
   if (extension === "doc") throw new Error("暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入");
-  throw new Error("请选择 PDF 或 .docx 文件");
+  throw new Error("请选择 PDF、.docx 或 PNG / JPEG / WebP 图片");
 }

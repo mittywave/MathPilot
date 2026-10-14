@@ -22,6 +22,23 @@ test('indexed roots retain their degree as editable Word radical structure',asyn
   assert.doesNotMatch(xml,/\[3\]|\[4\]/);
 });
 const base = { categoryId: "one", difficulty: "基础", tags: [], analysis: "" };
+test("imported equations leave invalid text-run wrappers without losing mixed text, styles or tables", async () => {
+  const math = '<m:oMath><m:rad><m:deg/><m:e><m:r><m:t>4</m:t></m:r></m:e></m:rad></m:oMath>';
+  const mixed = `<w:r w:rsidR="12345678"><w:rPr><w:b/></w:rPr><w:t>before</w:t>${math}<w:t>after</w:t>${math}</w:r>`;
+  const question = { ...base, id: "imported", type: "单选题", stem: "raw stem", options: ["A"], answer: "A", analysis: "raw analysis",
+    stemDocxXml: [`<w:p>${mixed}</w:p>`, `<w:tbl><w:tr><w:tc><w:p><w:r>${math}</w:r></w:p></w:tc></w:tr></w:tbl>`],
+    optionsDocxXml: [`<w:p><w:r><w:rPr/>${math}</w:r></w:p>`],
+    analysisDocxXml: [`<w:p><w:r><m:oMathPara>${math}</m:oMathPara></w:r></w:p>`] };
+  const blob = await buildWordBlob({ title: "Imported math", answers: "each", sections: [{ questions: [question] }] });
+  const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml").async("string");
+  assert.equal(XMLValidator.validate(xml), true);
+  assert.equal((xml.match(/<m:oMath>/g) ?? []).length, 5);
+  for (const [run] of xml.matchAll(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g)) assert.doesNotMatch(run, /<m:oMath(?:Para)?\b/);
+  assert.match(xml, /<w:r w:rsidR="12345678"><w:rPr><w:b\/><\/w:rPr><w:t>before<\/w:t><\/w:r><m:oMath>/);
+  assert.match(xml, /<w:r w:rsidR="12345678"><w:rPr><w:b\/><\/w:rPr><w:t>after<\/w:t><\/w:r><m:oMath>/);
+  assert.match(xml, /<w:tbl><w:tr><w:tc><w:p><m:oMath>/);
+  assert.match(xml, /<w:p><m:oMathPara><m:oMath>/);
+});
 const questions = [
   { ...base, id: "a", type: "解答题", stem: "ALPHAQUESTION", options: [], answer: "ALPHAANSWER", analysis: "ALPHAANALYSIS" },
   { ...base, id: "b", type: "单选题", stem: "BETAQUESTION", options: ["一", "二", "三", "四"], answer: "BETAANSWER" },

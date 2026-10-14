@@ -191,7 +191,7 @@ export type LibraryData = {
   publishedAt?: number | null;
 };
 
-// A handout only references library questions; replacing one swaps the reference in place.
+// A handout references library questions or its own temporary question snapshots by id.
 // A section is a knowledge module (title + 知识点); each 讲义 question sits in one of its bands.
 // 一讲有讲义、小测、作业三份资料。小测和作业各是一列题，每道题记着它考的是哪个模块（讲义没有模块时为 null）。
 export type HandoutBand = "example" | "practice" | "variant";
@@ -214,6 +214,7 @@ export type Handout = HandoutGroup & {
   id: string;
   title: string;
   items: HandoutItem[];
+  temporaryQuestions: Question[];
   // Only the student's own teacher ever receives a student handout, so the name travels with it.
   studentName: string | null;
   // position orders a group: the 课次 of a term, the topics of a grade, a student's handouts.
@@ -227,7 +228,7 @@ export type HandoutOutline = { title: string; questionIds: string[] }[];
 export type HandoutModuleCounts = Record<HandoutBand | Exclude<HandoutSheet, "handout">, number>;
 // One lesson of the 课程体系 as the course knowledge graph sees it.
 export type CourseLessonDetail = { id: string; title: string; grade: HandoutGrade; modules: { id: string; title: string; counts: HandoutModuleCounts }[] };
-export type HandoutSummary = Omit<Handout, "items"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
+export type HandoutSummary = Omit<Handout, "items" | "temporaryQuestions"> & { outline: HandoutOutline; sheetCounts: Record<Exclude<HandoutSheet, "handout">, number> };
 
 // 快速排版的历史记录：只属于排它的老师。settings 是当时的排版设置。Word 记录（word）另行读取原始 Word，打开时按原样
 // 再读一遍；智能组卷的记录（library）是一份按天分好的题库题目清单（plan），打开时按题目 ID 取题库原题。
