@@ -155,7 +155,7 @@ export default function SmartPaper() {
             <option value="">不针对某位学生</option>
             {students.map((item) => <option key={item.id} value={item.id}>{item.name}{item.className ? `（${item.className}）` : ""}</option>)}
           </select>
-          <small>{student ? "会读这位学生的错题、批改记录和作业报告，并避开他做过的题。" : "选了学生，agent 会按他的档案挑题。"}</small>
+          <small>{student ? "会读这位学生的课后反馈、批改出的知识点正确率和错题，并避开做过、布置过的题。" : "选了学生，agent 会按学生档案挑题。"}</small>
         </label>
         <label className="smart-paper-field"><span>要出什么样的练习</span>
           <textarea rows={5} value={request} disabled={Boolean(busy)} placeholder={EXAMPLE} onChange={(event) => setRequest(event.target.value)} />
@@ -218,7 +218,7 @@ export default function SmartPaper() {
       </> : <div className="smart-paper-empty">
         <SmartIcon name="spark" />
         <b>说一句要出什么练习，agent 从题库里挑题</b>
-        <p>选好学生时，会读他的错题、批改记录和作业报告，侧重他反复出错的地方，并避开他做过的题。方案按天列出，每道题写明为什么选它；可以换题、删题、加题，或用一句话让 agent 调整，确认后点“排版”进快速排版，每天单独起页。</p>
+        <p>选好学生时，会读学生档案里的课后反馈、批改出的知识点正确率、错题和作业报告，侧重反复出错的地方，并避开做过、布置过的题。方案按天列出，每道题写明为什么选它；可以换题、删题、加题，或用一句话让 agent 调整，确认后点“排版”进快速排版，每天单独起页，排好后可以直接布置给这位学生。</p>
       </div>}
     </section>
   </main>;
