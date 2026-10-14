@@ -55,7 +55,7 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
       const name = `${studentName}-学情报告-${period(report).replace(/[/—]/g, "-")}`;
       if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setState("这台设备无法排版 PDF，可以下载 TeX，或在运行知题的电脑上打开本页"); return; }
+      if (!(await latexCompilerStatus()).available) { setState("这台设备无法排版 PDF，可以下载 TeX，或在运行 MathPilot 的电脑上打开本页"); return; }
       setState("正在排版…");
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);

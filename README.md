@@ -1,4 +1,4 @@
-# Mitty 的宝藏题库
+# MathPilot
 
 主开发仓库：<https://github.com/mittywave/MathPilot>。新功能、Issue、PR 和发布统一在 `mittywave` 维护；`mittyhua` 的历史开发成果通过保留父提交的合并纳入，不再作为主开发入口。
 

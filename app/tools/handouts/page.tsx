@@ -81,7 +81,7 @@ export default function HandoutsPage() {
 
   // The list sits under the shared site header; an open handout's editor takes the whole window.
   if (!loaded) return <><SiteHeader active="handouts" user={null} loading /><main className="toolbox handouts"><p>正在读取…</p></main></>;
-  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main></>;
+  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 MathPilot。</p><a href="/">返回题库</a></main></>;
   return <>
     {openId ? <HandoutEditor id={openId} onNotice={setNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={setNotice} /></>}
     {notice && <div className="toast" role="status">✓ {notice}</div>}
@@ -859,7 +859,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         <p>{sheet === "handout" ? answerChoice?.hint : answerChoice?.listHint}</p>
       </fieldset>
       {!!missingCount && <p className="handout-warning">有 {missingCount} 道题已无法读取，导出时会跳过。</p>}
-      {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在本机用「启动知题」运行时生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
+      {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在运行 MathPilot 的这台电脑上生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
         : latexStatus && !latexStatus.installed && <p className="handout-export-status">首次生成会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {/* PDF is the handout; Word and the LaTeX source are kept for the rare file someone else needs. */}
       <div className="modal-actions handout-export-actions">

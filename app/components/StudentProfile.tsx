@@ -143,7 +143,7 @@ export function StudentProfile({ student }: { student: StudentSummary }) {
   return <section className="student-profile" aria-label={`${student.name}的定档`}>
     <header className="student-panel-head">
       <div className="profile-periods" role="group" aria-label="时间范围">{PERIODS.map(([days, label]) => <button key={days} type="button" className={period === days ? "active" : ""} aria-pressed={period === days} onClick={() => setPeriod(days)}>{label}</button>)}</div>
-      <a className="student-panel-action" href={`/knowledge-graph?student=${encodeURIComponent(student.id)}`} target="_blank" rel="noreferrer">在知识图谱里看</a>
+      <a className="student-panel-action" href={`/knowledge-graph?student=${encodeURIComponent(student.id)}`}>在知识图谱里看</a>
     </header>
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !profile ? <div className="wrong-book-loading"><i></i><span>正在读取定档…</span></div> : <div className="profile-columns">
       <article className="profile-card"><h3>知识点<small>客观 · 来自作业批改</small></h3><KnowledgePanel profile={profile} /></article>

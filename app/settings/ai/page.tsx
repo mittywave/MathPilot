@@ -1,7 +1,8 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
-import Link from 'next/link';
-import {useRouter} from 'next/navigation';
+import {fetchMe} from '../../../lib/api-client';
+import type {AuthUser} from '../../../lib/types';
+import {SiteHeader} from '../../components/SiteHeader';
 import type {AiCenterPublic,AiRoutingConfig,ProviderConfig,ProviderDiagnostic,ProviderKind,ProviderWrite} from '../../../lib/ai-provider-types';
 import {KIND_LABELS,newProvider} from '../../../lib/ai-provider-presets';
 import {api,ConfirmDialog,providerDraft} from './_components/common';
@@ -9,13 +10,12 @@ import {ProviderEditor} from './_components/provider-editor';
 import {ModelCatalog} from './_components/model-catalog';
 import {TaskRouting} from './_components/task-routing';
 import {ConnectionTestPanel} from './_components/connection-test-panel';
-import {AppearancePicker} from '../../components/AppearancePicker';
 import css from './ai-center.module.css';
 type Operation='save'|'model'|'discover'|'test'|'route'|'delete';
 type Confirmation={title:string;message:string;accept:()=>void};
 const endpoint='/api/admin/ai-providers';
 export default function AiSettingsPage(){
- const router=useRouter();
+ const [user,setUser]=useState<AuthUser|null|undefined>(undefined);
  const [data,setData]=useState<AiCenterPublic|null>(null),[selected,setSelected]=useState(''),[draft,setDraft]=useState<ProviderWrite|null>(null),[routing,setRouting]=useState<AiRoutingConfig|null>(null);
  const [view,setView]=useState<'providers'|'routing'>('providers'),[tab,setTab]=useState<'connection'|'models'|'diagnostics'>('connection'),[search,setSearch]=useState('');
  const [records,setRecords]=useState<ProviderDiagnostic[]>([]),[notice,setNotice]=useState(''),[error,setError]=useState(''),[field,setField]=useState<string>(),[confirm,setConfirm]=useState<Confirmation|null>(null);
@@ -26,7 +26,7 @@ export default function AiSettingsPage(){
  const routeDirty=Boolean(data&&routing&&JSON.stringify(data.routing)!==JSON.stringify(routing));
  const dirty=connectionDirty||routeDirty||modelDirty,working=Object.values(busy).some(Boolean);
  const report=useCallback((e:unknown)=>{const value=e as Error&{field?:string};setError(value.message||'操作未完成');setField(value.field);if(value.field)queueMicrotask(()=>{const target=root.current?.querySelector<HTMLElement>(`[name="${CSS.escape(value.field!)}"]`)||(value.field==='apiKey'?root.current?.querySelector<HTMLElement>('select[aria-label="密钥操作"]'):null);target?.focus();});},[]);
- useEffect(()=>{const controller=new AbortController();api<AiCenterPublic>(endpoint,undefined,'GET',controller.signal).then(d=>{if(controller.signal.aborted)return;setData(d);setRouting(d.routing);if(d.providers[0]){setSelected(d.providers[0].id);setDraft(providerDraft(d.providers[0]));}}).catch(e=>{if(!controller.signal.aborted)report(e);});return()=>{controller.abort();Object.values(controllers.current).forEach(c=>c?.abort());};},[report]);
+ useEffect(()=>{const controller=new AbortController();void fetchMe().then(result=>{if(!controller.signal.aborted)setUser(result.user);}).catch(()=>{if(!controller.signal.aborted)setUser(null);});api<AiCenterPublic>(endpoint,undefined,'GET',controller.signal).then(d=>{if(controller.signal.aborted)return;setData(d);setRouting(d.routing);if(d.providers[0]){setSelected(d.providers[0].id);setDraft(providerDraft(d.providers[0]));}}).catch(e=>{if(!controller.signal.aborted)report(e);});return()=>{controller.abort();Object.values(controllers.current).forEach(c=>c?.abort());};},[report]);
  useEffect(()=>{if(!dirty)return;const unload=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',unload);return()=>window.removeEventListener('beforeunload',unload);},[dirty]);
  useEffect(()=>{if(!saved||tab!=='diagnostics')return;const c=new AbortController();api<{diagnostics:ProviderDiagnostic[]}>(`${endpoint}/${saved.id}/diagnostics`,undefined,'GET',c.signal).then(r=>{if(!c.signal.aborted)setRecords(r.diagnostics);}).catch(e=>{if(!c.signal.aborted)report(e);});return()=>c.abort();},[saved,tab,report]);
  function cancelAll(){generation.current++;Object.values(controllers.current).forEach(c=>c?.abort());controllers.current={};setBusy({});}
@@ -45,7 +45,7 @@ export default function AiSettingsPage(){
  const providerPath=saved?`${endpoint}/${saved.id}`:'';
  const visible=data?.providers.filter(p=>`${p.name} ${p.baseUrl}`.toLowerCase().includes(search.toLowerCase()))||[];
  const selector=<label>当前提供方<select aria-label="当前提供方" value={selected} onChange={e=>choose(e.target.value)}><option value="">{draft?'新建连接':'选择提供方'}</option>{data?.providers.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>;
- return <main className={css.root} ref={root}><div className={css.shell}><div className={css.toolbar}><Link href="/tools" onClick={e=>{if(dirty){e.preventDefault();move(()=>router.push('/tools'));}}}>← 返回工具箱</Link><AppearancePicker label="外观" /></div>
+ return <><SiteHeader active="tools" user={user??null} loading={user===undefined}/><main className={css.root} ref={root}><div className={css.shell}>
  <header className={css.header}><div><p className={css.eyebrow}>AI / Provider center</p><h1>AI 配置中心</h1><p className={css.hint}>管理接入服务，明确每种任务的模型与数据去向。</p></div><div className={css.actions}>{data&&<span className={css.badge}>{data.encryptionReady?'密钥加密可用':'密钥加密未就绪'}</span>}{Boolean(data?.providers.length)&&<button data-primary disabled={working} onClick={()=>add()}>添加提供方</button>}</div></header>
  {error&&<div role="alert" className={css.warning}>{error}<div className={css.actions}><button onClick={()=>move(()=>{window.location.reload();})}>重新加载</button></div></div>}{notice&&<div role="status" className={css.notice}>{notice}</div>}
  {!data&&!error&&<p role="status">正在读取配置…</p>}
@@ -60,5 +60,5 @@ export default function AiSettingsPage(){
  </>:<p className={css.empty}>选择一个提供方，或添加新连接。</p>}</div></div></div>}
  {((view==='providers'&&draft&&tab==='connection')||view==='routing')&&<footer className={css.savebar}><span>{view==='routing'?(routeDirty?'任务分配有未保存修改':'任务分配已保存'):(connectionDirty?'连接有未保存修改':'连接已保存')}</span><div className={css.actions}><button disabled={!dirty||working} onClick={()=>move(()=>{})}>放弃修改</button><button data-primary disabled={working||(view==='routing'?!routeDirty:!connectionDirty)} onClick={()=>view==='routing'?void perform('route',signal=>api('/api/admin/ai-routing',routing,'PUT',signal),'任务分配已保存。'):save()}>{working?'处理中…':view==='routing'?'保存任务分配':'保存配置'}</button>{busy.save&&<button onClick={()=>cancel('save')}>取消保存</button>}</div></footer>}
  </>}{confirm&&<ConfirmDialog title={confirm.title} accept={()=>{const action=confirm.accept;setConfirm(null);action();}} cancel={()=>setConfirm(null)}>{confirm.message}</ConfirmDialog>}
- </div></main>;
+ </div></main></>;
 }

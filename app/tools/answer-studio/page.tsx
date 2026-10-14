@@ -128,7 +128,7 @@ export default function AnswerStudioPage() {
     }
   }
   if(!loaded)return <main className="answer-studio"><p>正在读取…</p></main>;
-  if(!user)return <main className="answer-studio"><h1>手写转录</h1><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main>;
+  if(!user)return <main className="answer-studio"><h1>手写转录</h1><p>请先登录 MathPilot。</p><a href="/">返回题库</a></main>;
   return <main className="answer-studio answer-studio-simple">
     <header><div><a className="studio-back" href="/tools"><StudioIcon name="back"/><span>返回工具箱</span></a><div className="studio-title"><span className="studio-title-icon"><StudioIcon name="pen"/></span><h1>手写转录</h1></div></div><small>{user.local?'本地管理员':user.email}</small></header>
     <section className="simple-panel">

@@ -23,7 +23,7 @@ function SharingIcon({ name }: { name: "back" | "share" }) {
 const errorText = (error: unknown, fallback: string) => {
   const message = error instanceof Error ? error.message : fallback;
   // Before the server restarts, the new account columns do not exist yet.
-  return /no such (column|table)/i.test(message) ? "请重启「启动知题」完成升级后再试" : message;
+  return /no such (column|table)/i.test(message) ? "请在运行 MathPilot 的电脑上重新启动后再试" : message;
 };
 
 function lastLogin(time: number | null) {
@@ -46,7 +46,7 @@ export default function SharingPage() {
     <a className="toolbox-back" href="/tools"><SharingIcon name="back" /><span>返回工具箱</span></a>
     <header className="toolbox-head">
       <span className="toolbox-mark"><SharingIcon name="share" /></span>
-      <div><h1>共享办公</h1><p>在公司把知题共享给同事：一个开关、一组邀请码，再管好同事的账号。</p></div>
+      <div><h1>共享办公</h1><p>在公司把 MathPilot 共享给同事：一个开关、一组邀请码，再管好同事的账号。</p></div>
     </header>
   </>;
   let body;
@@ -97,7 +97,7 @@ function ShareSection({ notify }: { notify: Notify }) {
   async function copy(text: string, what: string) { notify(await copyText(text) ? `${what}已复制` : "复制失败，请手动选中复制", true); }
 
   if (status === undefined) return <section className="sharing-card"><p className="sharing-muted">正在检查共享状态…</p></section>;
-  if (status === null) return <section className="sharing-card"><h2>共享给同事</h2><p className="sharing-muted">这里没有共享开关：网站部署在线上时，同事直接用网址访问。共享开关只出现在用「启动知题」运行的电脑上。</p></section>;
+  if (status === null) return <section className="sharing-card"><h2>共享给同事</h2><p className="sharing-muted">这里没有共享开关：网站部署在线上时，同事直接用网址访问。共享开关只出现在运行 MathPilot 的这台电脑上。</p></section>;
   const canChange = status.local && Boolean(status.network);
   return <section className="sharing-card" aria-labelledby="share-title">
     <div className="sharing-card-head">
@@ -107,7 +107,7 @@ function ShareSection({ notify }: { notify: Notify }) {
     <label className="sharing-option">
       <input type="checkbox" role="switch" checked={status.sharing} disabled={!canChange || busy}
         onChange={(event) => void change(event.target.checked, event.target.checked && status.autoHere, event.target.checked ? "已共享给同事" : "已停止共享")} />
-      <b>共享给同事</b><small>{status.sharing ? "同一网络里的同事可以打开这台电脑上的知题。" : "现在只有这台电脑能用；同事打开会看到「暂未共享」。"}</small>
+      <b>共享给同事</b><small>{status.sharing ? "同一网络里的同事可以打开这台电脑上的 MathPilot。" : "现在只有这台电脑能用；同事打开会看到「暂未共享」。"}</small>
     </label>
     <label className="sharing-option">
       <input type="checkbox" checked={status.autoHere} disabled={!canChange || busy}
@@ -127,7 +127,7 @@ function ShareSection({ notify }: { notify: Notify }) {
       </div>
     </div>}
     {status.sharing && status.keepAwake && <p className="sharing-hint">共享期间这台 Mac 不会自动睡眠；合上屏幕仍会断开同事的访问。</p>}
-    {!status.local && <p className="sharing-hint">只能在运行知题的这台电脑上开关共享。</p>}
+    {!status.local && <p className="sharing-hint">只能在运行 MathPilot 的这台电脑上开关共享。</p>}
     {!!status.remembered.length && <div className="sharing-networks">
       <p className="sharing-muted">已记住的网络</p>
       <ul>{status.remembered.map((item) => <li key={item.id}>

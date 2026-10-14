@@ -1,5 +1,5 @@
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-  <title>Mitty 的宝藏题库</title>
+  <title>MathPilot</title>
   <style>
     .tile { fill:#2f6b53; }
     @media (prefers-color-scheme:dark) { .tile { fill:#6675c9; } }

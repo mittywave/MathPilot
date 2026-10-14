@@ -40,7 +40,7 @@ test("server-renders the cloud question-bank guest shell", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
+  assert.match(html, /<title>MathPilot<\/title>/i);
   assert.match(html, /全部试题/);
   const navigation = html.match(/<nav[^>]*aria-label="题库入口"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? "";
   assert.equal((navigation.match(/>题库</g) ?? []).length, 1, "one shared library entry");

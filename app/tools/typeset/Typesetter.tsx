@@ -348,7 +348,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
       {(basket || records !== null) && <button type="button" className="secondary typeset-assign" disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
       {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign} />}
-      {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
+      {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
       {historyNote && <p className="typeset-note warn">{historyNote}</p>}
@@ -361,7 +361,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         : result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
         label={(index) => `${labelOf(index)} · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
-          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在本机用「启动知题」打开。" : "排好的 PDF 会显示在这里。"}</p></>}
+          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在运行 MathPilot 的这台电脑上打开。" : "排好的 PDF 会显示在这里。"}</p></>}
         </div>}
       {busy && result && <div className="typeset-busy"><i className="typeset-spinner" />{busy}</div>}
     </section>

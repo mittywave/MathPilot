@@ -23,8 +23,6 @@
 .root label { display:grid; gap:6px; font-size:14px; margin:0 0 16px; min-width:0; }
 .root fieldset { border:0; margin:0; padding:0; min-width:0; }
 .header, .toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
-/* 外观入口与本页按钮同高（44px 触控尺寸） */
-.root .toolbar :global(.appearance-picker .appearance-toggle) { height:44px; padding:0 14px 0 12px; font-size:14px; }
 .header { margin-bottom:24px; }
 .eyebrow { letter-spacing:1.5px; text-transform:uppercase; font-size:12px; color:var(--muted); }
 .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }

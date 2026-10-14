@@ -108,9 +108,9 @@ function macKeepAwake() {
   };
 }
 
-const NOT_SHARED_PAGE = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>知题暂未共享</title>
+const NOT_SHARED_PAGE = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MathPilot 暂未共享</title>
 <style>body{margin:0;display:grid;min-height:100vh;place-items:center;padding:0 16px;font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f6f8f7;color:#24352f}main{max-width:420px}h1{margin:0 0 8px;font-size:20px}p{margin:0;color:#5b6b64}@media(prefers-color-scheme:dark){body{background:#0b0f14;color:#e6ece9}p{color:#9fb0a8}}</style>
-<main><h1>知题暂未共享</h1><p>这台电脑上的知题现在只供本机使用。请管理员在「工具箱 → 共享办公」里打开共享，然后刷新这个页面。</p></main></html>`;
+<main><h1>MathPilot 暂未共享</h1><p>这台电脑上的 MathPilot 现在只供本机使用。请管理员在「工具箱 → 共享办公」里打开共享，然后刷新这个页面。</p></main></html>`;
 
 export function lanSharePlugin({ root = process.cwd(), detect = detectNetwork, keepAwake = macKeepAwake(), refreshMs = REFRESH_MS, name = localNetworkName() } = {}) {
   const file = join(root, ".wrangler", "share.json");
@@ -122,7 +122,7 @@ export function lanSharePlugin({ root = process.cwd(), detect = detectNetwork, k
     const next = isSharing(state, network);
     if (next === sharing) return;
     sharing = next; keepAwake(next);
-    log(next ? `知题已共享给同事：${addresses().join("  或  ")}` : "知题已停止共享，现在只有这台电脑能用。");
+    log(next ? `MathPilot 已共享给同事：${addresses().join("  或  ")}` : "MathPilot 已停止共享，现在只有这台电脑能用。");
   }
   async function refresh() { network = await detect(); settle(); }
   // Starts with the server, so the first "已共享" message reaches the terminal with the real port.
@@ -157,7 +157,7 @@ export function lanSharePlugin({ root = process.cwd(), detect = detectNetwork, k
     const host = String(request.headers.host ?? "");
     let hostName = "";
     try { hostName = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, ""); } catch { /* refused below */ }
-    if (!isLoopbackAddress(request.socket.remoteAddress) || !["localhost", "127.0.0.1", "::1"].includes(hostName)) throw new ShareRequestError("只能在运行知题的这台电脑上开关共享", 403);
+    if (!isLoopbackAddress(request.socket.remoteAddress) || !["localhost", "127.0.0.1", "::1"].includes(hostName)) throw new ShareRequestError("只能在运行 MathPilot 的这台电脑上开关共享", 403);
     const origin = request.headers.origin;
     if (origin && new URL(origin).host !== host) throw new ShareRequestError("请求来源不受信任", 403);
     const body = await readBody(request);
@@ -178,7 +178,7 @@ export function lanSharePlugin({ root = process.cwd(), detect = detectNetwork, k
     if (String(request.headers.accept ?? "").includes("text/html")) {
       response.writeHead(403, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       response.end(NOT_SHARED_PAGE);
-    } else sendJson(response, 403, { error: "知题暂未共享，请管理员在「共享办公」里打开" });
+    } else sendJson(response, 403, { error: "MathPilot 暂未共享，请管理员在「共享办公」里打开" });
   }
 
   return {

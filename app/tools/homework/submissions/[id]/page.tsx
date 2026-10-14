@@ -318,7 +318,7 @@ export default function TeacherSubmissionPage() {
       const name = `${submission.studentName}-${submission.assignmentTitle}-批改报告`;
       if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage("TeX 源文件已下载"); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../../../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setMessage("这台设备无法排版 PDF，请下载 TeX 源文件，或在运行知题的电脑上打开本页"); return; }
+      if (!(await latexCompilerStatus()).available) { setMessage("这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页"); return; }
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);
       setMessage(issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成");

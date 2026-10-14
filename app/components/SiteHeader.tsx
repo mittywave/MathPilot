@@ -24,7 +24,8 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   };
   const link = (href: string, label: string, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
   return <header className="topbar">
-    <div className="brand"><span className="brand-mark">题</span><div><strong>Mitty</strong><span>{copy.brandSubtitle}</span></div></div>
+    {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection; the home page switches in place. */}
+    <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><span className="brand-mark">题</span><strong>MathPilot</strong></a>
     <nav className="library-entries" aria-label="题库入口">
       {entry("library", "/", copy.navPublic)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}

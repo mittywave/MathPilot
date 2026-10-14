@@ -1,4 +1,4 @@
-// Tools collected under the single “工具箱” entry. Adding a tool is one entry here plus its own page; cards open the tool in a new tab.
+// Tools collected under the single “工具箱” entry. Adding a tool is one entry here plus its own page; cards open the tool in the current tab.
 export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check" | "page" | "spark"; tags: string[]; adminOnly?: boolean };
 
 export const TOOLBOX_TOOLS: ToolboxTool[] = [
@@ -29,7 +29,7 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
   },
   {
     key: "sharing", href: "/tools/sharing", name: "共享办公", icon: "share", adminOnly: true,
-    summary: "在公司把知题共享给同事：一键开关、记住公司网络，管理邀请码和同事账号。",
+    summary: "在公司把 MathPilot 共享给同事：一键开关、记住公司网络，管理邀请码和同事账号。",
     tags: ["局域网", "邀请码", "成员"],
   },
 ];
