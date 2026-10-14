@@ -22,7 +22,7 @@ jobs:
         env:
           BACKUP_CONFIRMED: ${{ inputs.database_backup_confirmed }}
         run: |
-          test "$GITHUB_REPOSITORY" = mittywave/zhiti-local-question-bank || { echo "Deploy only from mittywave"; exit 1; }
+          test "$GITHUB_REPOSITORY" = mittywave/MathPilot || { echo "Deploy only from mittywave"; exit 1; }
           test "$GITHUB_REF" = refs/heads/main || { echo "Deploy only from main"; exit 1; }
           test "$BACKUP_CONFIRMED" = true || { echo "Create a D1 backup and review migrations before deploying"; exit 1; }
       - uses: actions/checkout@v4

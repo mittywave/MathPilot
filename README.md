@@ -1,6 +1,6 @@
 # Mitty 的宝藏题库
 
-主开发仓库：<https://github.com/mittywave/zhiti-local-question-bank>。新功能、Issue、PR 和发布统一在 `mittywave` 维护；`mittyhua` 的历史开发成果通过保留父提交的合并纳入，不再作为主开发入口。
+主开发仓库：<https://github.com/mittywave/MathPilot>。新功能、Issue、PR 和发布统一在 `mittywave` 维护；`mittyhua` 的历史开发成果通过保留父提交的合并纳入，不再作为主开发入口。
 
 一个部署在 Cloudflare Workers 上的双入口题库：公共资源库用于发布只读共享资源；“我的题库”按账户完全隔离，供受邀请会员维护自己的模块、分类和题目。
 
@@ -107,7 +107,7 @@ Antigravity 模型探测使用 `/antigravity/v1beta/models`，兼容 OpenAI `dat
 现有本地工作目录先保存/提交自己的修改，再执行：
 
 ```bash
-git remote set-url origin https://github.com/mittywave/zhiti-local-question-bank.git
+git remote set-url origin https://github.com/mittywave/MathPilot.git
 git fetch origin
 git switch main
 git pull --ff-only origin main
