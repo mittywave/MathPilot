@@ -4,7 +4,7 @@ import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { authorizeDownload, createSmartPaperRecord, fetchLibrary, fetchMe, fetchStudents, fetchTypesetRecords, generateSmartPaper, updateTypesetRecord } from "../../../lib/api-client";
 import { categoryDescendants, categoryPath } from "../../../lib/library-tree";
-import { focusFeatures, planDays, planQuestionIds, questionComplexity, questionFeatures } from "../../../lib/smart-paper-contract";
+import { focusFeatures, normalizeSmartPaperPlan, planDays, planQuestionIds, questionComplexity, questionFeatures } from "../../../lib/smart-paper-contract";
 import type { AuthUser, LibraryData, Question, SmartPaperGroup, SmartPaperPlan, StudentSummary, TypesetSettings } from "../../../lib/types";
 import "../tools.css";
 import "./smart-paper.css";
@@ -39,6 +39,9 @@ export default function SmartPaper() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [typesetting, setTypesetting] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [draftStatus, setDraftStatus] = useState("");
+  const [savedStatus, setSavedStatus] = useState("");
 
   // Signed in only. ?student= preselects a student (from 学生档案); ?record= reopens a plan from the 快速排版 history.
   useEffect(() => {
@@ -51,13 +54,39 @@ export default function SmartPaper() {
       const wanted = params.get("student");
       if (wanted && studentList.students.some((student) => student.id === wanted)) setStudentId(wanted);
       const recordParam = params.get("record");
-      if (!recordParam) return;
+      try {
+        const key = `smart-paper:${me.id}:${recordParam ? `record:${recordParam}` : wanted ? `student:${wanted}` : "current"}`;
+        const draft = JSON.parse(localStorage.getItem(key) || "null");
+        if (draft?.version === 1 && typeof draft.request === "string" && typeof draft.title === "string" && typeof draft.instruction === "string" && typeof draft.studentId === "string" && Array.isArray(draft.exclude) && draft.exclude.every((id: unknown) => typeof id === "string")) {
+          const restored = normalizeSmartPaperPlan(draft.plan) ?? (draft.plan && Array.isArray(draft.plan.groups) && draft.plan.groups.length <= 14 && draft.plan.groups.every((group: SmartPaperGroup) => typeof group.title === "string" && typeof group.theme === "string" && Array.isArray(group.items) && group.items.length === 0) && Array.isArray(draft.plan.brief?.categoryIds) && Array.isArray(draft.plan.brief?.questionTypes) && Array.isArray(draft.plan.brief?.focus) && Array.isArray(draft.plan.findings) ? draft.plan as SmartPaperPlan : null);
+          if (draft.plan && !restored) throw new Error("草稿方案无效");
+          setPlan(restored); setTitle(draft.title); setRequest(draft.request); setInstruction(draft.instruction);
+          setStudentId(draft.studentId); setExclude(draft.exclude);
+          setRecordId(typeof draft.recordId === "string" ? draft.recordId : null);
+          setSettings(draft.settings ?? { answers: "none" });
+          setReady(true); return;
+        }
+      } catch { setError("本机草稿无法读取，请从已保存方案恢复。"); }
+      if (!recordParam) { setReady(true); return; }
       const record = (await fetchTypesetRecords()).records.find((item) => item.id === recordParam && item.plan);
       if (!record?.plan) { setError("没有找到这份智能组卷记录"); return; }
       setPlan(record.plan); setTitle(record.title); setRecordId(record.id); setSettings(record.settings);
       setRequest(record.plan.request); setStudentId(record.studentId ?? "");
+      setReady(true);
     }).catch((reason) => { setUser(null); setError(reason instanceof Error ? reason.message : "读取失败"); });
   }, []);
+
+  // Keep edits on this browser even before the first explicit server save. Hydrate first so empty state never overwrites a draft.
+  useEffect(() => {
+    if (!ready || !user) return;
+    try {
+      const draft = JSON.stringify({ version: 1, studentId, request, instruction, plan, exclude, title, recordId, settings });
+      localStorage.setItem(`smart-paper:${user.id}:current`, draft);
+      if (studentId) localStorage.setItem(`smart-paper:${user.id}:student:${studentId}`, draft);
+      if (recordId) localStorage.setItem(`smart-paper:${user.id}:record:${recordId}`, draft);
+      queueMicrotask(() => setDraftStatus("进度已自动保存在本机浏览器"));
+    } catch { queueMicrotask(() => setDraftStatus("本机自动保存失败，请点击“保存方案”后再退出")); }
+  }, [ready, user, studentId, request, instruction, plan, exclude, title, recordId, settings]);
 
   const byId = useMemo(() => new Map((library?.questions ?? []).map((question) => [question.id, question])), [library]);
   const student = students.find((item) => item.id === studentId) ?? null;
@@ -78,6 +107,7 @@ export default function SmartPaper() {
       const result = await generateSmartPaper(body);
       setPlan(result.plan); setExclude(result.exclude);
       if (!body.current || !title.trim()) setTitle(result.plan.brief.title);
+      if (!body.current) { setRecordId(null); setSavedStatus(""); window.history.replaceState(null, "", window.location.pathname); }
       if (body.current) setInstruction("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "智能组卷失败"); }
     finally { clearInterval(timer); setBusy(""); }
@@ -118,17 +148,18 @@ export default function SmartPaper() {
   const remove = (dayIndex: number, itemIndex: number) => editDay(dayIndex, (items) => items.filter((_, index) => index !== itemIndex));
 
   // 排版: the plan is saved (a new record, or the one it came from) and 快速排版 opens on it, one day per page.
-  async function typeset() {
+  async function typeset(openTypesetter = true) {
     if (!plan || !total) return;
     setError(""); setBusy("正在保存方案…");
     try {
-      await authorizeDownload(planQuestionIds(plan));
+      if (openTypesetter) await authorizeDownload(planQuestionIds(plan));
       const current = { ...plan, studentId: studentId || null };
       const name = title.trim() || plan.brief.title || "智能组卷";
       const saved = recordId ? (await updateTypesetRecord(recordId, { title: name, plan: current })).record : (await createSmartPaperRecord({ title: name, plan: current, settings })).record;
       setRecordId(saved.id); setSettings(saved.settings); setTitle(saved.title);
       window.history.replaceState(null, "", `?record=${encodeURIComponent(saved.id)}`);
-      setTypesetting(true);
+      setSavedStatus(`上次保存方案：${new Date().toLocaleTimeString()}，可从快速排版历史重新打开；后续修改需再次保存`);
+      setTypesetting(openTypesetter);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); }
     finally { setBusy(""); }
   }
@@ -150,6 +181,9 @@ export default function SmartPaper() {
     <aside className="smart-paper-panel">
       <a className="toolbox-back" href="/tools"><SmartIcon name="back" /><span>工具箱 · 智能组卷</span></a>
       {user === null ? <p className="smart-paper-note">请先在题库页登录，再使用智能组卷。</p> : <>
+        {draftStatus && <p className="smart-paper-note" role="status">{draftStatus}。<a href="/tools/typeset">已保存方案</a></p>}
+        {savedStatus && <p className="smart-paper-note" role="status">{savedStatus}</p>}
+        <fieldset disabled={!ready || Boolean(busy)} style={{ display: "grid", gap: 12, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <label className="smart-paper-field"><span>学生</span>
           <select value={studentId} disabled={Boolean(busy)} onChange={(event) => setStudentId(event.target.value)}>
             <option value="">不针对某位学生</option>
@@ -181,14 +215,16 @@ export default function SmartPaper() {
           </label>
           <button type="button" className="secondary" disabled={!instruction.trim() || Boolean(busy)} onClick={revise}>按意见调整</button>
         </section>}
+        </fieldset>
       </>}
     </aside>
 
-    <section className="smart-paper-plan" aria-label="方案">
+    <fieldset className="smart-paper-plan" aria-label="方案" disabled={Boolean(busy)} style={{ border: 0, margin: 0, minWidth: 0 }}>
       {plan ? <>
         <header className="smart-paper-head">
           <input value={title} aria-label="练习标题" placeholder="练习标题" onChange={(event) => setTitle(event.target.value)} />
           <span>{total} 道题 · 分 {plan.groups.length} 天</span>
+          <button type="button" className="secondary" disabled={!total || Boolean(busy)} onClick={() => void typeset(false)}>保存方案</button>
           <button type="button" className="primary-button" disabled={!total || Boolean(busy)} onClick={() => void typeset()}>排版</button>
         </header>
         {plan.groups.map((group, dayIndex) => <section key={dayIndex} className="smart-paper-day">
@@ -220,6 +256,6 @@ export default function SmartPaper() {
         <b>说一句要出什么练习，agent 从题库里挑题</b>
         <p>选好学生时，会读学生档案里的课后反馈、批改出的知识点正确率、错题和作业报告，侧重反复出错的地方，并避开做过、布置过的题。方案按天列出，每道题写明为什么选它；可以换题、删题、加题，或用一句话让 agent 调整，确认后点“排版”进快速排版，每天单独起页，排好后可以直接布置给这位学生。</p>
       </div>}
-    </section>
+    </fieldset>
   </main>;
 }
