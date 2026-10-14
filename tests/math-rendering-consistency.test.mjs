@@ -8,7 +8,64 @@ import { createRequire } from 'node:module';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import JSZip from 'jszip';
+import katex from 'katex';
+import { loadSource } from './load-source.mjs';
 const require = createRequire(import.meta.url);
+
+test('fractions in every cases row use body-size digits in inline and display math', async () => {
+  const { renderKatex } = await loadSource('lib/math-render.ts');
+  const systems = [
+    String.raw`\begin{cases}3x+2y=5\\\frac{x+1}{3}-\frac{1-y}{5}=\frac{4}{15}\end{cases}`,
+    String.raw`\begin{cases}\frac{2x-1}{3}-\frac{5x+1}{2}\ge1\\5x-1<3(x+1)\end{cases}`,
+    String.raw`f(x)=\begin{cases}\frac{x+1}{3}&x>0\\0&x\le0\end{cases}`,
+    String.raw`\begin {cases}x=\begin{cases}\frac{1}{2}\\3\end{cases}\\y=4\end {cases}`,
+  ];
+  for (const source of systems) for (const display of [false, true]) {
+    const { html, error } = renderKatex(source, display);
+    assert.equal(error, undefined);
+    assert.match(html, /<mstyle scriptlevel="0" displaystyle="true">/);
+    assert.doesNotMatch(html, /<mstyle scriptlevel="0" displaystyle="false">/);
+    assert.doesNotMatch(html, /katex-sizing reset-size6 size3/, 'first-level fraction digits must not shrink');
+    assert.equal((html.match(/<mfrac>/g) || []).length, (source.match(/\\frac\b/g) || []).length);
+  }
+});
+
+test('cases sizing preserves genuine nested fractions, scripts and explicit compact fractions', async () => {
+  const { renderKatex } = await loadSource('lib/math-render.ts');
+  for (const source of [
+    String.raw`\begin{cases}x^{2}+y_{1}=5\\\frac{x+1}{3}=2\end{cases}`,
+    String.raw`\begin{cases}x=\frac{1+\frac{2}{3}}{4}\\y=5\end{cases}`,
+    String.raw`\begin{cases}x=\frac{1}{2}\\y=\tfrac{3}{4}\end{cases}`,
+  ]) {
+    const { html, error } = renderKatex(source);
+    assert.equal(error, undefined);
+    assert.match(html, /katex-sizing reset-size6 size3/, 'scripts, inner fractions and tfrac retain smaller type');
+    const expected = katex.renderToString('\\displaystyle ' + source.replaceAll('{cases}', '{dcases}'), {
+      output: 'htmlAndMathml', strict: 'ignore', throwOnError: true,
+    });
+    assert.equal(html, expected, 'KaTeX calculates spacing and script sizes without CSS overrides');
+  }
+});
+
+test('cases rendering leaves other environments, literals and syntax failures intact', async () => {
+  const { renderKatex } = await loadSource('lib/math-render.ts');
+  for (const source of [
+    String.raw`\begin{cases}x=1\\y=2\end{cases}`,
+    String.raw`\begin{cases}x=\dfrac{1}{2}\\y=\tfrac{3}{4}\end{cases}`,
+    String.raw`\begin{bmatrix}\frac{1}{2}&3\\4&5\end{bmatrix}`,
+    String.raw`\frac{1}{2}+\text{cases}+\verb|\begin{cases}|`,
+  ]) {
+    const expected = katex.renderToString((source.includes('\\frac') ? '\\displaystyle ' : '') + source, {
+      output: 'htmlAndMathml', strict: 'ignore', throwOnError: true,
+    });
+    assert.equal(renderKatex(source).html, expected);
+  }
+  for (const source of [
+    String.raw`\begin{cases}\frac{1}{2}\end{dcases}`,
+    String.raw`\begin{dcases}\frac{1}{2}\end{cases}`,
+    String.raw`\begin{cases}\frac{1}{2}`,
+  ]) assert.ok(renderKatex(source).error, 'a style adjustment must not silently repair invalid environments');
+});
 
 test('both web renderers share explicit math styles and expose parse failures', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'zhiti-math-render-'));
