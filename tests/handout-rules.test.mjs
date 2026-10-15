@@ -119,6 +119,11 @@ test("a group is a term, a topic domain or a student, and the shelf follows from
   assert.equal(groupLabel({ domain: "thinking" }), "数学思想专题");
   assert.equal(groupLabel({ domain: "custom-topic", domainName: "计算能力" }), "计算能力");
   assert.equal(groupLabel({ domain: "custom-topic" }), "专题库");
+  const topicNodes = [{ id: "topic-library", parentId: null, name: "专题库" }, { id: "function", parentId: "topic-library", name: "函数" }, { id: "inverse", parentId: "function", name: "反比例" }];
+  assert.deepEqual(coursePath(topicNodes, "inverse").map((node) => node.id), ["topic-library", "function", "inverse"]);
+  assert.equal(groupLabel({ domain: "inverse", domainName: "反比例", coursePath: coursePath(topicNodes, "inverse") }), "函数 / 反比例");
+  assert.equal(groupLabel({ domain: "function", coursePath: coursePath(topicNodes, "function") }), "函数");
+  assert.equal(shelfOf({ domain: "inverse", coursePath: coursePath(topicNodes, "inverse") }), "topic");
   assert.equal(groupLabel(none), "未分板块");
   assert.equal(groupLabel({ studentId: "s1", studentName: "CICI" }), "CICI");
   assert.ok(sameGroup({ ...none, domain: "function" }, { domain: "function" }));
