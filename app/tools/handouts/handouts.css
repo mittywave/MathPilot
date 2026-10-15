@@ -107,6 +107,13 @@
 .picker-tree{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line,#e4e9e6)}
 .picker-tree>header{display:flex;flex:none;align-items:center;justify-content:space-between;gap:8px;min-height:64px;padding:12px 16px;border-bottom:1px solid var(--line)}
 .picker-tree h2{margin:0;font-family:"Songti SC",serif;font-size:16px}
+.picker-modules{position:relative;flex:none;margin-left:auto}
+.picker-modules>summary{list-style:none}
+.picker-modules>summary::-webkit-details-marker{display:none}
+.picker-modules:not([open])>.more-panel{display:none}
+.picker-modules>.more-panel{left:0;right:auto;max-width:280px;max-height:60dvh;overflow:auto}
+.picker-modules>.more-panel button{white-space:normal;overflow-wrap:anywhere}
+.picker-modules>.more-panel button[aria-pressed="true"]{background:var(--green-soft);color:var(--green);font-weight:600}
 .picker-tree .icon-button,.picker-source>.icon-button{display:inline-flex;flex:none;align-items:center;justify-content:center;width:32px;height:32px;padding:0;cursor:pointer}
 .picker-tree .icon-button:hover,.picker-source>.icon-button:hover{border-color:var(--green);background:var(--green-soft)}
 .picker-tree .icon-button:focus-visible,.picker-source>.icon-button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
@@ -128,9 +135,8 @@
 .picker-replacing{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:46px;padding:6px 12px;border-radius:calc(10px*var(--radius-scale));background:var(--green-soft,#edf5f0);font-size:13px}
 .picker-results{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
 .handout-draft{overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:20px 24px 40px}
-.picker-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.picker-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .picker-filters input{grid-column:1/-1}
-@container (max-width:339px){.picker-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.picker-filters select:last-child{grid-column:1/-1}}
 .picker-count{margin:0 0 6px;color:var(--muted);font-size:12px}
 .picker-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
 .picker-item{padding:10px 14px 6px;border:1px solid var(--line);border-radius:calc(10px*var(--radius-scale));background:var(--surface);container-type:inline-size}

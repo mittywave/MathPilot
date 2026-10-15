@@ -40,6 +40,7 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
   });
   const [treeOpen, setTreeOpen] = useState(false);
   const target = useRef<HTMLDetailsElement>(null);
+  const modulePicker = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const wide = matchMedia("(min-width:1680px)");
     const update = () => setTreeOpen(wide.matches);
@@ -69,10 +70,14 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
   }, [library, activeModuleId, activeCategoryId]);
   const targetLabel = mode.kind === "add" ? sections.find(section => section.id === mode.sectionId)?.label || "请先添加知识模块" : "";
   useEffect(() => {
-    const close = (event: PointerEvent) => { if (target.current?.open && !target.current.contains(event.target as Node)) target.current.open = false; };
+    const close = (event: PointerEvent) => {
+      for (const menu of [target.current, modulePicker.current]) if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+    };
     const escape = (event: KeyboardEvent) => {
-      if (!target.current?.open || event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      event.preventDefault(); target.current.open = false; target.current.querySelector("summary")?.focus();
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      for (const menu of [target.current, modulePicker.current]) if (menu?.open) {
+        event.preventDefault(); menu.open = false; menu.querySelector("summary")?.focus();
+      }
     };
     document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape, true);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
@@ -93,7 +98,6 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
   const byCode = library?.questions.find((question) => question.code === search);
   const results = temporary ? temporaryQuestions.filter((question) => (!fileName || question.importFileName === fileName)
     && (type === "全部" || question.type === type) && (!search || questionMatchesKeyword(question, search, question.importFileName ?? ""))) : byCode ? [byCode] : moduleQuestions.filter((question) => (!allowed || allowed.has(question.categoryId))
-    && (type === "全部" || question.type === type)
     && (!search || questionMatchesKeyword(question, search, pathOf(question.categoryId))));
   const visibleIds = new Set((temporary ? temporaryQuestions : library?.questions ?? []).map((question) => question.id));
   const archived = new Set((library?.questions ?? []).map((question) => question.id));
@@ -105,7 +109,13 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题">
     <aside className="picker-tree" aria-label="知识目录" hidden={!treeOpen}>
-      <header><h2>{temporary ? "临时题库" : "知识目录"}</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={true} onClick={() => setTreeOpen(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5m7-7-7 7 7 7" /></svg></button></header>
+      <header><h2>{temporary ? "临时题库" : "知识目录"}</h2>
+        {!temporary && <details ref={modulePicker} className="basket-more picker-modules">
+          <summary className="icon-button" role="button" title="切换模块" aria-label="切换模块"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4" /></svg></summary>
+          <div className="more-panel" role="group" aria-label="选择题库模块">{modules.map((item) => <button type="button" key={item.id} aria-pressed={item.id === activeModuleId} onClick={() => { setScope({ moduleId: item.id, categoryId: "" }); setLimit(PAGE_SIZE); if (modulePicker.current) { modulePicker.current.open = false; modulePicker.current.querySelector("summary")?.focus(); } }}>{item.name}</button>)}</div>
+        </details>}
+        <button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={true} onClick={() => { if (modulePicker.current) modulePicker.current.open = false; setTreeOpen(false); }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5m7-7-7 7 7 7" /></svg></button>
+      </header>
       {temporary ? <div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div> : <CategoryTree module={activeModule} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} onSelect={(id) => { setScope({ moduleId: activeModuleId, categoryId: id === activeModuleId ? "" : id }); setLimit(PAGE_SIZE); }} />}
     </aside>
     <div className="picker-main">
@@ -127,9 +137,10 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
       </details>}
       <div className="picker-filters">
         <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />
-        {temporary ? <select aria-label="来源文件" value={fileName} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源文件</option>{[...new Set(temporaryQuestions.map((question) => question.importFileName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}</select> : <select aria-label="模块" value={activeModuleId} onChange={(event) => { setScope({ moduleId: event.target.value, categoryId: "" }); setLimit(PAGE_SIZE); }}>{modules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
-        {!temporary && <select aria-label="分类" value={activeCategoryId} onChange={(event) => { setScope({ moduleId: activeModuleId, categoryId: event.target.value }); setLimit(PAGE_SIZE); }}><option value="">全部分类</option>{moduleCategories.map(category => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</select>}
-        <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
+        {temporary && <>
+          <select aria-label="来源文件" value={fileName} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源文件</option>{[...new Set(temporaryQuestions.map((question) => question.importFileName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}</select>
+          <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
+        </>}
       </div>
       <div className="picker-results">
       {temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>先校对再选题，不自动加入正式题库。</p><button className="secondary" onClick={onImport}>导入文件</button></div> : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary ? <p className="picker-empty">题库还没有模块。</p> : !results.length ? <p className="picker-empty">没有符合条件的题目。</p> : <>
