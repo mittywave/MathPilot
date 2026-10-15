@@ -3,7 +3,59 @@ import assert from "node:assert/strict";
 import JSZip from "jszip";
 import { loadSource } from "./load-source.mjs";
 
-const { orderedBasketQuestions, moveBasketQuestion } = await loadSource("lib/paper-basket.ts");
+const { orderedBasketQuestions, moveBasketQuestion, basketIds, basketSections, selectBasketQuestions, placeBasketQuestion, removeBasketSection, groupBasketByType, restoreBasketDraft } = await loadSource("lib/paper-basket.ts");
+
+const pool = [
+  { id: "a", type: "解答题" }, { id: "b", type: "单选题" }, { id: "c", type: "填空题" }, { id: "d", type: "单选题" },
+].map((question) => ({ ...question, categoryId: "one", stem: question.id, answer: question.id, analysis: "", options: [], difficulty: "基础" }));
+const structured = () => ({ sections: [{ id: "one", title: "一、基础", questionIds: ["a", "b"] }, { id: "empty", title: "空组", questionIds: [] }, { id: "two", title: "应用", questionIds: ["c"] }], unassignedIds: ["d"] });
+
+test("selection, cross-section insertion and deleting a heading never duplicate or lose questions", () => {
+  const original = structured();
+  let next = placeBasketQuestion(original, "b", "two", "c");
+  assert.deepEqual(next.sections[2].questionIds, ["b", "c"]);
+  next = placeBasketQuestion(next, "d", "two", "c");
+  next = placeBasketQuestion(next, "c", null);
+  assert.deepEqual(basketIds(next), ["a", "b", "d", "c"]);
+  next = selectBasketQuestions(next, ["a", "d", "c", "new", "new"]);
+  assert.deepEqual(next.unassignedIds, ["c", "new"], "new selections go to unassigned once");
+  next = removeBasketSection(next, "two");
+  assert.deepEqual(next.unassignedIds, ["c", "new", "d"]);
+  assert.equal(new Set(basketIds(next)).size, basketIds(next).length);
+  assert.deepEqual(original, structured(), "operations do not mutate earlier state");
+  assert.equal(placeBasketQuestion(next, "a", "missing"), next);
+  assert.equal(placeBasketQuestion(next, "missing", null), next);
+  const cleared = selectBasketQuestions(next, []);
+  assert.deepEqual(basketIds(cleared), []);
+  assert.equal(cleared.sections.length, 2, "cancel selection keeps editable empty headings");
+});
+
+test("one projection numbers nonempty sections and all questions, and the unassigned tail is printable", () => {
+  const sections = basketSections(structured(), pool);
+  assert.deepEqual(sections.map((section) => [section.heading, section.start]), [["一、基础", 0], ["", 2], ["二、应用", 2], ["三、其他题目", 3]]);
+  const flat = basketSections({ sections: [], unassignedIds: ["d", "b"] }, pool);
+  assert.deepEqual(flat.map((section) => section.heading), [""]);
+  assert.deepEqual(flat[0].questions.map((question) => question.id), ["d", "b"]);
+});
+
+test("type classification is stable and manual edits remain possible afterwards", () => {
+  let serial = 0;
+  const result = groupBasketByType(structured(), pool, () => String(++serial));
+  assert.deepEqual(result.sections.map((section) => [section.title, section.questionIds]), [["单选题", ["b", "d"]], ["填空题", ["c"]], ["解答题", ["a"]]]);
+  assert.deepEqual(basketIds(placeBasketQuestion(result, "a", result.sections[0].id, "d")), ["b", "a", "d", "c"]);
+});
+
+test("draft restore uses live library content, retains selected wrong snapshots and drops invalid references", () => {
+  const wrong = { ...pool[0], id: "wrong", stem: "snapshot" };
+  const raw = { version: 1, structure: { sections: [{ id: "one", title: "基础", questionIds: ["a", "a", "gone", "wrong"] }], unassignedIds: ["a", "b"] }, title: "保留标题", includeAnswers: false, snapshots: [wrong, { ...pool[0], stem: "stale" }], typeset: null };
+  const { draft, missing } = restoreBasketDraft(raw, pool);
+  assert.equal(missing, 1);
+  assert.deepEqual(basketIds(draft.structure), ["a", "wrong", "b"]);
+  assert.deepEqual(draft.snapshots, [wrong]);
+  assert.equal(orderedBasketQuestions([...draft.snapshots, ...pool], ["a"])[0].stem, "a");
+  assert.equal(draft.title, raw.title); assert.equal(draft.includeAnswers, false);
+  assert.throws(() => restoreBasketDraft({ version: 9 }, pool), /保留原记录/);
+});
 
 test("basket follows selected order across modules and omits deleted or repeated IDs", () => {
   const questions = [{ id: "a", moduleId: "one" }, { id: "b", moduleId: "two" }, { id: "c", moduleId: "one" }];

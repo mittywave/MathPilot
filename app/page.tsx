@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, lazy, memo, useCallback, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, lazy, memo, useCallback, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
@@ -15,9 +15,10 @@ import { StudentReports } from "./components/StudentReports";
 import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
 import WrongQuestionUpload from "./components/WrongQuestionUpload";
 import { QuestionBody } from "./components/QuestionBody";
+import { BasketOutline } from "./components/BasketOutline";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./components/QuestionEntry";
-import { moveBasketQuestion, orderedBasketQuestions } from "../lib/paper-basket";
-import { exportQuestionsToWord } from "../lib/export-word";
+import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
+import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../lib/library-tree";
 import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
@@ -30,7 +31,6 @@ const NEW_STUDENT_OPTION = "__new_student__";
 type ArchiveTab = "homework" | "profile" | "report" | "wrong";
 const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["profile", "定档"], ["report", "学情报告"], ["wrong", "错题本"]];
 const ARCHIVE_TAB_KEY = "student-archive-tab";
-const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
 // (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
 const LIBRARY_PAGE = 40;
@@ -40,7 +40,7 @@ const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
 
-type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void };
+type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; place: (id: string, sectionId: string | null) => void };
 
 // A click anywhere on a selectable card ticks it, as its check box does. Buttons, links and the grading record keep
 // their own clicks, and dragging across the text to copy it ticks nothing.
@@ -52,21 +52,22 @@ function selectOnCardClick(event: MouseEvent<HTMLElement>, toggle: () => void) {
 
 // One card of the library list. It re-renders only when its own question or state changes, so ticking one question
 // in a long category does not rebuild every other card on the page.
-const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, path, checked, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
+const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, isFirst = index === 0, sectionId, sections, path, checked, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
   question: Question; index: number; isLast: boolean; path: string; checked: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
   canDelete: boolean; isExporting: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
+  isFirst?: boolean; sectionId?: string | null; sections?: Array<{ id: string | null; title: string }>;
 }) {
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
   // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
-  return <article className={`question-card ${checked ? "checked" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : undefined}>
+  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
       <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
       {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
       {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
-      <div className="question-actions"><button onClick={() => actions.toggleAnswer(question.id)}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}{basket && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
+      <div className="question-actions"><button onClick={() => actions.toggleAnswer(question.id)}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}{basket && <div className="basket-card-actions">{!!sections?.some((section) => section.id !== sectionId) && <label className="basket-move-to">移动到<select aria-label={`第 ${index + 1} 题移动到`} disabled={isExporting} value={sectionId ?? ""} onChange={(event) => actions.place(question.id, event.target.value || null)}>{sections.map((section) => <option key={section.id ?? "unassigned"} value={section.id ?? ""}>{section.title}</option>)}</select></label>}<button disabled={isFirst || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
     </div>
   </article>;
 });
@@ -78,7 +79,14 @@ export default function Home() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [activeModuleId, setActiveModuleId] = useState("");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [basketStructure, setBasketStructure] = useState<BasketStructure>({ sections: [], unassignedIds: [] });
+  const selectedIds = useMemo(() => basketIds(basketStructure), [basketStructure]);
+  const setSelectedIds = useCallback((update: SetStateAction<string[]>) => setBasketStructure((current) => selectBasketQuestions(current, typeof update === "function" ? update(basketIds(current)) : update)), []);
+  const [draftOwner, setDraftOwner] = useState<string | null>(null);
+  const [draftCanSave, setDraftCanSave] = useState(false);
+  const [draftStatus, setDraftStatus] = useState("正在读取本机草稿…");
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const activeDraftOwner = useRef<string | null>(null);
   // A student's wrong book is browsed like a library: its question snapshots join the basket pool, so they can be selected and exported.
   const [basketWrongQuestions, setBasketWrongQuestions] = useState<Question[]>([]);
   const [wrongMonth, setWrongMonth] = useState("全部");
@@ -159,8 +167,9 @@ export default function Home() {
       url.searchParams.set("view", "wrong-book");
       if (activeStudentId) url.searchParams.set("studentId", activeStudentId); else url.searchParams.delete("studentId");
       url.searchParams.set("tab", archiveTab);
-    } else if (url.searchParams.get("view") === "wrong-book") {
-      if (showSelected) url.searchParams.set("view", "selected"); else url.searchParams.delete("view");
+    } else {
+      if (showSelected) url.searchParams.set("view", "selected");
+      else if (["selected", "wrong-book"].includes(url.searchParams.get("view") ?? "")) url.searchParams.delete("view");
       url.searchParams.delete("studentId"); url.searchParams.delete("tab");
     }
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -193,6 +202,50 @@ export default function Home() {
     applyLibrary(data, preserveCategory);
   }
 
+  async function restoreLocalBasket(user: AuthUser, library: Question[]) {
+    activeDraftOwner.current = user.id;
+    setDraftCanSave(false); setDraftOwner(null); setDraftStatus("正在读取本机草稿…");
+    try {
+      // An older write from this page must finish before switching back to its owner.
+      await saveQueue.current;
+      const raw = await basketStorage(user.id, "read");
+      if (activeDraftOwner.current !== user.id) return;
+      if (raw) {
+        const { draft, missing } = restoreBasketDraft(raw, library);
+        setBasketStructure(draft.structure); setPaperTitle(draft.title); setIncludeAnswers(draft.includeAnswers);
+        setBasketWrongQuestions(draft.snapshots); setTypesetKept(draft.typeset);
+        if (missing) show({ text: `草稿中 ${missing} 道已失效的题目已移除`, tone: "success" });
+      } else {
+        setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null);
+      }
+      setDraftCanSave(true); setDraftStatus("已保存在本机");
+    } catch (error) {
+      if (activeDraftOwner.current !== user.id) return;
+      setDraftStatus("本机草稿不可用，本次整理尚未保存");
+      show({ text: `${error instanceof Error ? error.message : "本机草稿读取失败"}。本次仍可整理和导出，原记录不会被覆盖。`, tone: "error" });
+    } finally { if (activeDraftOwner.current === user.id) setDraftOwner(user.id); }
+  }
+
+  useEffect(() => {
+    if (!authUser || draftOwner !== authUser.id || !draftCanSave) return;
+    const owner = authUser.id;
+    const draft: BasketDraft = { version: 1, structure: basketStructure, title: paperTitle, includeAnswers, typeset: typesetKept,
+      snapshots: basketWrongQuestions.filter((question) => selectedIds.includes(question.id) && !questions.some((item) => item.id === question.id)) };
+    // Serialize atomic writes; a slow earlier save cannot overwrite a later edit.
+    saveQueue.current = saveQueue.current.then(async () => {
+      try {
+        if (activeDraftOwner.current === owner) setDraftStatus("正在保存到本机…");
+        await basketStorage(owner, "write", draft);
+        if (activeDraftOwner.current === owner) setDraftStatus("已保存在本机");
+      } catch {
+        if (activeDraftOwner.current === owner) {
+          setDraftStatus("本机保存失败");
+          show({ text: "本机组卷草稿保存失败，本次操作仍有效；请保留页面并及时导出。", tone: "error" });
+        }
+      }
+    });
+  }, [authUser, draftOwner, draftCanSave, basketStructure, paperTitle, includeAnswers, typesetKept, basketWrongQuestions, selectedIds, questions, show]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -200,6 +253,7 @@ export default function Home() {
         const params = new URLSearchParams(window.location.search);
         const data = await fetchLibrary();
         setAuthUser(auth.user); applyLibrary(data, false);
+        if (auth.user) await restoreLocalBasket(auth.user, data.questions);
         if (auth.user && params.get("view") === "wrong-book") {
           setShowWrongBook(true); setWrongBookLoading(true);
           try { await loadStudents(params.get("studentId") ?? ""); } finally { setWrongBookLoading(false); }
@@ -236,8 +290,11 @@ export default function Home() {
     setShowWrongBook(false);
   }
 
-  const basketPool = useMemo(() => [...questions, ...basketWrongQuestions], [questions, basketWrongQuestions]);
+  const basketBusy = isExporting || Boolean(authUser && draftOwner !== authUser.id);
+  const basketPool = useMemo(() => [...basketWrongQuestions, ...questions], [questions, basketWrongQuestions]);
   const selectedQuestions = orderedBasketQuestions(basketPool, selectedIds);
+  const paperSections = useMemo(() => basketSections(basketStructure, basketPool), [basketStructure, basketPool]);
+  const sectionChoices = useMemo(() => paperSections.map((section) => ({ id: section.id, title: section.id ? section.title : "未分组" })), [paperSections]);
   const byCode = query.trim() ? questions.find((item) => item.code === query.trim()) : undefined;
   const filteredQuestions = useMemo(() => {
     if (showSelected) return orderedBasketQuestions(basketPool, selectedIds);
@@ -253,7 +310,22 @@ export default function Home() {
   // A new filter starts again from the first 40; the end marker loads the next 40 while it is still well below the screen.
   const listKey = `${activeModuleId}|${activeCategory}|${typeFilter}|${query}|${showSelected}`;
   const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
+  const [locatingQuestion, setLocatingQuestion] = useState<string | null>(null);
   const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_PAGE;
+  const locateBasketQuestion = (id: string) => {
+    const index = selectedIds.indexOf(id);
+    if (index < 0) return;
+    setListPaging((current) => ({ key: listKey, count: Math.max(current.key === listKey ? current.count : LIBRARY_PAGE, index + 1) }));
+    setLocatingQuestion(id);
+  };
+  useEffect(() => {
+    if (!locatingQuestion || !showSelected || typesetting) return;
+    const frame = requestAnimationFrame(() => {
+      const card = document.getElementById(`basket-question-${locatingQuestion}`);
+      if (card) { card.scrollIntoView({ block: "start" }); card.focus({ preventScroll: true }); setLocatingQuestion(null); }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [locatingQuestion, showSelected, typesetting, visibleCount]);
   const listEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const end = listEndRef.current;
@@ -291,7 +363,7 @@ export default function Home() {
     setBasketWrongQuestions((current) => [...current.filter((item) => !snapshots.some((question) => question.id === item.id)), ...snapshots]);
   }
 
-  const requireLogin = () => { if (authUser) return true; setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
+  const requireLogin = () => { if (authUser) { if (draftOwner !== authUser.id) { show({ text: "正在读取本机组卷草稿，请稍候", tone: "success" }); return false; } return true; } setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
   function openLibrary() {
     setShowSelected(false); setShowWrongBook(false);
   }
@@ -367,14 +439,15 @@ export default function Home() {
     setAuthSubmitting(true); setAuthError("");
     try {
       const result = authMode === "register" ? await register(authEmail, authPassword, authInvite) : await login(authEmail, authPassword);
-      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite(""); await refreshLibrary(true);
+      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite("");
+      const data = await fetchLibrary(); applyLibrary(data, true); await restoreLocalBasket(result.user, data.questions);
       show({ text: authMode === "register" ? "注册成功，已登录云端题库" : "登录成功", tone: "success" });
     } catch (error) { setAuthError(error instanceof Error ? error.message : "操作失败，请重试"); }
     finally { setAuthSubmitting(false); }
   }
 
   async function signOut() {
-    try { await logout(); setAuthUser(null); setSelectedIds([]); setShowSelected(false); setShowWrongBook(false); setStudents([]); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
+    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setIncludeAnswers(true); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
     catch (error) { show({ text: error instanceof Error ? error.message : "退出失败", tone: "error" }); }
   }
 
@@ -395,9 +468,14 @@ export default function Home() {
     toggleAnswer: (id) => setExpandedAnswers((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]),
     edit: (question) => cardHandlers.current.openEditQuestion(question),
     remove: (question) => { void cardHandlers.current.deleteQuestion(question); },
-    move: (id, direction) => setSelectedIds((ids) => moveBasketQuestion(ids, id, direction)),
+    move: (id, direction) => setBasketStructure((current) => {
+      const section = current.sections.find((item) => item.questionIds.includes(id));
+      return section ? { ...current, sections: current.sections.map((item) => item.id === section.id ? { ...item, questionIds: moveBasketQuestion(item.questionIds, id, direction) } : item) }
+        : { ...current, unassignedIds: moveBasketQuestion(current.unassignedIds, id, direction) };
+    }),
     drop: (id) => setSelectedIds((ids) => ids.filter((item) => item !== id)),
-  }), []);
+    place: (id, sectionId) => setBasketStructure((current) => placeBasketQuestion(current, id, sectionId)),
+  }), [setSelectedIds]);
 
   async function deleteWrongEntries(entries: WrongQuestionEntry[]) {
     if (!entries.length) return;
@@ -487,17 +565,29 @@ export default function Home() {
   }
 
   async function generateWord() {
-    if (!selectedQuestions.length || isExporting) return;
+    if (!selectedQuestions.length || basketBusy) return;
     setIsExporting(true);
-    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); show({ text: "Word 练习已生成", tone: "success" }); }
+    try {
+      await authorizeDownload(selectedQuestions.map((question) => question.id));
+      const title = paperTitle.trim() || "练习题";
+      const sections = paperSections.filter((section) => section.questions.length).map((section) => ({ heading: section.heading || `试题（共${selectedQuestions.length}题）`, questions: section.questions }));
+      downloadWordBlob(basketStructure.sections.length ? await buildWordBlob({ title, sections, answers: includeAnswers ? "end" : "none", answerHeadings: true }) : await buildQuestionsWordBlob(selectedQuestions, title, includeAnswers, "basket"), `${title}.docx`);
+      show({ text: "Word 练习已生成", tone: "success" });
+    }
     catch (error) { show({ text: error instanceof Error ? error.message : "下载失败", tone: "error" }); }
     finally { setIsExporting(false); }
   }
 
   async function openTypeset() {
-    if (!selectedQuestions.length || isExporting) return;
+    if (!selectedQuestions.length || basketBusy) return;
     try { await authorizeDownload(selectedQuestions.map((question) => question.id)); setTypesetting(true); }
     catch (error) { show({ text: error instanceof Error ? error.message : "无法排版所选题目", tone: "error" }); }
+  }
+
+  async function classifyBasket() {
+    if (basketBusy || !selectedQuestions.length) return;
+    if (basketStructure.sections.length && !await confirm({ title: "按题型重新分类", body: "现有大标题及题目归属会被替换，所有题目都会保留，组内按当前顺序排列。", confirmLabel: "重新分类" })) return;
+    setBasketStructure((current) => groupBasketByType(current, basketPool, () => uid("section")));
   }
 
   function openNewModule() {
@@ -567,12 +657,18 @@ export default function Home() {
     finally { deleting.current = false; }
   }
 
-  const typesetIds = selectedQuestions.map((question) => question.id).join(",");
-  if (typesetting) return <Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
+  const typesetIds = useMemo(() => orderedBasketQuestions(basketPool, selectedIds).map((question) => question.id).join(","), [basketPool, selectedIds]);
+  const keepTypeset = useCallback((title: string, settings: TypesetSettings) => {
+    setPaperTitle(title); setIncludeAnswers(settings.answers !== "none"); setTypesetKept({ ids: typesetIds, settings });
+  }, [typesetIds]);
+  if (typesetting) return <>{toastNode}<Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
     questions: selectedQuestions, title: paperTitle,
+    groups: basketStructure.sections.length ? paperSections.filter((section) => section.questions.length).map((section) => ({ title: section.heading, size: section.questions.length })) : undefined,
+    groupMode: "sections",
     settings: typesetKept ? { ...typesetKept.settings, ownRoom: typesetKept.ids === typesetIds ? typesetKept.settings.ownRoom : {} } : { answers: includeAnswers ? "end" : "none" },
-    onClose: (title, settings) => { setPaperTitle(title); setTypesetKept({ ids: typesetIds, settings }); setTypesetting(false); },
-  }} /></Suspense>;
+    onChange: keepTypeset,
+    onClose: (title, settings) => { keepTypeset(title, settings); setTypesetting(false); },
+  }} /></Suspense></>;
 
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
@@ -630,9 +726,10 @@ export default function Home() {
           </> : <>
           {showSelected ? <>
             <aside className="basket-settings">
-              <label className="basket-title">练习标题<input value={paperTitle} disabled={isExporting} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
-              <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={isExporting} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
-              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><button className="primary-button" disabled={isExporting || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={isExporting || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={isExporting || !selectedQuestions.length} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu></div>
+              <label className="basket-title">练习标题<input value={paperTitle} disabled={basketBusy} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
+              <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={basketBusy} onChange={(event) => { setIncludeAnswers(event.target.checked); setTypesetKept((current) => current ? { ...current, settings: { ...current.settings, answers: event.target.checked ? "end" : "none" } } : null); }} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
+              <BasketOutline structure={basketStructure} pool={basketPool} disabled={basketBusy} onChange={setBasketStructure} onLocate={locateBasketQuestion} onGroupByType={() => void classifyBasket()} />
+              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 全卷连续编号<br /><small role="status">{draftStatus}</small></span><button className="primary-button" disabled={basketBusy || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={basketBusy || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={basketBusy || !selectedQuestions.length && !basketStructure.sections.length} onClick={() => setBasketStructure({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu></div>
             </aside>
           </> : <>
           <div className="filters">
@@ -648,9 +745,17 @@ export default function Home() {
           </>}
           <div className="question-list">
             {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
-            {filteredQuestions.slice(0, visibleCount).map((question, index) => { const path = pathOf(question.categoryId); return <LibraryQuestionCard key={question.id} question={question} index={index} isLast={index === filteredQuestions.length - 1}
-              path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
-              basket={showSelected} canDelete={canDelete} isExporting={isExporting} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />; })}
+            {filteredQuestions.slice(0, visibleCount).map((question, index) => {
+              const path = pathOf(question.categoryId);
+              const section = showSelected ? paperSections.find((item) => index >= item.start && index < item.start + item.questions.length) : undefined;
+              return <Fragment key={question.id}>
+                {section?.heading && index === section.start && <h2 className="basket-section-heading">{section.heading}<small>{section.questions.length} 题</small></h2>}
+                <LibraryQuestionCard question={question} index={index} isFirst={section ? index === section.start : index === 0} isLast={section ? index === section.start + section.questions.length - 1 : index === filteredQuestions.length - 1}
+                  sectionId={section?.id} sections={showSelected ? sectionChoices : undefined}
+                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+                  basket={showSelected} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />
+              </Fragment>;
+            })}
           </div>
           {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}
           </>}

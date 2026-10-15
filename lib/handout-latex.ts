@@ -14,7 +14,7 @@ import type { HandoutBand, Question } from "./types";
 export const DEFAULT_ANSWER_LINES = 6;
 // A sheet may come in groups (智能组卷 by day): the questions are listed in group order and each group takes the next `size`.
 export type SheetGroup = { title: string; size: number };
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[] });
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[]; groupMode?: "sections" | "days" });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -461,9 +461,9 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   const list = "questions" in input ? input : null;
   const groups = list ? sheetGroups(list.questions.length, list.groups) : null;
   // A sheet in days scores each day under its own heading, so the title keeps only name and class.
-  const fields = groups ? "姓名,班级" : list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
+  const fields = groups && list?.groupMode !== "sections" ? "姓名,班级" : list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
   const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
-  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups) : moduleBody(input.modules, answers, figureName);
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups, input.groupMode) : moduleBody(input.modules, answers, figureName);
   return [
     "\\documentclass{mitty-handout}",
     series ? `\\handoutseries{${series}}` : "",
@@ -486,18 +486,19 @@ function sheetGroups(count: number, groups?: SheetGroup[]) {
 
 // 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers. In groups (days) each group starts
 // on a new page under its heading and numbers from 1 again; the key repeats the group headings.
-function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], groups?: SheetGroup[] | null) {
+function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], groups?: SheetGroup[] | null, groupMode: "sections" | "days" = "days") {
   if (!questions.length) return [];
   const parts = groups ?? [{ title: "", size: questions.length }];
-  const body = [`\\handoutnumberwidth{${Math.max(...parts.map((part) => part.size))}}`]; const keys: string[] = [];
+  const width = groupMode === "sections" ? questions.length : Math.max(...parts.map((part) => part.size));
+  const body = [`\\handoutnumberwidth{${width}}`]; const keys: string[] = [];
   let index = 0;
   for (const part of parts) {
     if (groups) {
-      body.push(`\\handoutgroup{${latexPlain(part.title)}}{${part.size}}`);
-      if (answers === "end") keys.push(`\\handoutkeygroup{${latexPlain(part.title)}}{${part.size}}`);
+      body.push(groupMode === "sections" ? `\\handoutsection{}{${latexPlain(part.title)}}` : `\\handoutgroup{${latexPlain(part.title)}}{${part.size}}`);
+      if (answers === "end") keys.push(`\\handoutkeygroup{${latexPlain(part.title)}}{${groupMode === "sections" ? width : part.size}}`);
     }
     for (let number = 1; number <= part.size; number += 1, index += 1) {
-      const label = String(number);
+      const label = String(groupMode === "sections" ? index + 1 : number);
       body.push(questionLatex(questions[index], label, "practice", answers, figureName, false, spacing?.[index]));
       if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(questions[index], figureName), "\\end{handoutkey}");
     }

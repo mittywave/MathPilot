@@ -401,7 +401,7 @@ export function handoutWordSections(modules: HandoutExportModule[], answers: Wor
   return sections;
 }
 
-export async function buildWordBlob({ title, sections, answers }: { title: string; sections: WordSection[]; answers: WordAnswerPlacement }) {
+export async function buildWordBlob({ title, sections, answers, answerHeadings = false }: { title: string; sections: WordSection[]; answers: WordAnswerPlacement; answerHeadings?: boolean }) {
   const imageCache = new Map<string, Promise<ResolvedWordImage>>();
   const resolveImage = (source: string) => {
     let pending = imageCache.get(source);
@@ -439,7 +439,7 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
   ];
   let number = 1;
   const partCounters = new Map<string, number>();
-  const rendered: Array<{ question: Question; label: string; part?: WordPart }> = [];
+  const rendered: Array<{ question: Question; label: string; part?: WordPart; section: WordSection }> = [];
   const pushAnswer = (question: Question, label: string) => {
     children.push(new Paragraph({ spacing: { ...BODY_LINE, after: 80 }, children: [...textRuns(label, BODY_SIZE, { bold: true }), ...richText(question.answer || "略", { bold: true })] }));
     if (!question.analysis) return;
@@ -485,7 +485,7 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
     for (const question of section.questions) {
       let label = String(number);
       if (part) { const count = (partCounters.get(part.key) ?? 0) + 1; partCounters.set(part.key, count); label = `${part.prefix ?? ""}${count}`; }
-      rendered.push({ question, label, part });
+      rendered.push({ question, label, part, section });
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
       const compactConclusion = isCompactConclusionQuestion(question);
@@ -552,7 +552,14 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
   if (answers === "end") {
     children.push(new Paragraph({ pageBreakBefore: true, alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }));
     children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns("参考答案与试题解析", BODY_SIZE, { bold: true }) }));
-    if (!rendered.some((entry) => entry.part)) rendered.forEach((entry) => pushAnswer(entry.question, `${entry.label}．答案：`));
+    if (!rendered.some((entry) => entry.part)) {
+      let previous: WordSection | undefined;
+      rendered.forEach((entry) => {
+        if (answerHeadings && entry.section !== previous && entry.section.heading?.trim()) children.push(new Paragraph({ keepNext: true, spacing: { before: 180, after: 120 }, children: textRuns(entry.section.heading.trim(), BODY_SIZE, { bold: true }) }));
+        previous = entry.section;
+        pushAnswer(entry.question, `${entry.label}．答案：`);
+      });
+    }
     // A 讲义 key is grouped as 例题解析 / 练习答案 / 变式答案, with the labels used in the body.
     else for (const key of HANDOUT_BANDS) {
       const entries = rendered.filter((entry) => entry.part?.key === key);
@@ -624,8 +631,4 @@ export function downloadWordBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = url; link.download = fileName; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
-export async function exportQuestionsToWord(questions: Question[], title: string, includeAnswers: boolean, order: "type" | "basket" = "type") {
-  downloadWordBlob(await buildQuestionsWordBlob(questions, title, includeAnswers, order), `${title || "练习题"}.docx`);
 }
