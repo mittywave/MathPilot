@@ -280,8 +280,7 @@ export default function KnowledgeGraphPage() {
   const canEdit = Boolean(overview?.permissions.canEdit);
   const nextVersion = (editor.session?.published.version ?? version) + 1;
   const publishBlocked = !diff?.changed ? "还没有改动" : issues.length ? `还有 ${issues.length} 个问题` : "";
-  const title = index?.document.title.replace(/\s*V\d+$/i, "") ?? "知识图谱";
-  const heroName = title.replace(/知识图谱$/, "");
+  const title = knowledgeGraphInfo(graphId)?.title ?? "知识图谱";
   const pointCount = index?.activeNodes.filter((node) => node.level === "point").length ?? 0;
   const topicCount = index?.activeNodes.filter((node) => node.level === "topic").length ?? 0;
   const sizeLabel = pointCount ? `${pointCount} 个知识点` : `${topicCount} 个主题`;
@@ -337,7 +336,7 @@ export default function KnowledgeGraphPage() {
     {mode === "edit" && !editor.session && <div className="kg-edit-loading" role="status">{editor.loadError || "正在打开编辑草稿…"}</div>}
 
     {mode === "explore" && index && !studentId && !cardOpen && <section className="kg-hero" data-inset="auto">
-      <h1>{heroName && <span>{heroName}</span>}<span>知识全景<span className="kg-red" aria-hidden="true">。</span></span></h1>
+      <h1>{title}</h1>
       <p className="kg-hero-lede"><span>{sizeLabel}按年级自下而上排列，</span><span>{prerequisiteCount} 条连线标出学习先后。</span><span>点任一圆点，看它要先学什么、接着能学什么。</span></p>
       <p className="kg-hero-meta">v{version} · {published?.publishedAt ? `发布于 ${new Date(published.publishedAt).toLocaleDateString("zh-CN")}` : published?.note || "初始课程骨架"}</p>
     </section>}

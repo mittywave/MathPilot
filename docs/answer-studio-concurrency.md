@@ -9,8 +9,11 @@ server database migrations, deployments, or merges into `main` are required.
 
 ## Controls and scheduling
 
-The material-input section has a compact, collapsed speed control. The default
-is **4 text requests**; users can choose **1, 2, 4, or 6**. This is a maximum for
+The material-input section keeps this control in the collapsed **高级** section,
+labelled **同时处理的页数**. The default is **4 pages**; users can choose
+**1, 2, 4, or 6**. Its note explains that more pages can be faster but can also
+trigger provider rate limits. The stored numeric setting and scheduling remain
+unchanged. This is a maximum for
 one running browser task, not a promise that the provider can support that
 throughput. It does not combine quotas or limit other users/tabs globally.
 

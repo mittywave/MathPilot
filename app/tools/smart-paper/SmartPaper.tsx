@@ -85,7 +85,7 @@ export default function SmartPaper() {
       localStorage.setItem(`smart-paper:${user.id}:current`, draft);
       if (studentId) localStorage.setItem(`smart-paper:${user.id}:student:${studentId}`, draft);
       if (recordId) localStorage.setItem(`smart-paper:${user.id}:record:${recordId}`, draft);
-      queueMicrotask(() => setDraftStatus("进度已自动保存在本机浏览器"));
+      queueMicrotask(() => setDraftStatus("已自动保存在本机"));
     } catch { queueMicrotask(() => setDraftStatus("本机自动保存失败，请点击“保存方案”后再退出")); }
   }, [ready, user, studentId, request, instruction, plan, exclude, title, recordId, settings]);
 
@@ -181,7 +181,8 @@ export default function SmartPaper() {
   return <><SiteHeader active={fromStudent ? "students" : "tools"} user={user ?? null} loading={user === undefined} trail={fromStudent && student ? [{label:"学生档案",href:"/?view=wrong-book"},{label:student.name,href:`/?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:"智能组卷"}] : [{label:"工具箱",href:"/tools"},{label:"智能组卷"}]} /><main className="smart-paper">
     <aside className="smart-paper-panel">
       {user === null ? <p className="smart-paper-note">{error || "请先在题库页登录，再使用智能组卷。"}</p> : <>
-        {draftStatus && <p className="smart-paper-note" role="status">{draftStatus}。<a href="/tools/typeset">已保存方案</a></p>}
+        {draftStatus && <p className="smart-paper-note" role="status">{draftStatus}</p>}
+        <a className="smart-paper-link" href="/tools/typeset">已保存的方案（在快速排版历史里）</a>
         {savedStatus && <p className="smart-paper-note" role="status">{savedStatus}</p>}
         <fieldset disabled={!ready || Boolean(busy)} style={{ display: "flex", flexDirection: "column", flex: 1, gap: 12, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <label className="smart-paper-field"><span>学生</span>
@@ -189,14 +190,13 @@ export default function SmartPaper() {
             <option value="">不针对某位学生</option>
             {students.map((item) => <option key={item.id} value={item.id}>{item.name}{item.className ? `（${item.className}）` : ""}</option>)}
           </select>
-          <small>{student ? "会读这位学生的课后反馈、批改出的知识点正确率和错题，并避开做过、布置过的题。" : "选了学生，agent 会按学生档案挑题。"}</small>
+          <small>{student ? "会读这位学生的课后反馈、批改出的知识点正确率和错题，并避开做过、布置过的题。" : "选择学生后，会按该学生的档案挑题。"}</small>
         </label>
         <label className="smart-paper-field"><span>要出什么样的练习</span>
           <textarea rows={5} value={request} disabled={Boolean(busy)} placeholder={EXAMPLE} onChange={(event) => setRequest(event.target.value)} />
         </label>
-        {!request && <button type="button" className="smart-paper-link" onClick={() => setRequest(EXAMPLE)}>用示例填写</button>}
-        {plan && <section className="smart-paper-brief" aria-label="agent 的理解">
-          <h3>agent 的理解</h3>
+        {plan && <section className="smart-paper-brief" aria-label="方案要点">
+          <h3>方案要点</h3>
           <dl>
             <dt>范围</dt><dd>{paths.join("；") || "—"}</dd>
             <dt>题量</dt><dd>{plan.brief.days} 天 × 每天 {plan.brief.perDay} 题{plan.brief.questionTypes.length ? ` · ${plan.brief.questionTypes.join("、")}` : ""}</dd>
@@ -205,10 +205,10 @@ export default function SmartPaper() {
           {!!plan.brief.focus.length && <><h4>侧重点</h4><ul>{plan.brief.focus.map((focus) => <li key={focus.label}><b>{focus.label}</b>{focus.description && <small>{focus.description}</small>}</li>)}</ul></>}
           {!!plan.findings.length && <><h4>学生档案要点</h4><ul>{plan.findings.map((finding) => <li key={finding.label}><b>{finding.label}</b>{finding.evidence && <small>{finding.evidence}</small>}</li>)}</ul></>}
           {plan.avoided > 0 && <p className="smart-paper-note">已避开这位学生做过或练过的 {plan.avoided} 道题。</p>}
-          <label className="smart-paper-field"><span>按意见调整</span>
+          <label className="smart-paper-field"><span>用一句话调整</span>
             <textarea rows={2} value={instruction} disabled={Boolean(busy)} placeholder="例如：第 3 天难一点；每天加两道分数题" onChange={(event) => setInstruction(event.target.value)} />
           </label>
-          <button type="button" className="secondary" disabled={!instruction.trim() || Boolean(busy)} onClick={revise}>按意见调整</button>
+          <button type="button" className="secondary" disabled={!instruction.trim() || Boolean(busy)} onClick={revise}>调整方案</button>
         </section>}
         <div className="smart-paper-actions">
         <button type="button" className={`${plan ? "secondary" : "primary-button"} smart-paper-go`} disabled={!request.trim() || Boolean(busy) || !library} onClick={generate}>
@@ -253,7 +253,7 @@ export default function SmartPaper() {
           })}</ol>
           <button type="button" className="smart-paper-link" onClick={() => add(dayIndex)}>＋ 加一道</button>
         </section>)}
-      </> : <p className="smart-paper-empty">选择学生并说明练习要求，生成的方案会显示在这里。</p>}
+      </> : <p className="smart-paper-empty">说明练习要求，生成的方案会显示在这里。 <button type="button" className="smart-paper-link" onClick={() => setRequest(EXAMPLE)}>用示例填写</button></p>}
     </fieldset>
   </main></>;
 }

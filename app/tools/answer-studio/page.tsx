@@ -136,14 +136,14 @@ export default function AnswerStudioPage() {
         </div>
         <label className="field-label"><span className="field-heading">资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
         <details style={{marginTop:12,fontSize:14}}>
-          <summary style={{cursor:'pointer'}}>转录速度：最多 {textConcurrency} 路</summary>
+          <summary style={{cursor:'pointer'}}>高级</summary>
           <label htmlFor="studio-text-concurrency" style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginTop:8}}>
-            <span>同时识别页数</span>
+            <span>同时处理的页数</span>
             <select id="studio-text-concurrency" value={textConcurrency} disabled={busy} style={{width:'auto',minWidth:110,padding:'6px 10px'}} onChange={e=>setTextConcurrency(Number(e.target.value))}>
-              {STUDIO_CONCURRENCY_CHOICES.map(value=><option key={value} value={value}>{value} 路{value===1?'（逐页）':value===4?'（推荐）':''}</option>)}
+              {STUDIO_CONCURRENCY_CHOICES.map(value=><option key={value} value={value}>{value} 页{value===1?'（逐页）':value===4?'（推荐）':''}</option>)}
             </select>
           </label>
-          <small>默认 4 路，遇限流自动降速；跨页连续解答较多时可选 1 路。完整解题版配图最多 2 路。</small>
+          <small>默认同时处理 4 页。页数越多通常越快，也更容易触发服务限流；遇限流会自动降速，跨页连续解答较多时可选 1 页。</small>
         </details>
 
         {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
