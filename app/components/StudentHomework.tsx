@@ -104,7 +104,7 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
       <p>{homework ? late ? `${late} 份作业过了日子没交` : waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
       <div className="student-panel-actions">
         <button type="button" className="student-panel-action" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
-        <a className="student-panel-action" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
+        <a className="primary-button" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
       </div>
     </header>
     {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
@@ -117,7 +117,7 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
             <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
-              : days.length ? `交作业日期 ${shortDate(days[0].date)} · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
+              : days.length ? `${shortDate(days[0].date)} 交作业 · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
             {(days.length > 1 || graded > 0) && <span className="homework-tally">
               {days.length > 1 && <span className="homework-days" aria-label="每天交没交">{days.map((entry, index) => {
                 const note = dayNote(entry, states[index]);

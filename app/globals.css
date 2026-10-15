@@ -591,40 +591,39 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 
 /* Student-specific wrong-question books */
 
-.student-list { display:grid; gap:7px; overflow:auto; padding:0 3px 12px; }
-.student-card { width:100%; min-height:58px; display:grid; grid-template-columns:36px minmax(0,1fr) auto; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:calc(10px*var(--radius-scale)); background:transparent; text-align:left; }
+.student-list { display:grid; align-content:start; flex:1; min-height:0; gap:4px; overflow:auto; padding:0 3px 12px; }
+.student-card { width:100%; min-height:52px; display:grid; grid-template-columns:32px minmax(0,1fr) auto; align-items:center; gap:10px; padding:8px; border:0; border-radius:calc(10px*var(--radius-scale)); background:transparent; text-align:left; }
 .student-card:hover { background:var(--surface-soft); }
-.student-card.active { border-color:color-mix(in srgb, var(--green) 29%, var(--green-soft)); background:var(--green-soft); box-shadow:inset 3px 0 0 var(--green); }
-.student-card>span,.student-avatar { display:grid; place-items:center; border-radius:calc(10px*var(--radius-scale)); background:color-mix(in srgb, var(--green-soft) 93%, var(--green)); color:var(--green); font-family:"Songti SC",serif; font-weight:700; }
-.student-card>span { width:36px; height:36px; font-size:14px; }
+.student-card.active { background:var(--green-soft); }
+.student-card>span,.student-avatar { display:grid; place-items:center; border-radius:50%; background:var(--surface-soft); color:var(--green); font-family:"Songti SC",serif; font-weight:600; }
+.student-card>span { width:32px; height:32px; font-size:14px; }
 .student-card>div { min-width:0; display:grid; gap:4px; }
-.student-card b { overflow:hidden; text-overflow:ellipsis; color:var(--ink); font-size:12px; white-space:nowrap; }
-.student-card small { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:9px; white-space:nowrap; }
-.student-card em { min-width:27px; height:23px; display:grid; place-items:center; border-radius:999px; background:var(--surface); color:var(--green); font-size:9px; font-style:normal; }
+.student-card b { overflow:hidden; text-overflow:ellipsis; color:var(--ink); font-size:14px; font-weight:600; white-space:nowrap; }
+.student-card small { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:12px; white-space:nowrap; }
+.student-card em { color:var(--muted); font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .student-list-empty { min-height:220px; display:grid; place-content:center; justify-items:center; padding:20px; text-align:center; }
 .student-list-empty>span { width:44px; height:44px; display:grid; place-items:center; border-radius:50%; background:var(--surface-soft); color:var(--green); font-family:serif; }
 .student-list-empty b { margin-top:12px; font-size:12px; }
-.student-list-empty p { margin:6px 0 0; color:var(--muted); font-size:9px; line-height:1.6; }
+.student-list-empty p { margin:6px 0 0; color:var(--muted); font-size:13px; line-height:1.6; }
 .mobile-student-picker { display:none; }
-.wrong-book-hero { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:15px; padding:18px 20px; border:1px solid color-mix(in srgb, var(--green) 10%, var(--green-soft)); border-radius:calc(14px*var(--radius-scale)); background:linear-gradient(135deg,var(--green-soft),color-mix(in srgb, var(--surface) 62%, var(--page))); }
-.student-avatar { width:52px; height:52px; font-size:20px; }
-.wrong-book-hero h1 { font-size:25px; }
+.wrong-book-hero { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:16px; padding:24px 0 16px; border:0; background:transparent; }
+.student-avatar { width:52px; height:52px; font-size:22px; }
+.wrong-book-hero h1 { font-size:26px; letter-spacing:0; line-height:1.2; }
 .wrong-book-stats { display:flex; align-items:center; gap:7px; }
 .wrong-book-stats>.basket-more { margin-left:auto; }
-.wrong-book-smart { align-self:center; display:inline-flex; align-items:center; height:34px; padding:0 13px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; text-decoration:none; white-space:nowrap; }
+.wrong-book-smart { align-self:center; display:inline-flex; align-items:center; height:36px; padding:0 13px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--ink); font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; }
 .wrong-book-smart:hover { background:var(--green-soft); border-color:var(--green); }
-.wrong-book-head { margin-top:16px; align-items:center; }
-.wrong-book-head .subtext { margin:0; }
+.wrong-book-head { margin-top:16px; }
 /* 学生档案的页签：作业、错题本…… */
-.archive-tabs { display:flex; gap:2px; margin-top:20px; border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:none; }
-.archive-tabs button { position:relative; flex:none; padding:12px 14px; border:0; background:none; color:var(--muted); font-size:13px; }
-.archive-tabs button span { margin-left:5px; color:color-mix(in srgb, var(--muted) 70%, var(--page)); font-size:10.5px; }
-.archive-tabs button.active { color:var(--green); font-weight:700; }
+.archive-tabs { display:flex; gap:2px; margin-top:4px; border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:none; }
+.archive-tabs button { position:relative; flex:none; padding:12px 14px; border:0; background:none; color:var(--muted); font-size:14px; }
+.archive-tabs button span { margin-left:5px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.archive-tabs button.active { color:var(--ink); font-weight:600; }
 .archive-tabs button.active:after { content:""; position:absolute; left:12px; right:12px; bottom:-1px; height:2px; background:var(--green); }
 .student-homework { margin-top:16px; }
 .student-panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
-.student-panel-head p { margin:0; color:var(--muted); font-size:12px; }
-.student-panel-action { display:inline-flex; align-items:center; height:32px; padding:0 12px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; text-decoration:none; white-space:nowrap; }
+.student-panel-head p { margin:0; color:var(--muted); font-size:13px; }
+.student-panel-action { display:inline-flex; align-items:center; height:32px; padding:0 12px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--ink); font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; }
 .student-panel-action:hover { background:var(--green-soft); border-color:var(--green); }
 .student-panel-empty { margin:0; padding:34px 20px; border:1px dashed var(--line); border-radius:calc(12px*var(--radius-scale)); color:var(--muted); font-size:12px; text-align:center; }
 .student-panel-empty b { color:var(--ink); font-size:14px; }
@@ -809,11 +808,6 @@ button.student-panel-action { font-family:inherit; cursor:pointer; }
 .wrong-book-empty { min-height:520px; }
 .student-modal { width:min(520px,100%); }
 
-html[data-theme="dark"] .student-card.active { border-color:color-mix(in srgb, var(--green) 40%, var(--green-soft)); }
-html[data-theme="dark"] .student-card>span,
-html[data-theme="dark"] .student-avatar { background:color-mix(in srgb, var(--green-soft) 92%, var(--line)); }
-html[data-theme="dark"] .student-card em { background:color-mix(in srgb, var(--surface-soft) 96%, var(--muted)); }
-html[data-theme="dark"] .wrong-book-hero { border-color:var(--line); background:linear-gradient(135deg,color-mix(in srgb, var(--green-soft) 57%, var(--surface)),color-mix(in srgb, var(--green-soft) 5%, var(--surface))); }
 html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in srgb, var(--danger-soft) 49%, var(--warn-soft)); color:var(--cd-e3a176); }
 
 
@@ -1247,7 +1241,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 
 .sidebar .count{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 
-.library-content{padding:0 32px 60px}
+.library-content,.content:has(>.wrong-book-hero){padding:0 32px 60px}
 
 .filters{position:sticky;top:var(--topbar-h);z-index:5;display:flex;align-items:center;gap:12px;height:60px;margin:0;border-bottom:1px solid var(--line);background:var(--page)}
 
@@ -1297,7 +1291,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 
 .paper-dock .ghost-button:hover{background:color-mix(in srgb,var(--on-inverse) 10%,transparent)}
 
-@media(min-width:851px) and (max-width:1279px){.workspace:not(.basket-workspace){grid-template-columns:220px minmax(0,1fr)}.library-content{padding:0 24px 60px}}
+@media(min-width:851px) and (max-width:1279px){.workspace:not(.basket-workspace){grid-template-columns:220px minmax(0,1fr)}.library-content,.content:has(>.wrong-book-hero){padding:0 24px 60px}}
 
 @media(hover:none){.library-content .question-actions>button:not(:first-child),.library-content .question-actions>.basket-more{opacity:1;pointer-events:auto}}
 
@@ -1318,3 +1312,10 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .dock-count strong{font-family:inherit;font-variant-numeric:tabular-nums}
 
 @media(min-width:851px) and (max-width:1279px){.library-content>.filters:has(>.page-language-switch:not(.filter-segments)){display:grid;grid-template-columns:minmax(0,1fr) auto;height:auto;min-height:60px;gap:8px 12px;padding:8px 0}.library-content>.filters:has(>.page-language-switch:not(.filter-segments))>.search{grid-column:1;grid-row:1;max-width:420px;width:100%}.library-content>.filters:has(>.page-language-switch:not(.filter-segments))>.filter-segments{grid-column:1;grid-row:2}.library-content>.filters:has(>.page-language-switch:not(.filter-segments))>.select-visible{grid-column:2;grid-row:2}.library-content>.filters:has(>.page-language-switch:not(.filter-segments))>.page-language-switch:not(.filter-segments){grid-column:2;grid-row:1}}
+
+.student-card.active b{color:var(--green)}
+.wrong-book-hero .subtext{display:flex;gap:16px;align-items:center;margin:8px 0 0;font-size:13px;color:var(--muted);min-width:0}
+.wrong-book-hero .subtext span{white-space:nowrap}
+.wrong-book-hero .subtext span[title]{overflow:hidden;text-overflow:ellipsis}
+.wrong-book-hero .subtext b{color:var(--ink);font-weight:600}
+.student-panel-actions>.primary-button{display:inline-flex;align-items:center;height:32px;margin:0;padding:0 12px;text-decoration:none;box-shadow:none}
