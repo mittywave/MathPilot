@@ -381,12 +381,9 @@ export type AssignmentQuestion = {
 
 /** How an assigned material is split (智能组卷 by day); no groups means one run of questions numbered 1, 2, 3…. */
 export type HomeworkSheetGroup = { title: string; size: number };
-/**
- * One day of an assigned homework (a sheet without days is one day): the calendar date it is due, YYYY-MM-DD — 第 1 天
- * on the date the teacher set, each further day on the next — and what of it has come back so far.
- */
+/** One day's task group (a sheet without groups is one task), with progress and its actual submission time. */
 export type HomeworkDay = HomeworkSheetGroup & {
-  date: string; done: number; correct: number; incorrect: number; pending: number;
+  done: number; correct: number; incorrect: number; pending: number;
   /** When the first upload that found any of its questions was handed in. */
   handedInAt: number | null;
 };

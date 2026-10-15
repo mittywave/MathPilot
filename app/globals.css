@@ -634,7 +634,7 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-state { justify-self:start; padding:3px 9px; border-radius:999px; background:var(--surface-soft); color:var(--muted); font-size:12px; font-weight:600; white-space:nowrap; }
 .homework-rows li.waiting .homework-state { background:var(--warn-soft); color:var(--warn-strong); }
 .homework-rows li.busy .homework-state { background:var(--info-soft); color:color-mix(in srgb,var(--info) 70%,var(--ink)); }
-.homework-rows li.failed .homework-state,.homework-rows li.late .homework-state { background:var(--danger-soft); color:var(--danger); }
+.homework-rows li.failed .homework-state { background:var(--danger-soft); color:var(--danger); }
 .homework-rows li.partial .homework-state { background:var(--sky-soft); color:var(--sky); }
 .homework-rows li.done .homework-state { background:var(--success-soft); color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
 .homework-title { display:grid; gap:3px; }
@@ -642,13 +642,11 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-title small,.homework-tally small { color:var(--muted); font-size:12px; }
 .homework-tally { grid-column:3; display:grid; gap:7px; }
 .homework-bar { display:grid; gap:5px; }
-/* An assigned homework's days, one cell each: handed in, part of it, due today, past its date with nothing back, still to come. */
+/* One cell per task group: handed in, partially handed in, or unsubmitted. */
 .homework-days { display:flex; flex-wrap:wrap; gap:3px; }
 .homework-days i { display:grid; place-items:center; min-width:20px; height:20px; padding:0 3px; border-radius:calc(5px*var(--radius-scale)); background:var(--surface-soft); color:var(--muted); font-size:12px; font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
 .homework-days i.done { background:var(--success-soft); color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
 .homework-days i.partial { background:var(--warn-soft); color:var(--warn-strong); }
-.homework-days i.today { background:var(--surface); color:var(--green); box-shadow:inset 0 0 0 1.5px var(--green); }
-.homework-days i.late { background:var(--danger-soft); color:var(--danger); }
 .homework-tally .bar { display:flex; height:6px; border-radius:999px; background:var(--surface-soft); overflow:hidden; }
 .homework-tally em { display:block; height:100%; }
 .homework-tally em.correct { background:var(--success); }
@@ -665,8 +663,6 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 button.student-panel-action { font-family:inherit; cursor:pointer; }
 /* 布置给学生 (快速排版, and 布置作业 in the archive): the material's name and first day, the students, then what is stored. */
 .assign-modal { width:min(560px,100%); }
-.assign-fields { display:grid; grid-template-columns:minmax(0,1fr) 170px; gap:12px; }
-@media (max-width:560px) { .assign-fields { grid-template-columns:1fr; gap:0; } }
 .assign-students { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; padding:0; border:0; }
 .assign-students legend { margin-bottom:7px; padding:0; color:color-mix(in srgb,var(--ink) 23%,var(--muted)); font-size:12px; }
 .assign-students p { margin:0; color:var(--muted); font-size:12px; }
@@ -1190,17 +1186,6 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-day-head small { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
 .assigned-day.done .assigned-day-head small { color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
 .assigned-day.partial .assigned-day-head small { color:var(--warn-strong); }
-.assigned-day.today .assigned-day-head small { color:var(--green); font-weight:600; }
-.assigned-day.late .assigned-day-head small { color:var(--danger); font-weight:600; }
-/* The dates of the homework under its counts; 改日期 opens a date field in place. */
-.assigned-schedule { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin:4px 0 0; color:color-mix(in srgb,var(--ink) 62%,var(--muted)); font-size:12.5px; }
-.assigned-schedule.today span { color:var(--green); font-weight:600; }
-.assigned-schedule.late span { color:var(--danger); font-weight:600; }
-.assigned-schedule label { display:inline-flex; align-items:center; gap:7px; white-space:nowrap; }
-.assigned-schedule input { height:32px; padding:0 8px; border:1px solid var(--line); border-radius:calc(7px*var(--radius-scale)); background:var(--surface); color:var(--ink); font:inherit; }
-.assigned-sheet .assigned-schedule button { min-height:30px; padding:0 11px; border:1px solid var(--line); border-radius:calc(7px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; }
-.assigned-sheet .assigned-schedule button.primary { border-color:var(--accent-strong); background:var(--accent-strong); color:var(--on-accent); }
-.assigned-sheet .assigned-schedule button:disabled { opacity:.55; }
 .assigned-day ol { display:flex; flex-wrap:wrap; gap:5px; margin:0; padding:0; list-style:none; }
 .assigned-day li>* { display:grid; place-items:center; width:30px; height:30px; padding:0; border:1px solid transparent!important; border-radius:calc(7px*var(--radius-scale))!important; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; text-decoration:none; }
 .assigned-day li.missing>* { background:var(--surface-soft)!important; color:var(--muted); font-weight:500; }
