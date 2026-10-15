@@ -55,7 +55,6 @@ test("server-renders the cloud question-bank guest shell", async () => {
 });
 
 test("keeps every privileged operation behind server-side authentication", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
   const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
   const downloadRoute = await readFile(new URL("../app/api/download/route.ts", import.meta.url), "utf8");
@@ -63,7 +62,8 @@ test("keeps every privileged operation behind server-side authentication", async
 
   assert.equal(ALEVEL_PAGE_COPY.zh.guestBrowse, "访客 · 仅浏览");
   assert.equal(ALEVEL_PAGE_COPY.en.guestBrowse, "Guest · Browse only");
-  assert.match(page, /pageCopy\.guestBrowse/);
+  const header = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
+  assert.match(header, /copy\.guestBrowse/);
   assert.match(auth, /HttpOnly\$\{secure \? "; Secure" : ""\}; SameSite=Lax/);
   assert.match(loginRoute, /createSession\(user\.id, new URL\(request\.url\)\.protocol === "https:"\)/, "the https site keeps Secure session cookies");
   assert.match(auth, /PBKDF2/);

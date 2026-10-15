@@ -539,8 +539,9 @@ export default function Home() {
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading} locale={pageLocale} basketCount={selectedIds.length}
+        title={showWrongBook && activeStudent ? `${activeStudent.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
-        actions={authUser ? <>{!authUser.local && <button className="account-button" onClick={signOut}>{pageCopy.signOut}</button>}{canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button>}</> : <><span className="guest-badge">{pageCopy.guestBrowse}</span><button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button></>} />
+        actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button>} />
 
       <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : ""}`}>
         {(!showSelected || showWrongBook) && <aside className="sidebar">

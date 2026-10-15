@@ -41,8 +41,8 @@ export function AppearancePicker({ label, locale = "zh" }: { label: string; loca
   }
 
   return <div ref={rootRef} className="appearance-picker">
-    <button ref={toggleRef} className="appearance-toggle" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
-      <span className="appearance-dot" aria-hidden="true" />{label}
+    <button ref={toggleRef} type="button" className="appearance-toggle" aria-label={label} title={label} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
+      <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M10 3a7 7 0 0 1 0 14Z" fill="currentColor" /></svg>
     </button>
     {open && <div className="appearance-panel" role="radiogroup" aria-label={label}>
       {APPEARANCES.map((item) => {
