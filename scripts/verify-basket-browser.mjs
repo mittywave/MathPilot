@@ -78,7 +78,8 @@ try {
   for (const question of questions.slice(0, 6)) await choose(question.code);
   await basket();
   await titleInput().fill('结构化组卷验收');
-  assert.ok(await outline.locator('.katex').count() > 0, 'the outline renders math instead of displaying LaTeX source');
+  assert.deepEqual(await outline.locator('.basket-outline-locate').allTextContents(), ['1', '2', '3', '4', '5', '6'], 'the compact outline shows only global question numbers');
+  assert.equal(await outline.locator('.katex').count(), 0, 'question stems and equations stay in the right-hand cards');
   await outline.getByRole('button', { name: '按题型分类', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.basket-section-heading').length === 5);
   assert.deepEqual(await headings().allTextContents(), ['一、单选题1 题', '二、多选题1 题', '三、填空题1 题', '四、判断题1 题', '五、解答题2 题']);
@@ -94,7 +95,7 @@ try {
   // Keep source and target visible in the independently scrolling outline.
   // Real HTML drag-and-drop, via the same handles the user operates.
   for (const name of ['多选题', '填空题', '判断题']) await outline.getByRole('button', { name: `折叠${name}`, exact: true }).click();
-  await outline.getByRole('button', { name: '拖动第 2 题', exact: true }).dragTo(outline.locator('.basket-outline-section').nth(4).locator('header'));
+  await outline.getByRole('button', { name: '定位第 2 题', exact: true }).dragTo(outline.locator('.basket-outline-section').nth(4).locator('header'));
   await page.waitForFunction(() => document.querySelectorAll('.basket-outline-section')[4].querySelectorAll('.basket-outline-question').length === 2);
   for (const name of ['选择与基础', '解答题', '综合应用']) await outline.getByRole('button', { name: `折叠${name}`, exact: true }).click();
   await outline.getByRole('button', { name: '拖动大标题 综合应用', exact: true }).dragTo(outline.locator('.basket-outline-section').first().locator('header'));
@@ -133,7 +134,7 @@ try {
   // Keep six representative questions through the real remove controls for readable export evidence.
   const keep = new Set(questions.slice(0, 6).map((question) => question.id));
   for (const question of questions.filter((question) => !keep.has(question.id))) {
-    const row = outline.locator('.basket-outline-question').filter({ hasText: `ID ${question.code}` });
+    const row = outline.locator('.basket-outline-question').filter({ has: page.locator(`[data-question-id="${question.id}"]`) });
     await row.locator('.basket-outline-locate').click();
     await page.locator(`[id="basket-question-${question.id}"]`).getByRole('button', { name: /^移除第/ }).click();
   }
@@ -242,7 +243,7 @@ try {
   await page.reload(); await outline.waitFor(); await ready();
   assert.equal(await page.locator('.basket-outline-question').count(), 7);
   assert.match(await page.locator('.app-toast').innerText(), /1 道已失效/);
-  await outline.locator('.basket-outline-question').filter({ hasText: '错题快照验收' }).locator('.basket-outline-locate').click();
+  await outline.locator('[data-question-id="wrong-snapshot-fixture"]').click();
   await page.waitForFunction(() => document.querySelector('[id="basket-question-wrong-snapshot-fixture"] img')?.complete);
   await page.locator('[id="basket-question-wrong-snapshot-fixture"]').getByRole('button', { name: '移除第 7 题', exact: true }).click();
   await ready();

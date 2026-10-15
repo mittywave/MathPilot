@@ -965,9 +965,10 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-outline-tools>b{margin-right:auto;font-size:13px;white-space:nowrap}
 .basket-outline-tools>button{min-height:32px;padding:0 7px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:12px}
 .basket-outline button:disabled{opacity:.4;cursor:default}
-.basket-outline-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px 4px 96px 0;scrollbar-width:thin}
-.basket-outline-section{margin-bottom:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.basket-outline-section>header{display:flex;align-items:center;gap:3px;min-height:40px;padding:4px;background:var(--surface-soft);border-radius:8px}
+.basket-outline-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;margin-top:10px;padding:4px 6px 64px;border:1px solid var(--line);border-radius:8px;scrollbar-width:thin}
+.basket-outline-section{padding:8px 0;background:var(--surface)}
+.basket-outline-section+.basket-outline-section{border-top:1px dashed var(--line)}
+.basket-outline-section>header{display:flex;align-items:center;gap:3px;min-height:40px;padding:4px}
 .basket-outline-section header>input{width:0;min-width:0;flex:1;padding:5px 3px;border:1px solid transparent;border-radius:4px;color:var(--ink);background:transparent;font-size:13px;font-weight:600}
 .basket-outline-section header>input:hover,.basket-outline-section header>input:focus{border-color:var(--line);background:var(--surface)}
 .basket-outline-section header>b{font-size:13px;flex:1;padding-left:3px}
@@ -976,16 +977,14 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-workspace .basket-drag,.basket-workspace .basket-fold{display:inline-flex;align-items:center;justify-content:center;flex:none;width:20px;min-width:20px;min-height:28px;padding:0;border:0;background:transparent;color:var(--muted);font-size:16px}
 .basket-workspace .basket-drag{cursor:grab;touch-action:none}
 .basket-workspace .basket-drag:active{cursor:grabbing}
-.basket-outline-questions{padding:4px}
-.basket-outline-empty{margin:6px 4px 10px;color:var(--muted);font-size:12px;line-height:1.7}
-.basket-outline-question{display:flex;align-items:center;gap:3px;min-width:0;padding:4px 0;border-radius:5px;border-top:2px solid transparent}
-.basket-outline-question:hover,.basket-outline-question:focus-within{background:var(--surface-soft)}
-.basket-workspace .basket-outline-locate{display:grid;gap:4px;flex:1;min-width:0;min-height:44px;padding:3px;border:0;background:transparent;text-align:left;color:var(--ink)}
-.basket-outline-locate>span:first-child{display:flex;align-items:center;gap:7px;font-size:13px}
-.basket-outline-locate small{color:var(--muted);font-size:12px}
-.basket-outline-locate .basket-outline-excerpt{max-height:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted);line-height:2}
-.basket-outline-excerpt .math-formula.inline-math,.basket-outline-excerpt .math-formula.display-math{display:inline-flex;width:auto;max-width:none;overflow:visible;margin:0 .07em;white-space:nowrap}
+.basket-outline-questions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));justify-items:center;gap:10px;padding:8px 10px 12px}
+.basket-outline-empty{grid-column:1/-1;justify-self:start;margin:2px 0 4px;color:var(--muted);font-size:12px;line-height:1.7}
+.basket-outline-question{position:relative;min-width:0;border-radius:6px}
+.basket-workspace .basket-outline-locate{display:grid;place-items:center;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:14px;font-weight:600;cursor:grab;font-variant-numeric:tabular-nums}
+.basket-workspace .basket-outline-locate:hover:not(:disabled),.basket-workspace .basket-outline-locate:focus-visible{border-color:var(--green);background:var(--success-soft);color:var(--green)}
+.basket-workspace .basket-outline-locate:active{cursor:grabbing}
 .basket-outline .drop-target{border-top:2px solid var(--green);background:var(--success-soft)}
+.basket-outline-question.drop-target{border-top:0;outline:2px solid var(--green);outline-offset:3px}
 .basket-outline .more-panel{max-height:260px;overflow:auto;min-width:150px;max-width:270px}
 .basket-outline .more-panel button{white-space:normal;line-height:1.5;overflow-wrap:anywhere}
 .basket-toolbar{border-top:1px solid var(--line);margin-top:0}
