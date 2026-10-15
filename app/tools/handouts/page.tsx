@@ -678,7 +678,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     finally { setExporting(null); }
   }
 
-  if (missing) return <main className="toolbox handouts"><a className="toolbox-back" href="/tools/handouts"><BackIcon /><span>全部讲义</span></a><div className="handout-empty"><b>讲义不存在</b><p>它可能已被删除。</p></div></main>;
+  if (missing) return <main className="toolbox handouts"><a className="secondary" href="/tools/handouts"><BackIcon /><span>全部讲义</span></a><div className="handout-empty"><b>讲义不存在</b><p>它可能已被删除。</p></div></main>;
   if (!doc) return <main className="toolbox handouts"><p className="handout-muted">正在读取讲义…</p></main>;
 
   // Questions always sit in a module (see ensureLeadingModule), so only module cards are shown.

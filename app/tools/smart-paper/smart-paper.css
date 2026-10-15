@@ -1,8 +1,7 @@
 /* 智能组卷: the request and the agent's reading on the left, the plan by day filling the rest of the window. */
-.smart-paper{display:grid;grid-template-columns:340px minmax(0,1fr);height:100vh;color:var(--ink,#24352f);font-size:14px;line-height:1.55;background:var(--page,#f6f6f4)}
+.smart-paper{display:grid;grid-template-columns:350px minmax(0,1fr);height:calc(100dvh - var(--topbar-h) - 48px);color:var(--ink);font-size:14px;line-height:1.55;background:var(--page)}
 .smart-paper *{box-sizing:border-box;min-width:0}
-.smart-paper-panel{display:flex;flex-direction:column;gap:12px;overflow:auto;padding:16px;border-right:1px solid var(--line,#e4e9e6);background:var(--surface,#fff)}
-.smart-paper-panel .toolbox-back{align-self:flex-start}
+.smart-paper-panel{display:flex;flex-direction:column;gap:12px;overflow:auto;padding:24px;border-right:1px solid var(--line);background:var(--surface)}
 .smart-paper-field{display:grid;gap:6px;margin:0}
 .smart-paper-field>span{font-size:12.5px;font-weight:600;color:color-mix(in srgb,var(--ink,#24352f) 75%,var(--surface,#fff))}
 .smart-paper-field select,.smart-paper-field textarea{width:100%;padding:8px 11px;border:1px solid var(--line,#e4e9e6);border-radius:calc(8px*var(--radius-scale));background:var(--surface,#fff);color:inherit;font:inherit;outline:none;resize:vertical}
@@ -46,11 +45,10 @@
 .smart-paper-meta em{padding:1px 7px;border:1px solid color-mix(in srgb,var(--green,#2f6b53) 30%,var(--line,#e4e9e6));border-radius:999px;color:var(--green,#2f6b53);font-style:normal}
 .smart-paper-meta small{flex:1;color:color-mix(in srgb,var(--ink,#24352f) 60%,var(--surface,#fff));font-size:12px}
 .smart-paper-day>.smart-paper-link{margin-top:6px}
-.smart-paper-empty{display:grid;justify-items:center;gap:10px;max-width:560px;margin:12vh auto 0;text-align:center;color:color-mix(in srgb,var(--ink,#24352f) 70%,var(--surface,#fff))}
-.smart-paper-empty .tool-icon{width:34px;height:34px;color:var(--green,#2f6b53)}
-.smart-paper-empty b{color:var(--ink,#24352f);font-size:16px}
-.smart-paper-empty p{margin:0;font-size:13.5px}
+.smart-paper-empty{margin:8px 0;color:var(--muted);font-size:14px;line-height:1.7}
 .smart-paper-loading{display:flex;align-items:center;justify-content:center;gap:10px;height:100vh;color:var(--green,#2f6b53);font-weight:600}
 @media(max-width:860px){.smart-paper{grid-template-columns:1fr;height:auto}.smart-paper-panel{border-right:0;border-bottom:1px solid var(--line,#e4e9e6)}.smart-paper-plan{overflow:visible;padding:12px 16px 40px}.smart-paper-head{position:static;margin:0 0 10px;padding:0 0 10px;flex-wrap:wrap}.smart-paper-head input{flex-basis:100%}}
 .smart-paper-panel>*{flex:none}
 .smart-paper-meta .basket-more{margin-left:auto}
+.smart-paper-actions{display:grid;gap:12px;position:sticky;bottom:0;margin-top:auto;padding-top:16px;background:var(--surface)}
+@media (min-width:861px) and (max-width:1279px){.smart-paper{grid-template-columns:300px minmax(0,1fr)}.smart-paper-panel{padding:20px}}

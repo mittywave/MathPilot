@@ -92,7 +92,6 @@ export default function Home() {
   const [trashQuestions, setTrashQuestions] = useState<Array<Question & { deletedAt: number }> | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [categoryParent, setCategoryParent] = useState<string>("");
-  const [exportDialog, setExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [paperTitle, setPaperTitle] = useState("专项练习");
   const [includeAnswers, setIncludeAnswers] = useState(true);
@@ -451,7 +450,7 @@ export default function Home() {
   async function generateWord() {
     if (!selectedQuestions.length || isExporting) return;
     setIsExporting(true);
-    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); setExportDialog(false); setNotice("Word 练习已生成"); }
+    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); setNotice("Word 练习已生成"); }
     catch (error) { setNotice(error instanceof Error ? error.message : "下载失败"); }
     finally { setIsExporting(false); }
   }
@@ -592,17 +591,11 @@ export default function Home() {
             </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立档案"}</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
           </> : <>
           {showSelected ? <>
-            <div className="basket-heading">
-              <div><p className="breadcrumb">选题完成后，在这里整理练习</p><h1>组卷篮 <span>{selectedQuestions.length} 题</span></h1><p className="subtext">题目按下方顺序快速排版成 PDF 或生成 Word，可随时继续选题。</p></div>
-              {!!selectedQuestions.length && <button className="secondary" onClick={() => setShowSelected(false)}>继续选题</button>}
-            </div>
-            {!!selectedQuestions.length && <>
-              <div className="basket-settings">
-                <label className="basket-title">练习标题<input value={paperTitle} disabled={isExporting} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
-                <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={isExporting} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
-              </div>
-              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><PaperMoreMenu><button disabled={isExporting} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu><button className="secondary" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><button className="primary-button" disabled={isExporting} onClick={() => void openTypeset()}>快速排版</button></div>
-            </>}
+            <aside className="basket-settings">
+              <label className="basket-title">练习标题<input value={paperTitle} disabled={isExporting} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
+              <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={isExporting} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label>
+              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><button className="primary-button" disabled={isExporting || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={isExporting || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={isExporting || !selectedQuestions.length} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu></div>
+            </aside>
           </> : <>
           <div className="library-context-bar"><div><b>{pageCopy.publicLibrary}</b><span>{authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess}</span></div>{canManageLibrary && <button ref={moduleManager} className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
           <div className="module-switcher" aria-label={pageCopy.moduleSwitcher}>
@@ -677,7 +670,6 @@ export default function Home() {
 
       {wrongUploadOpen && activeStudent && <WrongQuestionUpload student={activeStudent} onClose={() => setWrongUploadOpen(false)} onGraded={(submission) => { void loadStudents(submission.studentId); if (submission.status !== "published") return; const archived = submission.gradingSummary?.archived ?? 0; setWrongUploadOpen(false); setNotice(archived ? `已收录 ${archived} 道错题` : "批改完成，没有需要收录的错题"); }} />}
 
-      {exportDialog && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="生成 Word"><div className="modal-head"><div><span className="eyebrow">Word 组卷</span><h2>生成练习题</h2></div><button className="close" onClick={() => setExportDialog(false)}>×</button></div><div className="export-summary"><strong>{selectedIds.length}</strong><span>道试题将按组卷篮顺序排入文档</span></div><label className="field">练习标题<input value={paperTitle} onChange={(event) => setPaperTitle(event.target.value)} /></label><label className="toggle-row" aria-label="答案设置"><input type="checkbox" checked={includeAnswers} onChange={(event) => setIncludeAnswers(event.target.checked)} /><span><b>附带答案与解析</b><small>在练习题末尾另起一页</small></span></label><div className="modal-actions"><button className="secondary" onClick={() => setExportDialog(false)}>取消</button><button className="primary-button" disabled={isExporting} onClick={generateWord}>{isExporting ? "正在生成…" : "下载 .docx"}</button></div></section></div>}
 
       {authDialog && <div className="modal-backdrop"><section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === "login" ? "登录" : "注册"}>
         <div className="modal-head"><div><span className="eyebrow">MathPilot</span><h2>{authMode === "login" ? "邮箱登录" : "使用邀请码注册"}</h2></div><button className="close" onClick={() => setAuthDialog(false)}>×</button></div>

@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties } from "react";
+import { SiteHeader } from "../../../../components/SiteHeader";
+import { PaperMoreMenu } from "../../../../components/PaperMoreMenu";
+import { fetchMe } from "../../../../../lib/api-client";
 import { AssignedHomeworkSheet } from "../../../../components/AssignedHomeworkSheet";
 import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../../../../components/HomeworkPagePicker";
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
-import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore } from "../../../../../lib/homework-grading-rules.mjs";
-import type { GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
+import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore, titleWithoutStudent } from "../../../../../lib/homework-grading-rules.mjs";
+import type { AuthUser, GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
 
 const STATUS: Record<string, string> = {
   draft: "待上传", submitted: "已提交", processing: "自动批改中", review_required: "旧版待复核",
@@ -96,17 +99,17 @@ function saveBlob(blob: Blob, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-/** IGCSE / A Level: the same report the PDF prints, with the download as the one main action. */
-function InternationalReportCard({ report, onDownload, busy }: { report: InternationalReport; onDownload: (kind: "pdf" | "tex") => void; busy: boolean }) {
+/** IGCSE / A Level: display the same report as the PDF; downloads live in the shared trail. */
+function InternationalReportCard({ report }: { report: InternationalReport }) {
   return <article className="submission-report-card international-report"><header><span>批改报告 · 家长与学生共读</span><h2>{report.priorities.length ? `优先改进：${report.priorities.join("、")}` : "本次没有需要优先改进的问题"}</h2><p className="report-overview"><MathText text={report.overview} /></p></header>
     {report.practice.length > 0 && <section className="report-actions"><b>下一步练习</b><ol>{report.practice.map((row) => <li key={row.action}><MathText text={row.action} /><small>完成标准：<MathText text={row.standard} /></small></li>)}</ol></section>}
     {report.losses.length > 0 && <details className="report-losses"><summary>失分分析与订正（{report.losses.length} 项）</summary>{report.losses.map((loss) => <section key={`${loss.questionNumbers.join("-")}-${loss.title}`}><strong>第 {loss.questionNumbers.join("、")} 题：<MathText text={loss.title} /></strong>{([["失分事实", loss.fact], ["知识与能力", loss.knowledge], ["正确思路", loss.method], ["订正动作", loss.action]] as const).filter(([, value]) => value).map(([label, value]) => <p key={label}><b>{label}</b><MathText text={value} /></p>)}</section>)}</details>}
-    <div className="report-download"><button className="primary" disabled={busy} onClick={() => onDownload("pdf")}>{busy ? "正在排版…" : "下载报告 PDF"}</button><button className="report-source" disabled={busy} onClick={() => onDownload("tex")}>下载 TeX</button></div>
   </article>;
 }
 
 export default function TeacherSubmissionPage() {
   const [id, setId] = useState("");
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
   const [submission, setSubmission] = useState<HomeworkSubmission | null>(null);
   const [items, setItems] = useState<GradingItem[]>([]);
   const [pages, setPages] = useState<HomeworkPage[]>([]);
@@ -130,6 +133,7 @@ export default function TeacherSubmissionPage() {
   }
 
   useEffect(() => {
+    void fetchMe().then(result => setUser(result.user)).catch(() => setUser(null));
     const frame = requestAnimationFrame(() => {
       const submissionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).at(-1) ?? "");
       setId(submissionId);
@@ -332,8 +336,8 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
-  if (loading) return <main className="homework-loading">正在读取学生作业…</main>;
-  if (!submission) return <main className="homework-loading"><h1>提交记录不存在</h1><a href="/tools/homework">返回作业批改</a></main>;
+  if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
+  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
   const report = submission.report;
   const live = ["submitted", "processing", "failed"].includes(submission.status);
@@ -350,10 +354,11 @@ export default function TeacherSubmissionPage() {
 
   const assigned = submission.assigned;
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
-  return <main className="review-shell">
-    <header className="review-topbar">{assigned ? <a href={`${archiveLink}&tab=homework`}>← {submission.studentName}的作业</a> : submission.outputs.wrongBook && !submission.outputs.report && !submission.outputs.profile ? <a href={archiveLink}>← 学生错题本</a> : <a href="/tools/homework">← 作业批改</a>}<button onClick={refresh} disabled={busy}>刷新</button></header>
+  return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
+    trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
+    trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={newVersion}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
     {message && <div className="homework-notice" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">×</button></div>}
-    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
+    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
       <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
         {submission.outputs.wrongBook && <div><span>写入错题本</span><a href={archiveLink}>已归档错题 {summary?.archived ?? 0} 道 →</a></div>}
@@ -367,7 +372,6 @@ export default function TeacherSubmissionPage() {
     {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}
     {/* An assigned question keeps the figures it was handed out with; only questions read off the page have figures to check. */}
-    {!assigned && ["published","ready"].includes(submission.status) && <section className="review-callout"><div><b>{submission.figuresPending ? `${submission.figuresPending} 道题配图待核对` : "原卷题图"}</b><p>重新检查图源、共用题图与手写覆盖，并同步到错题本。</p></div><button onClick={attachFigures} disabled={busy}>校对原卷配图</button></section>}
     {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} /></section>}
     {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
@@ -378,7 +382,7 @@ export default function TeacherSubmissionPage() {
     {["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>这是启用自动发布前产生的旧提交</b><p>保留旧流程兼容，不会被后台自动发布。</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>确认并发布</button></section>}
 
     {["review_required", "ready", "published"].includes(submission.status) && <>
-      {submission.outputs.report && international && report?.details && <section className="diagnosis-grid"><InternationalReportCard report={report.details} onDownload={downloadReport} busy={busy} /></section>}
+      {submission.outputs.report && international && report?.details && <section className="diagnosis-grid"><InternationalReportCard report={report.details} /></section>}
       {submission.outputs.report && !international && <section className="diagnosis-grid">
         <article className="submission-report-card"><header><span>整份诊断</span><h2>{report?.overallSummary || "逐题结果已完成"}</h2><p>{report?.studentMessage || "当前提交尚未生成整份建议。"}</p></header>{report && <><div className="report-columns"><section><b>做得好的地方</b>{report.strengths.length ? report.strengths.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">本次暂无足够证据。</p>}</section><section><b>优先改进</b>{report.gaps.length ? report.gaps.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">暂未发现优先问题。</p>}</section></div><section className="report-actions"><b>下一步建议</b><ol>{report.actions.map((action) => <li key={action}>{action}</li>)}</ol></section></>}</article>
       </section>}
@@ -399,8 +403,7 @@ export default function TeacherSubmissionPage() {
         })}</div>
       </section>}
     </>}
-    {submission.status === "published" && !assigned && <details className="homework-panel review-archive-panel"><summary>重新提交本份作业</summary><p>新的作答单独保留一版，之前的批改和原件不会覆盖。</p><button className="primary" disabled={busy} onClick={newVersion}>上传新版本</button></details>}
     {!!submission.originalDocuments?.length && <details className="homework-panel review-archive-panel"><summary>上传的 PDF 原件</summary><div className="original-files">{submission.originalDocuments.map((document,index)=><a key={index} className="original-file" href={document.url} target="_blank" rel="noreferrer"><svg className="pdf-icon" viewBox="0 0 32 40" aria-hidden="true" focusable="false"><path d="M7 1.5h13.5l9 9v24a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4v-29a4 4 0 0 1 4-4Z" /><path d="M20.5 1.5v6a3 3 0 0 0 3 3h6" /><rect x="0" y="20" width="23" height="11" rx="2.5" /><text x="11.5" y="28.3">PDF</text></svg><span><b>{document.name}</b><small>学生上传的原件 · 点击在新窗口打开</small></span><svg className="open-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 17 17 7M9 7h8v8" /></svg></a>)}</div></details>}
     {!!submission.pageRevisions?.length && <details className="homework-panel review-archive-panel"><summary>历史作业原件</summary>{submission.pageRevisions.map((revision,index)=><p key={index}><a href={revision.originalUrl} target="_blank" rel="noreferrer">补图前原件 · {new Date(revision.createdAt).toLocaleString("zh-CN")}</a></p>)}</details>}
-  </main>;
+  </main></>;
 }

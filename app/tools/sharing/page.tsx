@@ -1,5 +1,6 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
+import { SiteHeader } from "../../components/SiteHeader";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useState } from "react";
 import { changeTeamInvite, fetchMe, fetchTeam, resetTeamPassword, updateTeamMember } from "../../../lib/api-client";
@@ -11,14 +12,6 @@ import "./sharing.css";
 
 type Notify = (message: string, ok?: boolean) => void;
 type Team = { members: TeamMember[]; invite: TeamInvite };
-
-function SharingIcon({ name }: { name: "back" | "share" }) {
-  const paths = {
-    back: <path d="m10 5-7 7 7 7M3 12h18" />,
-    share: <><circle cx="18" cy="5.5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="18.5" r="2.5" /><path d="m8.3 10.8 7.4-4.1M8.3 13.2l7.4 4.1" /></>,
-  } as const;
-  return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
-}
 
 const errorText = (error: unknown, fallback: string) => {
   const message = error instanceof Error ? error.message : fallback;
@@ -42,22 +35,15 @@ export default function SharingPage() {
   useEffect(() => { void fetchMe().then((result) => setUser(result.user)).catch(() => notify("登录状态读取失败，请刷新重试", false)).finally(() => setLoaded(true)); }, [notify]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 2800); return () => clearTimeout(timer); }, [toast]);
 
-  const head = <>
-    <a className="toolbox-back" href="/tools"><SharingIcon name="back" /><span>返回工具箱</span></a>
-    <header className="toolbox-head">
-      <span className="toolbox-mark"><SharingIcon name="share" /></span>
-      <div><h1>共享办公</h1><p>在公司把 MathPilot 共享给同事：一个开关、一组邀请码，再管好同事的账号。</p></div>
-    </header>
-  </>;
   let body;
   if (!loaded) body = <p className="sharing-muted">正在读取…</p>;
   else if (!user) body = <div className="sharing-card"><h2>请先登录</h2><p className="sharing-muted">登录后才能使用共享办公。</p><a className="primary-button sharing-link" href="/">去登录</a></div>;
   else if (user.role !== "admin") body = <div className="sharing-card"><h2>共享办公由管理员管理</h2><p className="sharing-muted">需要开通账号、重置密码或调整权限时，请联系管理员。</p></div>;
   else body = <><ShareSection notify={notify} /><TeamSections me={user} notify={notify} /></>;
-  return <main className="toolbox sharing">
-    {head}{body}
+  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:"工具箱",href:"/tools"},{label:"共享办公"}]} /><main className="toolbox sharing">
+    {body}
     {toast && <div className={`toast${toast.ok ? "" : " sharing-toast-error"}`} role="status">{toast.ok ? "✓ " : ""}{toast.message}</div>}
-  </main>;
+  </main></>;
 }
 
 function ShareSection({ notify }: { notify: Notify }) {

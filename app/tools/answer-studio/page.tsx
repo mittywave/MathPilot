@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { useEffect, useRef, useState } from 'react';
+import { SiteHeader } from '../../components/SiteHeader';
 import { fetchMe } from '../../../lib/api-client';
 import type { AuthUser } from '../../../lib/types';
 import { deduplicateStudioPages, emptyStudioDraft, type StudioDraft, type StudioRecord } from '../../../lib/answer-studio';
@@ -15,13 +16,11 @@ import { studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, stud
 import { studioApi as api, STUDIO_TEXT_CONCURRENCY, STUDIO_CONCURRENCY_CHOICES } from '../../../lib/answer-studio-concurrency';
 import './studio.css';
 
-function StudioIcon({name}:{name:'pen'|'files'|'file'|'spark'|'download'|'steps'|'text'|'check'|'back'|'upload'}) {
+function StudioIcon({name}:{name:'pen'|'file'|'spark'|'download'|'steps'|'text'|'check'|'upload'}) {
   const paths={
     check:<path d="m5 12 4 4L19 6"/>,
     upload:<><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></>,
-    back:<path d="m10 5-7 7 7 7M3 12h18"/>,
     pen:<><path d="m4 16.5 9.8-9.8 3.5 3.5-9.8 9.8L4 21l.5-4.5Z"/><path d="m12.5 8 3.5 3.5M4 21l4.5-.5"/></>,
-    files:<><path d="M7 3h8l3 3v15H7z"/><path d="M15 3v4h3M4 7v14h3M10 12h5M10 16h5"/></>,
     file:<><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h4M9 13h6M9 17h4"/></>,
     spark:<><path d="m12 3 1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z"/></>,
     download:<><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></>,
@@ -127,20 +126,16 @@ export default function AnswerStudioPage() {
       running.current=false;setBusy(false);
     }
   }
-  if(!loaded)return <main className="answer-studio"><p>正在读取…</p></main>;
-  if(!user)return <main className="answer-studio"><h1>手写转录</h1><p>请先登录 MathPilot。</p><a href="/">返回题库</a></main>;
-  return <main className="answer-studio answer-studio-simple">
-    <header><div><a className="studio-back" href="/tools"><StudioIcon name="back"/><span>返回工具箱</span></a><div className="studio-title"><span className="studio-title-icon"><StudioIcon name="pen"/></span><h1>手写转录</h1></div></div><small>{user.local?'本地管理员':user.email}</small></header>
-    <section className="simple-panel">
-      <fieldset className="studio-fields" disabled={busy}><legend><span className="section-icon"><StudioIcon name="files"/></span>选择材料类型</legend>
-        <div className="mode-choice">
-          <label className="mode-card"><input id="studio-mode-paired" aria-label="提供原题和答案" type="radio" name="studio-mode" checked={mode==='paired'} onChange={()=>{changed();setMode('paired');}}/><span className="choice-copy"><strong>提供原题和答案</strong><small>分别上传干净原题与手写答案</small></span></label>
-          <label className="mode-card"><input id="studio-mode-answers" aria-label="只有答案材料" type="radio" name="studio-mode" checked={mode==='answers'} onChange={()=>{changed();setMode('answers');}}/><span className="choice-copy"><strong>只有答案材料</strong><small>上传带答案的讲义或答案页，有原题文字也会一并转录</small></span></label>
+  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'手写转录'}]} onSignOut={async exit=>{if(busy||(saved&&!downloads.length)){setNotice('请完成转录并生成 Word 后再退出登录。');setFailed(true);return;}await exit();}} />
+    {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href="/">返回题库登录</a></main>:<main className="answer-studio">
+    <fieldset className="studio-fields studio-workspace" disabled={busy}>
+      <aside className="studio-controls">
+        <div className="mode-choice" role="radiogroup" aria-label="材料类型">
+          <label><input id="studio-mode-paired" aria-label="提供原题和答案" type="radio" name="studio-mode" checked={mode==='paired'} onChange={()=>{changed();setMode('paired');}}/><b>原题和答案</b></label>
+          <label><input id="studio-mode-answers" aria-label="只有答案材料" type="radio" name="studio-mode" checked={mode==='answers'} onChange={()=>{changed();setMode('answers');}}/><b>只有答案</b></label>
         </div>
-        <label className="field-label"><span className="field-heading"><StudioIcon name="file"/>资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
-        {mode==='paired'&&<UploadZone id="studio-question-files" icon="file" title="上传原题" hint="干净、未作答的原题页" files={questionFiles} onFiles={list=>files('question',list)}/>}
-        <UploadZone id="studio-answer-files" icon="pen" title={mode==='paired'?'上传手写答案':'上传答案材料'} hint={mode==='paired'?'写有手写答案的页面':'带答案的讲义或答案页'} files={answerFiles} onFiles={list=>files('answer',list)}/>
-<details style={{marginTop:12,fontSize:14}}>
+        <label className="field-label"><span className="field-heading">资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
+        <details style={{marginTop:12,fontSize:14}}>
           <summary style={{cursor:'pointer'}}>转录速度：最多 {textConcurrency} 路</summary>
           <label htmlFor="studio-text-concurrency" style={{display:'flex',alignItems:'center',flexWrap:'wrap',gap:8,marginTop:8}}>
             <span>同时识别页数</span>
@@ -150,9 +145,13 @@ export default function AnswerStudioPage() {
           </label>
           <small>默认 4 路，遇限流自动降速；跨页连续解答较多时可选 1 路。完整解题版配图最多 2 路。</small>
         </details>
-      </fieldset>
-      {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
-      {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
+
+        {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
+        {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
+      </aside>
+      <section className="simple-panel">
+        {mode==='paired'&&<UploadZone id="studio-question-files" icon="file" title="上传原题" hint="干净、未作答的原题页" files={questionFiles} onFiles={list=>files('question',list)}/>}
+        <UploadZone id="studio-answer-files" icon="pen" title={mode==='paired'?'上传手写答案':'上传答案材料'} hint={mode==='paired'?'写有手写答案的页面':'带答案的讲义或答案页'} files={answerFiles} onFiles={list=>files('answer',list)}/>
       {saved&&studioTextReady(saved)&&<section className="studio-results" aria-labelledby="studio-results-title">
         <h2 id="studio-results-title">转录结果</h2>
         <div className="result-summary" role="status"><span className="result-summary-icon"><StudioIcon name="check"/></span><span className="result-summary-number">{saved.questions.length}</span><span className="result-summary-label">道题已识别</span></div>
@@ -171,6 +170,8 @@ export default function AnswerStudioPage() {
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
       </section>}
       <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。每次打开都是新任务，结果不会留在浏览器中，刷新或关闭页面后清空，请及时生成并下载 Word；识别有疑问处是否写入 Word 可用上方勾选项设置。</small>
-    </section>
-  </main>;
+
+      </section>
+    </fieldset>
+  </main>}</>;
 }

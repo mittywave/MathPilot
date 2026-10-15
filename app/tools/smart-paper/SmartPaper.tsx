@@ -1,5 +1,6 @@
 "use client";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { SiteHeader } from "../../components/SiteHeader";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { authorizeDownload, createSmartPaperRecord, fetchLibrary, fetchMe, fetchStudents, fetchTypesetRecords, generateSmartPaper, updateTypesetRecord } from "../../../lib/api-client";
@@ -16,9 +17,8 @@ const Typesetter = lazy(() => import("../typeset/Typesetter"));
 const EXAMPLE = "给这位同学出一份 5 天的计算打卡练习，内容是有理数的混合运算，每天大概 10 道题，侧重去括号、乘法分配律和通分约分";
 const STAGES: Array<[number, string]> = [[0, "正在读学生档案…"], [3000, "正在理解需求…"], [12000, "正在从题库挑题…"], [45000, "题目较多，还在挑选…"]];
 
-function SmartIcon({ name }: { name: "back" | "spark" }) {
+function SmartIcon({ name }: { name: "spark" }) {
   const paths = {
-    back: <path d="m10 5-7 7 7 7M3 12h18" />,
     spark: <><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.2l-1.8-5.6-5.7-1.8L10.2 9Z" /><path d="M18.5 3.5v3M17 5h3M5.5 17v3M4 18.5h3" /></>,
   } as const;
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
@@ -29,6 +29,7 @@ export default function SmartPaper() {
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentId, setStudentId] = useState("");
+  const [fromStudent, setFromStudent] = useState(false);
   const [request, setRequest] = useState("");
   const [instruction, setInstruction] = useState("");
   const [plan, setPlan] = useState<SmartPaperPlan | null>(null);
@@ -52,7 +53,7 @@ export default function SmartPaper() {
       const [studentList, data] = await Promise.all([fetchStudents(), fetchLibrary()]);
       setStudents(studentList.students); setLibrary(data);
       const wanted = params.get("student");
-      if (wanted && studentList.students.some((student) => student.id === wanted)) setStudentId(wanted);
+      if (wanted && studentList.students.some((student) => student.id === wanted)) { setStudentId(wanted); setFromStudent(true); }
       const recordParam = params.get("record");
       try {
         const key = `smart-paper:${me.id}:${recordParam ? `record:${recordParam}` : wanted ? `student:${wanted}` : "current"}`;
@@ -73,7 +74,7 @@ export default function SmartPaper() {
       setPlan(record.plan); setTitle(record.title); setRecordId(record.id); setSettings(record.settings);
       setRequest(record.plan.request); setStudentId(record.studentId ?? "");
       setReady(true);
-    }).catch((reason) => { setUser(null); setError(reason instanceof Error ? reason.message : "读取失败"); });
+    }).catch((reason) => { setUser(current => current ?? null); setError(reason instanceof Error ? reason.message : "读取失败"); });
   }, []);
 
   // Keep edits on this browser even before the first explicit server save. Hydrate first so empty state never overwrites a draft.
@@ -170,20 +171,19 @@ export default function SmartPaper() {
       <Typesetter basket={{
         questions: days.flatMap((day) => day.questions), title, settings, recordId, studentId: studentId || undefined,
         groups: days.map((day) => ({ title: day.title, size: day.questions.length })),
-        origin: { back: "智能组卷 · 快速排版", name: `智能组卷${student ? ` · ${student.name}` : ""}`, hint: "点击回去调整题目" },
+        origin: { back: "← 智能组卷", name: `智能组卷${student ? ` · ${student.name}` : ""}`, hint: "点击回去调整题目" },
         onClose: (changedTitle, changedSettings) => { if (changedTitle) setTitle(changedTitle); setSettings(changedSettings); setTypesetting(false); },
       }} />
     </Suspense>;
   }
 
   const paths = plan && library ? plan.brief.categoryIds.map((id) => categoryPath(library.modules, library.categories, id)).filter(Boolean) : [];
-  return <main className="smart-paper">
+  return <><SiteHeader active={fromStudent ? "students" : "tools"} user={user ?? null} loading={user === undefined} trail={fromStudent && student ? [{label:"学生档案",href:"/?view=wrong-book"},{label:student.name,href:`/?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:"智能组卷"}] : [{label:"工具箱",href:"/tools"},{label:"智能组卷"}]} /><main className="smart-paper">
     <aside className="smart-paper-panel">
-      <a className="toolbox-back" href="/tools"><SmartIcon name="back" /><span>工具箱 · 智能组卷</span></a>
-      {user === null ? <p className="smart-paper-note">请先在题库页登录，再使用智能组卷。</p> : <>
+      {user === null ? <p className="smart-paper-note">{error || "请先在题库页登录，再使用智能组卷。"}</p> : <>
         {draftStatus && <p className="smart-paper-note" role="status">{draftStatus}。<a href="/tools/typeset">已保存方案</a></p>}
         {savedStatus && <p className="smart-paper-note" role="status">{savedStatus}</p>}
-        <fieldset disabled={!ready || Boolean(busy)} style={{ display: "grid", gap: 12, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={!ready || Boolean(busy)} style={{ display: "flex", flexDirection: "column", flex: 1, gap: 12, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <label className="smart-paper-field"><span>学生</span>
           <select value={studentId} disabled={Boolean(busy)} onChange={(event) => setStudentId(event.target.value)}>
             <option value="">不针对某位学生</option>
@@ -195,11 +195,6 @@ export default function SmartPaper() {
           <textarea rows={5} value={request} disabled={Boolean(busy)} placeholder={EXAMPLE} onChange={(event) => setRequest(event.target.value)} />
         </label>
         {!request && <button type="button" className="smart-paper-link" onClick={() => setRequest(EXAMPLE)}>用示例填写</button>}
-        <button type="button" className="primary-button smart-paper-go" disabled={!request.trim() || Boolean(busy) || !library} onClick={generate}>
-          <SmartIcon name="spark" />{plan ? "重新生成方案" : "生成方案"}
-        </button>
-        {busy && <p className="smart-paper-busy"><i className="smart-paper-spinner" />{busy}</p>}
-        {error && <p className="smart-paper-note error" role="alert">{error}</p>}
         {plan && <section className="smart-paper-brief" aria-label="agent 的理解">
           <h3>agent 的理解</h3>
           <dl>
@@ -215,6 +210,13 @@ export default function SmartPaper() {
           </label>
           <button type="button" className="secondary" disabled={!instruction.trim() || Boolean(busy)} onClick={revise}>按意见调整</button>
         </section>}
+        <div className="smart-paper-actions">
+        <button type="button" className={`${plan ? "secondary" : "primary-button"} smart-paper-go`} disabled={!request.trim() || Boolean(busy) || !library} onClick={generate}>
+          <SmartIcon name="spark" />{plan ? "重新生成方案" : "生成方案"}
+        </button>
+        {busy && <p className="smart-paper-busy"><i className="smart-paper-spinner" />{busy}</p>}
+        {error && <p className="smart-paper-note error" role="alert">{error}</p>}
+        </div>
         </fieldset>
       </>}
     </aside>
@@ -251,11 +253,7 @@ export default function SmartPaper() {
           })}</ol>
           <button type="button" className="smart-paper-link" onClick={() => add(dayIndex)}>＋ 加一道</button>
         </section>)}
-      </> : <div className="smart-paper-empty">
-        <SmartIcon name="spark" />
-        <b>说一句要出什么练习，agent 从题库里挑题</b>
-        <p>选好学生时，会读学生档案里的课后反馈、批改出的知识点正确率、错题和作业报告，侧重反复出错的地方，并避开做过、布置过的题。方案按天列出，每道题写明为什么选它；可以换题、删题、加题，或用一句话让 agent 调整，确认后点“排版”进快速排版，每天单独起页，排好后可以直接布置给这位学生。</p>
-      </div>}
+      </> : <p className="smart-paper-empty">选择学生并说明练习要求，生成的方案会显示在这里。</p>}
     </fieldset>
-  </main>;
+  </main></>;
 }

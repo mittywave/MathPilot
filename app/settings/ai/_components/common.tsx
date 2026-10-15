@@ -30,6 +30,6 @@ export function ConfirmDialog({ title, children, accept, cancel, action = '确�
 }) {
     const ref = useRef<HTMLDialogElement>(null);
     useEffect(() => { const previous = document.activeElement as HTMLElement | null; const dialog = ref.current; dialog?.showModal(); return () => { dialog?.close(); previous?.focus(); }; }, []);
-    return <dialog ref={ref} aria-labelledby="ai-dialog-title" onCancel={event => { event.preventDefault(); cancel(); }}><h2 id="ai-dialog-title">{title}</h2><div>{children}</div><div className="ai-dialog-actions"><button type="button" onClick={cancel}>取消</button><button type="button" data-primary onClick={accept}>{action}</button></div></dialog>;
+    return <dialog ref={ref} aria-labelledby="ai-dialog-title" onCancel={event => { event.preventDefault(); cancel(); }}><h2 id="ai-dialog-title">{title}</h2><div>{children}</div><div className="ai-dialog-actions"><button className="secondary" type="button" onClick={cancel}>取消</button><button className="primary-button" type="button" data-primary onClick={accept}>{action}</button></div></dialog>;
 }
 export const time = (value: number) => value ? new Date(value).toLocaleString('zh-CN') : '未测试';
