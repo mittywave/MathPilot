@@ -41,7 +41,8 @@ test('ready and downloaded results hide issue statistics and backup controls wit
     assert.equal((html.match(/name="studio-output"/g)||[]).length,3);
     assert.equal(html.includes('生成 Word'),downloads.length===0);
     assert.equal(html.includes('下载完整解题版'),downloads.length>0);
-    assert.doesNotMatch(html,/102|个提示|当前记录|已生成|本地项目备份|生成备份|恢复 JSON|application\/json|三种版本共用/);
+    // Only the page body: the brand wordmark's SVG coordinates can contain these digits.
+    assert.doesNotMatch(html.slice(html.indexOf('<main')),/102|个提示|当前记录|已生成|本地项目备份|生成备份|恢复 JSON|application\/json|三种版本共用/);
   }
   assert.deepEqual(draft,original,'hiding UI never removes original annotations');
 });
