@@ -1,10 +1,10 @@
 <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <title>MathPilot</title>
   <style>
-    .tile { fill:#2f6b53; }
-    @media (prefers-color-scheme:dark) { .tile { fill:#6675c9; } }
+    .loop { stroke:#486955; } .ink { stroke:#2A342F; } .dot { fill:#2A342F; stroke:#fff; }
+    @media (prefers-color-scheme:dark) { .loop { stroke:#8DB39D; } .ink { stroke:#E3ECE6; } .dot { fill:#E3ECE6; stroke:#232427; } }
   </style>
-  <path class="tile" d="M18 4h28c8 0 14 6 14 14v28c0 8-6 14-14 14H12c-4.4 0-8-3.6-8-8V18C4 10 10 4 18 4Z"/>
-  <path d="M18 8h28c5.5 0 10 4.5 10 10" fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="2" stroke-linecap="round"/>
-  <text x="32" y="43" fill="#fff" font-family="Songti SC, STSong, Noto Serif CJK SC, serif" font-size="31" font-weight="700" text-anchor="middle">题</text>
+  <path class="loop" d="M9 33 C9 17 23 17 31 32 C39 47 51 48 56 33 C61 17 45 16 35 30 C25 47 13 48 9 33" fill="none" stroke-width="5.6" stroke-linecap="round"/>
+  <path class="ink" d="M9 33 C9 17 23 17 31 32" fill="none" stroke-width="5.6" stroke-linecap="round"/>
+  <circle class="dot" cx="55.3" cy="31" r="4.4" stroke-width="2"/>
 </svg>
