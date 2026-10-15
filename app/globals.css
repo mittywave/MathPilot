@@ -865,7 +865,7 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .report-losses p b { margin-right:8px; color:var(--ink); }
 .submission-report-card>header p.report-overview { color:var(--ink); font-size:14px; }
 .report-actions ol,.step-analysis ol { margin:0; padding-left:20px; color:var(--ink); font-size:13px; line-height:1.8; }
-.review-evidence-layout {scroll-margin-top:calc(var(--topbar-h) + 60px);height:calc(100dvh - var(--topbar-h) - 72px);min-height:440px;margin:0 0 48px;display:grid;grid-template-columns:minmax(0,var(--review-split,45%)) 14px minmax(0,1fr);padding:0 32px;align-items:stretch; }
+.review-evidence-layout {scroll-margin-top:calc(var(--topbar-h) + 60px);height:calc(100dvh - var(--topbar-h) - 72px);min-height:440px;max-width:1180px;margin:0 auto 48px;display:grid;grid-template-columns:minmax(0,var(--review-split,45%)) 14px minmax(0,1fr);padding:0;align-items:stretch; }
 .review-evidence-layout>.review-pages,.review-evidence-layout>.grading-list { min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; align-content:start; grid-auto-rows:max-content; padding:4px; }
 .review-evidence-layout>.review-pages { max-width:none; width:auto; margin:0; }
 .review-splitter { position:relative; cursor:col-resize; touch-action:none; outline-offset:-2px; }
