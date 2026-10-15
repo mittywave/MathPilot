@@ -899,8 +899,9 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const correctionHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:correctionAfter,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
     assert.match(correctionHtml,/<li class="corrected"[^>]*title="第 1 天 第 1 题 · 已订正/);
     assert.match(correctionHtml,/<li class="incorrect"[^>]*title="第 1 天 第 2 题 · 错/,"a still-partial correction remains red");
-    assert.match(correctionHtml,/<button[^>]*disabled=""[^>]*aria-label="第 2 天订正"/);
-    assert.equal((correctionHtml.match(/class="assigned-correct"/g)??[]).length,2,"every day has a correction button");
+    assert.match(correctionHtml,/<button[^>]*class="assigned-correct incorrect"[^>]*aria-label="第 1 天去订正"[^>]*>去订正<\/button>/);
+    assert.match(correctionHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 2 天无错题"[^>]*>无错题<span aria-hidden="true"> ✅<\/span><\/button>/);
+    assert.equal((correctionHtml.match(/class="assigned-correct(?: [^"]*)?"/g)??[]).length,2,"every day has a correction button");
     const correctionAgain=(await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
     assert.deepEqual(correctionAgain.questionScope,correctionIds.slice(1),"already corrected work is excluded from the next correction");
     mock.state.assignedPage=[{question_number:"D1-2",student_answer:"4"}];mock.state.assignedAnswers={"D1-2":"4"};mock.state.assignedVerdicts={"D1-2":"correct"};
@@ -909,6 +910,12 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(correctionFinal.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["correct",true],["incorrect",false],["correct",false]]);
     assert.equal(correctionFinal.assigned.uploads.length,3);
     assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne})).payload.submission.gradingItems[0].verdict,"incorrect","the original incorrect attempt remains in history");
+    const lastCorrection=(await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
+    mock.state.assignedPage=[{question_number:"D1-3",student_answer:"6"}];mock.state.assignedAnswers={"D1-3":"6"};mock.state.assignedVerdicts={"D1-3":"correct"};
+    await submitPages(base,teacherOne,lastCorrection.id,[await uploadPage(base,teacherOne,lastCorrection.id,bytes)]);
+    const allCorrected=await waitForSubmission(base,teacherOne,lastCorrection.id,["published"],worker);
+    const completedHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:allCorrected,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
+    assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};

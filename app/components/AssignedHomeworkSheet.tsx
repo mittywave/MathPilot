@@ -56,6 +56,8 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
     {days.map((group, index) => {
       const note = dayNote(group);
       const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
+      const allCorrect = group.done === group.size && group.correct === group.size;
+      const correctionLabel = mistakes ? "去订正" : allCorrect ? group.items.some(({ result }) => result?.wasIncorrect) ? "已订正" : "无错题" : "订正";
       const canCorrect = submission.status === "published" && latest?.status === "published";
       return <div className={`assigned-day ${group.state}`} key={index}>
         {several && <div className="assigned-day-head"><b title={group.title}>{group.title}</b><small>{note}</small></div>}
@@ -69,8 +71,8 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
               : <span aria-label={label}>{number}</span>}
           </li>;
         })}</ol>
-        <button type="button" className="assigned-correct" disabled={busy || !mistakes || !canCorrect} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}订正`}
-          title={!mistakes ? group.done ? "这一天暂无需要订正的错题" : "提交并批改后可订正错题" : !canCorrect ? "请先完成当前上传和批改" : `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>订正</button>
+        <button type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || !canCorrect} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
+          title={allCorrect ? correctionLabel === "已订正" ? "这一天的错题已全部订正正确" : "这一天的题目全部正确，无需订正" : !mistakes ? group.pending ? "请先核实待处理题目" : "提交并批改后可订正错题" : !canCorrect ? "请先完成当前上传和批改" : `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>{correctionLabel}{allCorrect && <span aria-hidden="true"> ✅</span>}</button>
       </div>;
     })}
     <p className="assigned-correction-note">绿色：原本正确 · 蓝色：已订正正确 · 红色：仍需订正</p>
