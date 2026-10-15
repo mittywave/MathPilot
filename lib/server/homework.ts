@@ -196,14 +196,15 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
   ]);
   const sheet = questions.results as Array<{ id: string; question_number: string; source_json: string }>, handedIn = uploads.results as UploadRow[];
   const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
-  const firstHandedIn = new Map<string, number>();
+  const firstHandedIn = new Map<string, { at: number; result: NonNullable<AssignedHomework["questions"][number]["result"]> }>();
   for (const upload of handedIn.filter((item) => item.status === "published")) {
     for (const result of await uploadResults(upload.id)) {
       const { assignmentQuestionId, ...grading } = result;
       const previous = results.get(assignmentQuestionId);
       const wasIncorrect = previous?.wasIncorrect || Boolean(previous && !isPendingGradingItem(previous) && ["incorrect", "partial"].includes(previous.verdict));
-      results.set(assignmentQuestionId, { ...grading, submissionId: upload.id, wasIncorrect });
-      if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, Number(upload.submitted_at ?? upload.created_at));
+      const graded = { ...grading, submissionId: upload.id, wasIncorrect };
+      results.set(assignmentQuestionId, graded);
+      if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, { at: Number(upload.submitted_at ?? upload.created_at), result: graded });
     }
   }
   const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: parseJson<Question>(question.source_json, {} as Question), result: results.get(question.id) ?? null }));
@@ -211,8 +212,9 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
   let from = 0;
   const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map((group) => {
     const day = items.slice(from, from += group.size);
-    const times = day.flatMap((item) => firstHandedIn.get(item.id) ?? []);
-    return { title: group.title, size: group.size, ...tally(day.flatMap((item) => item.result ?? [])), handedInAt: times.length ? Math.min(...times) : null };
+    const first = day.flatMap((item) => firstHandedIn.get(item.id) ?? []);
+    const { correct, incorrect, pending } = tally(first.map((item) => item.result));
+    return { title: group.title, size: group.size, ...tally(day.flatMap((item) => item.result ?? [])), firstAttempt: { correct, incorrect, pending }, handedInAt: first.length ? Math.min(...first.map((item) => item.at)) : null };
   });
   return {
     days, questions: items,

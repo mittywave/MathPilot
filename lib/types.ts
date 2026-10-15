@@ -385,6 +385,8 @@ export type HomeworkSheetGroup = { title: string; size: number };
 /** One day's task group (a sheet without groups is one task), with progress and its actual submission time. */
 export type HomeworkDay = HomeworkSheetGroup & {
   done: number; correct: number; incorrect: number; pending: number;
+  /** Each question's first published attempt; later corrections do not replace these marks. */
+  firstAttempt: Pick<HomeworkDay, "correct" | "incorrect" | "pending">;
   /** When the first upload that found any of its questions was handed in. */
   handedInAt: number | null;
 };
