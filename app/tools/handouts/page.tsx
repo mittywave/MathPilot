@@ -346,8 +346,10 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
           </div>}
         </div>)}
         <div className="handout-nav-heading">{navItem("topic", "专题库", 0, false, () => choose("topic"), true)}<button className="icon-button" aria-label="新建专题" title="新建专题" disabled={busy || !courseNodes} onClick={() => addNode(HANDOUT_TOPIC_ROOT, "专题")}>＋</button></div>
-        {topics.map((topic) => <div className="handout-nav-row row-tail" key={topic.id}>{navItem(topic.id, topic.name, countIn({ ...NOWHERE, domain: topic.id }), viewing === "topic" && activeTopic?.id === topic.id, () => choose("topic", topic.id))}{nodeMenu(topic)}</div>)}
-        {!!unsorted && navItem("unsorted", UNSORTED_TOPIC_LABEL, unsorted, viewing === "topic" && !activeTopic, () => choose("topic", "unsorted"))}
+        <div className="handout-stage-nav">
+          {topics.map((topic) => <div className="handout-nav-row row-tail" key={topic.id}>{navItem(topic.id, topic.name, countIn({ ...NOWHERE, domain: topic.id }), viewing === "topic" && activeTopic?.id === topic.id, () => choose("topic", topic.id))}{nodeMenu(topic)}</div>)}
+          {!!unsorted && navItem("unsorted", UNSORTED_TOPIC_LABEL, unsorted, viewing === "topic" && !activeTopic, () => choose("topic", "unsorted"))}
+        </div>
         {navItem("student", "学生讲义", 0, false, () => choose("student"), true)}
         {students?.map((item) => navItem(`student-${item.id}`, item.name, countIn({ ...NOWHERE, studentId: item.id }), viewing === "student" && activeStudent?.id === item.id, () => choose("student", item.id)))}
         {students && !students.length && <a className="item handout-nav-link" href="/?view=wrong-book">去学生档案建立学生</a>}
