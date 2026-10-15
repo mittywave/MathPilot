@@ -41,7 +41,7 @@ test("server-renders the cloud question-bank guest shell", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>MathPilot<\/title>/i);
-  assert.match(html, /全部试题/);
+  assert.match(html, /aria-label="搜索试题"/);
   const navigation = html.match(/<nav[^>]*aria-label="题库入口"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? "";
   assert.equal((navigation.match(/>题库</g) ?? []).length, 1, "one shared library entry");
   assert.doesNotMatch(html, /我的题库|私人题库|公共资源库|复制到私人题库/);
@@ -79,8 +79,8 @@ test("keeps the select-all control on the right without filter scroll chrome", a
 
   assert.doesNotMatch(page, /local-badge/);
   assert.match(css, /\.select-visible\s*\{[^}]*margin-left:auto/);
-  assert.match(css, /\.filters::-webkit-scrollbar\s*\{\s*display:none/);
-  assert.match(css, /\.filters\s*\{[^}]*scrollbar-width:none/);
+  assert.match(css, /\.filter-segments::-webkit-scrollbar\s*\{\s*display:none/);
+  assert.match(css, /\.filter-segments\s*\{[^}]*scrollbar-width:none/);
   assert.match(css, /html::-webkit-scrollbar,body::-webkit-scrollbar\s*\{\s*display:none/);
 });
 

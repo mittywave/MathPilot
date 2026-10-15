@@ -53,7 +53,7 @@ export function PaperMoreMenu({ children, className = "", label = "组卷更多�
   }, [open]);
 
   return <div ref={menuRef} className={`basket-more ${className}`.trim()}>
-    <button type="button" className="more-toggle icon-button" aria-label={label} title="更多操作" aria-expanded={open} onClick={() => setOpen(!open)}><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="2" fill="currentColor" /><circle cx="12" cy="12" r="2" fill="currentColor" /><circle cx="19" cy="12" r="2" fill="currentColor" /></svg></button>
+    <button type="button" className="more-toggle icon-button" aria-label={label} title={label} aria-expanded={open} onClick={() => setOpen(!open)}><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="2" fill="currentColor" /><circle cx="12" cy="12" r="2" fill="currentColor" /><circle cx="19" cy="12" r="2" fill="currentColor" /></svg></button>
     {open && <div className="more-panel" role="group" aria-label={label}>{children}</div>}
   </div>;
 }

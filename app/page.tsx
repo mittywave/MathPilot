@@ -62,11 +62,11 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
   return <article className={`question-card ${checked ? "checked" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
-      <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span><em>{path || question.source}</em></div>
+      <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
       <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
       {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
       {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
-      <div className="question-actions"><button onClick={() => actions.toggleAnswer(question.id)}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button>}</>}{basket && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
+      <div className="question-actions"><button onClick={() => actions.toggleAnswer(question.id)}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}{basket && <div className="basket-card-actions"><button disabled={index === 0 || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
     </div>
   </article>;
 });
@@ -116,7 +116,7 @@ export default function Home() {
   const [draggedModuleId, setDraggedModuleId] = useState("");
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
-  const moduleManager = useRef<HTMLButtonElement>(null);
+  const moduleManager = useRef<HTMLDivElement>(null);
   const [showWrongBook, setShowWrongBook] = useState(false);
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [activeStudentId, setActiveStudentId] = useState("");
@@ -199,12 +199,13 @@ export default function Home() {
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
 
   const descendantsOf = (id: string) => categoryDescendants(categories, id);
-  const categoryById = (id: string | null) => categories.find((item) => item.id === id);
   const moduleById = (id: string | null) => modules.find((item) => item.id === id);
   const pathOf = (id: string) => categoryPath(modules, categories, id);
-  const countFor = (id: string) => moduleById(id)
-    ? questions.filter((question) => question.moduleId === id).length
-    : questions.filter((question) => descendantsOf(id).includes(question.categoryId)).length;
+  const countFor = (id: string) => {
+    if (moduleById(id)) return questions.filter((question) => question.moduleId === id).length;
+    const ids = descendantsOf(id);
+    return questions.filter((question) => ids.includes(question.categoryId)).length;
+  };
   const moduleCategories = activeModule ? categories.filter((item) => item.moduleId === activeModule.id) : [];
   const moduleQuestions = activeModule ? questions.filter((item) => item.moduleId === activeModule.id) : [];
   const activeCategoryIds = activeCategory ? descendantsOf(activeCategory) : activeModule ? [activeModule.id, ...moduleCategories.map((item) => item.id)] : [];
@@ -250,7 +251,7 @@ export default function Home() {
     return () => observer.disconnect();
   }, [listKey, visibleCount, filteredQuestions.length, typesetting]);
 
-  const activeName =showSelected ? "我的组卷" : byCode ? `ID ${byCode.code}` : activeCategory ? moduleById(activeCategory)?.name ?? categoryById(activeCategory)?.name ?? pageCopy.allQuestions : pageCopy.allQuestions;
+  const activeName = activeCategory ? pathOf(activeCategory) : activeModule?.name || pageCopy.publicLibrary;
   const activeWrongEntries = wrongEntries.filter(entry => entry.archivedAt == null);
   const historicalWrongEntries = wrongEntries.filter(entry => entry.archivedAt != null);
   const filteredWrongEntries = useMemo(() => {
@@ -267,6 +268,7 @@ export default function Home() {
   const selectedWrongEntries = activeWrongEntries.filter((entry) => selectedIds.includes(entry.question.id));
   const selectableIds = showWrongBook ? visibleWrongMonths.flatMap((group) => group.entries.map((entry) => entry.question.id)) : filteredQuestions.map((item) => item.id);
 
+  const selectedHere = selectedQuestions.filter(question => showWrongBook ? selectedWrongEntries.some(entry => entry.question.id === question.id) : activeCategoryIds.includes(question.categoryId)).length;
   const allFilteredSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.includes(id));
 
   function showWrongEntries(entries: WrongQuestionEntry[]) {
@@ -523,7 +525,7 @@ export default function Home() {
       setModuleDialog(null);
       setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
       setNotice("模块及其内容已删除");
-      requestAnimationFrame(() => moduleManager.current?.focus());
+      requestAnimationFrame(() => moduleManager.current?.querySelector<HTMLButtonElement>(".more-toggle")?.focus());
     } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
     finally { deleting.current = false; }
   }
@@ -549,25 +551,25 @@ export default function Home() {
             <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}</b><small>{student.className || "未填写班级"}</small></div><em>{student.wrongCount}</em></button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
             <button className="manage-button" onClick={() => openStudentDialog()}>＋ 新建学生档案</button>
           </> : <>
-          <div className="sidebar-heading"><div><span className="eyebrow">{activeModule?.name ?? pageCopy.publicLibrary}</span><h2>{pageCopy.knowledgeDirectory}</h2></div>{canManageLibrary && activeModule && <button className="icon-button" aria-label={pageCopy.addCategory} title={pageCopy.addCategory} onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋</button>}</div>
-          <CategoryTree module={activeModule} categories={categories} activeId={showSelected ? null : activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setShowSelected(false); }} />
+          <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button>}
           </>}
         </aside>}
 
-        <section className="content">
+        <section className={`content${!showWrongBook && !showSelected ? " library-content" : ""}`}>
           {showWrongBook ? <>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => { if (event.target.value === NEW_STUDENT_OPTION) openStudentDialog(); else selectStudent(event.target.value); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}<option value={NEW_STUDENT_OPTION}>＋ 新建学生</option></select></label>}
             {activeStudent ? <>
               <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><p className="breadcrumb">{activeStudent.className || "未填写班级"}</p><h1>{activeStudent.name}</h1>{activeStudent.notes && <p className="subtext">{activeStudent.notes}</p>}</div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} title="按这位学生的档案从题库挑题、按天排好">智能组卷</a><PaperMoreMenu label={`${activeStudent.name}的档案操作`}><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><hr /><button className="danger-text" onClick={() => void removeStudent(activeStudent)}>删除档案…</button></PaperMoreMenu></div></div>
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
               {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
-              <div className="content-head wrong-book-head"><div><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div><label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label></div>
-              {!!activeWrongEntries.length && <div className="filters">
-                <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => setWrongMonth("全部")}>全部 <span>{activeWrongEntries.length}</span></button>
-                {wrongMonths.map((month) => <button key={month} className={`filter ${activeWrongMonth === month ? "active" : ""}`} onClick={() => setWrongMonth(month)}>{month} <span>{activeWrongEntries.filter((entry) => wrongMonthOf(entry) === month).length}</span></button>)}
-                <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!selectableIds.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消选中" : "选中结果"}</button>
-              </div>}
+              <div className="content-head wrong-book-head"><div><p className="subtext">上传学生作业自动批改，完全错误的题目按月收录，可加入组卷篮导出。</p>{!!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div></div>
+              <div className="filters"><label className="search"><span>⌕</span><input value={query} onChange={(event) => { setQuery(event.target.value); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label><div className="page-language-switch filter-segments" role="group" aria-label="错题月份">
+                <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => { setWrongMonth("全部"); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }}>全部 <span>{activeWrongEntries.length}</span></button>
+                {wrongMonths.map((month) => <button key={month} className={`filter ${activeWrongMonth === month ? "active" : ""}`} onClick={() => { setWrongMonth(month); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }}>{month} <span>{activeWrongEntries.filter((entry) => wrongMonthOf(entry) === month).length}</span></button>)}
+                </div><button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!selectableIds.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消选中" : "选中结果"}</button>
+              </div>
               <div className="question-list wrong-question-list">
                 {wrongBookLoading ? <div className="wrong-book-loading"><i></i><span>正在读取错题记录…</span></div> : !filteredWrongEntries.length ? <div className="empty-state"><div>错</div><h3>{activeWrongEntries.length ? "没有符合搜索的错题" : "还没有错题记录"}</h3><p>{activeWrongEntries.length ? "换一个关键词继续查找" : "上传学生作业，批改后自动收录错题"}</p>{!activeWrongEntries.length && <button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button>}</div> : visibleWrongMonths.map((group) => <section className="wrong-month" key={group.month} aria-label={`${group.month}错题`}>
                   <h3 className="wrong-month-head">{group.month}<span>{group.entries.length} 题</span></h3>
@@ -597,35 +599,29 @@ export default function Home() {
               <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题 · 上移或下移调整顺序</span><button className="primary-button" disabled={isExporting || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={isExporting || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={isExporting || !selectedQuestions.length} onClick={() => setSelectedIds([])}>清空组卷篮</button></PaperMoreMenu></div>
             </aside>
           </> : <>
-          <div className="library-context-bar"><div><b>{pageCopy.publicLibrary}</b><span>{authUser ? pageCopy.publicMemberAccess : pageCopy.publicGuestAccess}</span></div>{canManageLibrary && <button ref={moduleManager} className="secondary" onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button>}</div>
-          <div className="module-switcher" aria-label={pageCopy.moduleSwitcher}>
-            {modules.map((examModule, index) => <button key={examModule.id} className={activeModule?.id === examModule.id && !showSelected ? "active" : ""} onClick={() => switchExamModule(examModule.id)}>
-              <span>{String(index + 1).padStart(2, "0")}</span><div><b>{examModule.name}</b><small>{examModule.subtitle || pageCopy.noSubtitle}</small></div><em>{pageLocale === "en" ? alevelQuestionCount(countFor(examModule.id), pageLocale) : `${countFor(examModule.id)} ${pageCopy.questionUnit}`}</em>
-            </button>)}
-            {canManageLibrary && <button className="module-add" onClick={openNewModule}><span>＋</span><div><b>{pageCopy.newModule}</b><small>{pageCopy.customModule}</small></div></button>}
-          </div>
-          <div className="content-head">
-            <div><p className="breadcrumb">{showSelected ? "当前题库组卷篮" : activeCategory ? pathOf(activeCategory) : activeModule?.name ?? "尚无模块"}</p><h1>{activeName}</h1><p className="subtext">{alevelQuestionCount(filteredQuestions.length, pageLocale)} · {showSelected ? "可跨当前题库的模块组卷" : byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeModule ? `${activeModule.name} ${pageCopy.moduleSuffix}` : "创建第一个模块后开始录题"}{!authUser && ` · ${pageCopy.guestSuffix}`}</p></div>
-            <div className="content-head-actions">{isAlevelPage && <div className="page-language-switch" role="group" aria-label={pageCopy.language}><button lang="zh-CN" className={alevelPageLocale === "zh" ? "active" : ""} aria-pressed={alevelPageLocale === "zh"} onClick={() => chooseAlevelPageLocale("zh")}>中文</button><button lang="en" className={alevelPageLocale === "en" ? "active" : ""} aria-pressed={alevelPageLocale === "en"} onClick={() => chooseAlevelPageLocale("en")}>English</button></div>}<label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label></div>
-          </div>
           <div className="filters">
-            <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} onClick={() => setTypeFilter("全部")}>{pageCopy.allTypes} <span>{showSelected ? selectedQuestions.length : byCode ? 1 : categoryQuestions.length}</span></button>
-            {questionTypes.map((type) => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} onClick={() => setTypeFilter(type)}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(showSelected ? selectedQuestions : byCode ? [byCode] : categoryQuestions).filter((item) => item.type === type).length}</span></button>)}
+            <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
+            <div className="page-language-switch filter-segments" role="group" aria-label={pageCopy.allTypes}>
+              <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} aria-pressed={typeFilter === "全部"} onClick={() => { setTypeFilter("全部"); window.scrollTo(0,0); }}>{pageCopy.all} <span>{byCode ? 1 : categoryQuestions.length}</span></button>
+              {questionTypes.filter(type => (byCode ? [byCode] : categoryQuestions).some(item => item.type === type)).map(type => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} aria-pressed={typeFilter === type} onClick={() => { setTypeFilter(type); window.scrollTo(0,0); }}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(byCode ? [byCode] : categoryQuestions).filter(item => item.type === type).length}</span></button>)}
+            </div>
             {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? pageCopy.clearSelection : pageCopy.selectResults}</button>}
+            {isAlevelPage && <div className="page-language-switch" role="group" aria-label={pageCopy.language}><button lang="zh-CN" className={alevelPageLocale === "zh" ? "active" : ""} aria-pressed={alevelPageLocale === "zh"} onClick={() => chooseAlevelPageLocale("zh")}>中文</button><button lang="en" className={alevelPageLocale === "en" ? "active" : ""} aria-pressed={alevelPageLocale === "en"} onClick={() => chooseAlevelPageLocale("en")}>English</button></div>}
           </div>
+          <div className="library-position">{byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeName.split(" / ").join(" › ")} · {alevelQuestionCount(filteredQuestions.length, pageLocale)}</div>
           </>}
           <div className="question-list">
-            {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : `${activeModule.name}${pageLocale === "en" ? " " : ""}${pageCopy.noQuestions}`}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
-            {filteredQuestions.slice(0, visibleCount).map((question, index) => <LibraryQuestionCard key={question.id} question={question} index={index} isLast={index === filteredQuestions.length - 1}
-              path={pathOf(question.categoryId)} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
-              basket={showSelected} canDelete={canDelete} isExporting={isExporting} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />)}
+            {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
+            {filteredQuestions.slice(0, visibleCount).map((question, index) => { const path = pathOf(question.categoryId); return <LibraryQuestionCard key={question.id} question={question} index={index} isLast={index === filteredQuestions.length - 1}
+              path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+              basket={showSelected} canDelete={canDelete} isExporting={isExporting} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />; })}
           </div>
           {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}
           </>}
         </section>
       </section>
 
-{authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>已选试题</span></div><div className="dock-title"><b>选好题目后，进入组卷篮整理</b></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>删除</button> : canDelete && <button className="dock-delete-button" onClick={deleteSelectedQuestions}>删除</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>取消选中</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>整理组卷 <span>→</span></button></aside>}
+{authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
 
       {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} onClose={() => setEntryDraft(null)} onNotice={setNotice} onSaved={(saved) => setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt))} />}
 
@@ -642,7 +638,7 @@ export default function Home() {
           <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>
           <div className="data-tools"><div><b>题库备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>
           {canDelete && <div className="data-tools"><div><b>回收站</b><small>删除的试题保留在这里，可恢复到原分类。</small></div><button className="secondary" onClick={openTrash}>打开</button></div>}
-          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ 新建分类</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
+          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ {pageCopy.addCategory}</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
         </>}
       </section></div>}
 
