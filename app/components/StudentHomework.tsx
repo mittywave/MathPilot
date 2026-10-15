@@ -10,6 +10,7 @@ import { AssignHomework } from "./AssignHomework";
 import { dayNote, dayState, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
+export const homeworkInProgress = (item: Homework) => item.latest.status !== "published" || item.pending > 0 || (item.assigned && item.done < item.total);
 
 // An assigned homework goes by task completion; an uploaded one goes by its grading.
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
@@ -72,7 +73,7 @@ function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: Stud
 }
 
 /** 学生档案 · 作业: the student's assigned and uploaded homework, newest first; each row opens its grading page. */
-export function StudentHomework({ student }: { student: StudentSummary }) {
+export function StudentHomework({ student, onProgressChange }: { student: StudentSummary; onProgressChange?: (studentId: string, inProgress: boolean) => void }) {
   // What was read, and for whom: switching students shows the loading state until that student's list arrives.
   const [loaded, setLoaded] = useState<{ studentId: string; homework: Homework[] | null; error: string } | null>(null);
   // Read again after a homework is assigned here.
@@ -80,10 +81,10 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
   const [assigning, setAssigning] = useState(false);
   useEffect(() => {
     let current = true;
-    homeworkApi.studentHomework(student.id).then((result) => { if (current) setLoaded({ studentId: student.id, homework: result.homework, error: "" }); })
+    homeworkApi.studentHomework(student.id).then((result) => { if (current) { setLoaded({ studentId: student.id, homework: result.homework, error: "" }); onProgressChange?.(student.id, result.homework.some(homeworkInProgress)); } })
       .catch((reason) => { if (current) setLoaded({ studentId: student.id, homework: null, error: reason instanceof Error ? reason.message : "作业记录读取失败" }); });
     return () => { current = false; };
-  }, [student.id, reads]);
+  }, [student.id, reads, onProgressChange]);
   const homework = loaded?.studentId === student.id ? loaded.homework : null;
   const error = loaded?.studentId === student.id ? loaded.error : "";
   const closeAssign = useCallback(() => setAssigning(false), []);

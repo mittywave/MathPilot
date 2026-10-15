@@ -9,7 +9,8 @@ import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { useConfirm } from "./components/ConfirmDialog";
 import { useToast } from "./components/Toast";
 import { SiteHeader } from "./components/SiteHeader";
-import { StudentHomework } from "./components/StudentHomework";
+import { StudentHomework, homeworkInProgress } from "./components/StudentHomework";
+import { homeworkApi } from "../lib/homework-api-client";
 import { StudentProfile } from "./components/StudentProfile";
 import { StudentReports } from "./components/StudentReports";
 import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
@@ -126,6 +127,7 @@ export default function Home() {
   const moduleManager = useRef<HTMLDivElement>(null);
   const [showWrongBook, setShowWrongBook] = useState(false);
   const [students, setStudents] = useState<StudentSummary[]>([]);
+  const [studentHomeworkInProgress, setStudentHomeworkInProgress] = useState<Record<string, boolean>>({});
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
   const [wrongBookLoading, setWrongBookLoading] = useState(false);
@@ -146,6 +148,28 @@ export default function Home() {
   const canManageLibrary = Boolean(authUser);
   const canDelete = authUser?.role === "admin";
   const activeStudent = students.find((item) => item.id === activeStudentId) ?? null;
+  const updateHomeworkProgress = useCallback((studentId: string, inProgress: boolean) => {
+    setStudentHomeworkInProgress((current) => current[studentId] === inProgress ? current : { ...current, [studentId]: inProgress });
+  }, []);
+
+  useEffect(() => {
+    if (!showWrongBook || !authUser) return;
+    let current = true, latest = 0;
+    // Read the existing homework summaries only while the archive is open; returning to the window refreshes them.
+    const refresh = () => {
+      const request = ++latest;
+      void Promise.allSettled(students.map((student) => homeworkApi.studentHomework(student.id))).then((results) => {
+        if (!current || request !== latest) return;
+        setStudentHomeworkInProgress((previous) => Object.fromEntries(students.map((student, index) => {
+          const result = results[index];
+          return [student.id, result.status === "fulfilled" ? result.value.homework.some(homeworkInProgress) : previous[student.id] ?? false];
+        })));
+      });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { current = false; window.removeEventListener("focus", refresh); };
+  }, [showWrongBook, authUser, students]);
 
 
   useEffect(() => {
@@ -681,7 +705,7 @@ export default function Home() {
         {(!showSelected || showWrongBook) && <aside className="sidebar">
           {showWrongBook ? <>
             <div className="sidebar-heading"><span className="eyebrow">学生 · {students.length}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
-            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}</b><small>{student.className || "未填写班级"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
+            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkInProgress[student.id] && <i title="有未交齐、批改中或待处理的作业">作业中</i>}</b><small>{student.className || "未填写班级"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
@@ -695,7 +719,7 @@ export default function Home() {
             {activeStudent ? <>
               <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><h1>{activeStudent.name}</h1><p className="subtext"><span>{activeStudent.className || "未填写班级"}</span><span>错题 <b>{activeStudent.wrongCount}</b></span>{activeStudent.notes && <span title={activeStudent.notes}>{activeStudent.notes.split(/[。！？\n]|[.!?]\s/, 1)[0]}</span>}</p></div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} title="按这位学生的档案从题库挑题、按天排好">智能组卷</a><PaperMoreMenu label={`${activeStudent.name}的档案操作`}><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><hr /><button className="danger-text" onClick={() => void removeStudent(activeStudent)}>删除档案…</button></PaperMoreMenu></div></div>
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
-              {archiveTab === "homework" ? <StudentHomework student={activeStudent} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
+              {archiveTab === "homework" ? <StudentHomework student={activeStudent} onProgressChange={updateHomeworkProgress} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
               {!!activeWrongEntries.length && <div className="wrong-book-head"><button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button></div>}
               <div className="filters"><label className="search"><span>⌕</span><input value={query} onChange={(event) => { setQuery(event.target.value); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label><div className="page-language-switch filter-segments" role="group" aria-label="错题月份">
                 <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => { setWrongMonth("全部"); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }}>全部 <span>{activeWrongEntries.length}</span></button>
