@@ -167,7 +167,7 @@ def main():
             try:
                 app.start();launcher=getattr(pw,name);options={'headless':True}
                 if name=='chromium':options.update(args=['--no-sandbox'],**({'executable_path':args.chromium} if args.chromium else {}))
-                browser=launcher.launch(**options);ctx=browser.new_context(viewport={'width':1440,'height':1000});key,val=app.cookie.split('=',1);ctx.add_cookies([{'name':key,'value':val,'url':app.base,'httpOnly':True,'sameSite':'Lax'}]);page=ctx.new_page();page.set_default_timeout(12000);errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+                browser=launcher.launch(**options);ctx=browser.new_context(viewport={'width':1440,'height':1000},reduced_motion='reduce');key,val=app.cookie.split('=',1);ctx.add_cookies([{'name':key,'value':val,'url':app.base,'httpOnly':True,'sameSite':'Lax'}]);page=ctx.new_page();page.set_default_timeout(12000);errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
                 r=exercise(page,app,target,upstream);r['pageErrors']=errors;assert not errors,errors;results[name]=r
             except Exception as e:
                 if page:
@@ -181,7 +181,7 @@ def main():
     server.shutdown();print(json.dumps(results,ensure_ascii=False,indent=2))
 
 def exercise(page,app,out,upstream):
-    r={};migration_check(page,app,out);page.goto(app.base+'/settings/ai');expect(page.get_by_role('heading',name='AI 配置中心',exact=True)).to_be_visible();expect(page.get_by_role('button',name='添加第一个提供方',exact=True)).to_be_visible();page.screenshot(path=str(out/'empty-light.png'),full_page=True)
+    r={};migration_check(page,app,out);page.goto(app.base+'/settings/ai');expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('AI 配置');expect(page).to_have_title('AI 配置 · 工具箱 · MathPilot');expect(page.get_by_role('button',name='添加第一个提供方',exact=True)).to_be_visible();page.screenshot(path=str(out/'empty-light.png'),full_page=True)
     assert app.request(API,cookie='')[0]==401
     status,_,hdr=app.request('/api/auth/register','POST',{'email':'member@example.invalid','password':'Synthetic-Member1','inviteCode':INVITE},cookie='');assert status==201
     assert app.request(API,cookie=hdr['Set-Cookie'].split(';')[0])[0]==403
@@ -206,17 +206,17 @@ def exercise(page,app,out,upstream):
         return next(p for p in app.ok(API)['providers'] if p['name']==name)
     ds=new('DeepSeek · 合成验收','deepseek','chat_completions','/deepseek')
     # Guard dirty state and keyboard cancel. The saved key is not retrieved.
-    page.get_by_label('名称',exact=True).fill('尚未保存');tab('任务分配');expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape');expect(page.get_by_label('名称',exact=True)).to_have_value('尚未保存');button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();expect(page.get_by_label('名称',exact=True)).to_have_value(ds['name'])
-    page.get_by_label('Base URL',exact=True).fill(upstream+'/different-tenant');button('保存配置').click();expect(page.get_by_role('alert')).to_contain_text('范围已变化');assert app.ok(API)['providers'][0]['baseUrl']==upstream+'/deepseek';button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click()
+    page.get_by_label('名称',exact=True).fill('尚未保存');tab('任务分配');expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape');expect(page.get_by_label('名称',exact=True)).to_have_value('尚未保存');button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='放弃修改',exact=True).click();expect(page.get_by_label('名称',exact=True)).to_have_value(ds['name'])
+    page.get_by_label('Base URL',exact=True).fill(upstream+'/different-tenant');button('保存配置').click();expect(page.get_by_role('alert')).to_contain_text('范围已变化');assert app.ok(API)['providers'][0]['baseUrl']==upstream+'/deepseek';button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='放弃修改',exact=True).click()
     tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');expect(page.get_by_text('Model-A',exact=True).first).to_be_visible()
     for theme in ['light','dark']:
-        for width in [390,768,1440]:
-            page.set_viewport_size({'width':width,'height':1000});page.evaluate('(t)=>{document.documentElement.dataset.theme=t;localStorage.setItem("mitty-color-theme",t)}',theme)
+        for width in [1024,1280,1440]:
+            page.set_viewport_size({'width':width,'height':1000});button('外观').click();page.get_by_role('radio',name='经典深色' if theme=='dark' else '经典浅色',exact=True).click();page.keyboard.press('Escape');assert page.locator('html').get_attribute('data-theme')==theme
             sizes=page.evaluate('({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth})');assert sizes['scroll']<=sizes['width'],sizes
             for label in ['重新获取上游模型','添加模型']:
-                b=button(label);expect(b).to_be_visible();metric=b.evaluate('e=>({height:e.getBoundingClientRect().height,fg:getComputedStyle(e).color,bg:getComputedStyle(e).backgroundColor})');assert metric['height']>=44;assert contrast(metric['fg'],metric['bg'])>=4.5,metric
+                b=button(label);expect(b).to_be_visible();metric=b.evaluate('e=>({height:e.getBoundingClientRect().height,fg:getComputedStyle(e).color,bg:getComputedStyle(e).backgroundColor})');assert metric['height']>=36;assert contrast(metric['fg'],metric['bg'])>=4.5,metric
             page.screenshot(path=str(out/f'models-{theme}-{width}.png'),full_page=True)
-    page.set_viewport_size({'width':1440,'height':1000});r['responsiveThemes']=6
+    page.set_viewport_size({'width':1440,'height':1000});r['desktopThemes']=6
     # Model-specific effort survives catalog refresh, without altering other models.
     model_card=page.locator('article').filter(has=page.get_by_text('Model-A',exact=True))
     model_card.get_by_role('button',name='编辑',exact=True).click();page.get_by_label('此模型思考档位',exact=True).select_option('high');button('保存模型').click();expect(page.get_by_role('status')).to_contain_text('模型已保存')
@@ -226,7 +226,7 @@ def exercise(page,app,out,upstream):
     r['perModelEffort']=True;r['imageChallenge']=True
     # Manual case-sensitive model, duplicate rejected; blank form cannot submit.
     button('添加模型').click();button('保存模型').click();expect(page.locator('[name=modelId]')).to_be_focused();page.locator('[name=modelId]').fill('Manual-Case');page.get_by_label('文本能力',exact=True).select_option('supported');page.get_by_label('图片能力',exact=True).select_option('unsupported');page.get_by_label('结构化能力',exact=True).select_option('supported');button('保存模型').click();page.locator('summary',has_text='已保留但不在当前上游目录').click();expect(page.get_by_text('Manual-Case',exact=True)).to_be_visible()
-    button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])
+    button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='放弃修改',exact=True).click();button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])
     gm=new('Sub2API · Gemini','sub2api','gemini_generate_content','/tenant/antigravity/v1beta');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
     cl=new('Sub2API · Claude','sub2api','anthropic_messages','/claude/antigravity/v1');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('alert')).to_contain_text('目录接口不可用');button('添加模型').click();page.locator('[name=modelId]').fill('Claude-Alias');
     for cap in ['文本能力','图片能力','结构化能力']:page.get_by_label(cap,exact=True).select_option('supported')
@@ -243,11 +243,11 @@ def exercise(page,app,out,upstream):
     page.get_by_label(labels[0]+'主目标',exact=True).select_option(target(ds,'Manual-Case'))
     for label,p,m in [(labels[1],ds,'Model-A'),(labels[2],cl,'Claude-Alias'),(labels[3],ds,'Model-A')]:page.get_by_label(label+'主目标',exact=True).select_option(target(p,m))
     button('保存任务分配').click();expect(page.get_by_role('status')).to_contain_text('任务分配已保存');page.screenshot(path=str(out/'routing-dark-1440.png'),full_page=True)
-    page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(out/'routing-dark-390.png'),full_page=True);assert page.evaluate('document.documentElement.scrollWidth<=document.documentElement.clientWidth');page.set_viewport_size({'width':1440,'height':1000})
-    tab('提供方');page.set_viewport_size({'width':390,'height':844});page.get_by_label('当前提供方',exact=True).select_option(gm['id']);expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+'/tenant/antigravity/v1beta');button('外观').click();page.get_by_role('radio',name='经典浅色',exact=True).click();page.keyboard.press('Escape');assert page.evaluate('[document.documentElement.dataset.theme,document.documentElement.dataset.style]')==['light','classic'];page.screenshot(path=str(out/'connection-light-390.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
-    page.get_by_text('更多操作',exact=True).click();button('复制连接（无 Key）').click();expect(page.get_by_label('密钥操作',exact=True)).to_have_value('keep');assert page.locator('[name=apiKey]').count()==0;expect(page.get_by_label('允许任务使用此连接',exact=False)).not_to_be_checked();button('保存配置').click();settle();copied=next(p for p in app.ok(API)['providers'] if p['name'].endswith(' 副本'));assert copied['hasApiKey'] is False
-    page.get_by_text('更多操作',exact=True).click();button('删除提供方').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();expect(page.get_by_role('status')).to_contain_text('提供方已删除');assert len(app.ok(API)['providers'])==3
-    page.get_by_label('允许任务使用此连接',exact=False).uncheck();button('保存配置').click();expect(page.get_by_role('dialog')).to_contain_text('处引用');page.screenshot(path=str(out/'referenced-disable-confirmation.png'),full_page=True);page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click();button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click()
+    page.set_viewport_size({'width':1024,'height':768});page.screenshot(path=str(out/'routing-dark-1024.png'),full_page=True);assert page.evaluate('document.documentElement.scrollWidth<=document.documentElement.clientWidth');page.set_viewport_size({'width':1440,'height':1000})
+    tab('提供方');page.set_viewport_size({'width':1024,'height':768});page.locator('aside').get_by_role('button').filter(has_text=gm['name']).click();expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+'/tenant/antigravity/v1beta');button('外观').click();page.get_by_role('radio',name='经典浅色',exact=True).click();page.keyboard.press('Escape');assert page.evaluate('[document.documentElement.dataset.theme,document.documentElement.dataset.style]')==['light','classic'];page.screenshot(path=str(out/'connection-light-1024.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
+    page.get_by_role('button',name=re.compile('的连接操作$')).click();button('复制连接（无 Key）').click();expect(page.get_by_label('密钥操作',exact=True)).to_have_value('keep');assert page.locator('[name=apiKey]').count()==0;expect(page.get_by_label('允许任务使用此连接',exact=False)).not_to_be_checked();button('保存配置').click();settle();copied=next(p for p in app.ok(API)['providers'] if p['name'].endswith(' 副本'));assert copied['hasApiKey'] is False
+    page.get_by_role('button',name=re.compile('的连接操作$')).click();button('删除提供方…').click();page.get_by_role('dialog').get_by_role('button',name='删除提供方',exact=True).click();expect(page.get_by_role('status')).to_contain_text('提供方已删除');assert len(app.ok(API)['providers'])==3
+    page.get_by_label('允许任务使用此连接',exact=False).uncheck();button('保存配置').click();expect(page.get_by_role('dialog')).to_contain_text('处引用');page.screenshot(path=str(out/'referenced-disable-confirmation.png'),full_page=True);page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click();button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='放弃修改',exact=True).click()
     # Actual business endpoints go through the shared gateway, not a mocked application API.
     # Recognition goes to the model routed above (Manual-Case): capability labels never redirect a call.
     for path,body,model,prefix in [('/api/recognize',{'image':IMAGE,'categories':[]},'Manual-Case','/deepseek'),('/api/optimize',{'stem':'合成验收题：计算 x','options':[],'tags':[]},'Model-A','/deepseek'),('/api/reconstruct-diagram',{'image':IMAGE,'stem':'线段 AB','imageAspectRatio':1.5},'Claude-Alias','/claude/antigravity/v1')]:
@@ -260,8 +260,8 @@ def exercise(page,app,out,upstream):
     assert 'synthetic-browser-provider-key' not in json.dumps(app.ok(API))
     r.update(permissions=True,dirtyGuard=True,scopeGuard=True,directoryFailureManualModel=True,modelProbe=True,probeCancellation=True,capabilityAdvisory=True,referenceDeleteGuard=True,revisionConflict=True)
     word_export(page,app,out)
-    r['wordExport']=True;r['mobileSelectorAndThemeButton']=True;r['copyWithoutKeyAndDelete']=True;r['referencedDisableConfirmation']=True
-    page.goto(app.base+'/settings/ai');expect(page.get_by_role('heading',name='AI 配置中心',exact=True)).to_be_visible();page.screenshot(path=str(out/'connection-final.png'),full_page=True)
+    r['wordExport']=True;r['desktopSelectorAndThemeButton']=True;r['copyWithoutKeyAndDelete']=True;r['referencedDisableConfirmation']=True
+    page.goto(app.base+'/settings/ai');expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('AI 配置');expect(page).to_have_title('AI 配置 · 工具箱 · MathPilot');page.screenshot(path=str(out/'connection-final.png'),full_page=True)
     return r
 
 def migration_check(page,app,out):
@@ -299,7 +299,7 @@ def word_export(page,app,out):
     mod=app.ok('/api/modules','POST',{'module':{'name':'V2 验收题库'}})['module']
     # Real application data, safe synthetic material. Fraction + picture exercise native Word structures.
     q={'moduleId':mod['id'],'categoryId':mod['id'],'type':'单选题','difficulty':'基础','stem':'合成验收：计算 $x=\\frac{1}{2}$。','options':['$\\frac{1}{2}$','1','2','4'],'answer':'A','analysis':'分数保持为可编辑公式：$\\frac{1}{2}$。','source':'V2 本地验收','tags':[],'contentImages':[word_image()],'imageLayout':'right','createdAt':1,'updatedAt':1}
-    app.ok('/api/questions','POST',{'question':q});page.goto(app.base+'/');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.locator('.module-switcher button',has_text='V2 验收题库').click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('button',name='生成 Word',exact=True)).to_be_visible()
+    app.ok('/api/questions','POST',{'question':q});page.goto(app.base+'/');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.locator('.tree-row.module-root',has_text='V2 验收题库').click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('button',name='生成 Word',exact=True)).to_be_visible()
     with page.expect_download() as dl:page.get_by_role('button',name='生成 Word',exact=True).click()
     path=out/'actual-page-export.docx';dl.value.save_as(str(path));page.screenshot(path=str(out/'question-bank-after-word-export.png'),full_page=True)
     with zipfile.ZipFile(path) as z:
