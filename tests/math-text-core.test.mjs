@@ -130,3 +130,12 @@ test('newline recovery leaves explicit math, commands, literals and paths intact
   const source = String.raw`$\n$之后。\n（2）$a\neq b$`;
   assert.equal(normalizeProseLineBreaks(source), '$\\n$之后。\n（2）$a\\neq b$');
 });
+
+test('newline recovery starts choice options and sentences on new lines but keeps negated arrows', () => {
+  const source = String.raw`等于( )\n\nA. -1\nB. $-2x-1$\r\nC. 1\nThe end`;
+  const expected = '等于( )\n\nA. -1\nB. $-2x-1$\nC. 1\nThe end';
+  assert.equal(normalizeProseLineBreaks(source), expected);
+  assert.equal(normalizeProseLineBreaks(expected), expected);
+  for (const source of [String.raw`p\nRightarrow q`, String.raw`A\nLeftarrow B`, String.raw`$p\nRightarrow q$`, String.raw`C:\data\nA.txt`])
+    assert.equal(normalizeProseLineBreaks(source), source, source);
+});

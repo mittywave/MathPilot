@@ -7,7 +7,7 @@ const {mathOmml}=await import('data:text/javascript;base64,'+Buffer.from(compile
 const splitBuild=await build({entryPoints:['lib/answer-studio-math-text.ts'],bundle:true,write:false,format:'esm',platform:'node'});
 const {splitMathText}=await import('data:text/javascript;base64,'+Buffer.from(splitBuild.outputFiles[0].text).toString('base64'));
 const normalizeBuild=await build({entryPoints:['lib/answer-studio-normalize.ts'],bundle:true,write:false,format:'esm',platform:'node'});
-const {normalizeStudioMathEscapes}=await import('data:text/javascript;base64,'+Buffer.from(normalizeBuild.outputFiles[0].text).toString('base64'));
+const {normalizeStudioMathEscapes,normalizeStudioTextFields}=await import('data:text/javascript;base64,'+Buffer.from(normalizeBuild.outputFiles[0].text).toString('base64'));
 test('native math retains fractions in scripts and roots, systems, arcs and parallel-equal notation',()=>{
   assert.match(mathOmml(String.raw`x^{\frac{1}{2}}+\sqrt[3]{\frac{a}{b}}`),/<m:sSup>[\s\S]*<m:f>/);
   assert.match(mathOmml(String.raw`\begin{cases}x+y=3\\x-y=1\end{cases}`),/<m:eqArr>/);
@@ -39,6 +39,16 @@ test('OCR nequiv typo is normalized to the intended parallel symbol',async()=>{
   const normalized=normalizeStudioMathEscapes(String.raw`$NE \nequiv BC$`);
   assert.equal(normalized,String.raw`$NE \parallel BC$`);
   assert.match(mathOmml(splitMathText(normalized).find(s=>s.kind==='math').value),/>∥<\/m:t>/);
+});
+test('doubly escaped newlines between transcribed choices become real lines with native formulas',()=>{
+  // A whole page of model output arrived with \\n instead of \n; \nA then failed Word export as a command.
+  const stem=String.raw`假设$-1<x<0$，那么$\sqrt{x^2}-\sqrt{(x+1)^2}$等于( )\n\nA. -1\nB. 1\nC. $-2x-1$\nD. $-2x+1$`;
+  const record=normalizeStudioTextFields({stem,analysis:String.raw`选D.\n【点评】本题考查二次根式，$a\neq b$。`,warnings:[]});
+  assert.equal(record.stem,'假设$-1<x<0$，那么$\\sqrt{x^2}-\\sqrt{(x+1)^2}$等于( )\n\nA. -1\nB. 1\nC. $-2x-1$\nD. $-2x+1$');
+  assert.equal(record.analysis,'选D.\n【点评】本题考查二次根式，$a\\neq b$。');
+  assert.deepEqual(record.warnings,[],'no formula warnings reach the Word file');
+  for(const line of record.stem.split('\n'))for(const segment of splitMathText(line).filter(s=>s.kind==='math'))assert.doesNotThrow(()=>mathOmml(segment.value),line);
+  assert.equal(normalizeStudioMathEscapes(record.stem),record.stem);
 });
 test('S9 winter answer export fixture keeps every reported math form native',async()=>{
   const fixture=JSON.parse(await fs.readFile(new URL('./fixtures/answer-studio-s9-math.json',import.meta.url),'utf8'));

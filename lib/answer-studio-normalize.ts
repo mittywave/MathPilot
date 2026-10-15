@@ -1,14 +1,16 @@
-import { repairMathSource, scanMathSource } from "./math-source.mjs";
+import { normalizeProseLineBreaks, repairMathSource, scanMathSource } from "./math-source.mjs";
 import { studioMathIssues } from "./studio-math-layout";
 import { hasStudioControlCharacters, type StudioAnswerPlacement, type StudioTable } from './answer-studio';
 
 // A model may emit a valid JSON escape (e.g. \t) instead of the LaTeX
 // backslash. Repair only unambiguous command suffixes inside explicit math;
 // never reinterpret ordinary prose whitespace or guess mathematical content.
+// A doubly escaped newline (a literal \n in prose) becomes a real line break,
+// so stored drafts, warnings and Word paragraphs all see the same lines.
 export function normalizeStudioMathEscapes(text: string) {
   // eslint-disable-next-line no-control-regex -- JSON-decoded TeX commands
   text=text.replace(/\\*\x08(oldsymbol|ecause|eta|egin|ot|igodot)\b/g, '\\b$1');
-  const source=repairMathSource(text);
+  const source=repairMathSource(normalizeProseLineBreaks(text));
   let cursor=0,result='';
   for(const range of scanMathSource(source).ranges) {
     const markerLength=source[range.start]==='$'?(range.display?2:1):2;

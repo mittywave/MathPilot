@@ -24,7 +24,7 @@ for(const name of ['math-capabilities.mjs','math-notation.mjs','math-text-core.m
 const normalizerSource=await readFile(new URL('../lib/answer-studio-normalize.ts',import.meta.url),'utf8');
 const ast=ts.createSourceFile('normalize.ts',normalizerSource,ts.ScriptTarget.Latest,true);
 const declaration=ast.statements.find(s=>ts.isFunctionDeclaration(s)&&s.name?.text==='normalizeStudioMathEscapes');
-const normalizer=ts.transpileModule('import {repairMathSource,scanMathSource} from "./math-source.mjs";\n'+declaration.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+const normalizer=ts.transpileModule('import {normalizeProseLineBreaks,repairMathSource,scanMathSource} from "./math-source.mjs";\n'+declaration.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 await writeFile(join(dir,'normalize.js'),normalizer);
 const {normalizeStudioMathEscapes}=require(join(dir,'normalize.js'));
 const {mathOmml}=require(join(dir,'math-omml.js'));
