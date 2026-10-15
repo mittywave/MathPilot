@@ -11,6 +11,8 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import jpeg from "jpeg-js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
@@ -852,6 +854,54 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     reportList=(await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne})).payload.reports;
     assert.deepEqual(reportList.map(item=>item.id),[report.id]);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo})).response.status,404);
+
+    // Per-day corrections reuse uploads and their processing scope; only confirmed mistakes may change.
+    const correctionBody={studentIds:[studentTwoId],title:"按天订正回归",groups:[{title:"第 1 天",size:3},{title:"第 2 天",size:1}],questions:[
+      sheetQuestion("correction-1","计算 $1+1$","2",{type:"解答题"}),sheetQuestion("correction-2","计算 $2+2$","4",{type:"解答题"}),
+      sheetQuestion("correction-3","计算 $3+3$","6"),sheetQuestion("correction-4","计算 $4+4$","8"),
+    ]};
+    const correctionOriginal=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:correctionBody})).payload.assigned[0].id;
+    mock.state.assignedPage=[{question_number:"D1-1",student_answer:"3"},{question_number:"D1-2",student_answer:"5"},{question_number:"D1-3",student_answer:"7"},{question_number:"D2-1",student_answer:"8"}];
+    mock.state.assignedAnswers={"D1-1":"3","D1-2":"5","D1-3":"7","D2-1":"8"};
+    mock.state.assignedVerdicts={"D1-1":"incorrect","D1-2":"incorrect","D1-3":"incorrect","D2-1":"correct"};
+    await submitPages(base,teacherOne,correctionOriginal,[await uploadPage(base,teacherOne,correctionOriginal,bytes)]);
+    const correctionBefore=await waitForSubmission(base,teacherOne,correctionOriginal,["published"],worker);
+    for(const correctionDay of [-1,2,0.5,"0"])assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay}})).response.status,400);
+    assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherTwo,method:"PUT",body:{action:"new-version",correctionDay:0}})).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:1}})).response.status,409,"a correct day has no mistakes to correct");
+    const correctionDraft=(await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
+    const correctionIds=correctionBefore.assigned.questions.slice(0,3).map(q=>q.id);
+    assert.deepEqual(correctionDraft.questionScope,correctionIds);
+    assert.deepEqual((await jsonRequest(base,`/api/submissions/${correctionDraft.id}`,{cookie:teacherOne})).payload.submission.questionScope,correctionIds,"reloading retains the day and question scope");
+    assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission.id,correctionDraft.id,"repeated clicks reuse the same draft");
+    mock.state.assignedPage=[{question_number:"1",student_answer:"2"},{question_number:"D1-2",student_answer:"只算了第一步"},{question_number:"D2-1",student_answer:"99"}];
+    mock.state.assignedAnswers={"D1-1":"2","D1-2":"只算了第一步","D2-1":"99"};
+    mock.state.assignedVerdicts={"D1-1":"correct","D1-2":"partial","D2-1":"incorrect"};
+    mock.state.gradedNumbers=[];
+    await submitPages(base,teacherOne,correctionDraft.id,[await uploadPage(base,teacherOne,correctionDraft.id,bytes)]);
+    const correctionAfter=await waitForSubmission(base,teacherOne,correctionDraft.id,["published"],worker);
+    assert.deepEqual(mock.state.gradedNumbers.sort(),["D1-1","D1-2"],"other days and an omitted correction are not graded");
+    assert.doesNotMatch(mock.state.assignedPrompts.at(-1),/D2-1｜/);
+    assert.deepEqual(correctionAfter.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["partial",true],["incorrect",false],["correct",false]]);
+    for(const index of [2,3])assert.deepEqual(correctionAfter.assigned.questions[index].result,correctionBefore.assigned.questions[index].result,"omitted mistakes and the other day retain their previous results");
+    assert.deepEqual(correctionAfter.assigned.days.map(d=>d.handedInAt),correctionBefore.assigned.days.map(d=>d.handedInAt));
+    const {AssignedHomeworkSheet}=await loadSource("app/components/AssignedHomeworkSheet.tsx");
+    const correctionHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:correctionAfter,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
+    assert.match(correctionHtml,/<li class="corrected"[^>]*title="第 1 天 第 1 题 · 已订正/);
+    assert.match(correctionHtml,/<li class="incorrect"[^>]*title="第 1 天 第 2 题 · 错/,"a still-partial correction remains red");
+    assert.match(correctionHtml,/<button[^>]*disabled=""[^>]*aria-label="第 2 天订正"/);
+    assert.equal((correctionHtml.match(/class="assigned-correct"/g)??[]).length,2,"every day has a correction button");
+    const correctionAgain=(await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
+    assert.deepEqual(correctionAgain.questionScope,correctionIds.slice(1),"already corrected work is excluded from the next correction");
+    mock.state.assignedPage=[{question_number:"D1-2",student_answer:"4"}];mock.state.assignedAnswers={"D1-2":"4"};mock.state.assignedVerdicts={"D1-2":"correct"};
+    await submitPages(base,teacherOne,correctionAgain.id,[await uploadPage(base,teacherOne,correctionAgain.id,bytes)]);
+    const correctionFinal=await waitForSubmission(base,teacherOne,correctionAgain.id,["published"],worker);
+    assert.deepEqual(correctionFinal.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["correct",true],["incorrect",false],["correct",false]]);
+    assert.equal(correctionFinal.assigned.uploads.length,3);
+    assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne})).payload.submission.gradingItems[0].verdict,"incorrect","the original incorrect attempt remains in history");
+    const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
+    assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});

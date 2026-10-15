@@ -20,7 +20,10 @@ export function knownSheetNumber(raw:string,known:Set<string>){
   const day=number.match(/^(?:D|第)?(\d+)天?-?第?(\d+)题?$/i);
   if(day&&known.has(`D${day[1]}-${day[2]}`))return `D${day[1]}-${day[2]}`;
   const single=number.match(/^第?(\d+)题?$/);
-  return single&&known.has(single[1])?single[1]:null;
+  if(single&&known.has(single[1]))return single[1];
+  // A day-specific correction can contain just the printed number; accept it only if the supplied inventory is unambiguous.
+  const matches=single?[...known].filter(candidate=>candidate.endsWith(`-${single[1]}`)):[];
+  return matches.length===1?matches[0]:null;
 }
 // An assigned sheet's reading keeps only the sheet's own questions under their listed numbers; anything else on the page
 // (another sheet, scrap work) is left out, and parts the model listed apart are one question again.

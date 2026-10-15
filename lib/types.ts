@@ -394,7 +394,7 @@ export type HomeworkDay = HomeworkSheetGroup & {
  */
 export type AssignedHomework = {
   days: HomeworkDay[];
-  questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified"> & { submissionId: string }) | null }>;
+  questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified"> & { submissionId: string; wasIncorrect: boolean }) | null }>;
   uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
 };
 
@@ -641,6 +641,8 @@ export type HomeworkSubmission = {
   report: SubmissionReport | null;
   /** Present on an assigned homework: the whole sheet with each question's latest result. */
   assigned?: AssignedHomework | null;
+  /** Existing processing scope, retained across reloads for an upload of selected mistakes. */
+  questionScope?: string[];
   createdAt: number;
   updatedAt: number;
 };
