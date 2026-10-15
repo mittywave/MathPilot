@@ -200,3 +200,23 @@ test("a sheet in days (智能组卷): each day under its own heading from a new 
   assert.match(plain, /\\handoutfields\{姓名,班级,得分\}/);
   assert.match(buildHandoutLatex({ title: "练习", answers: "none", sheet: "练习", questions: [proof], groups: [{ title: "第 1 天", size: 1 }, { title: "第 2 天", size: 0 }] }), /\\handoutgroup\{第 1 天\}\{1\}/);
 });
+
+test("basket sections flow naturally, keep global question anchors/numbers, and repeat headings in the key", () => {
+  const groups = [{ title: "一、热身", size: 2 }, { title: "二、应用", size: 1 }];
+  const input = { title: "结构化组卷", sheet: "练习", questions: [proof, blank, { ...blank, id: "third" }], groups, groupMode: "sections" };
+  for (const answers of ["none", "end", "each"]) {
+    const source = buildHandoutLatex({ ...input, answers });
+    assert.match(source, /\\handoutfields\{姓名,班级,得分\}/);
+    assert.match(source, /\\handoutnumberwidth\{3\}/);
+    assert.doesNotMatch(source, /\\handoutgroup\{/);
+    assert.deepEqual([...source.matchAll(/\\begin\{handoutquestion\}\{(\d+)\}/g)].map((match) => match[1]), ["1", "2", "3"]);
+    assert.match(source, /\\handoutsection\{\}\{一、热身\}/);
+    assert.match(source, /\\handoutsection\{\}\{二、应用\}/);
+    if (answers === "end") {
+      const key = source.slice(source.indexOf("\\handoutanswerkey"));
+      assert.match(key, /\\handoutkeygroup\{一、热身\}\{3\}/);
+      assert.match(key, /\\handoutkeygroup\{二、应用\}\{3\}/);
+      assert.deepEqual([...key.matchAll(/\\begin\{handoutkey\}\{(\d+)\}/g)].map((match) => match[1]), ["1", "2", "3"]);
+    }
+  }
+});

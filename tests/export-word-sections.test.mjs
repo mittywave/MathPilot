@@ -79,6 +79,19 @@ test("answers can be omitted, collected at the end, or placed after each questio
   assert.doesNotMatch(between, /\u3000/, "no blank working lines when the answer follows directly");
 });
 
+test("basket answer headings are opt-in and keep continuous numbering across sections", async () => {
+  const grouped = [{ heading: "一、热身", questions: questions.slice(0, 2) }, { heading: "二、应用", questions: questions.slice(2) }];
+  for (const answerHeadings of [true, false]) {
+    const blob = await buildWordBlob({ title: "结构化组卷", sections: grouped, answers: "end", answerHeadings });
+    const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml").async("string");
+    assert.equal(XMLValidator.validate(xml), true);
+    const key = xml.slice(xml.indexOf("参考答案与试题解析"));
+    if (answerHeadings) order(key, ["一、热身", "1．答案：", "ALPHAANSWER", "2．答案：", "BETAANSWER", "二、应用", "3．答案：", "GAMMAANSWER"]);
+    else assert.doesNotMatch(key, /一、热身|二、应用/);
+    assert.match(xml, /3．<\/w:t>[\s\S]*?GAMMAQUESTION/);
+  }
+});
+
 test("calculation analyses retain one paragraph per derivation step in both answer placements", async () => {
   const calculations = [
     { ...base, id: "calculation-one", type: "解答题", stem: String.raw`$(-6)\div(-\frac{1}{3})^{2}-7^{2}+2\times(-3)^{2}$`, options: [], answer: "$-85$",
