@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { AuthUser } from "../types";
-import type { StudioDraft, StudioPage, StudioRecord } from "../answer-studio";
+import { studioInputMode, type StudioDraft, type StudioPage, type StudioRecord } from "../answer-studio";
 import { normalizeStudioRecords, studioRecognitionPrompt, studioRecognitionSchema } from "../answer-studio-contract";
 import { StudioRequestError, studioConcurrency, studioRetryAfter } from "../answer-studio-concurrency";
 import { transcribeStudio } from "../answer-studio-pipeline";
@@ -11,8 +11,8 @@ import { callRecognitionModel, parseRecognitionModelText } from "./recognition-m
 type StudioQueueMessage = { kind: "studio_transcription"; jobId: string };
 type AppEnv = { DB: D1Database; HOMEWORK_ASSETS?: R2Bucket; HOMEWORK_GRADING_QUEUE?: { send(message: StudioQueueMessage): Promise<void> } };
 export type StudioJobStatus = "uploading" | "queued" | "running" | "done" | "failed";
-export type StudioJob = { id: string; title: string; inputMode: "paired" | "answers"; status: StudioJobStatus; stalled: boolean; pageCount: number; processedCount: number; questionCount: number; progress: string; error: string; createdAt: number; updatedAt: number };
-type JobRow = { id: string; owner_user_id: string; title: string; input_mode: "paired" | "answers"; status: StudioJobStatus; run_id: string; text_concurrency: number; page_count: number; processed_count: number; question_count: number; progress: string; error: string; created_at: number; updated_at: number };
+export type StudioJob = { id: string; title: string; status: StudioJobStatus; stalled: boolean; pageCount: number; processedCount: number; questionCount: number; progress: string; error: string; createdAt: number; updatedAt: number };
+type JobRow = { id: string; owner_user_id: string; title: string; status: StudioJobStatus; run_id: string; text_concurrency: number; page_count: number; processed_count: number; question_count: number; progress: string; error: string; created_at: number; updated_at: number };
 
 // The local queue delivers one batch at a time, so one long run would hold up homework grading.
 // Each delivery works for about this long, then re-queues and resumes from its checkpoint.
@@ -33,7 +33,7 @@ const PAGE_ID = /^[\w-]{1,80}$/;
 const draftKey = (id: string) => `studio/${id}/draft.json`;
 const imageKey = (id: string, pageId: string, kind: "full" | "recognize") => `studio/${id}/${pageId}.${kind}.jpg`;
 const job = (row: JobRow): StudioJob => ({
-  id: row.id, title: row.title, inputMode: row.input_mode, status: row.status,
+  id: row.id, title: row.title, status: row.status,
   stalled: (row.status === "queued" || row.status === "running") && Date.now() - row.updated_at > STALE_MS,
   pageCount: row.page_count, processedCount: row.processed_count, questionCount: row.question_count, progress: row.progress, error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
 });
@@ -67,15 +67,14 @@ export async function listStudioJobs(user: AuthUser) {
   return rows.results.map(job);
 }
 
-export async function createStudioJob(user: AuthUser, input: { title?: unknown; inputMode?: unknown; textConcurrency?: unknown }) {
+export async function createStudioJob(user: AuthUser, input: { title?: unknown; textConcurrency?: unknown }) {
   const title = typeof input.title === "string" ? input.title.trim() : "";
   if (!title || title.length > 200) throw badRequest("请填写资料名称");
-  if (input.inputMode !== "paired" && input.inputMode !== "answers") throw badRequest("材料类型无效");
   const id = crypto.randomUUID(), now = Date.now();
-  const draft: StudioDraft = { version: 1, title, inputMode: input.inputMode, pages: [], questions: [], answers: [], updatedAt: now };
+  const draft: StudioDraft = { version: 1, title, pages: [], questions: [], answers: [], updatedAt: now };
   await writeDraft(id, draft);
-  await db().prepare("INSERT INTO studio_jobs (id, owner_user_id, title, input_mode, status, text_concurrency, created_at, updated_at) VALUES (?, ?, ?, ?, 'uploading', ?, ?, ?)")
-    .bind(id, user.id, title, input.inputMode, studioConcurrency(input.textConcurrency), now, now).run();
+  await db().prepare("INSERT INTO studio_jobs (id, owner_user_id, title, status, text_concurrency, created_at, updated_at) VALUES (?, ?, ?, 'uploading', ?, ?, ?)")
+    .bind(id, user.id, title, studioConcurrency(input.textConcurrency), now, now).run();
   return job(await ownedRow(user, id));
 }
 
@@ -96,15 +95,14 @@ export async function addStudioJobPage(user: AuthUser, id: string, input: { page
   return job(await ownedRow(user, id));
 }
 
-/** Starts an uploaded job, or continues one that failed or lost its worker. */
+/** Starts an uploaded job, or continues one that failed or lost its worker.
+ * The uploaded pages decide the mode: originals only, answers only, or both paired. */
 export async function startStudioJob(user: AuthUser, id: string) {
   const row = await ownedRow(user, id);
   if (row.status !== "uploading" && row.status !== "failed" && !job(row).stalled) throw badRequest("任务正在进行或已完成");
-  if (!row.page_count) throw badRequest("请先上传页面");
-  if (row.input_mode === "paired") {
-    const draft = await readDraft(id);
-    if (!draft.pages.some(page => page.role === "question") || !draft.pages.some(page => page.role === "answer")) throw badRequest("请上传原件和答案文件");
-  }
+  const draft = await readDraft(id), inputMode = studioInputMode(draft.pages.map(page => page.role));
+  if (!inputMode) throw badRequest("请先上传页面");
+  if (draft.inputMode !== inputMode) await writeDraft(id, { ...draft, inputMode });
   await db().prepare("UPDATE studio_jobs SET status = 'queued', run_id = '', error = '', progress = '排队中…', updated_at = ? WHERE id = ?").bind(Date.now(), id).run();
   await dispatch(id);
   return job(await ownedRow(user, id));

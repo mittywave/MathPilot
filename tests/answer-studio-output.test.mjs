@@ -15,6 +15,26 @@ async function modules(t){
   await build({entryPoints:['lib/answer-studio-pipeline.ts','lib/answer-studio-output.ts','lib/answer-studio-export.ts'],bundle:true,platform:'node',format:'cjs',packages:'external',alias:{docx:require.resolve('docx'),jszip:require.resolve('jszip')},external:[require.resolve('docx'),require.resolve('jszip')],outdir:dir,outExtension:{'.js':'.cjs'},logLevel:'silent'});
   return Object.assign({},...['pipeline','output','export'].map(name=>require(join(dir,`answer-studio-${name}.cjs`))));
 }
+test('an originals-only paper becomes an editable question Word without answer notes or empty solutions',async t=>{
+  const {transcribeStudio,buildStudioWord,studioOutputs}=await modules(t);
+  const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const page={id:'p',role:'question',name:'paper.pdf',page:1,image:png,hash:'p',selected:true};
+  const question=(number,stem,diagramBoxes=[])=>({...record(`q${number}`,'p'),number,stem,analysis:'',diagramBoxes});
+  const draft={version:1,inputMode:'questions',title:'第一讲',updatedAt:0,pages:[page],questions:[],answers:[]};
+  const services={recognize:async()=>[question('1','如图，$\\angle A=90^\\circ$，求 $BC$。',[box]),question('2','计算 $\\frac{1}{2}+\\frac{1}{3}$。')],
+    crop:async()=>({image:png,width:300,height:200}),drawings:async()=>assert.fail('question figures need no drawing model'),checkpoint:async()=>{},progress:()=>{}};
+  const text=await transcribeStudio(draft,services,{drawings:false});
+  assert.ok(text.questions.every(q=>!q.warnings.length),'no answer-matching notes on a question paper');
+  assert.deepEqual(studioOutputs(text).map(o=>o.label),['题目版','题目版（无图）']);
+  const full=await transcribeStudio(text,services,{drawings:true,includeQuestionFigures:true});
+  const zip=await JSZip.loadAsync(await(await buildStudioWord(full,'full',{transcription:true})).arrayBuffer());
+  const xml=await zip.file('word/document.xml').async('string');
+  assert.match(xml,/第一讲 题目版/);assert.match(xml,/>，求</);assert.match(xml,/<m:f>/);
+  assert.equal(zip.file(/^word\/media\//).length,1,'the original figure is embedded once');
+  assert.doesNotMatch(xml,/StudioAnswer|未匹配|解析/,'no red solution or warning paragraphs');
+  const plain=await JSZip.loadAsync(await(await buildStudioWord(full,'text',{transcription:true})).arrayBuffer());
+  assert.equal(plain.file(/^word\/media\//).length,0);
+});
 test('legacy math exports natively without mutating drafts and failures identify their question',async t=>{
   const {buildStudioWord}=await modules(t);
   const q={...record('q','p'),stem:'弧 $\\overgroup{AB}$，圆 $\\\bigodot O$，$\\\\angle A=30^\\\\circ$',answerIds:[],questionSources:[],diagrams:[],reviewed:false,resolutions:{},answerPlacements:[{kind:'blank',placeholder:'___',answer:'$\bigodot O$'}]};

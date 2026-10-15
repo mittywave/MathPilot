@@ -2,11 +2,20 @@ import type { StudioDraft, StudioQuestion } from './answer-studio';
 
 /** Input describes evidence; output describes which content to include. */
 export type StudioOutputMode = 'full' | 'text' | 'steps';
-export const studioOutputs = [
-  { value: 'full', label: '完整解题版', description: '原题、步骤解析和解答辅助图；提供干净原件时另附原题配图。' },
-  { value: 'text', label: '题目解析版（无图）', description: '原题和步骤解析，不含原题配图或解答图。' },
-  { value: 'steps', label: '仅解题步骤版', description: '只保留讲次、栏目、题号和解题步骤，不含题干或配图。' },
-] as const;
+type StudioOutput = { value: StudioOutputMode; label: string; description: string };
+const questionOutputs: StudioOutput[] = [
+  { value: 'full', label: '题目版', description: '题干、选项、表格和原题配图，可直接编辑。' },
+  { value: 'text', label: '题目版（无图）', description: '题干、选项和表格，不含配图。' },
+];
+/** An originals-only paper has no solutions, so it offers only the question versions. */
+export function studioOutputs(draft: Pick<StudioDraft, 'inputMode'>): StudioOutput[] {
+  if (draft.inputMode === 'questions') return questionOutputs;
+  return [
+    { value: 'full', label: '完整解题版', description: studioIncludesQuestionFigures(draft) ? '原题、解析、原题图和解答图。' : '原题文字、解析和解答图（含必要底图）。' },
+    { value: 'text', label: '题目解析版（无图）', description: '原题和步骤解析，不含原题配图或解答图。' },
+    { value: 'steps', label: '仅解题步骤版', description: '只保留讲次、栏目、题号和解题步骤，不含题干或配图。' },
+  ];
+}
 
 export function studioTextReady(draft: StudioDraft) {
   const used = draft.questions.flatMap(q => q.answerIds);
@@ -32,7 +41,7 @@ export function studioFullFiguresReady(q: StudioQuestion, draft: StudioDraft) {
     || !draft.answers.some(a => q.answerIds.includes(a.id) && a.diagramBoxes.length > 0);
 }
 
-export function studioIncludesQuestionFigures(draft: StudioDraft) {
+export function studioIncludesQuestionFigures(draft: Pick<StudioDraft, 'inputMode'>) {
   return draft.inputMode !== 'answers';
 }
 

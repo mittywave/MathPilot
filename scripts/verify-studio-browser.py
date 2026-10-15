@@ -25,7 +25,7 @@ def main():
       transcribe=r"""async ({title,pages,invalid})=>{
         const fixture=studioTest.mathContractDraft(),fail=async()=>{throw new Error('No figures in text transcription');};
         const records=page=>fixture.questions.map((q,i)=>({lesson:q.lesson,section:q.section,number:q.number,stem:q.stem,analysis:invalid&&!i?'$\\unknown{x}$':q.analysis,warnings:q.warnings,tables:q.tables,id:page.id+':'+i,source:{pageId:page.id,box:{x:0,y:0,width:1000,height:1000}},diagramBoxes:[],continuation:false}));
-        const draft={version:1,title,inputMode:'answers',pages:pages.map(p=>({...p,image:'',selected:true})),questions:[],answers:[],updatedAt:0};
+        const draft={version:1,title,inputMode:studioTest.studioInputMode(pages.map(p=>p.role)),pages:pages.map(p=>({...p,image:'',selected:true})),questions:[],answers:[],updatedAt:0};
         return studioTest.transcribeStudio(draft,{recognize:async page=>records(page),checkpoint:async()=>{},progress:()=>{},crop:fail,drawings:fail},{drawings:false});
       }"""
       jobs={}
@@ -34,7 +34,7 @@ def main():
         if not parts:
           if request.method=='GET':return route.fulfill(json={'jobs':[entry['job'] for entry in reversed(list(jobs.values()))]})
           body=request.post_data_json;job_id=f'job-{len(jobs)+1}'
-          jobs[job_id]={'job':{'id':job_id,'title':body['title'],'inputMode':body['inputMode'],'status':'uploading','stalled':False,'pageCount':0,'processedCount':0,'questionCount':0,'progress':'','error':'','createdAt':0,'updatedAt':0},'pages':[],'images':{},'draft':None}
+          jobs[job_id]={'job':{'id':job_id,'title':body['title'],'status':'uploading','stalled':False,'pageCount':0,'processedCount':0,'questionCount':0,'progress':'','error':'','createdAt':0,'updatedAt':0},'pages':[],'images':{},'draft':None}
           return route.fulfill(json={'job':jobs[job_id]['job']})
         entry=jobs[parts[0]]
         if parts[1:]==['pages']:
@@ -49,13 +49,13 @@ def main():
         return route.fulfill(json={'job':entry['job'],'draft':entry['draft']})
       page.route('**/api/answer-studio/jobs**',job_api)
       try:
-        page.goto(origin);expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('手写转录');expect(page).to_have_title('手写转录 · 工具箱 · MathPilot')
+        page.goto(origin);expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('文件转录');expect(page).to_have_title('文件转录 · 工具箱 · MathPilot')
         # Real PNG upload; the model is mocked because no real credentials/sample were supplied.
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
         def upload(name):
           created=len(jobs)
-          page.get_by_label('\u53ea\u6709\u7b54\u6848\u6750\u6599',exact=True).check()
-          page.locator('input[type=file]').set_input_files({'name':name,'mimeType':'image/png','buffer':png})
+          # Answers only: the server would read this mode from the uploaded roles.
+          page.locator('#studio-answer-files').set_input_files({'name':name,'mimeType':'image/png','buffer':png})
           page.get_by_placeholder('\u4f8b\u5982\uff1a\u7b2c\u4e00\u8bb2 \u4e09\u89d2\u5f62\u7684\u5916\u5fc3').fill('Math contract regression')
           page.get_by_role('button',name='\u5f00\u59cb\u8f6c\u5f55',exact=True).click()
           # The newest job is listed first; open its finished result.

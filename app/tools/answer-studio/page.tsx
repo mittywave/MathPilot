@@ -6,7 +6,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { PaperMoreMenu } from '../../components/PaperMoreMenu';
 import { fetchMe } from '../../../lib/api-client';
 import type { AuthUser } from '../../../lib/types';
-import type { StudioDraft } from '../../../lib/answer-studio';
+import { studioInputMode, type StudioDraft, type StudioInputMode } from '../../../lib/answer-studio';
 import type { StudioJob } from '../../../lib/server/answer-studio-jobs';
 import { studioSnapshot } from '../../../lib/answer-studio-snapshot';
 import { studioStorage } from '../../../lib/answer-studio-storage';
@@ -33,11 +33,11 @@ const STUDIO_ACCEPT='application/pdf,image/png,image/jpeg,image/webp';
 
 // Intake keeps the original files; the existing transcription pipeline reads them when the task starts.
 const isStudioFile=(file:File)=>/\.pdf$/i.test(file.name)||/^image\/(png|jpeg|webp)$/.test(file.type);
-function UploadZone({id,title,files,onFiles,onActivate,compact=false}:{id:string;title:string;files:File[];onFiles:(list:FileList|File[],append?:boolean)=>void;onActivate:()=>void;compact?:boolean}) {
+function UploadZone({id,title,files,onFiles,onActivate}:{id:string;title:string;files:File[];onFiles:(list:FileList|File[],append?:boolean)=>void;onActivate:()=>void}) {
   const names=files.map(file=>file.name);
   return <div className="upload-field">
     <input id={id} type="file" hidden multiple accept={STUDIO_ACCEPT} aria-label={`上传${title}`} onChange={event=>{if(event.target.files?.length){onActivate();onFiles(event.target.files);}event.target.value='';}}/>
-    <button id={`${id}-entry`} type="button" className={`drop-entry${compact||files.length?' compact':''}${files.length?' has-files':''}`} aria-labelledby={`${id}-title`} aria-describedby={`${id}-formats`}
+    <button id={`${id}-entry`} type="button" className={`drop-entry${files.length?' compact has-files':''}`} aria-labelledby={`${id}-title`} aria-describedby={`${id}-formats`}
       title={files.length?'粘贴或拖入可追加文件，点击可重新选择':undefined}
       onClick={()=>{onActivate();document.getElementById(id)?.click();}}
       onDragEnter={event=>{if(event.dataTransfer.types.includes('Files')&&!event.currentTarget.matches(':disabled')){event.preventDefault();event.currentTarget.classList.add('dragging');}}}
@@ -66,11 +66,12 @@ function jobState(job:StudioJob) {
   if(job.status==='done')return `已完成 · ${job.questionCount} 题`;
   return '失败';
 }
+const modeLabels:Record<StudioInputMode,string>={questions:'只有原题，转成可编辑的题目 Word',answers:'只有答案，转录答案和解析',paired:'原题和答案，配对生成题目解析'};
 const jobTime=(value:number)=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 
 export default function AnswerStudioPage() {
   const [user,setUser]=useState<AuthUser|null>(null),[loaded,setLoaded]=useState(false);
-  const [mode,setMode]=useState<'paired'|'answers'>('paired'),[title,setTitle]=useState('');
+  const [title,setTitle]=useState('');
   const [questionFiles,setQuestionFiles]=useState<File[]>([]),[answerFiles,setAnswerFiles]=useState<File[]>([]);
   const [busy,setBusy]=useState(false),[notice,setNotice]=useState(''),[failed,setFailed]=useState(false);
   const [saved,setSaved]=useState<StudioDraft|null>(null),[downloads,setDownloads]=useState<StudioDownload[]>([]);
@@ -124,14 +125,14 @@ export default function AnswerStudioPage() {
     const paste=(event:ClipboardEvent)=>{
       if(running.current)return;
       const incoming=Array.from(event.clipboardData?.files||[]).filter(isStudioFile);if(!incoming.length)return;
-      const roles:Array<'question'|'answer'>=mode==='paired'?['question','answer']:['answer'];
+      const roles:Array<'question'|'answer'>=['question','answer'];
       const visible=roles.flatMap(role=>{const entry=document.getElementById(`studio-${role}-files-entry`);if(!entry||entry.closest('details:not([open])')||!entry.getClientRects().length)return [];const box=entry.getBoundingClientRect();if(box.bottom<=0||box.top>=innerHeight||box.right<=0||box.left>=innerWidth)return [];const hit=document.elementFromPoint((Math.max(0,box.left)+Math.min(innerWidth,box.right))/2,(Math.max(0,box.top)+Math.min(innerHeight,box.bottom))/2);return hit&&entry.contains(hit)?[{role,entry}]:[];});
       const target=visible.find(item=>item.role===lastEntry.current)||visible.find(item=>!(item.role==='question'?questionFiles:answerFiles).length)||visible.find(item=>item.role==='answer')||visible[0];
       if(!target)return;event.preventDefault();files(target.role,incoming,true);target.entry.focus({preventScroll:true});
       if(!matchMedia('(prefers-reduced-motion:reduce)').matches)target.entry.animate([{boxShadow:'0 0 0 3px var(--green)'},{boxShadow:'0 0 0 0 transparent'}],{duration:700});
     };
     document.addEventListener('paste',paste);return()=>document.removeEventListener('paste',paste);
-  },[answerFiles,busy,files,mode,questionFiles]);
+  },[answerFiles,busy,files,questionFiles]);
   // Pages are rendered here, uploaded in source order, then transcribed by the server even after this page closes.
   async function submit(){
     if(running.current)return;
@@ -140,10 +141,11 @@ export default function AnswerStudioPage() {
     try{
       if(!user)throw new Error('请先登录');
       if(!title.trim())throw new Error('请填写资料名称');
-      if(!answerFiles.length||(mode==='paired'&&!questionFiles.length))throw new Error(mode==='paired'?'请上传原件和答案文件':'请上传答案文件');
-      const {job}=await jobsApi<{job:StudioJob}>('/api/answer-studio/jobs',postJson({title:title.trim(),inputMode:mode,textConcurrency}));
+      if(!questionFiles.length&&!answerFiles.length)throw new Error('请上传原题或答案文件');
+      const {job}=await jobsApi<{job:StudioJob}>('/api/answer-studio/jobs',postJson({title:title.trim(),textConcurrency}));
       unfinished=job.id;setJobs(current=>[job,...current]);
-      const input:[File[],'question'|'answer'][]=mode==='paired'?[[questionFiles,'question'],[answerFiles,'answer']]:[[answerFiles,'answer']];
+      // The server reads the mode from these roles when the job starts.
+      const input=([[questionFiles,'question'],[answerFiles,'answer']] as [File[],'question'|'answer'][]).filter(([selected])=>selected.length);
       let uploaded=0;
       for(const [selected,role] of input) await readStudioFilesInBatches(selected,role,'',setNotice,async batch=>{
         for(const page of batch){
@@ -174,7 +176,7 @@ export default function AnswerStudioPage() {
         if(!response.ok)throw new Error(`第 ${page.page} 页原件读取失败`);
         page.image=await blobDataUrl(await response.blob());
       }
-      setQuestionFiles([]);setAnswerFiles([]);setMode(draft.inputMode||'paired');setTitle(draft.title);
+      setQuestionFiles([]);setAnswerFiles([]);setTitle(draft.title);setOutput('full');
       setSaved(draft);setOpenJobId(job.id);setNotice('');
     }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'打开失败');}
     finally{running.current=false;setBusy(false);}
@@ -206,23 +208,20 @@ export default function AnswerStudioPage() {
       },{drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../../lib/answer-studio-export');
-      const label=studioOutputs.find(item=>item.value===variant)!.label;
+      const label=studioOutputs(result).find(item=>item.value===variant)!.label;
       const blob=await buildStudioWord(result,variant,{transcription:true,includeTranscriptionWarnings});
       setDownloads(links.current.offer(blob,`${result.title}_${label}.docx`,'下载 Word'));
       setNotice('');
     }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'生成失败');}
     finally{running.current=false;setBusy(false);}
   }
-  const missing=[!title.trim()&&{label:'资料名称',target:'.studio-controls .field-label input'},!saved&&mode==='paired'&&!questionFiles.length&&{label:'原题',target:'#studio-question-files-entry'},!saved&&!answerFiles.length&&{label:mode==='paired'?'手写答案':'答案材料',target:'#studio-answer-files-entry'}].filter(field=>field!==false);
-  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'手写转录'}]} onSignOut={async exit=>{if(busy){setNotice('请等上传或生成 Word 完成后再退出登录。');setFailed(true);return;}await exit();}} />
+  const inputMode=studioInputMode([...(questionFiles.length?['question' as const]:[]),...(answerFiles.length?['answer' as const]:[])]);
+  const missing=[!title.trim()&&{label:'资料名称',target:'.studio-controls .field-label input'},!saved&&!inputMode&&{label:'原题或答案',target:'#studio-question-files-entry'}].filter(field=>field!==false);
+  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'文件转录'}]} onSignOut={async exit=>{if(busy){setNotice('请等上传或生成 Word 完成后再退出登录。');setFailed(true);return;}await exit();}} />
     {confirmNode}
     {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href="/">返回题库登录</a></main>:<main className="answer-studio">
     <fieldset className="studio-fields studio-workspace" disabled={busy}>
       <aside className="studio-controls">
-        <div className="mode-choice" role="radiogroup" aria-label="材料类型">
-          <label><input id="studio-mode-paired" aria-label="提供原题和答案" type="radio" name="studio-mode" checked={mode==='paired'} onChange={()=>{changed();setMode('paired');}}/><b>原题和答案</b></label>
-          <label><input id="studio-mode-answers" aria-label="只有答案材料" type="radio" name="studio-mode" checked={mode==='answers'} onChange={()=>{changed();setMode('answers');}}/><b>只有答案</b></label>
-        </div>
         <label className="field-label"><span className="field-heading">资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>
         <details style={{marginTop:12,fontSize:14}}>
           <summary style={{cursor:'pointer'}}>高级</summary>
@@ -235,21 +234,23 @@ export default function AnswerStudioPage() {
           <small>默认同时处理 4 页。页数越多通常越快，也更容易触发服务限流；遇限流会自动降速，跨页连续解答较多时可选 1 页。</small>
         </details>
 
-        {mode==='paired'&&<UploadZone id="studio-question-files" title="原题" compact files={questionFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='question';}} onFiles={(list,append)=>files('question',list,append)}/>}
-
+        {!saved&&inputMode&&<p className="studio-mode-line" id="studio-mode-line">转录方式：{modeLabels[inputMode]}</p>}
         {!saved&&<button className="primary simple-start" aria-describedby={!busy&&missing.length?'studio-missing':undefined} disabled={busy||missing.length>0} onClick={()=>void submit()}>{busy?'正在上传…':'开始转录'}</button>}
         {!busy&&missing.length>0&&<p className="missing-reason" id="studio-missing">还差：{missing.map((field,index)=><span key={field.label}>{index>0?'、':''}<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLElement>(field.target);control?.focus({preventScroll:true});control?.scrollIntoView({block:'nearest'});}}>{field.label}</button></span>)}</p>}
         {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role={failed?'alert':'status'}>{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
       </aside>
       <section className="simple-panel">
-        <UploadZone id="studio-answer-files" title={mode==='paired'?'手写答案':'答案材料'} files={answerFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='answer';}} onFiles={(list,append)=>files('answer',list,append)}/>
+        <div className="studio-uploads">
+          <UploadZone id="studio-question-files" title="原题" files={questionFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='question';}} onFiles={(list,append)=>files('question',list,append)}/>
+          <UploadZone id="studio-answer-files" title="答案" files={answerFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='answer';}} onFiles={(list,append)=>files('answer',list,append)}/>
+        </div>
       {saved&&studioTextReady(saved)&&<section className="studio-results" aria-labelledby="studio-results-title">
         <h2 id="studio-results-title">转录结果</h2>
         <div className="result-summary" role="status"><span className="result-summary-icon"><StudioIcon name="check"/></span><span className="result-summary-number">{saved.questions.length}</span><span className="result-summary-label">道题已识别</span></div>
         <fieldset className="studio-fields output-choices" disabled={busy}><legend className="output-legend"><span className="section-icon"><StudioIcon name="download"/></span>选择下载内容</legend>
-          {studioOutputs.map(item=><label key={item.value} htmlFor={`studio-output-${item.value}`} aria-label={item.label} className={output===item.value?'output-choice selected':'output-choice'}>
+          {studioOutputs(saved).map(item=><label key={item.value} htmlFor={`studio-output-${item.value}`} aria-label={item.label} className={output===item.value?'output-choice selected':'output-choice'}>
             <input id={`studio-output-${item.value}`} type="radio" name="studio-output" value={item.value} checked={output===item.value} onChange={()=>{setOutput(item.value);setDownloads(links.current.invalidate());setNotice(item.value==='full'?'已选择完整解题版，生成时将处理尚未完成的配图。':'已选择无图版本，将跳过配图处理，直接生成 Word。');setFailed(false);}}/>
-            <span className="output-icon"><StudioIcon name={item.value==='full'?'spark':item.value==='text'?'text':'steps'}/></span><span className="output-copy"><strong>{item.label}</strong><small>{item.value==='full'?(studioIncludesQuestionFigures(saved)?'原题、解析、原题图和解答图。':'原题文字、解析和解答图（含必要底图）。'):item.description}</small></span>
+            <span className="output-icon"><StudioIcon name={item.value==='full'?'spark':item.value==='text'?'text':'steps'}/></span><span className="output-copy"><strong>{item.label}</strong><small>{item.description}</small></span>
           </label>)}
         </fieldset>
         <label htmlFor="studio-include-transcription-warnings" aria-label="在 Word 中加入转录问题提示" style={{display:'flex',alignItems:'flex-start',gap:8,margin:'8px 2px 4px',padding:'2px 0',cursor:'pointer'}}>
@@ -258,7 +259,7 @@ export default function AnswerStudioPage() {
         </label>
         {studioOutputBlocker(saved,output)&&<p id="studio-output-missing" className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
         {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" aria-describedby={studioOutputBlocker(saved,output)?'studio-output-missing':undefined} disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void generate(output)}>{busy?'正在生成…':'生成 Word'}</button>}
-        {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
+        {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs(saved).find(item=>item.value===output)!.label}</a>)}
       </section>}
       {jobs.length>0&&<section className="studio-jobs" aria-labelledby="studio-jobs-title">
         <h2 id="studio-jobs-title">转录任务</h2>

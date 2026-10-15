@@ -75,7 +75,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     }
   });
   const diagrams: Array<{ token: string; question: StudioQuestion; index: number }> = [];
-  const outputLabel=studioOutputs.find(output=>output.value===mode)?.label||'答案解析';
+  const outputLabel=studioOutputs(draft).find(output=>output.value===mode)?.label||'答案解析';
   const children: Array<Paragraph|Table> = [new Paragraph({ style:"Title", alignment:AlignmentType.CENTER, children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,bold:true,size:32,color:"000000"})],spacing:{after:300} })];
   if(options.reviewCopy)children.push(new Paragraph({children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000'})]}));
   const safeRichText=(text:string,style:{color?:string;underline?:boolean;italicMath?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right'},q:StudioQuestion,field:string):ParagraphChild[]=>{

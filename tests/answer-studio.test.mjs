@@ -1,11 +1,27 @@
 import { loadSource } from './load-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const {parseStudioPages,deduplicateStudioPages,matchStudioAnswers,reviseStudioQuestion,assertStudioExportable,validateStudioShapes,validateStudioDraft} = await loadSource("lib/answer-studio.ts");
+const {parseStudioPages,deduplicateStudioPages,matchStudioAnswers,reviseStudioQuestion,assertStudioExportable,validateStudioShapes,validateStudioDraft,studioInputMode,growStudioRectToBlankEdges} = await loadSource("lib/answer-studio.ts");
 const {diagramBounds,studioDiagramVml,studioDiagramSvg} = await loadSource("lib/answer-studio-diagram.ts");
 const record=(id,section='例题精练',extra={})=>({id,lesson:'一',section,number:'1',stem:'已知三角形ABC求外接圆的半径',analysis:'按原文转写',continuation:false,...extra});
 const question=()=>({...record('q'),questionSources:[{pageId:'p',box:{x:0,y:0,width:100,height:100}}],answerIds:['a'],diagrams:[],warnings:[],resolutions:{},reviewed:true});
 test('page ranges are bounded, deduplicated and selected before PDF rendering',()=>{assert.deepEqual(parseStudioPages('1-3,2,5',5),[1,2,3,5]);for(const s of ['0','4-2','6','1,x'])assert.throws(()=>parseStudioPages(s,5));});
+test('the uploaded roles decide the transcription mode',()=>{
+  assert.equal(studioInputMode(['question','question']),'questions');
+  assert.equal(studioInputMode(['answer']),'answers');
+  assert.equal(studioInputMode(['answer','question']),'paired');
+  assert.equal(studioInputMode([]),null);
+});
+test('a tight figure box grows to the figure’s blank edges but not into separate content',()=>{
+  const width=100,height=100,data=new Uint8ClampedArray(width*height*4).fill(255);
+  const ink=(x,y)=>data.fill(0,(y*width+x)*4,(y*width+x)*4+3);
+  for(let a=0;a<360;a+=0.5)ink(Math.round(50+20*Math.cos(a*Math.PI/180)),Math.round(50+20*Math.sin(a*Math.PI/180)));
+  for(let x=20;x<80;x++)ink(x,80);// a text line after a blank gap below the circle at y=70
+  const image={width,height,data};
+  assert.deepEqual(growStudioRectToBlankEdges(image,{left:35,top:35,right:65,bottom:60},20),{left:30,top:30,right:70,bottom:70});
+  assert.deepEqual(growStudioRectToBlankEdges(image,{left:28,top:28,right:72,bottom:72},20),{left:28,top:28,right:72,bottom:72},'a clean box is unchanged');
+  assert.equal(growStudioRectToBlankEdges(image,{left:35,top:35,right:65,bottom:60},3).bottom,63,'growth is capped');
+});
 test('duplicate pages collapse only within their source role',()=>{assert.equal(deduplicateStudioPages([{role:'question',hash:'a'},{role:'question',hash:'a'},{role:'answer',hash:'a'}]).length,2);});
 test('same numbers across sections cannot steal one another’s answers',()=>{assert.deepEqual(matchStudioAnswers(question(),[record('other','知识拼接'),record('a')]).map(x=>x.id),['a']);});
 test('conflicting starts block matching and continuations preserve independent evidence',()=>{assert.equal(matchStudioAnswers(question(),[record('a'),record('b')]).length,0);assert.deepEqual(matchStudioAnswers(question(),[record('a'),record('b','例题精练',{continuation:true,stem:''})]).map(x=>x.id),['a','b']);assert.equal(matchStudioAnswers(question(),[record('b','例题精练',{continuation:true,stem:''})]).length,0);});
