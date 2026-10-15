@@ -779,6 +779,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(listed.days[1].handedInAt-firstHandedIn>=3*24*60*60*1000,"task submissions need not be on consecutive days");
     assert.equal(listed.days[1].handedInAt,sheet.submittedAt);
     assert.deepEqual(sheet.assigned.days.map(d=>[d.done,d.correct]),[[2,1],[2,2]]);
+    assert.deepEqual(sheet.assigned.days.map(d=>d.firstAttempt),[{correct:1,incorrect:1,pending:0},{correct:2,incorrect:0,pending:0}],"a later day's first upload adds its own first-attempt marks");
 
     // Legacy planned dates are ignored without changing actual submissions or grading results.
     command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
@@ -876,6 +877,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.assignedVerdicts={"D1-1":"incorrect","D1-2":"incorrect","D1-3":"incorrect","D2-1":"correct"};
     await submitPages(base,teacherOne,correctionOriginal,[await uploadPage(base,teacherOne,correctionOriginal,bytes)]);
     const correctionBefore=await waitForSubmission(base,teacherOne,correctionOriginal,["published"],worker);
+    assert.deepEqual(correctionBefore.assigned.days.map(d=>d.firstAttempt),[{correct:0,incorrect:3,pending:0},{correct:1,incorrect:0,pending:0}]);
     for(const correctionDay of [-1,2,0.5,"0"])assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay}})).response.status,400);
     assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherTwo,method:"PUT",body:{action:"new-version",correctionDay:0}})).response.status,404);
     assert.equal((await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:1}})).response.status,409,"a correct day has no mistakes to correct");
@@ -914,7 +916,11 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.assignedPage=[{question_number:"D1-3",student_answer:"6"}];mock.state.assignedAnswers={"D1-3":"6"};mock.state.assignedVerdicts={"D1-3":"correct"};
     await submitPages(base,teacherOne,lastCorrection.id,[await uploadPage(base,teacherOne,lastCorrection.id,bytes)]);
     const allCorrected=await waitForSubmission(base,teacherOne,lastCorrection.id,["published"],worker);
+    assert.deepEqual(allCorrected.assigned.days.map(d=>d.firstAttempt),correctionBefore.assigned.days.map(d=>d.firstAttempt),"corrections never replace first-attempt marks");
+    assert.equal(allCorrected.assigned.days[0].correct,3,"current progress still reaches fully corrected");
     const completedHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:allCorrected,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
+    assert.match(completedHtml,/首交对 0\/3/);
+    assert.match(completedHtml,/首交对 1 · 错 3/);
     assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");

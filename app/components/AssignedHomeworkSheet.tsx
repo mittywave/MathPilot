@@ -44,7 +44,7 @@ export function dayState(day: HomeworkDay): DayState {
 export function dayNote(task: HomeworkDay) {
   if (!task.done) return "未提交";
   return [task.handedInAt == null ? "" : `${day(task.handedInAt)} 提交`, task.done < task.size ? `已交 ${task.done}/${task.size}` : "",
-    `对 ${task.correct}/${task.size}`, task.pending ? `待处理 ${task.pending}` : ""].filter(Boolean).join(" · ");
+    `首交对 ${task.firstAttempt.correct}/${task.size}`, task.pending ? `待处理 ${task.pending}` : ""].filter(Boolean).join(" · ");
 }
 
 /**
@@ -55,8 +55,8 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void;
 }) {
   const { assigned } = submission;
-  const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.correct, incorrect: all.incorrect + day.incorrect,
-    pending: all.pending + day.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
+  const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
+    pending: all.pending + day.firstAttempt.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
   const handedIn = assigned.questions.length - counts.missing;
   const latest = assigned.uploads.at(-1);
   const days = assigned.days.map((item, index) => {
@@ -66,7 +66,7 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
   const first = days[0], several = days.length > 1;
   return <section className="assigned-sheet" aria-label="整份作业">
     <header>
-      <div><h2>整份作业</h2><p>{several ? `${days.length} 天任务 · ` : ""}{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 对 ${counts.correct} · 错 ${counts.incorrect}` : ""}{counts.pending ? ` · 待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
+      <div><h2>整份作业</h2><p>{several ? `${days.length} 天任务 · ` : ""}{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 首交对 ${counts.correct} · 错 ${counts.incorrect}` : ""}{counts.pending ? ` · 首交待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
         {!several && first?.handedInAt != null && <p>提交日期：{day(first.handedInAt)}</p>}
       </div>
       {latest && latest.status === "draft" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>去上传</a>

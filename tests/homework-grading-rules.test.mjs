@@ -43,6 +43,15 @@ test("pending counts separate unsettled answers from the teacher's existing judg
   ]) assert.equal(isPendingGradingItem({ ...settled, ...patch }), expected, JSON.stringify(patch));
 });
 
+test("day captions keep first-attempt marks after every mistake is corrected", async () => {
+  const { dayNote } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
+  const task = { title: "第 1 天", size: 10, done: 10, correct: 10, incorrect: 0, pending: 0, handedInAt: 1_760_400_000_000, firstAttempt: { correct: 5, incorrect: 5, pending: 0 } };
+  assert.match(dayNote(task), /首交对 5\/10/);
+  assert.doesNotMatch(dayNote(task), /对 10\/10/);
+  assert.equal(dayNote({ ...task, correct: 5, incorrect: 5 }), dayNote(task), "regrading changes the current status, not the original caption");
+  assert.equal(dayNote({ ...task, done: 0 }), "未提交");
+});
+
 test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");
   assert.equal(normalizeHomeworkAnswer("✓"), "正确");
