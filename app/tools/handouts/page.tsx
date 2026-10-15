@@ -443,6 +443,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     window.history.replaceState(null, "", `/tools/handouts?${params}`);
   }, [id, sheet]);
 
+  useEffect(() => { document.title = `${doc?.title || "讲义"} · 讲义编撰 · MathPilot`; }, [doc?.title]);
+
   const opened = Boolean(doc);
   useEffect(() => {
     if (opened && focusModule) document.getElementById(`module-${focusModule}`)?.scrollIntoView({ block: "start" });
@@ -758,6 +760,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const addTarget = activePicker.kind === "add" ? activePicker.sectionId : modules[0]?.section.id ?? null;
 
   return <main className="toolbox handouts handout-editor">
+    <header className="handout-bar">
+      <a className="brand-mark" href={backHref} aria-label="返回讲义书架">题</a>
+      <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><span>讲义编撰</span><span aria-hidden="true">/</span><span>{backLabel}</span></a>
+      <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
+      <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+    </header>
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
         <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
@@ -766,12 +774,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
             if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }
             if (window.confirm("从当前讲义的临时题库删除这道题？已保存到正式题库的内容不受影响。")) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
           }}
-          sections={moduleOptions}
-          footer={<div className="handout-bar">
-            <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><BackIcon /><span>{backLabel}</span></a>
-            <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
-            <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
-          </div>} />
+          sections={moduleOptions} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
     <div className="handout-draft-head">
