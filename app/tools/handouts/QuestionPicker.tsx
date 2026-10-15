@@ -105,11 +105,11 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题">
     <aside className="picker-tree" aria-label="知识目录" hidden={!treeOpen}>
-      <button className="secondary" type="button" aria-label="收起知识目录" aria-expanded={true} onClick={() => setTreeOpen(false)}><span aria-hidden="true">←</span> 收起目录</button>
+      <header><h2>{temporary ? "临时题库" : "知识目录"}</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={true} onClick={() => setTreeOpen(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5m7-7-7 7 7 7" /></svg></button></header>
       {temporary ? <div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div> : <CategoryTree module={activeModule} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} onSelect={(id) => { setScope({ moduleId: activeModuleId, categoryId: id === activeModuleId ? "" : id }); setLimit(PAGE_SIZE); }} />}
     </aside>
     <div className="picker-main">
-      <div className="picker-source">{!treeOpen && <button className="secondary" type="button" aria-label="展开知识目录" aria-expanded={false} onClick={() => setTreeOpen(true)}>展开目录 <span aria-hidden="true">→</span></button>}<div className="handout-sheets" role="tablist" aria-label="选题来源">
+      <div className="picker-source">{!treeOpen && <button className="icon-button" type="button" title="展开目录" aria-label="展开知识目录" aria-expanded={false} onClick={() => setTreeOpen(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button>}<div className="handout-sheets" role="tablist" aria-label="选题来源">
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
       </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
