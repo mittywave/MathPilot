@@ -14,7 +14,7 @@ import type { HandoutBand, Question } from "./types";
 export const DEFAULT_ANSWER_LINES = 6;
 // A sheet may come in groups (智能组卷 by day): the questions are listed in group order and each group takes the next `size`.
 export type SheetGroup = { title: string; size: number };
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[]; groupMode?: "sections" | "days" });
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[]; groupMode?: "sections" | "days"; showSource?: boolean });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -382,10 +382,11 @@ function answerBody(question: Question, figureName: (source: string) => string |
 }
 
 // 小测 and 作业 print no 考点: naming the knowledge point would give the method away.
-function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null, showPoints = true, space?: number) {
+function questionLatex(question: Question, label: string, band: HandoutBand, answers: WordAnswerPlacement, figureName: (source: string) => string | null, showPoints = true, space?: number, code?: string, showSource = true) {
   const { lines: paragraphs, placed } = stemContent(question, figureName);
-  const source = question.source?.trim() ? `\\handoutsource{${latexPlain(question.source.trim())}}` : "";
-  const stem = [`${source}${paragraphs[0] ?? ""}`, ...paragraphs.slice(1)].join("\\par\n");
+  const id = code?.trim() ? `\\handoutsource{ID ${latexPlain(code.trim())}}` : "";
+  const source = showSource && question.source?.trim() ? `\\handoutsource{${latexPlain(question.source.trim())}}` : "";
+  const stem = [`${id}${source}${paragraphs[0] ?? ""}`, ...paragraphs.slice(1)].join("\\par\n");
   // Pictures not already placed in the stem follow the question's layout; a screenshot figure keeps its share of the line.
   const figures = questionImages(question).filter((image) => !placed.includes(image)).map(figureName).filter((name): name is string => Boolean(name));
   const layout = resolveQuestionImageLayout(question);
@@ -463,7 +464,7 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   // A sheet in days scores each day under its own heading, so the title keeps only name and class.
   const fields = groups && list?.groupMode !== "sections" ? "姓名,班级" : list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
   const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
-  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups, input.groupMode) : moduleBody(input.modules, answers, figureName);
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups, input.groupMode, input.showSource) : moduleBody(input.modules, answers, figureName);
   return [
     "\\documentclass{mitty-handout}",
     series ? `\\handoutseries{${series}}` : "",
@@ -486,7 +487,7 @@ function sheetGroups(count: number, groups?: SheetGroup[]) {
 
 // 小测 and 作业: questions numbered 1, 2, 3…; the key at the end uses the same numbers. In groups (days) each group starts
 // on a new page under its heading and numbers from 1 again; the key repeats the group headings.
-function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], groups?: SheetGroup[] | null, groupMode: "sections" | "days" = "days") {
+function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], groups?: SheetGroup[] | null, groupMode: "sections" | "days" = "days", showSource = true) {
   if (!questions.length) return [];
   const parts = groups ?? [{ title: "", size: questions.length }];
   const width = groupMode === "sections" ? questions.length : Math.max(...parts.map((part) => part.size));
@@ -499,7 +500,7 @@ function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureNa
     }
     for (let number = 1; number <= part.size; number += 1, index += 1) {
       const label = String(groupMode === "sections" ? index + 1 : number);
-      body.push(questionLatex(questions[index], label, "practice", answers, figureName, false, spacing?.[index]));
+      body.push(questionLatex(questions[index], label, "practice", answers, figureName, false, spacing?.[index], questions[index].code, showSource));
       if (answers === "end") keys.push(`\\begin{handoutkey}{${label}}`, answerBody(questions[index], figureName), "\\end{handoutkey}");
     }
   }

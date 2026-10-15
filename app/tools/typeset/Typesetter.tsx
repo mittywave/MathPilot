@@ -46,6 +46,7 @@ function restoredSettings(raw: Partial<TypesetSettings>): TypesetSettings {
     .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
   return {
     answers: raw.answers === "end" || raw.answers === "each" ? raw.answers : "none",
+    showSource: raw.showSource === true,
     linePitch: typeof raw.linePitch === "number" ? Math.min(PITCH.max, Math.max(PITCH.min, Math.round(raw.linePitch))) : PITCH.fallback,
     groupRoom: numbers(raw.groupRoom), ownRoom: numbers(raw.ownRoom),
   };
@@ -102,6 +103,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const [title, setTitle] = useState("");
   const [appliedTitle, setAppliedTitle] = useState("");
   const [answers, setAnswers] = useState<WordAnswerPlacement>("none");
+  const [showSource, setShowSource] = useState(false);
   const [linePitch, setLinePitch] = useState(PITCH.fallback);
   const [groupRoom, setGroupRoom] = useState<Record<string, number>>({});
   const [ownRoom, setOwnRoom] = useState<Record<number, number>>({});
@@ -165,7 +167,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         const { buildHandoutLatexProject, compileLatexPdf } = await import("../../../lib/handout-latex-files");
         // The hosted site has no typesetter; the panel says so instead.
         if (!statusRef.current?.available) return;
-        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch, groups: source.groups, groupMode: source.groupMode });
+        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, showSource, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch, groups: source.groups, groupMode: source.groupMode });
         const notes = project.missingFigures ? [`${project.missingFigures} 张配图未能读取`] : [];
         const { pdf, issues } = await compileLatexPdf(project);
         if (id !== run.current) return;
@@ -176,12 +178,13 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       finally { if (id === run.current) setBusy(""); }
     })(), 350);
     return () => clearTimeout(timer);
-  }, [source, appliedTitle, answers, spacingKey, linePitch]);
+  }, [source, appliedTitle, answers, showSource, spacingKey, linePitch]);
 
   // Puts a material on the page: its questions, with the title and the settings it opens with.
   async function show(fileName: string, questions: Question[], name: string, settings: TypesetSettings, groups?: SheetGroup[], groupMode?: "sections" | "days") {
     const { leavesAnswerLines } = await import("../../../lib/handout-latex");
     setTitle(name); setAppliedTitle(name); setAnswers(settings.answers); setLinePitch(settings.linePitch);
+    setShowSource(settings.showSource === true);
     setGroupRoom(settings.groupRoom); setOwnRoom(Object.fromEntries(Object.entries(settings.ownRoom).map(([index, value]) => [Number(index), value])));
     setSource({ fileName, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm"), groups, groupMode });
   }
@@ -197,7 +200,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       // The questions are only typeset, never saved, so they carry no library fields.
       const questions: Question[] = items.map(({ questionNumber, ...item }) => ({ ...item, id: `typeset-${questionNumber}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 }));
       const name = record?.title ?? file.name.replace(/\.docx$/i, "").trim();
-      const settings = record ? restoredSettings(record.settings) : { answers, linePitch, groupRoom: {}, ownRoom: {} };
+      const settings = record ? restoredSettings(record.settings) : { answers, showSource, linePitch, groupRoom: {}, ownRoom: {} };
       await show(file.name, questions, name, settings);
       setBusy(""); setShowHistory(false);
       saved.current = JSON.stringify({ title: name, settings });
@@ -245,7 +248,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   }
 
   // Every change of title, edition or spacing is written to the open record shortly after, which makes it the latest edit.
-  const settingsKey = JSON.stringify({ title: appliedTitle, settings: { answers, linePitch, groupRoom, ownRoom } });
+  const settingsKey = JSON.stringify({ title: appliedTitle, settings: { answers, showSource, linePitch, groupRoom, ownRoom } });
   // The paper basket keeps one local draft even while this overlay is open.
   const onBasketChange = basket?.onChange;
   useEffect(() => {
@@ -322,10 +325,11 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
           onBlur={() => setAppliedTitle(title.trim())} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
         <small>写成「第3讲 一元二次方程」时，「第3讲」会放进标题上方的标签。</small>
       </label>
-      <div className="typeset-field" role="radiogroup" aria-label="版本"><span>版本</span>
-        <div className="typeset-editions">{EDITIONS.map((item) => <label key={item.value} title={item.hint} className={answers === item.value ? "active" : ""}>
+      <div className="typeset-field"><span>版本</span>
+        <div className="typeset-editions" role="radiogroup" aria-label="版本">{EDITIONS.map((item) => <label key={item.value} title={item.hint} className={answers === item.value ? "active" : ""}>
           <input type="radio" name="edition" checked={answers === item.value} onChange={() => setAnswers(item.value)} /><b>{item.label}</b>
         </label>)}</div>
+        <label><input type="checkbox" checked={showSource} disabled={!source} onChange={(event) => setShowSource(event.target.checked)} /><span>显示题目来源</span></label>
       </div>
 
       {source && <section className="typeset-field" aria-label="间距"><span>间距</span>

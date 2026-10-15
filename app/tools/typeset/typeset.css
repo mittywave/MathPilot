@@ -19,6 +19,7 @@
 .typeset-field>input{width:100%;height:38px;padding:0 11px;border:1px solid var(--line,#e4e9e6);border-radius:calc(8px*var(--radius-scale));background:var(--surface,#fff);color:inherit;font-size:14px;outline:none}
 .typeset-field>input:focus{border-color:var(--green,#2f6b53);box-shadow:0 0 0 3px color-mix(in srgb,var(--green,#2f6b53) 10%,transparent)}
 .typeset-field>input:disabled{opacity:.6}
+.typeset-field>label{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
 .typeset-editions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;padding:3px;border:1px solid var(--line);border-radius:calc(8px*var(--radius-scale));background:var(--surface-soft)}
 .typeset-editions label{position:relative;display:flex;align-items:center;justify-content:center;min-height:32px;padding:0 6px;border-radius:calc(6px*var(--radius-scale));cursor:pointer;color:var(--muted)}
 .typeset-editions label.active{background:var(--surface);color:var(--green)}
