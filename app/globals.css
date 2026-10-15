@@ -1139,10 +1139,10 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-day ol { flex:1; min-width:0; display:flex; flex-wrap:wrap; gap:5px; margin:0; padding:0; list-style:none; }
 .assigned-day li>* { display:grid; place-items:center; width:30px; height:30px; padding:0; border:1px solid transparent!important; border-radius:calc(7px*var(--radius-scale))!important; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; text-decoration:none; }
 .assigned-day li.missing>* { background:var(--surface-soft)!important; color:var(--muted); font-weight:500; }
-.assigned-day li.correct>* { background:var(--success-soft)!important; color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
-.assigned-day li.corrected>* { background:var(--sky-soft)!important; color:var(--sky); }
-.assigned-day li.incorrect>* { background:var(--danger-soft)!important; color:var(--danger); }
-.assigned-day li.partial>* { background:var(--warn-soft)!important; color:var(--warn-strong); }
+.assigned-day li.correct>* { background:color-mix(in srgb,var(--success) 20%,var(--success-soft))!important; color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
+.assigned-day li.corrected>* { background:color-mix(in srgb,var(--sky) 20%,var(--sky-soft))!important; color:var(--sky); }
+.assigned-day li.incorrect>* { background:color-mix(in srgb,var(--danger) 20%,var(--danger-soft))!important; color:var(--danger); }
+.assigned-day li.partial>* { background:color-mix(in srgb,var(--warn) 20%,var(--warn-soft))!important; color:var(--warn-strong); }
 .assigned-day li.pending>* { border-color:var(--warn)!important; background:var(--surface)!important; color:var(--warn-strong); }
 .assigned-day li>button:hover,.assigned-day li>a:hover { border-color:currentColor!important; }
 .assigned-correct { flex:none; margin-left:auto; min-height:30px; padding:0 14px; color:var(--green); font-size:12px; }
