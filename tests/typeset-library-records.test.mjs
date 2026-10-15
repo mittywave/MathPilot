@@ -75,18 +75,19 @@ test("智能组卷 records: own students only, questions once each, used questio
     ],
   };
 
-  const created = await records.createTypesetRecord(teacher, { title: "刘羽汐 · 计算打卡", plan, settings: { answers: "end" } });
+  const created = await records.createTypesetRecord(teacher, { title: "刘羽汐 · 计算打卡", plan, settings: { answers: "end", showSource: true } });
   assert.equal(created.sourceKind, "library");
   assert.equal(created.studentName, "刘羽汐");
   assert.equal(created.questionCount, 3, "a question appears once in a plan");
   assert.deepEqual(created.plan.groups.map((group) => group.items.map((item) => item.id)), [["q1", "q2"], ["q3"]]);
-  assert.deepEqual(created.settings, { answers: "end" });
+  assert.deepEqual(created.settings, { answers: "end", showSource: true });
 
   await assert.rejects(records.createTypesetRecord(teacher, { plan: { ...plan, studentId: "s2" } }), (error) => error instanceof Response && error.status === 404, "another teacher's student");
   await assert.rejects(records.createTypesetRecord(teacher, { plan: { ...plan, groups: [{ title: "第 1 天", items: [] }] } }), (error) => error instanceof Response && error.status === 400, "a plan without questions");
 
-  const updated = await records.updateTypesetRecord(teacher, created.id, { plan: { ...plan, groups: [{ title: "第 1 天", theme: "", items: [{ id: "q4", focus: "", reason: "" }] }] } });
+  const updated = await records.updateTypesetRecord(teacher, created.id, { settings: { answers: "end", showSource: false }, plan: { ...plan, groups: [{ title: "第 1 天", theme: "", items: [{ id: "q4", focus: "", reason: "" }] }] } });
   assert.equal(updated.questionCount, 1);
+  assert.equal((await records.listTypesetRecords(teacher)).find((record) => record.id === created.id).settings.showSource, false, "the source setting survives saving and reopening a history record");
   await assert.rejects(records.updateTypesetRecord(teacher, "w1", { plan }), (error) => error instanceof Response && error.status === 400, "a Word record has no question list");
 
   const second = await records.createTypesetRecord(teacher, { plan });

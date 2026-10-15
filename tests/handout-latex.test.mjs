@@ -111,6 +111,29 @@ test("a 小测 or 作业 prints one numbered list under its name, without 考点
   assert.doesNotMatch(buildHandoutLatex({ title: "空", answers: "none", sheet: "小测", questions: [] }), /handoutquestion|handoutnumberwidth/);
 });
 
+test("sheets keep permanent library IDs with optional sources across editions, reordered sections and days", () => {
+  const questions = [{ ...docx, code: "10023" }, { ...choice, code: "0046" }, { ...proof, code: "0921" }, { ...blank, id: "typeset-4" }];
+  for (const answers of ["none", "end", "each"]) {
+    for (const groupMode of [undefined, "sections", "days"]) {
+      for (const showSource of [false, true]) {
+        const source = buildHandoutLatex({ title: "练习", sheet: "练习", answers, showSource, questions,
+          ...(groupMode ? { groupMode, groups: [{ title: "第一组", size: 2 }, { title: "第二组", size: 2 }] } : {}),
+        }, () => "figures/proof.png");
+        const bodies = [...source.matchAll(/\\begin\{handoutquestion\}\{(\d+)\}\n([\s\S]*?)\\end\{handoutquestion\}/g)];
+        assert.deepEqual(bodies.map((body) => body[1]), groupMode === "days" ? ["1", "2", "1", "2"] : ["1", "2", "3", "4"]);
+        assert.deepEqual([...source.matchAll(/\\handoutsource\{ID ([^}]+)\}/g)].map((match) => match[1]), ["10023", "0046", "0921"], "IDs come from the questions, preserve leading zeros and do not restart with daily numbering");
+        assert.match(bodies[0][2], /^\\handoutsource\{ID 10023\}根据下表求/);
+        assert.ok(bodies[1][2].startsWith(`\\handoutsource{ID 0046}${showSource ? "\\handoutsource{2024 期中}" : ""}方程`), "hiding provenance keeps the permanent ID ahead of the stem");
+        assert.equal(source.includes("2024 期中"), showSource, "the source setting applies to every edition and group mode");
+        assert.match(bodies[2][2], /\\begin\{handoutsidefigure\}[^\n]*\n\\handoutsource\{ID 0921\}如图/);
+        assert.doesNotMatch(bodies[3][2], /ID |typeset-4/, "an unbanked Word question gets no invented library ID");
+        assert.match(bodies[0][2], /\\begin\{tabular\}/, "the ID keeps the original Word table");
+      }
+    }
+  }
+  assert.doesNotMatch(buildHandoutLatex({ title: "讲义", answers: "none", modules: [{ heading: "", note: "", bands: { ...empty, practice: questions } }] }), /\\handoutsource\{ID /, "the existing module handout path keeps its layout");
+});
+
 test("Word-imported stems keep formulas and tables", () => {
   const latex = build("none");
   assert.match(latex, /\\begin\{handoutquestion\}\{变式1\}\n根据下表求 \$\\displaystyle \\frac\{a\}\{2\}\$。/);
