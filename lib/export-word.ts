@@ -207,7 +207,7 @@ export function tidyOmml(omml: string) {
 // Native equations placed by token: the run carrying the token is replaced by the OMML when the document is packed.
 const richEquations = new Map<string, string>();
 const EM_GAP = "\u303F";
-function richEquation(source: string, display: boolean): ParagraphChild | null {
+function richEquation(source: string, display: boolean, alignment?: "left"): ParagraphChild | null {
   try {
     // \quad is a 1em gap (a blank to fill in, a pause between parts). MathML makes it a plain space that Word squeezes
     // and the converter drops other spaces, so it travels as a placeholder and lands as the ideographic space (1em).
@@ -218,7 +218,8 @@ function richEquation(source: string, display: boolean): ParagraphChild | null {
       .replace(/(<munder accentunder="true">[\s\S]*?)<mo stretchy="true">‾<\/mo>(<\/munder>)/g, "$1<mo stretchy=\"true\">_</mo>$2");
     if (!math) return null;
     const token = `__ZHITI_OMML_${richEquations.size}_${Math.random().toString(36).slice(2, 8)}__`;
-    richEquations.set(token, tidyOmml(mml2omml(math)).replaceAll(EM_GAP, "\u3000"));
+    const omml = tidyOmml(mml2omml(math)).replaceAll(EM_GAP, "\u3000");
+    richEquations.set(token, alignment ? `<m:oMathPara><m:oMathParaPr><m:jc m:val="${alignment}"/></m:oMathParaPr>${omml}</m:oMathPara>` : omml);
     return new TextRun({ text: token });
   } catch {
     return null;
@@ -450,10 +451,19 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
         children.push(new Paragraph({ children: textRuns(token) }));
       });
     } else {
-      originalParagraphs.forEach((line, lineIndex) => children.push(new Paragraph({
-        spacing: { ...BODY_LINE, after: lineIndex === originalParagraphs.length - 1 ? 180 : 40 },
-        children: [...(lineIndex === 0 && !line.startsWith("【") ? textRuns("解析：") : []), ...richText(line)],
-      })));
+      originalParagraphs.forEach((line, lineIndex) => {
+        const segments = splitMathText(line).filter((segment) => segment.value.trim());
+        // Word centers a paragraph containing only oMath even when w:jc is left.
+        // All derivation steps, including simple arithmetic, need the same explicit math alignment.
+        const derivation = segments.length === 1 && segments[0].kind === "math" && /^\s*[=＝]/.test(segments[0].value)
+          ? richEquation(segments[0].value, true, "left") : null;
+        if (derivation && lineIndex === 0) children.push(new Paragraph({ spacing: { ...BODY_LINE, after: 40 }, children: textRuns("解析：") }));
+        children.push(new Paragraph({
+          alignment: derivation ? AlignmentType.LEFT : undefined,
+          spacing: { ...BODY_LINE, after: lineIndex === originalParagraphs.length - 1 ? 180 : 40 },
+          children: [...(lineIndex === 0 && !line.startsWith("【") && !derivation ? textRuns("解析：") : []), ...(derivation ? [derivation] : richText(line))],
+        }));
+      });
     }
   };
   for (const section of sections) {

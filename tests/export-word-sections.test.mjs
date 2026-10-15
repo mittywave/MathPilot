@@ -101,8 +101,11 @@ test("calculation analyses retain one paragraph per derivation step in both answ
         assert.match(text(paragraph), /^[=＝]/, "every step starts with an equals sign");
         assert.equal((text(paragraph).match(/[=＝]/g) ?? []).length, 1, "steps never merge into one paragraph");
         assert.doesNotMatch(text(paragraph), /[\r\n]/, "newlines become Word paragraphs, not ignored text characters");
+        assert.match(paragraph, /<m:oMathPara><m:oMathParaPr><m:jc m:val="left"\/><\/m:oMathParaPr><m:oMath\b/, "every derivation step explicitly overrides Word's centered display default");
+        assert.equal((paragraph.match(/<m:oMath\b/g) ?? []).length, 1, "simple and structured steps use the same native equation layout");
+        assert.doesNotMatch(paragraph, /<w:t\b/, "no step switches back to full-width text equals signs");
       }
-      assert.equal(text(steps[4]), start === starts[0] ? "＝−85" : "＝−1");
+      assert.equal(text(steps[4]).replace(/−/g, "-"), start === starts[0] ? "=-85" : "=-1");
     }
     assert.equal((xml.match(/<m:f>/g) ?? []).length, 7, "fractions remain editable Word structures");
   }
@@ -111,8 +114,10 @@ test("calculation analyses retain one paragraph per derivation step in both answ
 test("analysis paragraph boundaries preserve prose, tags, legacy breaks and complete multiline equations", async () => {
   const variants = [
     { analysis: "先算乘方。\n再算乘除。\n最后算加减。", expected: ["解析：先算乘方。", "再算乘除。", "最后算加减。"] },
-    { analysis: "【解答】原式：\n$=2+3$\n$=5$", expected: ["【解答】原式：", "＝2＋3", "＝5"] },
-    { analysis: String.raw`原式：\n$=2+3$\n$=5$`, expected: ["解析：原式：", "＝2＋3", "＝5"] },
+    { analysis: "【解答】原式：\n$=2+3$\n$=5$", expected: ["【解答】原式：", "=2+3", "=5"] },
+    { analysis: String.raw`原式：\n$=2+3$\n$=5$`, expected: ["解析：原式：", "=2+3", "=5"] },
+    { analysis: "$=2+3$\n$=5$", expected: ["解析：", "=2+3", "=5"] },
+    { analysis: "原式：\n=2+3\n=5", expected: ["解析：原式：", "=2+3", "=5"] },
     { analysis: "计算如下：\n$$\\begin{aligned}\na&=1\\\\\nb&=2\n\\end{aligned}$$\n因此成立。", expected: ["解析：计算如下：", "a=1b=2", "因此成立。"], matrix: true },
     { analysis: "$$\\frac{1}{2}=0.5$$\n结论成立。", expected: ["解析：12=0.5", "结论成立。"] },
   ];
