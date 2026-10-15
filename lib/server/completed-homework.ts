@@ -18,7 +18,7 @@ async function hash(value:unknown){return [...new Uint8Array(await crypto.subtle
 
 export async function prepareCompletedHomework(submissionId:string,assignmentId:string,upperAttempt:number,onReady:(questionIds:string[])=>Promise<void>) {
   const db=homeworkDb();
-  const submission=await db.prepare('SELECT reprocess_question_ids_json FROM homework_submissions WHERE id=?').bind(submissionId).first<{reprocess_question_ids_json:string}>();
+  const submission=await db.prepare('SELECT reprocess_question_ids_json,published_at FROM homework_submissions WHERE id=?').bind(submissionId).first<{reprocess_question_ids_json:string;published_at:number|null}>();
   const pendingIds=JSON.parse(submission?.reprocess_question_ids_json??'[]') as string[];
   const pageResult=await db.prepare('SELECT id,page_order,processed_asset_id,quality_json FROM submission_pages WHERE submission_id=? ORDER BY page_order').bind(submissionId).all<ExtractionPage>();
   const pages=pageResult.results as ExtractionPage[];
@@ -33,8 +33,11 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const oldByNumber=new Map(stored.map(q=>[q.question_number,q]));
   // An assigned homework already holds its questions: the pages are only searched for the answers to them.
   const sheet=assignment?.sheet_json?stored.filter(q=>q.source_json):null;
-  const knownNumbers=sheet?new Set(sheet.map(q=>q.question_number)):undefined;
-  const inventory:KnownSheetQuestion[]|undefined=sheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem.replace(/\s+/g,' ').slice(0,80)}));
+  // A new correction upload only reads its selected mistakes. A published upload's pending-item recovery still reads
+  // its full inventory so the other results in that same upload stay visible.
+  const scopedSheet=sheet&&pendingIds.length&&submission?.published_at==null?sheet.filter(q=>pendingIds.includes(q.id)):sheet;
+  const knownNumbers=scopedSheet?new Set(scopedSheet.map(q=>q.question_number)):undefined;
+  const inventory:KnownSheetQuestion[]|undefined=scopedSheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem.replace(/\s+/g,' ').slice(0,80)}));
   const extracted=await boundedMap(pages,HOMEWORK_AI_CONCURRENCY,async(page,index):Promise<PageExtraction>=>{
     const fingerprint=await coverageFingerprint(pages,index);
     const cached=await db.prepare('SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND page_id=? AND fingerprint=? AND status=\'complete\'').bind(submissionId,page.id,fingerprint).first<{result_json:string}>();
@@ -102,6 +105,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   if(!sheet&&questions.length>200)throw new Error('每份作业最多200道题，当前未标记完成，请分份上传');
   const pendingPages=pendingIds.filter((id:string)=>id.startsWith('page:')).map((id:string)=>Number(id.slice(5)));
   if(pendingIds.length)questions=questions.filter(q=>pendingIds.includes(recordId(q.question_number)??'')||q.page_numbers.some(p=>pendingPages.includes(p)));
+  if(!questions.length)throw new Error('上传的页面里没有找到本次需要处理的题目，请核对题号和原件');
   const ids=new Map(questions.map(q=>[q.question_number,recordId(q.question_number)??crypto.randomUUID()]));
   if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
   const now=Date.now();

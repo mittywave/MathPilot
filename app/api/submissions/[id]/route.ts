@@ -8,7 +8,7 @@ export async function GET(request: Request, context: Context) {
 }
 export async function PUT(request: Request, context: Context) {
   try { requireSameOrigin(request); const user = await requireUser(request); const { id } = await context.params; const body = await request.json() as {
-      action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean;
+      action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown;
     }; return Response.json({ submission: await updateSubmission(id, body, user) }); }
   catch (error) { if (error instanceof Response) return error; return Response.json({ error: error instanceof Error ? error.message : "提交记录更新失败" }, { status: 500 }); }
 }

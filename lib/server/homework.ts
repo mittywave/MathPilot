@@ -143,6 +143,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
     originalDocuments: documents.results.map(d=>({name:d.original_name,url:`/api/homework-assets/${d.id}`})),
     pageRevisions: revisions.results.map(r=>({pageId:String(r.page_id),originalUrl:`/api/homework-assets/${r.original_asset_id}`,processedUrl:`/api/homework-assets/${r.processed_asset_id}`,createdAt:Number(r.created_at)})),
     pages: pages.results.map(submissionPage), gradingItems, report, assigned,
+    questionScope: parseJson<string[]>(row.reprocess_question_ids_json, []),
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
 }
@@ -199,7 +200,9 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
   for (const upload of handedIn.filter((item) => item.status === "published")) {
     for (const result of await uploadResults(upload.id)) {
       const { assignmentQuestionId, ...grading } = result;
-      results.set(assignmentQuestionId, { ...grading, submissionId: upload.id });
+      const previous = results.get(assignmentQuestionId);
+      const wasIncorrect = previous?.wasIncorrect || Boolean(previous && !isPendingGradingItem(previous) && ["incorrect", "partial"].includes(previous.verdict));
+      results.set(assignmentQuestionId, { ...grading, submissionId: upload.id, wasIncorrect });
       if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, Number(upload.submitted_at ?? upload.created_at));
     }
   }
@@ -368,17 +371,31 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
 }
 
 /** A new version of a graded homework keeps the earlier version and its results untouched. */
-export async function createSubmissionVersion(submissionId: string, user: AuthUser) {
+export async function createSubmissionVersion(submissionId: string, user: AuthUser, correctionDay?: unknown) {
   const current = await teacherSubmissionRow(submissionId, user);
   if (current.status !== "published") throw responseError("请等待本次批改完成后再上传新版本", 409);
+  let questionIds: string[] = [];
+  if (correctionDay !== undefined) {
+    const assigned = await assignedHomework(current);
+    if (!assigned || typeof correctionDay !== "number" || !Number.isInteger(correctionDay) || correctionDay < 0 || correctionDay >= assigned.days.length) throw responseError("请选择这份作业中的一天进行订正", 400);
+    const from = assigned.days.slice(0, correctionDay).reduce((sum, day) => sum + day.size, 0);
+    questionIds = assigned.questions.slice(from, from + assigned.days[correctionDay].size)
+      .filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).map((question) => question.id);
+    if (!questionIds.length) throw responseError("这一天没有需要订正的错题", 409);
+  }
   const latest = await appEnv().DB.prepare("SELECT id, version, status FROM homework_submissions WHERE assignment_id = ? AND student_id = ? ORDER BY version DESC LIMIT 1")
     .bind(current.assignment_id, current.student_id).first<{ id: string; version: number; status: SubmissionStatus }>();
-  if (latest && latest.status === "draft") return readTeacherSubmission(latest.id, user);
+  if (latest && latest.status === "draft") {
+    const draft = await readTeacherSubmission(latest.id, user);
+    if (correctionDay !== undefined && JSON.stringify(draft.questionScope) !== JSON.stringify(questionIds)) throw responseError("已有待上传记录，请先完成这次上传后再订正其他天", 409);
+    return draft;
+  }
+  if (latest && latest.status !== "published") throw responseError("请等待当前上传批改完成后再上传", 409);
   const id = crypto.randomUUID(); const now = Date.now();
   await appEnv().DB.prepare(`INSERT INTO homework_submissions
-    (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'draft', 'teacher', ?, ?, ?)`)
-    .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, now, now).run();
+    (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, reprocess_question_ids_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'draft', 'teacher', ?, ?, ?, ?)`)
+    .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, JSON.stringify(questionIds), now, now).run();
   return readTeacherSubmission(id, user);
 }
 
@@ -574,7 +591,7 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   return readTeacherSubmission(id,user);
 }
 
-export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean }, user: AuthUser) {
+export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown }, user: AuthUser) {
   if (body.action === "profile") {
     const row = await teacherSubmissionRow(id, user);
     if (typeof body.profile !== "boolean") throw responseError("计入定档必须为开或关", 400);
@@ -601,7 +618,7 @@ export async function updateSubmission(id: string, body: { action?: string; page
   if (body.action === "save-pages") return replaceSubmissionPages(id, body.pages ?? [], user);
   if (body.action === "submit") return submitHomeworkSubmission(id, user);
   if (body.action === "retry") return retryHomeworkSubmission(id, user);
-  if (body.action === "new-version") return createSubmissionVersion(id, user);
+  if (body.action === "new-version") return createSubmissionVersion(id, user, body.correctionDay);
   if (body.action === "rebuild-coverage") return rebuildSubmissionCoverage(id, user);
   if (body.action === "attach-figures") { await (await import("./homework-figures")).attachMissingFigures(id, user); return readTeacherSubmission(id, user); }
   if (body.action === "reprocess-pending") return reprocessPendingSubmission(id, body.pages ?? [], user);

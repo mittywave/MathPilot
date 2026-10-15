@@ -4,6 +4,13 @@ import {loadSource} from './load-source.mjs';
 const {normalizePageExtraction,mergePageExtractions,conflictingPages,requireExactQuestionNumbers,boundedMap,homeworkQuestionBatches,completedPageExtractionPrompt}=await loadSource('lib/completed-homework-coverage.ts');
 const question=(number,pages)=>({question_number:number,page_numbers:pages,type:'解答题',stem:'完整题干',options:[],student_answer:'作答',answer_state:'readable',question_complete:true,bbox:null,knowledge_tags:[],capability_keys:[]});
 const receipt=(number,questions,kind='questions',reason='')=>({page:{page_number:number,kind,reason,question_numbers:questions.map(q=>q.question_number)},questions});
+test('a selected day accepts bare correction numbers while ambiguous days and out-of-scope work stay out',()=>{
+ const known=new Set(['D2-1','D2-3']);
+ const reading=normalizePageExtraction(receipt(1,[question('1',[1]),question('第3题',[1]),question('D1-1',[1]),question('D2-2',[1])]),1,[1],1,'school',known);
+ assert.deepEqual(reading.questions.map(q=>q.question_number),['D2-1','D2-3']);
+ const ambiguous=normalizePageExtraction(receipt(1,[question('1',[1])]),1,[1],1,'school',new Set(['D1-1','D2-1']));
+ assert.deepEqual(ambiguous.questions,[]);
+});
 test('page identity comes from the supplied primary image, not a neighbouring worksheet',()=>{
  const prompt=completedPageExtractionPrompt(13,[13],27);
  assert.match(prompt,/输入按顺序有 1 页/);assert.match(prompt,/整份 PDF 共 27 页/);

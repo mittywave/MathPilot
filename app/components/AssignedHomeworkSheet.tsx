@@ -4,10 +4,12 @@ import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-
 import type { AssignedHomework, HomeworkDay, HomeworkSubmission } from "../../lib/types";
 
 type Result = AssignedHomework["questions"][number]["result"];
-const STATE: Record<string, string> = { correct: "对", partial: "部分对", incorrect: "错", pending: "待处理", missing: "未交" };
+const STATE: Record<string, string> = { correct: "对", corrected: "已订正", partial: "部分对", incorrect: "错", pending: "待处理", missing: "未交" };
 function resultState(result: Result) {
   if (!result) return "missing";
-  return isPendingGradingItem(result) ? "pending" : result.verdict;
+  if (isPendingGradingItem(result)) return "pending";
+  if (result.wasIncorrect) return result.verdict === "correct" ? "corrected" : "incorrect";
+  return result.verdict;
 }
 const plain = (text: string) => text.replace(/\$+/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
 const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
@@ -30,8 +32,8 @@ export function dayNote(task: HomeworkDay) {
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue }: {
-  submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void;
+export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, onCorrect }: {
+  submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void;
 }) {
   const { assigned } = submission;
   const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.correct, incorrect: all.incorrect + day.incorrect,
@@ -53,6 +55,8 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue }:
     </header>
     {days.map((group, index) => {
       const note = dayNote(group);
+      const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
+      const canCorrect = submission.status === "published" && latest?.status === "published";
       return <div className={`assigned-day ${group.state}`} key={index}>
         {several && <div className="assigned-day-head"><b title={group.title}>{group.title}</b><small>{note}</small></div>}
         <ol>{group.items.map((item) => {
@@ -65,8 +69,11 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue }:
               : <span aria-label={label}>{number}</span>}
           </li>;
         })}</ol>
+        <button type="button" className="assigned-correct" disabled={busy || !mistakes || !canCorrect} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}订正`}
+          title={!mistakes ? group.done ? "这一天暂无需要订正的错题" : "提交并批改后可订正错题" : !canCorrect ? "请先完成当前上传和批改" : `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>订正</button>
       </div>;
     })}
+    <p className="assigned-correction-note">绿色：原本正确 · 蓝色：已订正正确 · 红色：仍需订正</p>
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id
       ? <b key={upload.id}>第 {upload.version} 次上传 · {upload.submittedAt == null ? "待上传" : `${day(upload.submittedAt)} 提交`}{upload.pageCount ? ` · ${upload.pageCount} 页` : ""}</b>
       : <a key={upload.id} href={`/tools/homework/submissions/${encodeURIComponent(upload.id)}`}>第 {upload.version} 次上传 · {upload.submittedAt == null ? "待上传" : `${day(upload.submittedAt)} 提交`}{upload.pageCount ? ` · ${upload.pageCount} 页` : ""}</a>)}</nav>}
