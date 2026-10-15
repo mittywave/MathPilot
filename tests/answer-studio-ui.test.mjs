@@ -21,7 +21,7 @@ async function fixture(t){
       build.onResolve({filter:/^studio-test-hooks$/},()=>({path:'hooks',namespace:'test'}));
       // Shared headers use the renderer's React; only this page receives seeded hooks.
       build.onResolve({filter:/^react(?:\/.*)?$/},args=>args.path==='react'&&args.importer.endsWith('/tools/answer-studio/page.tsx')?{path:'hooks',namespace:'test'}:{path:require.resolve(args.path),external:true});
-      build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'let values=[]; export function seed(state){values=[...state]} export function useState(){if(!values.length)throw Error("Missing page state seed"); return [values.shift(),()=>{}]} export function useEffect(){} export function useRef(value){return {current:value}}',loader:'js'}));
+      build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'let values=[]; export function seed(state){values=[...state]} export function useState(){if(!values.length)throw Error("Missing page state seed"); return [values.shift(),()=>{}]} export function useEffect(){} export function useRef(value){return {current:value}} export function useCallback(callback){return callback}',loader:'js'}));
     }}],
   });
   return require(join(dir,'ui.cjs'));
