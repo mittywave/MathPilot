@@ -204,14 +204,14 @@ export type HandoutItem =
 // 已有深圳创新知识图谱中的初一至初三记为 7–9。
 export type HandoutGrade = 7 | 8 | 9;
 export type HandoutShelf = "course" | "topic" | "student";
-// 专题分类或系列的稳定目录 ID；原分类直属讲义保留原位置，等待移入系列。
+// 专题分组的稳定目录 ID；旧分类和大纲目录直属讲义保留原位置，等待归类。
 export type HandoutDomain = string;
 // 课程体系和专题库复用同一棵目录树，专题挂在固定的专题库根目录下。
 export type HandoutCourseNode = { id: string; parentId: string | null; name: string; position: number };
 export type HandoutGroup = { courseUnitId: string | null; domain: HandoutDomain | null; studentId: string | null };
 
 export type Handout = HandoutGroup & {
-  // Shared directory breadcrumb: course system/stage/unit or topic library/category/series.
+  // Shared breadcrumb: course system/stage/unit or topic library/category/outline/group.
   coursePath: HandoutCourseNode[];
   domainName: string | null;
   id: string;

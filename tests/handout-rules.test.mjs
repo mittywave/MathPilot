@@ -124,6 +124,11 @@ test("a group is a term, a topic domain or a student, and the shelf follows from
   assert.equal(groupLabel({ domain: "inverse", domainName: "反比例", coursePath: coursePath(topicNodes, "inverse") }), "函数 / 反比例");
   assert.equal(groupLabel({ domain: "function", coursePath: coursePath(topicNodes, "function") }), "函数");
   assert.equal(shelfOf({ domain: "inverse", coursePath: coursePath(topicNodes, "inverse") }), "topic");
+  const groupedTopics = [...topicNodes, { id: "properties", parentId: "inverse", name: "反比例函数的性质" }, { id: "too-deep", parentId: "properties", name: "第五层" }];
+  assert.deepEqual(coursePath(groupedTopics, "properties").map((node) => node.id), ["topic-library", "function", "inverse", "properties"]);
+  assert.equal(groupLabel({ domain: "properties", coursePath: coursePath(groupedTopics, "properties") }), "函数 / 反比例 / 反比例函数的性质");
+  assert.deepEqual(coursePath(groupedTopics, "too-deep"), []);
+  assert.deepEqual(coursePath([...nodes, { id: "extra-course", parentId: "unit", name: "多余层" }], "extra-course"), [], "the extra topic level must not allow a fourth course directory");
   assert.equal(groupLabel(none), "未分板块");
   assert.equal(groupLabel({ studentId: "s1", studentName: "CICI" }), "CICI");
   assert.ok(sameGroup({ ...none, domain: "function" }, { domain: "function" }));

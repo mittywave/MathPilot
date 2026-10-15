@@ -72,7 +72,7 @@ async function groupOf(raw: unknown) {
   if (!group) throw responseError("讲义位置无效", 400);
   const path = group.courseUnitId || group.domain ? coursePath(await listHandoutCourses(), group.courseUnitId ?? group.domain) : [];
   if (group.courseUnitId && (path.length !== 3 || path[0].id === HANDOUT_TOPIC_ROOT)) throw responseError("请选择存在的学期或单元", 400);
-  // Categories retain old handouts in 未分系列; new series use the same domain field.
+  // Old category/outline handouts remain readable; new topic groups use the same domain field.
   if (group.domain && (path[0]?.id !== HANDOUT_TOPIC_ROOT || path.length < 2)) throw responseError("请选择存在的专题分类或系列", 400);
   return group;
 }
@@ -203,7 +203,8 @@ export async function saveHandoutCourse(raw: unknown) {
   const name = typeof source.name === "string" ? source.name.trim() : "";
   if (!name || name.length > 80) throw responseError("名称请填写 1 至 80 个字", 400);
   const parentId = existing ? existing.parentId : source.parentId ?? null;
-  if (parentId !== null && (typeof parentId !== "string" || !nodes.some((node) => node.id === parentId) || coursePath(nodes, parentId).length >= 3)) throw responseError("请选择体系、年级 / 阶段或专题分类", 400);
+  const parentPath = typeof parentId === "string" ? coursePath(nodes, parentId) : [];
+  if (parentId !== null && (!parentPath.length || parentPath.length >= (parentPath[0].id === HANDOUT_TOPIC_ROOT ? 4 : 3))) throw responseError("请选择体系、年级 / 阶段、专题分类或大纲目录", 400);
   if (nodes.some((node) => node.parentId === parentId && node.name === name && node.id !== existing?.id && node.id !== HANDOUT_TOPIC_ROOT)) throw responseError("同一层级已有这个名称", 409);
   const id = existing?.id ?? crypto.randomUUID();
   try {

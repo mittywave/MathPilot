@@ -272,7 +272,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     const originalTopicHandout = (await jsonRequest(base, `/api/handouts/${geometry.payload.handout.id}`, { cookie: two })).payload.handout;
     assert.deepEqual([originalTopicHandout.domain, originalTopicHandout.domainName], ["geometry", "平面几何"], "renaming an original topic preserves its existing handouts");
 
-    // 专题库 → 分类（函数）→ 系列（反比例、二次、动点问题）→ 每一讲。
+    // Compatibility: old series are now outline directories; their direct handouts remain readable.
     const inverse = (await course({ name: "反比例", parentId: "function" })).payload.id;
     const quadratic = (await course({ name: "二次", parentId: "function" }, two)).payload.id;
     const movingPoint = (await course({ name: "动点问题", parentId: "function" })).payload.id;
@@ -281,7 +281,6 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.ok(!seriesList.handouts.some((item) => [inverse, quadratic, movingPoint].includes(item.domain)), "empty series persist independently of lessons");
     assert.equal((await course({ name: "反比例", parentId: "function" })).response.status, 409);
     assert.equal((await course({ name: "反比例", parentId: "geometry" })).response.status, 200, "different categories can use the same series name");
-    assert.equal((await course({ name: "fourth directory", parentId: inverse })).response.status, 400);
     assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "invalid course", courseUnitId: inverse } } })).response.status, 400, "a topic series is never a course unit");
     assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: inverse, ids: [diy.id] } })).response.status, 400);
     const inverseLessons = [];
@@ -317,6 +316,44 @@ test("course and topic handouts are shared, student handouts stay with the stude
     const classifiedLegacy = (await jsonRequest(base, `/api/handouts/${originalTopicHandout.id}`, { cookie: two })).payload.handout;
     assert.equal(classifiedLegacy.domain, movingPoint, "old direct category handouts can move into a series without changing content");
     assert.deepEqual(classifiedLegacy.items, originalTopicHandout.items);
+
+    // 专题库 → 函数 → 二次函数（左侧大纲）→ 性质 / 图像（右侧分组）→ 讲义。
+    const properties = (await course({ name: "二次函数的性质", parentId: quadratic })).payload.id;
+    const graph = (await course({ name: "二次函数的图像", parentId: quadratic }, two)).payload.id;
+    const groupedList = (await jsonRequest(base, "/api/handouts", { cookie: two })).payload;
+    assert.deepEqual(groupedList.courseNodes.filter((node) => node.parentId === quadratic).map((node) => node.id), [properties, graph]);
+    assert.ok(!groupedList.handouts.some((item) => [properties, graph].includes(item.domain)), "empty topic groups persist before lectures are written");
+    assert.equal((await course({ name: "二次函数的性质", parentId: quadratic })).response.status, 409);
+    assert.equal((await course({ name: "二次函数的性质", parentId: movingPoint })).response.status, 200, "the same topic name can be used in another outline");
+    assert.equal((await course({ name: "too deep", parentId: properties })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "invalid", courseUnitId: properties } } })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "invalid", domain: "topic-library" } } })).response.status, 400);
+    const groupedLesson = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "开口与对称轴", domain: properties, items: diy.items } } })).payload.handout;
+    assert.deepEqual([groupedLesson.domain, groupedLesson.domainName, groupedLesson.courseUnitId, groupedLesson.position], [properties, "二次函数的性质", null, 0]);
+    assert.deepEqual(groupedLesson.coursePath.map((node) => node.id), ["topic-library", "function", quadratic, properties]);
+    await course({ id: quadratic, name: "二次函数" });
+    await course({ id: "function", name: "函数" });
+    await course({ id: properties, name: "二次函数的性质与应用" }, two);
+    const savedGroupedLesson = (await jsonRequest(base, `/api/handouts/${groupedLesson.id}`, { cookie: one, method: "PUT", body: { handout: { title: groupedLesson.title, items: groupedLesson.items } } })).payload.handout;
+    assert.deepEqual(savedGroupedLesson.coursePath.map((node) => node.name), ["专题库", "函数", "二次函数", "二次函数的性质与应用"]);
+    assert.equal(savedGroupedLesson.domain, properties);
+    const sharedGroupedLesson = (await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.find((item) => item.id === groupedLesson.id);
+    assert.deepEqual(sharedGroupedLesson.coursePath, savedGroupedLesson.coursePath);
+    const reorderedGroups = (await course({ id: graph, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === quadratic);
+    assert.deepEqual(reorderedGroups.map((node) => node.id), [graph, properties]);
+    for (const id of ["function", quadratic, properties]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 409, "nonempty groups and every ancestor protect lectures");
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: graph, ids: [groupedLesson.id] } })).response.status, 400);
+    await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: graph, ids: [quadraticLesson.id, groupedLesson.id] } });
+    const movedGroupedLesson = (await jsonRequest(base, `/api/handouts/${groupedLesson.id}`, { cookie: two })).payload.handout;
+    assert.deepEqual([movedGroupedLesson.domain, movedGroupedLesson.position, movedGroupedLesson.title], [graph, 1, groupedLesson.title]);
+    assert.deepEqual(movedGroupedLesson.coursePath.map((node) => node.name), ["专题库", "函数", "二次函数", "二次函数的图像"]);
+    assert.deepEqual(movedGroupedLesson.items, groupedLesson.items);
+    const movedOldOutlineLesson = (await jsonRequest(base, `/api/handouts/${quadraticLesson.id}`, { cookie: two })).payload.handout;
+    assert.equal(movedOldOutlineLesson.position, 0, "legacy outline handouts can be filed in topic groups");
+    assert.deepEqual(movedOldOutlineLesson.items, quadraticLesson.items);
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: properties } })).response.status, 403);
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: properties } })).response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: properties, ids: [groupedLesson.id] } })).response.status, 400);
 
     const tempQuestion = { id: "temp-equation", categoryId: "", type: "解答题", difficulty: "中等", stem: "解方程 $x+2=5$。", options: [], answer: "3", analysis: "移项得 $x=3$。", source: "", importFileName: "外部试卷.docx", contentImages: [pixel],
       stemDocxXml: ['<w:p><m:oMath><m:r><m:t>x+2=5</m:t></m:r></m:oMath></w:p>'], createdAt: Date.now(), updatedAt: Date.now() };
