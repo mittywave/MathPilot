@@ -99,7 +99,7 @@ html[data-theme="dark"][data-style]:not([data-style="classic"]) {
 nav { display:flex; align-self:stretch; gap:26px; }
 .app-shell { min-height:100vh; padding-bottom:112px; }
 .topbar { height:var(--topbar-h); position:sticky; top:0; z-index:10; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:20px; padding:0 32px; border-bottom:1px solid var(--line); background:var(--surface); }
-.brand { display:flex; align-items:center; gap:10px; color:var(--ink); text-decoration:none; white-space:nowrap; }
+.brand { display:flex; align-items:center; gap:10px; color:var(--ink); text-decoration:none; white-space:nowrap; transform:translateY(3px); } /* 字标下方有箭头：下移 3px，让字母与导航文字居中对齐 */
 .library-entries { display:flex; align-self:stretch; min-width:0; gap:2px; overflow-x:auto; scrollbar-width:none; }
 .library-entries::-webkit-scrollbar { display:none; }
 .library-entries .nav-item { position:relative; display:flex; flex:none; align-items:center; justify-content:center; border:0; background:transparent; padding:0 12px; color:var(--muted); font-size:14px; text-decoration:none; white-space:nowrap; }
