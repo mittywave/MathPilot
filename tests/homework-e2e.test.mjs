@@ -671,7 +671,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const plan=await jsonRequest(base,"/api/typeset-records",{cookie:teacherOne,method:"POST",body:{title:"两天计算打卡",plan:{studentId:studentOneId,groups:[{title:"第 1 天",items:[{id:"typeset-1"}]}]}}});
     assert.equal(plan.response.status,201,JSON.stringify(plan.payload));
     const planId=plan.payload.record.id;
-    const sheetBody={studentIds:[studentOneId],title:"两天计算打卡",start:"2026-10-12",recordId:planId,groups:[{title:"第 1 天 · 热身",size:2},{title:"第 2 天 · 加深",size:2}],questions:[
+    const sheetBody={studentIds:[studentOneId],title:"两天计算打卡",recordId:planId,groups:[{title:"第 1 天 · 热身",size:2},{title:"第 2 天 · 加深",size:2}],questions:[
       sheetQuestion("typeset-1","计算 $1+1$","2",{contentImages:[`data:image/png;base64,${PNG}`]}),
       sheetQuestion("typeset-2","计算 $2+2$","4",{analysis:"【点评】本题考查有理数的加法．"}),
       sheetQuestion("typeset-3","计算 $3\\times 3$","",{type:"解答题"}),
@@ -679,7 +679,6 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     ]};
     assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherTwo,method:"POST",body:sheetBody})).response.status,404,"only the student's own teacher assigns to them");
     assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{...sheetBody,groups:[{title:"第 1 天",size:3}]}})).response.status,400,"groups must account for every question");
-    for(const start of ["2026-02-30","10/12","",null,undefined])assert.equal((await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{...sheetBody,start}})).response.status,400,`${start} is not a date`);
     const assignedHomework=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:sheetBody});
     assert.equal(assignedHomework.response.status,201,JSON.stringify(assignedHomework.payload));
     const firstUpload=assignedHomework.payload.assigned[0].id;
@@ -687,8 +686,10 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     let sheet=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission;
     assert.equal(sheet.status,"draft");
     assert.deepEqual(sheet.assigned.questions.map(q=>[q.number,q.result]),[["D1-1",null],["D1-2",null],["D2-1",null],["D2-2",null]]);
-    // Each day is due on its own date, 第 1 天 on the date the teacher set and the next day after it.
-    assert.deepEqual(sheet.assigned.days.map(d=>[d.title,d.size,d.date,d.done,d.handedInAt]),[["第 1 天 · 热身",2,"2026-10-12",0,null],["第 2 天 · 加深",2,"2026-10-13",0,null]]);
+    // Days are task groups: assigning needs no date, and an unsubmitted task has no date.
+    assert.deepEqual(sheet.assigned.days.map(d=>[d.title,d.size,d.date,d.done,d.handedInAt]),[["第 1 天 · 热身",2,undefined,0,null],["第 2 天 · 加深",2,undefined,0,null]]);
+    const savedSheet=JSON.parse(d1Rows(stateDir,"SELECT sheet_json FROM homework_assignments WHERE id=?",[sheet.assignmentId])[0].sheet_json);
+    assert.equal(savedSheet.start,undefined,"new homework does not store a preset date");
     assert.deepEqual(sheet.outputs,{wrongBook:true,report:false,profile:true});
     const assignedProfileRequests=mock.state.requests;
     for (const profile of [false,true]) {
@@ -708,7 +709,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(JSON.parse(sheetRows[1].taxonomy_keys_json).length,"a question the library never saw is tagged from what its analysis says it tests");
     let listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.title,listed.total,listed.done,listed.latest.status],["两天计算打卡",4,0,"draft"]);
-    assert.deepEqual(listed.days.map(d=>[d.date,d.size,d.done]),[["2026-10-12",2,0],["2026-10-13",2,0]]);
+    assert.deepEqual(listed.days.map(d=>[d.date,d.size,d.done]),[[undefined,2,0],[undefined,2,0]]);
     assert.equal(listed.recordId,planId);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherTwo})).response.status,404);
 
@@ -726,10 +727,15 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const sheetWrong=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===sheet.assignmentId);
     assert.deepEqual(sheetWrong.map(e=>[e.question.stem,e.question.analysis]),[["计算 $2+2$","【点评】本题考查有理数的加法．"]],"the wrong book keeps the question as it was handed out");
     assert.ok(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=? AND dimension='knowledge'",[firstUpload])[0].count>0,"an assigned homework feeds the knowledge profile");
+    // The first task was submitted several days ago; the second can still be submitted today.
+    const firstSubmittedAt=Date.now()-4*24*60*60*1000;
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE homework_submissions SET submitted_at=${firstSubmittedAt} WHERE id='${firstUpload}'`]);
     listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
     assert.deepEqual(listed.days.map(d=>[d.done,d.correct,d.incorrect,typeof d.handedInAt]),[[2,1,1,"number"],[0,0,0,"object"]],"day 1 came back with the first upload, day 2 is still out");
     const firstHandedIn=listed.days[0].handedInAt;
+    assert.equal(firstHandedIn,firstSubmittedAt,"the task records the actual upload submission time");
     const sheetError=sheet.gradingItems.find(i=>i.questionNumber==="D1-2");
     command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
       `UPDATE assignment_questions SET answer='',reference_verified=0 WHERE id='${sheetError.assignmentQuestionId}'`]);
@@ -758,20 +764,20 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.done,listed.correct,listed.incorrect,listed.latest.version],[4,3,1,2]);
     assert.equal(listed.days[0].handedInAt,firstHandedIn,"a day is handed in when it first came back");
-    assert.ok(listed.days[1].handedInAt>=firstHandedIn);
+    assert.ok(listed.days[1].handedInAt-firstHandedIn>=3*24*60*60*1000,"task submissions need not be on consecutive days");
+    assert.equal(listed.days[1].handedInAt,sheet.submittedAt);
     assert.deepEqual(sheet.assigned.days.map(d=>[d.done,d.correct]),[[2,1],[2,2]]);
 
-    // 改日期 moves 第 1 天, and the next day with it, across the turn of a year; the grading stays as it is.
-    const moved=await jsonRequest(base,`/api/submissions/${nextUpload.id}`,{cookie:teacherOne,method:"PUT",body:{action:"schedule",start:"2026-12-31"}});
-    assert.equal(moved.response.status,200,JSON.stringify(moved.payload));
-    assert.deepEqual(moved.payload.submission.assigned.days.map(d=>[d.date,d.done]),[["2026-12-31",2],["2027-01-01",2]]);
-    assert.equal((await jsonRequest(base,`/api/submissions/${nextUpload.id}`,{cookie:teacherTwo,method:"PUT",body:{action:"schedule",start:"2026-10-01"}})).response.status,404);
-    assert.equal((await jsonRequest(base,`/api/submissions/${nextUpload.id}`,{cookie:teacherOne,method:"PUT",body:{action:"schedule",start:"2026-13-01"}})).response.status,400);
-    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"schedule",start:"2026-10-01"}})).response.status,400,"an uploaded homework has no dates");
+    // Legacy planned dates are ignored without changing actual submissions or grading results.
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE homework_assignments SET sheet_json=json_set(sheet_json,'$.start','2026-12-31') WHERE id='${sheet.assignmentId}'`]);
+    const legacySheet=(await jsonRequest(base,`/api/submissions/${nextUpload.id}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual(legacySheet.assigned.days,sheet.assigned.days);
+    assert.equal((await jsonRequest(base,`/api/submissions/${nextUpload.id}`,{cookie:teacherOne,method:"PUT",body:{action:"schedule",start:"2026-10-01"}})).response.status,400,"preset dates can no longer be set");
     listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework;
-    assert.deepEqual(listed.find(h=>h.assigned).days.map(d=>d.date),["2026-12-31","2027-01-01"]);
+    assert.deepEqual(listed.find(h=>h.assigned).days.map(d=>d.date),[undefined,undefined]);
     assert.deepEqual([listed.find(h=>h.assignmentId===directAssignmentId).days,listed.find(h=>h.assignmentId===directAssignmentId).recordId],[null,null]);
-    // A sheet without days is one day, due on the date set.
+    // A sheet without groups is one task; a date sent by an older client is not stored.
     // A record that is not this teacher's is not remembered.
     const otherPlan=(await jsonRequest(base,"/api/typeset-records",{cookie:teacherTwo,method:"POST",body:{plan:{groups:[{items:[{id:"typeset-9"}]}]}}})).payload.record.id;
     const oneDay=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentIds:[studentTwoId],title:"一页练习",start:"2026-10-20",recordId:otherPlan,questions:[sheetQuestion("typeset-9","计算 $5+5$","10")]}});
@@ -779,13 +785,9 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const studentTwoHomework=(await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([studentTwoHomework.title,studentTwoHomework.recordId],["一页练习",null]);
     const oneDayUrl=`/api/submissions/${oneDay.payload.assigned[0].id}`;
-    assert.deepEqual((await jsonRequest(base,oneDayUrl,{cookie:teacherOne})).payload.submission.assigned.days.map(d=>[d.title,d.size,d.date]),[["",1,"2026-10-20"]]);
-    // One assigned before homework had dates starts on the day it was assigned.
+    assert.deepEqual((await jsonRequest(base,oneDayUrl,{cookie:teacherOne})).payload.submission.assigned.days.map(d=>[d.title,d.size,d.date,d.handedInAt]),[["",1,undefined,null]]);
     const oneDayAssignment=(await jsonRequest(base,oneDayUrl,{cookie:teacherOne})).payload.submission.assignmentId;
-    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE homework_assignments SET sheet_json=json_remove(sheet_json,'$.start') WHERE id='${oneDayAssignment}'`]);
-    const assignedAt=d1Rows(stateDir,"SELECT created_at, sheet_json FROM homework_assignments WHERE id=?",[oneDayAssignment])[0];
-    assert.equal(JSON.parse(assignedAt.sheet_json).start,undefined);
-    assert.deepEqual((await jsonRequest(base,oneDayUrl,{cookie:teacherOne})).payload.submission.assigned.days.map(d=>d.date),[new Date(assignedAt.created_at).toISOString().slice(0,10)]);
+    assert.equal(JSON.parse(d1Rows(stateDir,"SELECT sheet_json FROM homework_assignments WHERE id=?",[oneDayAssignment])[0].sheet_json).start,undefined);
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     // 定档: graded knowledge from the assigned homework, and the teacher's lesson feedback with the abilities read from it.

@@ -7,25 +7,20 @@ import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
-import { calendarDay, dayNote, dayState, shortDate, type DayState } from "./AssignedHomeworkSheet";
+import { dayNote, dayState, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
 
-// What a homework is waiting for, in a few words. An assigned one goes by its days: a day past its date with nothing
-// back comes first, then the day due today; an uploaded one goes by its grading.
-function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "late" | "partial" | "done" } {
+// An assigned homework goes by task completion; an uploaded one goes by its grading.
+function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
   const status = item.latest.status;
   if (busy(item)) return { label: "批改中", tone: "busy" };
   if (status === "failed") return { label: "处理失败", tone: "failed" };
   if (!item.days) return status === "draft" ? { label: "待上传", tone: "waiting" } : { label: "已批改", tone: "done" };
   if (states.every((state) => state === "done")) return { label: "已交齐", tone: "done" };
   const several = item.days.length > 1;
-  const late = states.flatMap((state, index) => (state === "late" ? [index + 1] : []));
-  if (late.length) return { label: !several ? "没交" : late.length > 1 ? `${late.length} 天没交` : `第 ${late[0]} 天没交`, tone: "late" };
-  const due = states.indexOf("today");
-  if (due >= 0) return { label: several ? `今天交第 ${due + 1} 天` : "今天交", tone: "waiting" };
-  if (!item.done) return { label: `${shortDate(item.days[0].date)} ${several ? "开始" : "要交"}`, tone: "waiting" };
-  return { label: several ? `已交 ${states.filter((state) => state === "done" || state === "partial").length}/${item.days.length} 天` : `已交 ${item.done}/${item.total}`, tone: "partial" };
+  if (!item.done) return { label: "未提交", tone: "waiting" };
+  return { label: several ? `已交 ${states.filter((state) => state === "done").length}/${item.days.length} 天` : `已交 ${item.done}/${item.total}`, tone: "partial" };
 }
 
 const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
@@ -95,13 +90,11 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
   const assigned = useCallback(() => { setAssigning(false); setReads((count) => count + 1); }, []);
   const [handedOut, setHandedOut] = useState<string[]>([]);
 
-  const today = calendarDay();
-  const rows = homework?.map((item) => ({ item, states: item.days?.map((entry) => dayState(entry, today)) ?? [] })) ?? [];
+  const rows = homework?.map((item) => ({ item, states: item.days?.map(dayState) ?? [] })) ?? [];
   const waiting = rows.filter(({ item }) => item.assigned && item.done < item.total && !busy(item));
-  const late = waiting.filter(({ states }) => states.includes("late")).length;
   return <section className="student-homework" aria-label={`${student.name}的作业`}>
     <header className="student-panel-head">
-      <p>{homework ? late ? `${late} 份作业过了日子没交` : waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
+      <p>{homework ? waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
       <div className="student-panel-actions">
         <button type="button" className="student-panel-action" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
         <a className="primary-button" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
@@ -116,12 +109,12 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
-            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
-              : days.length ? `${shortDate(days[0].date)} 交作业 · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
+            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${days.length} 天任务 · ${item.total} 道题`
+              : days.length ? `${item.total} 道题${days[0].handedInAt == null ? "" : ` · ${day(days[0].handedInAt)} 提交`}` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
             {(days.length > 1 || graded > 0) && <span className="homework-tally">
-              {days.length > 1 && <span className="homework-days" aria-label="每天交没交">{days.map((entry, index) => {
-                const note = dayNote(entry, states[index]);
-                return <i key={index} className={states[index]} title={`第 ${index + 1} 天 · ${shortDate(entry.date)}${note ? ` · ${note}` : ""}`}>{index + 1}</i>;
+              {days.length > 1 && <span className="homework-days" aria-label="各天任务进度">{days.map((entry, index) => {
+                const note = dayNote(entry);
+                return <i key={index} className={states[index]} title={`第 ${index + 1} 天 · ${note}`}>{index + 1}</i>;
               })}</span>}
               {graded > 0 && <span className="homework-bar" aria-label={`对 ${item.correct} 道，错 ${item.incorrect} 道，待处理 ${item.pending} 道`}>
                 <i className="bar">{(["correct", "incorrect", "pending"] as const).map((key) => item[key] > 0 && <em key={key} className={key} style={{ width: `${item[key] / Math.max(item.total, graded) * 100}%` }} />)}</i>

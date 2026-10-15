@@ -160,14 +160,6 @@ export default function TeacherSubmissionPage() {
     if(!submission)return;setBusy(true);
     try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建重交版本失败", tone: "error" });setBusy(false);}
   }
-  // 改日期 of an assigned homework: the days move, the grading stays as it is.
-  async function reschedule(start: string) {
-    if (!submission) return false;
-    setBusy(true);
-    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage({ text: "日期已改好", tone: "success" }); return true; }
-    catch (error) { setMessage({ text: error instanceof Error ? error.message : "日期没有改成", tone: "error" }); return false; }
-    finally { setBusy(false); }
-  }
   async function changeProfile(profile: boolean) {
     if (!submission || busy || submission.assigned) return;
     const previous = submission.outputs.profile;
@@ -367,7 +359,7 @@ export default function TeacherSubmissionPage() {
         {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
       </div></section>
 
-    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onReschedule={reschedule}
+    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
     {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}

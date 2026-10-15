@@ -166,24 +166,8 @@ async function uploadResults(submissionId: string) {
       standardAnswer: String(row.standard_answer ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
 }
 
-// What an assigned homework keeps beside its questions: the days it is split into, the date of its first day, and the
-// 快速排版 record it was assigned from.
-type HomeworkSheet = { groups?: HomeworkSheetGroup[]; start?: string; recordId?: string };
-
-// The teacher's calendar dates are kept as YYYY-MM-DD; a day later is one calendar day on, in any time zone.
-function calendarDate(value: unknown) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ""));
-  if (!match) return null;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-  return date.toISOString().slice(0, 10) === match[0] && date.getUTCFullYear() >= 2000 && date.getUTCFullYear() < 2100 ? match[0] : null;
-}
-function daysAfter(date: string, count: number) {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day + count)).toISOString().slice(0, 10);
-}
-// A homework assigned before it had a first day starts on the day it was assigned. Only the teacher's browser knows
-// the teacher's time zone, so that day is read in UTC, the worker's calendar; 改日期 puts it right.
-const assignedDay = (time: number) => new Date(time).toISOString().slice(0, 10);
+// Task groups and the 快速排版 record they were assigned from. Legacy start dates are ignored.
+type HomeworkSheet = { groups?: HomeworkSheetGroup[]; recordId?: string };
 
 // How the results so far add up: graded ones as right or wrong, and those a teacher still has to look at.
 function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
@@ -199,7 +183,7 @@ function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
 /**
  * An assigned homework comes back in as many uploads as the student hands it in: each question shows its result from
  * the latest published upload that found it, and a question no upload found yet has none (未提交, not wrong).
- * Day by day it is due on its own date, and handed in when the first upload that found any of its questions was.
+ * Each day is a task group, handed in when the first upload that found any of its questions was.
  */
 async function assignedHomework(row: Record<string, unknown>): Promise<AssignedHomework | null> {
   if (!row.sheet_json) return null;
@@ -220,13 +204,12 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
     }
   }
   const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: parseJson<Question>(question.source_json, {} as Question), result: results.get(question.id) ?? null }));
-  const { groups, start } = parseJson<HomeworkSheet>(row.sheet_json, {});
-  const first = calendarDate(start) ?? assignedDay(Number(row.assignment_created_at));
+  const { groups } = parseJson<HomeworkSheet>(row.sheet_json, {});
   let from = 0;
-  const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map((group, index) => {
+  const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map((group) => {
     const day = items.slice(from, from += group.size);
     const times = day.flatMap((item) => firstHandedIn.get(item.id) ?? []);
-    return { title: group.title, size: group.size, date: daysAfter(first, index), ...tally(day.flatMap((item) => item.result ?? [])), handedInAt: times.length ? Math.min(...times) : null };
+    return { title: group.title, size: group.size, ...tally(day.flatMap((item) => item.result ?? [])), handedInAt: times.length ? Math.min(...times) : null };
   });
   return {
     days, questions: items,
@@ -303,9 +286,9 @@ function hasReference(question: Pick<Question, "answer" | "analysis">) {
  * 布置作业: a material from 快速排版 handed to one or more students. Each student gets a homework of their own whose
  * questions and answers are stored now, waiting for the work to come back. A library question is copied from the
  * library itself; any other question (one read from a Word, a wrong-book snapshot) as the browser sent it, its
- * pictures stored for this teacher only. 第 1 天 (or, without days, the day it is due) is the date the teacher set.
+ * pictures stored for this teacher only. Task groups have no preset submission dates.
  */
-export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; start?: unknown; recordId?: unknown }, user: AuthUser) {
+export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; recordId?: unknown }, user: AuthUser) {
   requireHomeworkEnabled();
   const studentIds = [...new Set(Array.isArray(input.studentIds) ? input.studentIds.map((id) => String(id)) : [])];
   if (!studentIds.length || studentIds.length > 50) throw responseError("请选择要布置的学生", 400);
@@ -316,11 +299,10 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
   if (raw.length > MAX_ASSIGNED_QUESTIONS) throw responseError(`一份作业最多 ${MAX_ASSIGNED_QUESTIONS} 道题`, 400);
   const groups = assignedGroups(input.groups, raw.length);
   const numbers = assignedNumbers(groups, raw.length);
-  const start = calendarDate(input.start); if (!start) throw responseError("请选择有效的日期", 400);
   // The record is remembered only when it is this teacher's; the archive then knows the plan is handed out.
   const record = typeof input.recordId === "string" && input.recordId ? await appEnv().DB.prepare("SELECT id FROM typeset_records WHERE id = ? AND owner_user_id = ?")
     .bind(input.recordId, user.id).first<{ id: string }>() : null;
-  const sheet: HomeworkSheet = { groups, start, ...(record ? { recordId: record.id } : {}) };
+  const sheet: HomeworkSheet = { groups, ...(record ? { recordId: record.id } : {}) };
   const { readLibrary, storeTeacherQuestionMedia } = await import("./library");
   const library = new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
   const { index: graph } = await (await import("./knowledge-graph")).loadPublishedKnowledgeGraph();
@@ -383,16 +365,6 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
       days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
     };
   }));
-}
-
-// 改日期: 第 1 天 moves to another date, and every later day with it.
-async function rescheduleAssignedHomework(id: string, start: unknown, user: AuthUser) {
-  const row = await teacherSubmissionRow(id, user);
-  if (!row.sheet_json) throw responseError("只有布置的作业有日期", 400);
-  const date = calendarDate(start); if (!date) throw responseError("请选择有效的日期", 400);
-  await appEnv().DB.prepare("UPDATE homework_assignments SET sheet_json = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(JSON.stringify({ ...parseJson<HomeworkSheet>(row.sheet_json, {}), start: date }), Date.now(), row.assignment_id, user.id).run();
-  return readTeacherSubmission(id, user);
 }
 
 /** A new version of a graded homework keeps the earlier version and its results untouched. */
@@ -602,7 +574,7 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   return readTeacherSubmission(id,user);
 }
 
-export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; start?: string; profile?: boolean }, user: AuthUser) {
+export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean }, user: AuthUser) {
   if (body.action === "profile") {
     const row = await teacherSubmissionRow(id, user);
     if (typeof body.profile !== "boolean") throw responseError("计入定档必须为开或关", 400);
@@ -627,7 +599,6 @@ export async function updateSubmission(id: string, body: { action?: string; page
     return readTeacherSubmission(id, user);
   }
   if (body.action === "save-pages") return replaceSubmissionPages(id, body.pages ?? [], user);
-  if (body.action === "schedule") return rescheduleAssignedHomework(id, body.start, user);
   if (body.action === "submit") return submitHomeworkSubmission(id, user);
   if (body.action === "retry") return retryHomeworkSubmission(id, user);
   if (body.action === "new-version") return createSubmissionVersion(id, user);
