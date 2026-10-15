@@ -87,7 +87,7 @@ function ObservationItem({ studentId, observation, onChange, onRemove }: { stude
       <PaperMoreMenu label="这条反馈的操作">
         <button type="button" onClick={() => { setDraft(observation.text); setEditing(true); }}>修改</button>
         <button type="button" onClick={() => void change({ extract: true })}>重新提取</button>
-        <button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这条课后反馈？")) onRemove(); }}>删除</button>
+        <hr /><button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这条课后反馈？")) onRemove(); }}>删除…</button>
       </PaperMoreMenu>
     </header>
     {editing ? <div className="observation-edit">

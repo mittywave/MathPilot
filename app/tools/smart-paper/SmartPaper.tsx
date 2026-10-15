@@ -246,7 +246,7 @@ export default function SmartPaper() {
                   <button type="button" onClick={() => swap(dayIndex, itemIndex)}>换一道</button>
                   <button type="button" disabled={itemIndex === 0} onClick={() => move(dayIndex, itemIndex, -1)}>上移</button>
                   <button type="button" disabled={itemIndex === group.items.length - 1} onClick={() => move(dayIndex, itemIndex, 1)}>下移</button>
-                  <button type="button" className="danger-text" onClick={() => remove(dayIndex, itemIndex)}>移除</button>
+                  <hr /><button type="button" className="danger-text" onClick={() => remove(dayIndex, itemIndex)}>移除</button>
                 </PaperMoreMenu>
               </div>
             </li>;

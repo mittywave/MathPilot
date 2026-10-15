@@ -195,7 +195,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <button disabled={busy} onClick={() => setOutlineEdit({ id: node.id, parentId: node.parentId, name: node.name, label: "目录", error: "" })}>重命名</button>
       <button disabled={busy || index === 0} onClick={() => changeNode(node, -1)}>上移</button>
       <button disabled={busy || index === siblings.length - 1} onClick={() => changeNode(node, 1)}>下移</button>
-      {isAdmin && <button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录</button>}
+      {isAdmin && <><hr /><button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录…</button></>}
     </PaperMoreMenu>;
   };
   const addNode = (parentId: string | null, label: string) => setOutlineEdit({ parentId, label, name: "", error: "" });
@@ -277,16 +277,14 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     const modules = moduleList(handout);
     const counts = [questionTotal(handout), handout.sheetCounts.quiz, handout.sheetCounts.homework];
     const numbered = Boolean(order && handout.courseUnitId && !place);
-    return <li className="handout-entry" key={handout.id}>
-      <a className={numbered ? "numbered" : undefined} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
+    return <li className="handout-entry row-tail" key={handout.id}>
+      <a className={numbered ? "numbered" : undefined} aria-label={`${handout.title}，${HANDOUT_SHEETS.map((sheet, index) => `${sheet.label} ${counts[index]} 题`).join("，")}`} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
         {numbered && order ? <span className="handout-entry-no" aria-label={lessonName(order.index)}>{order.index + 1}</span> : null}
         <span className="handout-entry-main">
           {place && <small>{place}</small>}
           <strong>{handout.title}</strong>
           {modules && <span>{modules}</span>}
-        </span>
-        <span className="handout-entry-count" aria-label={HANDOUT_SHEETS.map((sheet, index) => `${sheet.label} ${counts[index]} 题`).join("，")}>
-          {HANDOUT_SHEETS.map((sheet, index) => <span key={sheet.value} className={counts[index] ? undefined : "zero"}>{sheet.label} {counts[index]}</span>)}
+          {counts.some(Boolean) && <span className="handout-entry-count" aria-hidden="true">{HANDOUT_SHEETS.flatMap((sheet, index) => counts[index] ? [`${sheet.label} ${counts[index]}`] : []).join(" · ")}</span>}
         </span>
       </a>
       <PaperMoreMenu label={`${handout.title} 更多操作`}>
@@ -296,7 +294,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         </>}
         <button disabled={busy} onClick={() => create(groupOf(handout), handout)}>复制一份</button>
         <button onClick={() => openMove(handout)}>移到…</button>
-        {(isAdmin || handout.studentId) && <button className="danger-text" onClick={() => remove(handout)}>删除</button>}
+        {(isAdmin || handout.studentId) && <><hr /><button className="danger-text" onClick={() => remove(handout)}>删除…</button></>}
       </PaperMoreMenu>
     </li>;
   };
@@ -304,7 +302,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const column = (key: string, title: string, unit: string, group: HandoutGroup, addLabel: string | null, dated = false, node?: HandoutCourseNode) => {
     const items = inGroup(group);
     return <section className="handout-column" key={key} aria-label={labelGroup({ ...group, studentName: title })}>
-      <header><h2>{title}</h2>{!!items.length && <span>{items.length} {unit}</span>}{node && nodeMenu(node)}</header>
+      <header className="row-tail"><h2>{title}</h2>{!!items.length && <span>{items.length} {unit} · 已编 {items.filter(item => questionTotal(item) + item.sheetCounts.quiz + item.sheetCounts.homework > 0).length} {unit}</span>}{node && nodeMenu(node)}</header>
       <ol>
         {items.map((item, index) => entry(item, { index, size: items.length }, dated ? `更新于 ${shortDate(item.updatedAt)}` : undefined))}
         {addLabel && <li className="handout-entry-add"><button disabled={busy} onClick={() => create(group)}>＋ {addLabel}</button></li>}
@@ -324,12 +322,11 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     <aside className="handout-nav" aria-label="讲义书架"><div>
       <input className="handout-find" type="search" aria-label="查找讲义" placeholder="查找讲义或模块" value={query} onChange={(event) => setQuery(event.target.value)} />
       <nav>
-        {navItem("course", "课程体系", 0, false, () => choose("course"), true)}
-        <button className="handout-outline-add" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋ 新建体系</button>
+        <div className="handout-nav-heading">{navItem("course", "课程体系", 0, false, () => choose("course"), true)}<button className="icon-button" aria-label="新建体系" title="新建体系" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋</button></div>
         {systems.map((system) => <div key={system.id}>
-          <div className="handout-nav-row">{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id, () => choose("course", system.id))}{nodeMenu(system)}</div>
+          <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id))}{nodeMenu(system)}</div>
           {activeSystem?.id === system.id && <div className="handout-stage-nav">
-            {stages.map((stage) => <div className="handout-nav-row" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
+            {stages.map((stage) => <div className="handout-nav-row row-tail" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
             <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>
           </div>}
         </div>)}
@@ -808,7 +805,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
               <button disabled={moduleIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, section.id, -1))}>上移</button>
               <button disabled={moduleIndex === modules.length - 1} onClick={() => setItems(moveHandoutItem(doc.items, section.id, 1))}>下移</button>
             </>}
-            <button className="danger-text" onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块</button>
+            <hr /><button className="danger-text" onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块…</button>
           </PaperMoreMenu>
         </div>
 

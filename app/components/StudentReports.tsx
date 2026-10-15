@@ -70,7 +70,7 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
       <button type="button" className="primary-button" disabled={busy} onClick={() => void download("pdf")}>{busy ? "正在排版…" : "下载 PDF"}</button>
       <PaperMoreMenu label="这份报告的操作">
         <button type="button" onClick={() => void download("tex")}>下载 TeX</button>
-        <button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这份学情报告？")) onRemove(); }}>删除</button>
+        <hr /><button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这份学情报告？")) onRemove(); }}>删除…</button>
       </PaperMoreMenu>
     </header>
     <dl className="report-banner">

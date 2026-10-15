@@ -5,7 +5,6 @@
 .handout-empty b{font-size:16px}
 .handout-empty p{margin:6px 0 0;color:color-mix(in srgb,var(--ink,#24352f) 62%,var(--surface,#fff));font-size:13.5px}
 .handout-question-foot small,.picker-item-foot small{color:color-mix(in srgb,var(--ink,#24352f) 58%,var(--surface,#fff));font-size:12.5px}
-.handouts .basket-more .more-toggle{min-height:44px}
 
 .handout-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:10px 12px 12px;border-top:1px solid var(--line,#e4e9e6);background:color-mix(in srgb,var(--surface-soft,#eef3f0) 55%,var(--surface,#fff))}
 .handout-bar .primary-button{grid-column:1/-1;width:100%;margin-left:0;height:38px;padding:0 18px}
@@ -197,8 +196,8 @@
 .handout-nav .shelf{margin-top:14px;font-family:"Songti SC",serif;font-size:15.5px;font-weight:700}
 .handout-nav .shelf:first-child{margin-top:0}
 .handout-nav .item{padding-left:24px;color:color-mix(in srgb,var(--ink) 80%,var(--surface));font-size:14px}
-.handout-nav button:hover{background:color-mix(in srgb,var(--line) 50%,transparent)}
-.handout-nav button.active{background:var(--green-soft);color:var(--green);font-weight:600}
+.handout-nav nav>button:hover,.handout-nav-heading>.shelf:hover{background:color-mix(in srgb,var(--line) 50%,transparent)}
+.handout-nav button.active{color:var(--green);font-weight:600}
 .handout-nav em{margin-left:auto;color:var(--muted);font:400 12px "PingFang SC","Microsoft YaHei",system-ui,sans-serif}
 .handout-nav button.active em{color:inherit}
 .handout-nav-link{color:var(--green);font-size:13px}
@@ -217,9 +216,6 @@
 .handout-column ol{margin:0;padding:0;list-style:none}
 .handout-column.wide ol,.handout-columns.single ol{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));column-gap:28px}
 .handout-entry{position:relative;border-bottom:1px solid var(--line)}
-.handout-entry>a{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:0 12px;padding:12px 8px 12px 6px;border-radius:calc(8px*var(--radius-scale));color:inherit;text-decoration:none}
-.handout-entry>a.numbered{grid-template-columns:auto minmax(0,1fr) auto}
-.handout-entry>a:hover{background:color-mix(in srgb,var(--green-soft) 70%,transparent)}
 .handout-entry>a:hover strong{color:var(--green)}
 .handout-entry-no{min-width:1.2em;color:var(--green);font:italic 600 18px/1.3 Georgia,"Songti SC",serif;text-align:right}
 .handout-entry-main{display:grid;gap:3px;min-width:0}
@@ -227,34 +223,19 @@
 .handout-entry-main strong{display:-webkit-box;overflow:hidden;font-family:"Songti SC",serif;font-size:15.5px;font-weight:700;line-height:1.4;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .handout-entry-main>span{display:-webkit-box;overflow:hidden;color:var(--muted);font-size:12.5px;line-height:1.6;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 /* 讲义、小测、作业的题数上下排开，没有题的变淡，一眼看出哪一讲还缺小测或作业。 */
-.handout-entry-count{display:grid;justify-items:end;gap:1px;color:var(--muted);font-size:12px;line-height:1.55;white-space:nowrap}
-.handout-entry-count .zero{opacity:.5}
 /* 低频操作收在“更多”里：鼠标经过或键盘聚焦这一行时才出现，盖住题数；触屏上一直显示。 */
-.handout-entry .basket-more{position:absolute;top:7px;right:4px;opacity:0;transition:opacity .12s ease}
-.handout-entry:hover .basket-more,.handout-entry:focus-within .basket-more{opacity:1}
-.handout-entry .basket-more .more-toggle{min-height:32px;padding:0 10px;font-size:12px}
 .handout-entry .basket-more>div{right:0;left:auto}
-.handout-entry .basket-more .danger-text{color:var(--danger)}
 .handout-entry-add button{width:100%;min-height:44px;padding:0 6px;border:0;border-radius:calc(8px*var(--radius-scale));background:transparent;color:var(--green);font-size:13.5px;font-weight:600;text-align:left;cursor:pointer}
 .handout-entry-add button:hover:not(:disabled){background:var(--green-soft)}
-@media (hover:none){
-  .handout-entry .basket-more{opacity:1}
-  .handout-entry>a{padding-right:64px}
-}
-@media (prefers-reduced-motion:reduce){.handout-entry .basket-more{transition:none}}
 .handout-nav-row{display:flex;align-items:center;min-width:0}
-.handout-nav-row>.item{flex:1;min-width:0;padding-left:10px}
 .handout-nav-row>.item>span{overflow:hidden;text-overflow:ellipsis}
-.handout-nav-row>.basket-more{flex:none}
-.handout-nav-row .more-toggle{width:30px;min-height:32px;padding:0 6px;justify-content:center}
-.handout-nav-row .basket-more>div{left:auto;right:0;min-width:140px}
+.handout-nav-row .basket-more>div{left:auto;right:0}
 .handout-stage-nav{margin-left:12px;padding-left:4px;border-left:1px solid var(--line)}
 .handout-nav .handout-outline-add{width:auto;min-height:36px;padding:0 10px;color:var(--green);font-size:12px}
 .handout-course-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 6px 18px}
 .handout-course-head h1{margin:0;font:700 24px/1.4 "Songti SC",serif;overflow-wrap:anywhere}
 .handout-course-head p{margin:4px 0 0;color:var(--muted);font-size:13px}
 .handout-columns.course-columns{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}
-.handout-column>header>.basket-more{margin-left:auto;flex:none}
 .handout-column>header h2{min-width:0;overflow-wrap:anywhere}
 .handout-column>header>span{white-space:nowrap}
 .handout-course-field{display:grid;gap:8px;margin:14px 0;font-size:14px}
@@ -280,10 +261,21 @@
 @media(max-width:640px){.handout-columns,.handout-columns.topics,.handout-columns.topics.with-unsorted{grid-template-columns:minmax(0,1fr)}.handout-column.wide ol,.handout-columns.single ol{grid-template-columns:minmax(0,1fr)}}
 
 /* 讲义正文里的“更多”和题目的操作行一样轻：不加边框，悬停时才显出底色。 */
-.handout-draft .basket-more .more-toggle{min-height:32px;padding:0 8px;border:0;background:transparent;color:color-mix(in srgb,var(--ink,#24352f) 62%,var(--surface,#fff));font-size:12.5px}
-.handout-draft .basket-more .more-toggle:hover{background:var(--surface-soft,#eef3f0);color:var(--green,#2f6b53)}
-.handout-draft .basket-more .danger-text{color:var(--danger,#a34f39)}
 .handout-module-head .basket-more{flex:none}
 @media (hover:none){
-  .handout-actions>button,.handout-draft .basket-more .more-toggle,.handout-lane-head .text-button,.handout-lane-head em{min-height:40px}
+  .handout-actions>button,.handout-lane-head .text-button,.handout-lane-head em{min-height:40px}
 }
+.handout-entry>a{display:grid;grid-template-columns:minmax(0,1fr);align-items:baseline;gap:0 12px;padding:12px 42px 12px 6px;border-radius:calc(8px*var(--radius-scale));color:inherit;text-decoration:none}
+.handout-entry>a.numbered{grid-template-columns:auto minmax(0,1fr)}
+.handout-entry-main>.handout-entry-count{display:block;color:var(--green);font-size:12px;line-height:1.6}
+.handout-nav-row>.item{flex:1;min-width:0;padding-left:10px;padding-right:40px}
+.handout-nav-row.current-path>.item{font-weight:600}
+.handout-nav-row:has(>.item.active),.handout-nav nav>button.active{background:var(--green-soft)}
+.handout-nav-heading{display:flex;align-items:center;gap:8px;margin-top:14px}
+.handout-nav-heading>.shelf{flex:1;margin-top:0}
+.handout-nav-heading>.icon-button{flex:none;width:28px;min-height:28px;padding:0;justify-content:center;background:transparent;color:var(--muted)}
+.handout-nav-heading>.icon-button:hover{background:var(--surface-soft);color:var(--green)}
+.handout-nav .handout-outline-add,.handout-entry-add button{color:var(--muted)}
+.handout-nav .handout-outline-add:hover,.handout-entry-add button:hover:not(:disabled){color:var(--green)}
+.handout-column>header.row-tail{padding-right:42px;flex-wrap:wrap;gap:4px 10px}
+.handout-column>header.row-tail>.basket-more{right:6px}

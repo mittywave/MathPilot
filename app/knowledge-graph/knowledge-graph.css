@@ -257,7 +257,6 @@
 .kg-link-button:hover { color:var(--ink); }
 .kg-more-menu,.kg-add-menu { position:relative; flex:0 0 auto; }
 .kg-menu { position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:250px; display:grid; padding:6px; border:1px solid var(--stroke); border-radius:12px; background:rgba(14,17,28,.97); box-shadow:0 20px 50px rgba(0,0,0,.5); }
-.kg-menu.right { left:auto; right:0; }
 .kg-menu button { display:grid; gap:2px; padding:9px 10px; border:0; border-radius:8px; background:transparent; text-align:left; white-space:normal; font-size:13px; }
 .kg-menu button:hover:not(:disabled) { background:var(--raise-strong); }
 .kg-menu button small { color:var(--faint); font-size:11px; }
@@ -478,3 +477,4 @@
 @media (prefers-reduced-motion:reduce) {
   .kg-shell * { scroll-behavior:auto; }
 }
+.kg-more-menu{--surface:var(--panel-solid);--surface-soft:var(--raise-strong);--line:var(--stroke);--muted:var(--mut);--green:var(--focus);--danger-strong:var(--danger)}

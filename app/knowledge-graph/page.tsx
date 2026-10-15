@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- vinext beta currently breaks next/link RSC prefetch on these client-only pages. */
 
 import "./knowledge-graph.css";
+import { PaperMoreMenu } from "../components/PaperMoreMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { homeworkApi } from "../../lib/homework-api-client";
 import { knowledgeGraphApi } from "../../lib/knowledge-graph-api-client";
@@ -77,7 +78,6 @@ export default function KnowledgeGraphPage() {
   const [linkSource, setLinkSource] = useState("");
   const [autoFocusKey, setAutoFocusKey] = useState("");
   const [dialog, setDialog] = useState<Dialog>("");
-  const [menuOpen, setMenuOpen] = useState(false);
   const [selectionView, setSelectionView] = useState<SelectionView>("chain");
   const [chainAll, setChainAll] = useState(false);
 
@@ -203,9 +203,10 @@ export default function KnowledgeGraphPage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName));
       if (event.key === "Escape" && !typing) {
-        if (dialog) setDialog(""); else if (menuOpen) setMenuOpen(false); else if (linkMode) { setLinkMode(false); setLinkSource(""); } else if (activeSelection) closeNode();
+        if (dialog) setDialog(""); else if (linkMode) { setLinkMode(false); setLinkSource(""); } else if (activeSelection) closeNode();
       }
       if (editing && !typing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault(); if (event.shiftKey) editor.redo(); else editor.undo();
@@ -213,7 +214,7 @@ export default function KnowledgeGraphPage() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeSelection, closeNode, dialog, editing, editor, linkMode, menuOpen]);
+  }, [activeSelection, closeNode, dialog, editing, editor, linkMode]);
 
   async function reloadOverview(nextStudentId = studentId) {
     setProfileLoading(true);
@@ -236,7 +237,7 @@ export default function KnowledgeGraphPage() {
   function chooseMode(next: Mode) {
     if (next === mode) return;
     if (next === "explore") void editor.flush();
-    setMode(next); setLinkMode(false); setLinkSource(""); setMenuOpen(false); setTrail([]); setMarked([]);
+    setMode(next); setLinkMode(false); setLinkSource(""); setTrail([]); setMarked([]);
   }
 
   function addNode(level: KnowledgeGraphLevel) {
@@ -272,7 +273,7 @@ export default function KnowledgeGraphPage() {
   }
 
   async function discardDraft() {
-    setMenuOpen(false);
+
     if (!window.confirm("放弃当前草稿中的全部改动？此操作不能撤销。")) return;
     try { await editor.discard(); setSelection(null); showNotice("已放弃草稿，回到发布版", "success"); }
     catch (error) { showNotice(error instanceof Error ? error.message : "放弃草稿失败", "error"); }
@@ -327,15 +328,12 @@ export default function KnowledgeGraphPage() {
             <button type="button" className="kg-icon-button" aria-label="撤销" title="撤销（⌘Z）" disabled={!editor.canUndo} onClick={editor.undo}>↶</button>
             <button type="button" className="kg-icon-button" aria-label="重做" title="重做（⇧⌘Z）" disabled={!editor.canRedo} onClick={editor.redo}>↷</button>
           </div>
-          <div className="kg-more-menu">
-            <button type="button" className="kg-button" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>更多</button>
-            {menuOpen && <div className="kg-menu right" role="menu">
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setDialog("import"); }}>导入 JSON<small>把整理好的图谱文件载入为草稿</small></button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); downloadDocument(editor.session!.document, diff?.changed ? 0 : version); }}>导出 JSON<small>备份当前图谱数据</small></button>
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setDialog("history"); }}>版本记录<small>查看或载入历史版本</small></button>
-              <button type="button" role="menuitem" className="danger" disabled={!diff?.changed} onClick={() => void discardDraft()}>放弃草稿<small>回到已发布的 v{version}</small></button>
-            </div>}
-          </div>
+          <PaperMoreMenu className="kg-more-menu" label="图谱编辑操作">
+            <button type="button" title="把整理好的图谱文件载入为草稿" onClick={() => setDialog("import")}>导入 JSON</button>
+            <button type="button" title="备份当前图谱数据" onClick={() => downloadDocument(editor.session!.document, diff?.changed ? 0 : version)}>导出 JSON</button>
+            <button type="button" title="查看或载入历史版本" onClick={() => setDialog("history")}>版本记录</button>
+            <hr /><button type="button" className="danger-text" title={`回到已发布的 v${version}`} disabled={!diff?.changed} onClick={() => void discardDraft()}>放弃草稿…</button>
+          </PaperMoreMenu>
           <button type="button" className="kg-button primary" disabled={Boolean(publishBlocked)} title={publishBlocked || undefined} onClick={() => setDialog("publish")}>发布 v{nextVersion}</button>
         </>}
       </div>
