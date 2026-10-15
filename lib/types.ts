@@ -396,7 +396,7 @@ export type HomeworkDay = HomeworkSheetGroup & {
  */
 export type AssignedHomework = {
   days: HomeworkDay[];
-  questions: Array<{ id: string; number: string; question: Question; result: { verdict: GradingVerdict; requiresReview: boolean; submissionId: string } | null }>;
+  questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified"> & { submissionId: string }) | null }>;
   uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
 };
 

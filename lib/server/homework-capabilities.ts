@@ -8,10 +8,12 @@ function appEnv(): AppEnv { return env as unknown as AppEnv; }
 function parseJson<T>(value: unknown, fallback: T): T { try { return value == null ? fallback : JSON.parse(String(value)) as T; } catch { return fallback; } }
 
 export async function replaceSubmissionCapabilityEvidence(input: {
-  ownerUserId: string; studentId: string; assignmentId: string; submissionId: string; gradingItems: GradingItem[];
-}) {
-  await appEnv().DB.prepare("DELETE FROM student_capability_evidence WHERE submission_id = ? AND owner_user_id = ?")
-    .bind(input.submissionId, input.ownerUserId).run();
+  ownerUserId: string; studentId: string; assignmentId: string; submissionId: string; gradingItems: GradingItem[]; at?: number;
+}, batch?: D1PreparedStatement[]) {
+  // A profile toggle collects every published version with the flag in one transaction; ordinary outputs commit here.
+  const statements = batch ?? [];
+  statements.push(appEnv().DB.prepare("DELETE FROM student_capability_evidence WHERE submission_id = ? AND owner_user_id = ?")
+    .bind(input.submissionId, input.ownerUserId));
   const questions = await appEnv().DB.prepare(`SELECT id, stem, type, knowledge_tags_json, taxonomy_keys_json, capability_keys_json
     FROM assignment_questions WHERE assignment_id = ?`).bind(input.assignmentId).all<Record<string, unknown>>();
   const questionById = new Map(questions.results.map((row) => [String(row.id), row])); const now = Date.now();
@@ -33,14 +35,15 @@ export async function replaceSubmissionCapabilityEvidence(input: {
       for (const parentKey of graph.hierarchy(node.key)) { const parent = graph.node(parentKey); if (parent) nodes.set(parent.key, { label: parent.label, dimension: "knowledge" }); }
     }
     for (const key of skillKeys) { const node = capabilityNodeFor(key, "", graph); if (node) nodes.set(key, { label: node.label, dimension: "skill" }); }
-    for (const [key, node] of nodes) await appEnv().DB.prepare(`INSERT INTO student_capability_evidence
+    for (const [key, node] of nodes) statements.push(appEnv().DB.prepare(`INSERT INTO student_capability_evidence
       (id, owner_user_id, student_id, assignment_id, submission_id, grading_item_id, capability_key, capability_label, dimension,
        verdict, confidence, diagnosis, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(grading_item_id, capability_key) DO UPDATE SET verdict = excluded.verdict, confidence = excluded.confidence,
         diagnosis = excluded.diagnosis, capability_label = excluded.capability_label, updated_at = excluded.updated_at`)
       .bind(crypto.randomUUID(), input.ownerUserId, input.studentId, input.assignmentId, input.submissionId, item.id, key, node.label, node.dimension,
-        item.verdict, item.confidence, item.feedback || item.evidenceSummary || item.errorType, now, now).run();
+        item.verdict, item.confidence, item.feedback || item.evidenceSummary || item.errorType, input.at ?? now, now));
   }
+  if (!batch) await appEnv().DB.batch(statements);
 }
 
 async function profileEvidence(ownerUserId: string, studentId: string) {

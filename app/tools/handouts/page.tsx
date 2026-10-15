@@ -1,6 +1,6 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_DOMAINS, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
@@ -17,6 +17,8 @@ import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
 import { SiteHeader } from "../../components/SiteHeader";
+import { useToast } from "../../components/Toast";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { QuestionPicker, type PickerMode } from "./QuestionPicker";
 import { NotePreview } from "./NotePreview";
 import "../tools.css";
@@ -71,20 +73,20 @@ export default function HandoutsPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
+  const [toastNode, show] = useToast();
+  const onNotice = useCallback((text: string, tone: "success" | "error" = "success") => show({ text, tone }), [show]);
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("id");
-    void fetchMe().then((result) => { setOpenId(id); setUser(result.user); }).catch(() => setNotice("登录状态读取失败，请刷新重试")).finally(() => setLoaded(true));
-  }, []);
-  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
+    void fetchMe().then((result) => { setOpenId(id); setUser(result.user); }).catch(() => show({ text: "登录状态读取失败，请刷新重试", tone: "error" })).finally(() => setLoaded(true));
+  }, [show]);
 
   // The list sits under the shared site header; an open handout's editor takes the whole window.
   if (!loaded) return <><SiteHeader active="handouts" user={null} loading /><main className="toolbox handouts"><p>正在读取…</p></main></>;
-  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main></>;
+  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 MathPilot。</p><a href="/">返回题库</a></main></>;
   return <>
-    {openId ? <HandoutEditor id={openId} onNotice={setNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={setNotice} /></>}
-    {notice && <div className="toast" role="status">✓ {notice}</div>}
+    {openId ? <HandoutEditor id={openId} onNotice={onNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={onNotice} /></>}
+    {toastNode}
   </>;
 }
 
@@ -111,7 +113,8 @@ function movedGroup(state: MoveState): HandoutGroup {
 
 // 课程体系和专题库全员共用：任何老师都能新建、编辑、调整顺序，删除只开放给管理员。学生讲义只有学生的老师能看到和管理。
 // 左侧选择体系和阶段，右侧并列单元；每讲继续使用同一个编辑器。
-function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (message: string) => void }) {
+function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (message: string, tone?: "success" | "error") => void }) {
+  const [confirmNode, confirm] = useConfirm();
   const [link] = useState(() => new URLSearchParams(window.location.search));
   const linkShelf = knownShelf(link.get("shelf"));
   const [handouts, setHandouts] = useState<HandoutSummary[] | null>(null);
@@ -135,7 +138,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const activeStudent = students?.find((item) => item.id === studentId) ?? students?.[0] ?? null;
 
   useEffect(() => {
-    void fetchHandouts().then((result) => { setHandouts(result.handouts); setCourseNodes(result.courseNodes); }).catch((error) => { setHandouts([]); onNotice(error instanceof Error ? error.message : "讲义列表读取失败"); });
+    void fetchHandouts().then((result) => { setHandouts(result.handouts); setCourseNodes(result.courseNodes); }).catch((error) => { setHandouts([]); onNotice(error instanceof Error ? error.message : "讲义列表读取失败", "error"); });
     void fetchStudents().then((result) => setStudents(result.students)).catch(() => setStudents([]));
   }, [onNotice]);
 
@@ -179,12 +182,12 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
 
   async function changeNode(node: HandoutCourseNode, direction?: -1 | 1) {
     if (busy) return;
-    if (!direction && !window.confirm(`删除“${node.name}”？只可删除没有下级目录、没有讲义的空目录。`)) return;
+    if (!direction && !await confirm({ title: `删除目录「${node.name}」`, body: "只能删除没有下级目录、没有讲义的空目录。删除后无法恢复。", confirmLabel: "删除目录", danger: true })) return;
     setBusy(true);
     try {
       const result = direction ? await saveHandoutCourse({ id: node.id, direction }) : await deleteHandoutCourse(node.id);
       setCourseNodes(result.courseNodes); onNotice(direction ? "顺序已调整" : "空目录已删除");
-    } catch (error) { onNotice(error instanceof Error ? error.message : "大纲调整失败"); }
+    } catch (error) { onNotice(error instanceof Error ? error.message : "大纲调整失败", "error"); }
     finally { setBusy(false); }
   }
 
@@ -195,7 +198,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <button disabled={busy} onClick={() => setOutlineEdit({ id: node.id, parentId: node.parentId, name: node.name, label: "目录", error: "" })}>重命名</button>
       <button disabled={busy || index === 0} onClick={() => changeNode(node, -1)}>上移</button>
       <button disabled={busy || index === siblings.length - 1} onClick={() => changeNode(node, 1)}>下移</button>
-      {isAdmin && <button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录</button>}
+      {isAdmin && <><hr /><button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录…</button></>}
     </PaperMoreMenu>;
   };
   const addNode = (parentId: string | null, label: string) => setOutlineEdit({ parentId, label, name: "", error: "" });
@@ -227,7 +230,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         setLessonDraft(null); setBusy(false); onNotice("本讲大纲已保存，点击讲名可继续编写讲义"); return;
       }
       window.location.assign(`/tools/handouts?id=${encodeURIComponent(handout.id)}`);
-    } catch (error) { const message = error instanceof Error ? error.message : "讲义创建失败"; if (lessonDraft) setLessonDraft({ ...lessonDraft, error: message }); else onNotice(message); setBusy(false); }
+    } catch (error) { const message = error instanceof Error ? error.message : "讲义创建失败"; if (lessonDraft) setLessonDraft({ ...lessonDraft, error: message }); else onNotice(message, "error"); setBusy(false); }
   }
 
   // Positions follow the order sent; the list updates first and rolls back if the server refuses.
@@ -240,7 +243,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     setHandouts((current) => current && current.map((item) => position.has(item.id) ? { ...item, ...group, studentName: name, position: position.get(item.id)! } : item)
       .sort((a, b) => a.position - b.position || a.createdAt - b.createdAt));
     try { await arrangeHandouts(group, ids); onNotice(message); }
-    catch (error) { setHandouts(before); onNotice(error instanceof Error ? error.message : "讲义调整失败"); }
+    catch (error) { setHandouts(before); onNotice(error instanceof Error ? error.message : "讲义调整失败", "error"); }
     finally { setBusy(false); }
   }
 
@@ -267,9 +270,9 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   }
 
   async function remove(handout: HandoutSummary) {
-    if (!window.confirm(`删除“${handout.title}”？本讲临时题库也会删除，已存入正式题库的题不受影响。`)) return;
+    if (!await confirm({ title: `删除讲义「${handout.title}」`, body: "讲义和本讲临时题库会一起删除，无法恢复。已存入正式题库的题不受影响。", confirmLabel: "删除讲义", danger: true })) return;
     try { await deleteHandout(handout.id); setHandouts((current) => current?.filter((item) => item.id !== handout.id) ?? null); onNotice("讲义已删除"); }
-    catch (error) { onNotice(error instanceof Error ? error.message : "讲义删除失败"); }
+    catch (error) { onNotice(error instanceof Error ? error.message : "讲义删除失败", "error"); }
   }
 
   // One line of the contents: lesson number, title, its modules and how many questions its 讲义, 小测 and 作业 hold.
@@ -277,16 +280,14 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     const modules = moduleList(handout);
     const counts = [questionTotal(handout), handout.sheetCounts.quiz, handout.sheetCounts.homework];
     const numbered = Boolean(order && handout.courseUnitId && !place);
-    return <li className="handout-entry" key={handout.id}>
-      <a className={numbered ? "numbered" : undefined} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
+    return <li className="handout-entry row-tail" key={handout.id}>
+      <a className={numbered ? "numbered" : undefined} aria-label={`${handout.title}，${HANDOUT_SHEETS.map((sheet, index) => `${sheet.label} ${counts[index]} 题`).join("，")}`} href={`/tools/handouts?id=${encodeURIComponent(handout.id)}`}>
         {numbered && order ? <span className="handout-entry-no" aria-label={lessonName(order.index)}>{order.index + 1}</span> : null}
         <span className="handout-entry-main">
           {place && <small>{place}</small>}
           <strong>{handout.title}</strong>
           {modules && <span>{modules}</span>}
-        </span>
-        <span className="handout-entry-count" aria-label={HANDOUT_SHEETS.map((sheet, index) => `${sheet.label} ${counts[index]} 题`).join("，")}>
-          {HANDOUT_SHEETS.map((sheet, index) => <span key={sheet.value} className={counts[index] ? undefined : "zero"}>{sheet.label} {counts[index]}</span>)}
+          {counts.some(Boolean) && <span className="handout-entry-count" aria-hidden="true">{HANDOUT_SHEETS.flatMap((sheet, index) => counts[index] ? [`${sheet.label} ${counts[index]}`] : []).join(" · ")}</span>}
         </span>
       </a>
       <PaperMoreMenu label={`${handout.title} 更多操作`}>
@@ -296,7 +297,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         </>}
         <button disabled={busy} onClick={() => create(groupOf(handout), handout)}>复制一份</button>
         <button onClick={() => openMove(handout)}>移到…</button>
-        {(isAdmin || handout.studentId) && <button className="danger-text" onClick={() => remove(handout)}>删除</button>}
+        {(isAdmin || handout.studentId) && <><hr /><button className="danger-text" onClick={() => remove(handout)}>删除…</button></>}
       </PaperMoreMenu>
     </li>;
   };
@@ -304,7 +305,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const column = (key: string, title: string, unit: string, group: HandoutGroup, addLabel: string | null, dated = false, node?: HandoutCourseNode) => {
     const items = inGroup(group);
     return <section className="handout-column" key={key} aria-label={labelGroup({ ...group, studentName: title })}>
-      <header><h2>{title}</h2>{!!items.length && <span>{items.length} {unit}</span>}{node && nodeMenu(node)}</header>
+      <header className="row-tail"><h2>{title}</h2>{!!items.length && <span>{items.length} {unit} · 已编 {items.filter(item => questionTotal(item) + item.sheetCounts.quiz + item.sheetCounts.homework > 0).length} {unit}</span>}{node && nodeMenu(node)}</header>
       <ol>
         {items.map((item, index) => entry(item, { index, size: items.length }, dated ? `更新于 ${shortDate(item.updatedAt)}` : undefined))}
         {addLabel && <li className="handout-entry-add"><button disabled={busy} onClick={() => create(group)}>＋ {addLabel}</button></li>}
@@ -324,12 +325,11 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     <aside className="handout-nav" aria-label="讲义书架"><div>
       <input className="handout-find" type="search" aria-label="查找讲义" placeholder="查找讲义或模块" value={query} onChange={(event) => setQuery(event.target.value)} />
       <nav>
-        {navItem("course", "课程体系", 0, false, () => choose("course"), true)}
-        <button className="handout-outline-add" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋ 新建体系</button>
+        <div className="handout-nav-heading">{navItem("course", "课程体系", 0, false, () => choose("course"), true)}<button className="icon-button" aria-label="新建体系" title="新建体系" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋</button></div>
         {systems.map((system) => <div key={system.id}>
-          <div className="handout-nav-row">{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id, () => choose("course", system.id))}{nodeMenu(system)}</div>
+          <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id))}{nodeMenu(system)}</div>
           {activeSystem?.id === system.id && <div className="handout-stage-nav">
-            {stages.map((stage) => <div className="handout-nav-row" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
+            {stages.map((stage) => <div className="handout-nav-row row-tail" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
             <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>
           </div>}
         </div>)}
@@ -397,6 +397,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       {outlineEdit.error && <p role="alert" className="handout-warning">{outlineEdit.error}</p>}
       <div className="modal-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOutlineEdit(null)}>取消</button><button className="primary-button" disabled={busy || !outlineEdit.name.trim()}>{busy ? "正在保存…" : "保存"}</button></div>
     </form></div>}
+    {confirmNode}
     {lessonDraft && <div className="modal-backdrop"><form className="modal handout-move" role="dialog" aria-modal="true" aria-label="新建一讲" onSubmit={(event) => { event.preventDefault(); void create(lessonDraft.group, undefined, { ...lessonDraft, open: false }); }}>
       <div className="modal-head"><div><h2>添加{lessonName(countIn(lessonDraft.group))}</h2><p className="handout-move-hint">{labelGroup(lessonDraft.group)}</p></div><button type="button" className="close" aria-label="关闭" disabled={busy} onClick={() => setLessonDraft(null)}>×</button></div>
       <label className="handout-course-field">本讲标题<input required maxLength={120} value={lessonDraft.title} onChange={(event) => setLessonDraft({ ...lessonDraft, title: event.target.value, error: "" })} placeholder="例如：一元一次方程" /></label>
@@ -408,7 +409,8 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   </main>;
 }
 
-function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: string) => void }) {
+function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: string, tone?: "success" | "error") => void }) {
+  const [confirmNode, confirm] = useConfirm();
   const [doc, setDoc] = useState<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
   const [home, setHome] = useState<HandoutGroup & { studentName: string | null; coursePath: HandoutCourseNode[] }>({ ...NOWHERE, studentName: null, coursePath: [] });
   const [missing, setMissing] = useState(false);
@@ -445,6 +447,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     if (sheet !== "handout") params.set("sheet", sheet);
     window.history.replaceState(null, "", `/tools/handouts?${params}`);
   }, [id, sheet]);
+
+  useEffect(() => { document.title = `${doc?.title || "讲义"} · 讲义编撰 · MathPilot`; }, [doc?.title]);
 
   const opened = Boolean(doc);
   useEffect(() => {
@@ -538,11 +542,11 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   }
 
   // 小测 and 作业 questions on the module stay in their lists and test the neighbouring module instead.
-  function removeModule(section: SectionItem, questions: QuestionItem[], name: string) {
+  async function removeModule(section: SectionItem, questions: QuestionItem[], name: string) {
     const tested = latest.current!.items.filter((item) => (item.kind === "quiz" || item.kind === "homework") && item.moduleId === section.id).length;
     const ask = questions.length ? `删除“${name}”及其中 ${questions.length} 道题？` : `删除“${name}”？`;
     const moved = tested ? `考查这个模块的 ${tested} 道小测、作业题会改为考查相邻模块。` : "";
-    if ((questions.length || tested) && !window.confirm(`${ask}${moved}题目仍保留在题库中。`)) return;
+    if (!await confirm({ title: `删除知识模块「${name}」`, body: `${ask}${moved}题目仍保留在题库中；讲义中的这次删除无法撤销。`, confirmLabel: "删除知识模块", danger: true })) return;
     setItems(removeHandoutModule(latest.current!.items, section.id));
   }
 
@@ -585,7 +589,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     const result = await saveQuestionImportBatch(questions, async (question) => (await createCloudQuestion({ ...question, categoryId, moduleId })).question);
     const saved = result.saved.map((item) => item.question);
     setLibrary((current) => current && { ...current, questions: [...saved, ...current.questions.filter((item) => !saved.some((question) => question.id === item.id))] });
-    onNotice(`已将 ${saved.length} 道题加入正式题库${result.failed.length ? `；${result.failed.length} 道失败，可重试：${result.failed[0].error}` : ""}`);
+    onNotice(`已将 ${saved.length} 道题加入正式题库${result.failed.length ? `；${result.failed.length} 道失败，可重试：${result.failed[0].error}` : ""}`, result.failed.length ? "error" : "success");
     return saved.map((question) => question.id);
   }
 
@@ -623,7 +627,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       setItems(latest.current!.items.map((item) => item.id === sectionId && item.kind === "section" ? { ...item, note: item.note.trim() ? `${item.note.trimEnd()}\n${text}` : text } : item));
       const checks = [...(missedFigures ? [`${missedFigures} 张配图未能裁剪`] : []), ...result.warnings.slice(0, 2)];
       onNotice(checks.length ? `已识别，请核对：${checks.join("；")}` : "已识别并加入知识点");
-    } catch (error) { onNotice(error instanceof Error ? error.message : "识别失败，请重试"); }
+    } catch (error) { onNotice(error instanceof Error ? error.message : "识别失败，请重试", "error"); }
     finally { setNoteImport(null); }
   }
 
@@ -674,11 +678,11 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         }
       }
       setExportOpen(false);
-    } catch (error) { onNotice(error instanceof Error ? error.message : "导出失败"); }
+    } catch (error) { onNotice(error instanceof Error ? error.message : "导出失败", "error"); }
     finally { setExporting(null); }
   }
 
-  if (missing) return <main className="toolbox handouts"><a className="toolbox-back" href="/tools/handouts"><BackIcon /><span>全部讲义</span></a><div className="handout-empty"><b>讲义不存在</b><p>它可能已被删除。</p></div></main>;
+  if (missing) return <main className="toolbox handouts"><a className="secondary" href="/tools/handouts"><BackIcon /><span>全部讲义</span></a><div className="handout-empty"><b>讲义不存在</b><p>它可能已被删除。</p></div></main>;
   if (!doc) return <main className="toolbox handouts"><p className="handout-muted">正在读取讲义…</p></main>;
 
   // Questions always sit in a module (see ensureLeadingModule), so only module cards are shown.
@@ -761,20 +765,23 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const addTarget = activePicker.kind === "add" ? activePicker.sectionId : modules[0]?.section.id ?? null;
 
   return <main className="toolbox handouts handout-editor">
+    {confirmNode}
+    <header className="handout-bar">
+      <a className="brand-mark" href={backHref} aria-label="返回讲义书架">题</a>
+      <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><span>讲义编撰</span><span aria-hidden="true">/</span><span>{backLabel}</span></a>
+      <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
+      <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+    </header>
+    {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>至少一道题</button></p>}
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
         <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
           source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
-          onEdit={openEditEntry} onRemove={(questionId) => {
+          onEdit={openEditEntry} onRemove={async (questionId) => {
             if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }
-            if (window.confirm("从当前讲义的临时题库删除这道题？已保存到正式题库的内容不受影响。")) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
+            if (await confirm({ title: "删除临时题", body: "从当前讲义的临时题库删除这道题，无法恢复。已保存到正式题库的内容不受影响。", confirmLabel: "删除临时题", danger: true })) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
           }}
-          sections={moduleOptions}
-          footer={<div className="handout-bar">
-            <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><BackIcon /><span>{backLabel}</span></a>
-            <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
-            <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
-          </div>} />
+          sections={moduleOptions} />
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
     <div className="handout-draft-head">
@@ -808,7 +815,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
               <button disabled={moduleIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, section.id, -1))}>上移</button>
               <button disabled={moduleIndex === modules.length - 1} onClick={() => setItems(moveHandoutItem(doc.items, section.id, 1))}>下移</button>
             </>}
-            <button className="danger-text" onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块</button>
+            <hr /><button className="danger-text" onClick={() => removeModule(section, HANDOUT_BANDS.flatMap((band) => bands[band]), heading.title || badge)}>删除模块…</button>
           </PaperMoreMenu>
         </div>
 
@@ -859,7 +866,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
         <p>{sheet === "handout" ? answerChoice?.hint : answerChoice?.listHint}</p>
       </fieldset>
       {!!missingCount && <p className="handout-warning">有 {missingCount} 道题已无法读取，导出时会跳过。</p>}
-      {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在本机用「启动知题」运行时生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
+      {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在运行 MathPilot 的这台电脑上生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
         : latexStatus && !latexStatus.installed && <p className="handout-export-status">首次生成会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {/* PDF is the handout; Word and the LaTeX source are kept for the rare file someone else needs. */}
       <div className="modal-actions handout-export-actions">

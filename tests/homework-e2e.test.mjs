@@ -81,8 +81,9 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
+  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
+    state.requests += 1;
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const prompt = String(payload.input?.[0]?.content?.find((item) => item.type === "input_text")?.text ?? "");
@@ -377,6 +378,16 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM student_capability_evidence WHERE submission_id=?",[providedId])[0].count>0);
     const overlay=(await jsonRequest(base,`/api/knowledge-graph?studentId=${studentTwoId}`,{cookie:teacherOne})).payload.profile;
     assert.ok(overlay.nodes.some(node=>node.evidenceCount>0),"the knowledge-graph overlay shows the integrated homework");
+    const providedRequests=mock.state.requests;
+    const providedEvidenceCount=d1Rows(stateDir,"SELECT count(*) n FROM student_capability_evidence WHERE assignment_id=?",[providedAssignment])[0].n;
+    const excludedProvided=await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:false}});
+    assert.equal(excludedProvided.response.status,200);assert.deepEqual(excludedProvided.payload.submission.outputs,{wrongBook:false,report:false,profile:false});
+    assert.equal(d1Rows(stateDir,"SELECT count(*) n FROM student_capability_evidence WHERE assignment_id=?",[providedAssignment])[0].n,0);
+    const includedProvided=await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}});
+    assert.equal(includedProvided.response.status,200);assert.deepEqual(includedProvided.payload.submission.outputs,{wrongBook:false,report:false,profile:true});
+    assert.equal(includedProvided.payload.submission.report,null);assert.equal(includedProvided.payload.submission.gradingSummary.archived,0);
+    assert.equal(d1Rows(stateDir,"SELECT count(*) n FROM student_capability_evidence WHERE assignment_id=?",[providedAssignment])[0].n,providedEvidenceCount);
+    assert.equal(mock.state.requests,providedRequests);
     // Existing figures can be independently relocated; only the owning teacher can do so.
     assert.equal(provided.figuresPending,0);
     assert.equal((await jsonRequest(base,`/api/submissions/${providedId}`,{cookie:teacherTwo,method:"PUT",body:{action:"attach-figures"}})).response.status,404);
@@ -529,6 +540,29 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual([unmarked.feedback,unmarked.stepAnalysis,unmarked.errorType,unmarked.standardAnswer,unmarked.standardAnalysis],["",[],"","5",""],"school homework keeps only the verdict and the final answer");
     assert.equal(markedResult.gradingSummary.archived,2,"the teacher's cross still files the sub-question after its answer is prepared");
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(e=>e.assignmentId===markedResult.assignmentId).length,2);
+    // Historical marks can lack a reference: the teacher's cross is settled, an unmarked error is pending.
+    const markedWrong=markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='',reference_verified=0 WHERE id IN ('${markedWrong.assignmentQuestionId}','${unmarked.assignmentQuestionId}')`]);
+    const unsettled=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([unsettled.gradingSummary.correct,unsettled.gradingSummary.partial,unsettled.gradingSummary.incorrect,unsettled.gradingSummary.unresolved],[1,0,1,1]);
+    assert.equal(unsettled.gradingSummary.archived,1,"the teacher-marked error stays archived without a reference");
+    const unsettledList=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne})).payload.submissions.find(s=>s.id===markedId);
+    assert.deepEqual(unsettledList.gradingSummary,unsettled.gradingSummary,"the grading list uses the detail summary");
+    const unsettledStudent=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===markedResult.assignmentId);
+    assert.deepEqual([unsettledStudent.total,unsettledStudent.correct,unsettledStudent.incorrect,unsettledStudent.pending],[3,1,1,1]);
+    // A page inventory may name the parent while the saved grading contains its sub-questions.
+    const markedExtraction=d1Rows(stateDir,"SELECT page_id,result_json FROM submission_page_extractions WHERE submission_id=?",[markedId])[0];
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE submission_page_extractions SET result_json=json_set(result_json,'$.questions[0].question_number','1-3','$.questions[1].question_number','1-3') WHERE page_id='${markedExtraction.page_id}'`]);
+    const parentDetail=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne})).payload.submission;
+    const parentStudent=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===markedResult.assignmentId);
+    assert.equal(parentDetail.gradingItems.length,3);
+    assert.deepEqual([parentStudent.total,parentStudent.correct,parentStudent.incorrect,parentStudent.pending],[3,1,1,1],"detail and student list keep the same sub-questions");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE submission_page_extractions SET result_json='${markedExtraction.result_json.replace(/'/g,"''")}' WHERE page_id='${markedExtraction.page_id}';
+       UPDATE assignment_questions SET answer='${markedWrong.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${markedWrong.assignmentQuestionId}';
+       UPDATE assignment_questions SET answer='${unmarked.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${unmarked.assignmentQuestionId}'`]);
     const misread=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").id,verdict:"correct"}]}});
     assert.equal(misread.response.status,200,"a misread mark is corrected without supplying a reference answer");
     assert.equal(misread.payload.submission.gradingSummary.archived,1);
@@ -542,6 +576,73 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(split.gradingItems.map(i=>[i.questionNumber,i.verdict]),[["1-3(1)","correct"],["1-3(2)","incorrect"],["1-4(1)","incorrect"],["1-4(2)","correct"]]);
     assert.equal(split.gradingItems.find(i=>i.questionNumber==="1-4(1)").assignmentQuestionId,unmarked.assignmentQuestionId);
     assert.deepEqual(mock.state.referenceNumbers,["1-4(1)"]);
+
+    // A profile toggle covers every published version, using original submission dates, without invoking any model.
+    const profileModelRequests=mock.state.requests;
+    const profileOriginalRows=d1Rows(stateDir,"SELECT id,submitted_at,created_at FROM homework_submissions WHERE assignment_id=? ORDER BY version",[split.assignmentId]);
+    const profileGradingBefore=d1Rows(stateDir,"SELECT g.* FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE s.assignment_id=? ORDER BY g.id",[split.assignmentId]);
+    const profileOldAt=Date.now()-60*86_400_000,profileNewAt=Date.now()-10*86_400_000;
+    const profileEvidenceSql="SELECT * FROM student_capability_evidence WHERE assignment_id=? ORDER BY grading_item_id,capability_key";
+    for (const value of [undefined,null,"true",0,1]) {
+      assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:value}})).response.status,400,"profile accepts only a boolean");
+    }
+    assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherTwo,method:"PUT",body:{action:"profile",profile:true}})).response.status,404);
+    assert.equal(d1Rows(stateDir,"SELECT json_extract(outputs_json,'$.profile') enabled FROM homework_assignments WHERE id=?",[split.assignmentId])[0].enabled,0);
+    try {
+      for (const status of ["submitted","processing","ready"]) {
+        command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE homework_submissions SET status='${status}' WHERE id='${versionId}'`]);
+        const activeProfile=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}});
+        assert.equal(activeProfile.response.status,409,"an older published version cannot change the assignment while another upload is grading or publishing");
+        assert.equal(d1Rows(stateDir,"SELECT json_extract(outputs_json,'$.profile') enabled FROM homework_assignments WHERE id=?",[split.assignmentId])[0].enabled,0);
+        assert.equal(d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]).length,0);
+      }
+    } finally {
+      command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE homework_submissions SET status='published' WHERE id='${versionId}'`]);
+    }
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE homework_submissions SET submitted_at=NULL,created_at=${profileOldAt} WHERE id='${markedId}'; UPDATE homework_submissions SET submitted_at=${profileNewAt} WHERE id='${versionId}';
+       CREATE TRIGGER wp04_profile_insert_failure BEFORE INSERT ON student_capability_evidence WHEN NEW.submission_id='${versionId}' BEGIN SELECT RAISE(ABORT,'fixture profile insert blocked'); END`]);
+    try {
+      const failedProfile=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}});
+      assert.equal(failedProfile.response.status,500);
+      assert.equal(d1Rows(stateDir,"SELECT json_extract(outputs_json,'$.profile') enabled FROM homework_assignments WHERE id=?",[split.assignmentId])[0].enabled,0,"a second-version failure rolls back the flag");
+      assert.equal(d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]).length,0,"it also rolls back the already inserted first-version evidence");
+    } finally {
+      command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command','DROP TRIGGER IF EXISTS wp04_profile_insert_failure']);
+    }
+    const enabledProfile=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}});
+    assert.equal(enabledProfile.response.status,200,JSON.stringify(enabledProfile.payload));
+    assert.deepEqual(enabledProfile.payload.submission.outputs,{wrongBook:true,report:false,profile:true});
+    const profileEvidence=d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]);
+    assert.deepEqual([...new Set(profileEvidence.map(row=>row.submission_id))].sort(),[markedId,versionId].sort(),"both published versions gain evidence even when the action targets the older one");
+    assert.ok(profileEvidence.every(row=>row.created_at===(row.submission_id===markedId?profileOldAt:profileNewAt)),"each version uses its submitted date, falling back to its creation date");
+    const recentProfile=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${profileOldAt+1}`,{cookie:teacherOne})).payload.profile;
+    assert.equal(recentProfile.knowledge.reduce((sum,node)=>sum+node.correct+node.partial+node.incorrect,0),profileEvidence.filter(row=>row.dimension==="knowledge"&&row.submission_id===versionId).length,"the date filter excludes only the older version");
+    const afterBoth=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${profileNewAt+1}`,{cookie:teacherOne})).payload.profile;
+    assert.equal(afterBoth.knowledge.length,0);assert.equal(afterBoth.types.length,0,"question types use the same original submission dates");
+    assert.equal((await jsonRequest(base,`/api/submissions/${versionId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}})).response.status,200);
+    const repeatedEvidence=d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]);
+    assert.deepEqual(repeatedEvidence.map(row=>[row.grading_item_id,row.capability_key,row.created_at]),profileEvidence.map(row=>[row.grading_item_id,row.capability_key,row.created_at]),"repeated inclusion does not duplicate evidence or move its date");
+    // Trigger failures live only in this test's temporary database, and are always removed.
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `CREATE TRIGGER wp04_profile_delete_failure BEFORE DELETE ON student_capability_evidence WHEN OLD.assignment_id='${split.assignmentId}' BEGIN SELECT RAISE(ABORT,'fixture profile delete blocked'); END`]);
+    try {
+      assert.equal((await jsonRequest(base,`/api/submissions/${versionId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:false}})).response.status,500);
+      assert.equal(d1Rows(stateDir,"SELECT json_extract(outputs_json,'$.profile') enabled FROM homework_assignments WHERE id=?",[split.assignmentId])[0].enabled,1,"a failed removal keeps the enabled flag");
+      assert.deepEqual(d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]),repeatedEvidence,"a failed removal keeps every evidence row untouched");
+    } finally {
+      command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command','DROP TRIGGER IF EXISTS wp04_profile_delete_failure']);
+    }
+    assert.equal((await jsonRequest(base,`/api/submissions/${versionId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:false}})).response.status,200);
+    assert.equal(d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]).length,0,"removal covers every version");
+    assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:true}})).response.status,200);
+    assert.deepEqual(d1Rows(stateDir,profileEvidenceSql,[split.assignmentId]).map(row=>[row.grading_item_id,row.capability_key,row.created_at]),profileEvidence.map(row=>[row.grading_item_id,row.capability_key,row.created_at]),"re-inclusion restores the same evidence without duplication");
+    assert.equal(mock.state.requests,profileModelRequests,"profile toggles make no model request");
+    assert.deepEqual(d1Rows(stateDir,"SELECT g.* FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE s.assignment_id=? ORDER BY g.id",[split.assignmentId]),profileGradingBefore,"profile toggles do not regrade or rearchive work");
+    assert.equal(d1Rows(stateDir,"SELECT count(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE 'wp04_profile_%'")[0].n,0,"failure injection was cleaned up");
+    assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile:false}})).response.status,200);
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',profileOriginalRows.map(row=>
+      `UPDATE homework_submissions SET submitted_at=${row.submitted_at??'NULL'},created_at=${row.created_at} WHERE id='${row.id}'`).join(';')]);
     mock.state.teacherMarked="partial";mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
     const partialMarked=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"半对题也有参考答案",outputs:{wrongBook:true,report:false,profile:false}}});
     const partialMarkedId=partialMarked.payload.submission.id;
@@ -589,6 +690,13 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     // Each day is due on its own date, 第 1 天 on the date the teacher set and the next day after it.
     assert.deepEqual(sheet.assigned.days.map(d=>[d.title,d.size,d.date,d.done,d.handedInAt]),[["第 1 天 · 热身",2,"2026-10-12",0,null],["第 2 天 · 加深",2,"2026-10-13",0,null]]);
     assert.deepEqual(sheet.outputs,{wrongBook:true,report:false,profile:true});
+    const assignedProfileRequests=mock.state.requests;
+    for (const profile of [false,true]) {
+      const refusedProfile=await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne,method:"PUT",body:{action:"profile",profile}});
+      assert.equal(refusedProfile.response.status,400);assert.equal(refusedProfile.payload.error,"布置的作业总是计入定档");
+    }
+    assert.deepEqual((await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission.outputs,{wrongBook:true,report:false,profile:true});
+    assert.equal(mock.state.requests,assignedProfileRequests);
     assert.equal(sheet.processingProgress.identified,0,"nothing is identified before a page is read");
     // A picture that came with the material is stored for this teacher only.
     const sheetPicture=sheet.assigned.questions[0].question.contentImages[0];
@@ -622,6 +730,18 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
     assert.deepEqual(listed.days.map(d=>[d.done,d.correct,d.incorrect,typeof d.handedInAt]),[[2,1,1,"number"],[0,0,0,"object"]],"day 1 came back with the first upload, day 2 is still out");
     const firstHandedIn=listed.days[0].handedInAt;
+    const sheetError=sheet.gradingItems.find(i=>i.questionNumber==="D1-2");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='',reference_verified=0 WHERE id='${sheetError.assignmentQuestionId}'`]);
+    const pendingSheet=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([pendingSheet.gradingSummary.correct,pendingSheet.gradingSummary.incorrect,pendingSheet.gradingSummary.unresolved],[1,0,1]);
+    assert.deepEqual(pendingSheet.assigned.days.map(d=>[d.done,d.correct,d.incorrect,d.pending]),[[2,1,0,1],[0,0,0,0]]);
+    const pendingSheetResult=pendingSheet.assigned.questions.find(q=>q.number==="D1-2").result;
+    assert.deepEqual([pendingSheetResult.teacherMark,pendingSheetResult.standardAnswer,pendingSheetResult.referenceVerified],[null,"",false],"assigned results retain the inputs used to classify pending work");
+    const pendingSheetList=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===sheet.assignmentId);
+    assert.deepEqual([pendingSheetList.total,pendingSheetList.done,pendingSheetList.correct,pendingSheetList.incorrect,pendingSheetList.pending],[4,2,1,0,1]);
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE assignment_questions SET answer='${sheetError.standardAnswer.replace(/'/g,"''")}',reference_verified=1 WHERE id='${sheetError.assignmentQuestionId}'`]);
 
     // The next upload brings day 2: the question handed out without an answer is solved and checked first.
     const nextUpload=(await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}})).payload.submission;

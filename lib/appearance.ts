@@ -13,7 +13,7 @@ export type Appearance = {
 
 export const APPEARANCES: readonly Appearance[] = [
   { id: "light", theme: "light", style: "classic", label: { zh: "经典浅色", en: "Classic light" }, swatches: ["#f5f7f4", "#ffffff", "#2f6b53", "#c18429", "#6675c9"] },
-  { id: "dark", theme: "dark", style: "classic", label: { zh: "经典深色", en: "Classic dark" }, swatches: ["#0e1016", "#171a22", "#6675c9", "#a8b2ff", "#e1ad70"] },
+  { id: "dark", theme: "dark", style: "classic", label: { zh: "经典深色", en: "Classic dark" }, swatches: ["#0e1016", "#171a22", "#616fbf", "#a8b2ff", "#e1ad70"] },
   { id: "dopamine", theme: "light", style: "dopamine", label: { zh: "多巴胺", en: "Dopamine" }, swatches: ["#fff8ef", "#ffffff", "#e11d63", "#ff8a00", "#3f5bff"] },
   { id: "tech", theme: "dark", style: "tech", label: { zh: "科技风", en: "Tech" }, swatches: ["#060a13", "#0c1322", "#22d3ee", "#8b9dff", "#3ee6a0"] },
   { id: "cute", theme: "light", style: "cute", label: { zh: "可爱风", en: "Cute" }, swatches: ["#fff6f9", "#ffffff", "#c93a76", "#9a5ed3", "#f0a03c"] },

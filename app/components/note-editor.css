@@ -57,7 +57,7 @@ html[data-theme="dark"] .note-preview .note-figure>img,html[data-theme="dark"] .
 @keyframes note-toolbar-in{from{opacity:0;transform:translateY(-3px)}}
 .note-math-popover{position:absolute;z-index:6;display:grid;gap:8px;width:min(340px,100%);padding:12px;border:1px solid var(--line,#e4e9e6);border-radius:calc(10px*var(--radius-scale));background:var(--surface,#fff);box-shadow:0 14px 36px rgb(0 0 0 / .18)}
 .note-math-preview{display:flex;align-items:center;justify-content:center;min-height:44px;padding:6px 10px;overflow-x:auto;border-radius:calc(6px*var(--radius-scale));background:color-mix(in srgb,var(--green-soft,#edf5f0) 45%,var(--surface,#fff));color:var(--ink,#24352f)}
-.note-math-hint{color:color-mix(in srgb,var(--ink,#24352f) 50%,var(--surface,#fff));font-size:12px}
+.note-math-hint{color:var(--muted);font-size:12px}
 .note-math-error{color:var(--danger,#b4442f);font-size:12.5px}
 .note-math-popover input{min-height:40px;padding:0 10px;border:1px solid var(--line,#e4e9e6);border-radius:calc(6px*var(--radius-scale));background:var(--surface,#fff);color:var(--ink,#24352f);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;outline:none}
 .note-math-popover input:focus{border-color:var(--green,#2f6b53)}

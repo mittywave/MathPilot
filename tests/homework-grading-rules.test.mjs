@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeHomeworkVerdict, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel } from "../lib/homework-grading-rules.mjs";
+import { finalizeHomeworkVerdict, isPendingGradingItem, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel, titleWithoutStudent } from "../lib/homework-grading-rules.mjs";
+
+test("pending counts separate unsettled answers from the teacher's existing judgement", () => {
+  const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true };
+  for (const [patch, expected] of [
+    [{}, false],
+    [{ verdict: "correct", standardAnswer: "", referenceVerified: false }, false],
+    [{ standardAnswer: "" }, true],
+    [{ referenceVerified: false }, true],
+    [{ referenceVerified: undefined }, true],
+    [{ verdict: "partial", standardAnswer: "" }, true],
+    [{ verdict: "partial", referenceVerified: false }, true],
+    [{ verdict: "partial" }, false],
+    ...["correct", "partial", "incorrect"].map((teacherMark) => [{ teacherMark, standardAnswer: "", referenceVerified: false }, false]),
+    [{ teacherMark: "incorrect", requiresReview: true }, true],
+    [{ verdict: "correct", teacherMark: "correct", requiresReview: true }, true],
+    [{ verdict: "unreadable", teacherMark: "correct" }, true],
+    [{ verdict: "review_required", teacherMark: "incorrect" }, true],
+  ]) assert.equal(isPendingGradingItem({ ...settled, ...patch }), expected, JSON.stringify(patch));
+});
 
 test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");
@@ -51,4 +70,19 @@ test("school questions read as page and printed number, sub-questions keep their
   assert.equal(homeworkQuestionLabel("1-3(2)"), "第 1 面 第 3 题 (2)");
   assert.equal(homeworkQuestionLabel("3(b)(ii)"), "第 3(b)(ii) 题");
   assert.equal(homeworkQuestionLabel("D1"), "第 D1 题");
+});
+
+
+test("list titles remove only a leading student name and its separator", () => {
+  for (const separator of [" · ", "·", "-", "－", "：", ":", " ", "  "]) {
+    assert.equal(titleWithoutStudent(`刘羽汐${separator}有理数练习`, "刘羽汐"), "有理数练习", separator);
+  }
+  assert.equal(titleWithoutStudent("Alisa · 多项式加法", "Alisa"), "多项式加法");
+  assert.equal(titleWithoutStudent("Mary Jane · Practice", "Mary Jane"), "Practice");
+  assert.equal(titleWithoutStudent("A+B.(1)[x] · Practice", "A+B.(1)[x]"), "Practice");
+  assert.equal(titleWithoutStudent("Eric - -2 的计算", "Eric"), "-2 的计算");
+  for (const title of ["Eric有理数练习", "周练 · Eric · 有理数", "Erica · Practice", "eric · Practice", "Eric", "Eric ·", "Eric—Practice", "  Eric · Practice"]) {
+    assert.equal(titleWithoutStudent(title, "Eric"), title, title);
+  }
+  for (const name of [undefined, null, "", "  "]) assert.equal(titleWithoutStudent("普通练习", name), "普通练习");
 });

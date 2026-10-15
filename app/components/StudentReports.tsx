@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useConfirm } from "./ConfirmDialog";
 import { PaperMoreMenu } from "./PaperMoreMenu";
 import { createStudentReport, deleteStudentReport, fetchStudentReports, updateStudentReport } from "../../lib/api-client";
 import { ABILITY_DIMENSIONS, abilityStateLabel, reportKnowledgePoints, reportTotals } from "../../lib/student-profile-contract";
@@ -31,6 +32,7 @@ function TextField({ label, value, rows = 3, onSave }: { label: string; value: s
 }
 
 function ReportView({ report, studentName, onChange, onRemove }: { report: StudentReport; studentName: string; onChange: (report: StudentReport) => void; onRemove: () => void }) {
+  const [confirmNode, confirm] = useConfirm();
   const [state, setState] = useState("");
   const [busy, setBusy] = useState(false);
   const totals = reportTotals(report.data);
@@ -55,7 +57,7 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
       const name = `${studentName}-学情报告-${period(report).replace(/[/—]/g, "-")}`;
       if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setState("这台设备无法排版 PDF，可以下载 TeX，或在运行知题的电脑上打开本页"); return; }
+      if (!(await latexCompilerStatus()).available) { setState("这台设备无法排版 PDF，可以下载 TeX，或在运行 MathPilot 的电脑上打开本页"); return; }
       setState("正在排版…");
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);
@@ -65,12 +67,13 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
   }
 
   return <article className="report-view" aria-label={`${period(report)}学情报告`}>
+    {confirmNode}
     <header>
       <div><h3>{studentName} · {period(report)}</h3><small>{new Date(report.createdAt).toLocaleDateString("zh-CN")} 生成{state && ` · ${state}`}</small></div>
       <button type="button" className="primary-button" disabled={busy} onClick={() => void download("pdf")}>{busy ? "正在排版…" : "下载 PDF"}</button>
       <PaperMoreMenu label="这份报告的操作">
         <button type="button" onClick={() => void download("tex")}>下载 TeX</button>
-        <button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这份学情报告？")) onRemove(); }}>删除</button>
+        <hr /><button type="button" className="danger-text" onClick={async () => { if (await confirm({ title: "删除这份学情报告", body: "删除后无法恢复。", confirmLabel: "删除", danger: true })) onRemove(); }}>删除…</button>
       </PaperMoreMenu>
     </header>
     <dl className="report-banner">

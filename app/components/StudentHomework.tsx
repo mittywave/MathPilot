@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchLibrary, fetchTypesetRecords } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
+import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
@@ -42,10 +43,8 @@ function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: Stud
     let current = true;
     fetchTypesetRecords().then(({ records }) => { if (current) setPlans(records.filter((record) => record.plan && record.studentId === student.id && !handedOut.includes(record.id))); })
       .catch((reason) => { if (current) { setPlans([]); setError(reason instanceof Error ? reason.message : "组卷记录读取失败"); } });
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector(".assign-modal[aria-busy=true]")) onClose(); };
-    document.addEventListener("keydown", close);
-    return () => { current = false; document.removeEventListener("keydown", close); };
-  }, [student.id, handedOut, onClose]);
+    return () => { current = false; };
+  }, [student.id, handedOut]);
 
   async function open(record: TypesetRecord) {
     if (!record.plan) return;
@@ -105,7 +104,7 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
       <p>{homework ? late ? `${late} 份作业过了日子没交` : waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
       <div className="student-panel-actions">
         <button type="button" className="student-panel-action" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
-        <a className="student-panel-action" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
+        <a className="primary-button" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
       </div>
     </header>
     {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
@@ -117,8 +116,8 @@ export function StudentHomework({ student }: { student: StudentSummary }) {
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
-            <span className="homework-title"><b>{item.title}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
-              : days.length ? `交作业日期 ${shortDate(days[0].date)} · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
+            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${shortDate(days[0].date)}–${shortDate(days[days.length - 1].date)} · ${days.length} 天 · ${item.total} 道题`
+              : days.length ? `${shortDate(days[0].date)} 交作业 · ${item.total} 道题` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
             {(days.length > 1 || graded > 0) && <span className="homework-tally">
               {days.length > 1 && <span className="homework-days" aria-label="每天交没交">{days.map((entry, index) => {
                 const note = dayNote(entry, states[index]);

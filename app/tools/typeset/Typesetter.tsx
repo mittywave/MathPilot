@@ -5,7 +5,8 @@ import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { SheetGroup } from "../../../lib/handout-latex";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
 import { planDays, planQuestionIds } from "../../../lib/smart-paper-contract";
-import type { Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
+import type { AuthUser, Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
+import { SiteHeader } from "../../components/SiteHeader";
 import { AssignHomework } from "../../components/AssignHomework";
 import { PdfPreview } from "./PdfPreview";
 import { TypesetHistory } from "./TypesetHistory";
@@ -50,9 +51,8 @@ function restoredSettings(raw: Partial<TypesetSettings>): TypesetSettings {
   };
 }
 
-function TypesetIcon({ name }: { name: "back" | "upload" | "history" | "list" }) {
+function TypesetIcon({ name }: { name: "upload" | "history" | "list" }) {
   const paths = {
-    back: <path d="m10 5-7 7 7 7M3 12h18" />,
     history: <><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" /><path d="M3 4v4.5h4.5M12 7.5V12l3 2" /></>,
     list: <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />,
     upload: <><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5" /><path d="M4 14.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4.5" /></>,
@@ -80,7 +80,7 @@ export type BasketTypeset = {
   questions: Question[]; title: string; settings: Partial<TypesetSettings>; onClose: (title: string, settings: TypesetSettings) => void;
   groups?: SheetGroup[]; recordId?: string; studentId?: string; origin?: { back: string; name: string; hint: string };
 };
-const BASKET_ORIGIN = { back: "组卷篮 · 快速排版", name: "组卷篮", hint: "点击回组卷篮调整题目" };
+const BASKET_ORIGIN = { back: "← 组卷篮", name: "组卷篮", hint: "点击回组卷篮调整题目" };
 
 // 第 2 天 第 3 题 in a material in days, otherwise 第 3 题.
 function questionLabel(groups: SheetGroup[] | undefined, index: number) {
@@ -93,6 +93,7 @@ function questionLabel(groups: SheetGroup[] | undefined, index: number) {
 }
 
 export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
   const [status, setStatus] = useState<LatexStatus | null>(null);
   const statusRef = useRef<LatexStatus | null>(null);
   const statusReady = useRef<Promise<LatexStatus> | null>(null);
@@ -129,8 +130,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     // The basket's questions open at once. They stay in the basket and are not kept in the history; a 智能组卷 plan
     // brings its own record, and settings changed here are written to it.
     if (basket) { void show((basket.origin ?? BASKET_ORIGIN).name, basket.questions, basket.title, restoredSettings(basket.settings), basket.groups); return; }
-    void fetchMe().then(({ user }) => user ? fetchTypesetRecords() : null)
-      .then((result) => { if (result) { setRecords(result.records); setListedAt(Date.now()); } }).catch(() => undefined);
+    void fetchMe().then(({ user }) => { setUser(user); return user ? fetchTypesetRecords() : null; })
+      .then((result) => { if (result) { setRecords(result.records); setListedAt(Date.now()); } }).catch(() => { setUser(current => current ?? null); setHistoryNote("历史记录读取失败，请刷新重试。"); });
   // The basket is read once, when the tool opens; it is out of sight until the tool closes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -284,14 +285,10 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     </div>;
   })();
 
-  return <main className="typeset">
+  const historyToggle = records !== null && <button type="button" className={`secondary typeset-history-toggle${showHistory || !source ? " active" : ""}`} aria-pressed={showHistory || !source} onClick={() => setShowHistory((open) => source ? !open : false)}><TypesetIcon name="history" /><span>历史记录</span></button>;
+  return <>{!basket && <SiteHeader active="tools" user={user ?? null} loading={user === undefined} trail={[{label:"工具箱",href:"/tools"},{label:"快速排版"}]} trailActions={historyToggle} />}<main className={`typeset${basket ? " typeset-overlay" : ""}`}>
     <aside className="typeset-panel">
-      <div className="typeset-top">
-        {basket ? <button type="button" className="toolbox-back" onClick={close}><TypesetIcon name="back" /><span>{origin.back}</span></button>
-          : <a className="toolbox-back" href="/tools"><TypesetIcon name="back" /><span>工具箱 · 快速排版</span></a>}
-        {records !== null && <button type="button" className={`typeset-history-toggle${showHistory || !source ? " active" : ""}`} aria-pressed={showHistory || !source}
-          onClick={() => setShowHistory((open) => source ? !open : false)}><TypesetIcon name="history" /><span>历史记录</span></button>}
-      </div>
+      {basket && <div className="typeset-top"><button type="button" className="secondary" onClick={close}>{origin.back}</button>{historyToggle}</div>}
       {basket ? <button type="button" className="typeset-drop loaded" onClick={close}>
         <TypesetIcon name="list" />
         <span><b>{origin.name}</b><small>{basket.questions.length} 道题{days}{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · {origin.hint}</small></span>
@@ -320,8 +317,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         <small>写成「第3讲 一元二次方程」时，「第3讲」会放进标题上方的标签。</small>
       </label>
       <div className="typeset-field" role="radiogroup" aria-label="版本"><span>版本</span>
-        <div className="typeset-editions">{EDITIONS.map((item) => <label key={item.value} className={answers === item.value ? "active" : ""}>
-          <input type="radio" name="edition" checked={answers === item.value} onChange={() => setAnswers(item.value)} /><b>{item.label}</b><small>{item.hint}</small>
+        <div className="typeset-editions">{EDITIONS.map((item) => <label key={item.value} title={item.hint} className={answers === item.value ? "active" : ""}>
+          <input type="radio" name="edition" checked={answers === item.value} onChange={() => setAnswers(item.value)} /><b>{item.label}</b>
         </label>)}</div>
       </div>
 
@@ -345,14 +342,17 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         </>}
       </section>}
 
-      <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      <div className="typeset-actions">
+      <button className="primary-button typeset-download" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
+      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习</button></p>}
       {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign} />}
-      {status && !status.available && <p className="typeset-note">PDF 需要在本机用「启动知题」运行时生成。</p>}
+      {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
       {historyNote && <p className="typeset-note warn">{historyNote}</p>}
       {error && <p className="typeset-note error" role="alert">{error}</p>}
+      </div>
     </aside>
 
     <section className="typeset-preview" aria-label={records !== null && (showHistory || !source) ? "历史记录" : "PDF 预览"} aria-busy={Boolean(busy)}>
@@ -361,9 +361,9 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         : result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
         label={(index) => `${labelOf(index)} · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
-          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在本机用「启动知题」打开。" : "排好的 PDF 会显示在这里。"}</p></>}
+          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在运行 MathPilot 的这台电脑上打开。" : "排好的 PDF 会显示在这里。"}</p></>}
         </div>}
       {busy && result && <div className="typeset-busy"><i className="typeset-spinner" />{busy}</div>}
     </section>
-  </main>;
+  </main></>;
 }

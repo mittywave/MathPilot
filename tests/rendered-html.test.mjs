@@ -40,8 +40,8 @@ test("server-renders the cloud question-bank guest shell", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Mitty 的宝藏题库<\/title>/i);
-  assert.match(html, /全部试题/);
+  assert.match(html, /<title>MathPilot<\/title>/i);
+  assert.match(html, /aria-label="搜索试题"/);
   const navigation = html.match(/<nav[^>]*aria-label="题库入口"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? "";
   assert.equal((navigation.match(/>题库</g) ?? []).length, 1, "one shared library entry");
   assert.doesNotMatch(html, /我的题库|私人题库|公共资源库|复制到私人题库/);
@@ -55,7 +55,6 @@ test("server-renders the cloud question-bank guest shell", async () => {
 });
 
 test("keeps every privileged operation behind server-side authentication", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
   const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
   const downloadRoute = await readFile(new URL("../app/api/download/route.ts", import.meta.url), "utf8");
@@ -63,7 +62,8 @@ test("keeps every privileged operation behind server-side authentication", async
 
   assert.equal(ALEVEL_PAGE_COPY.zh.guestBrowse, "访客 · 仅浏览");
   assert.equal(ALEVEL_PAGE_COPY.en.guestBrowse, "Guest · Browse only");
-  assert.match(page, /pageCopy\.guestBrowse/);
+  const header = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
+  assert.match(header, /copy\.guestBrowse/);
   assert.match(auth, /HttpOnly\$\{secure \? "; Secure" : ""\}; SameSite=Lax/);
   assert.match(loginRoute, /createSession\(user\.id, new URL\(request\.url\)\.protocol === "https:"\)/, "the https site keeps Secure session cookies");
   assert.match(auth, /PBKDF2/);
@@ -79,8 +79,8 @@ test("keeps the select-all control on the right without filter scroll chrome", a
 
   assert.doesNotMatch(page, /local-badge/);
   assert.match(css, /\.select-visible\s*\{[^}]*margin-left:auto/);
-  assert.match(css, /\.filters::-webkit-scrollbar\s*\{\s*display:none/);
-  assert.match(css, /\.filters\s*\{[^}]*scrollbar-width:none/);
+  assert.match(css, /\.filter-segments::-webkit-scrollbar\s*\{\s*display:none/);
+  assert.match(css, /\.filter-segments\s*\{[^}]*scrollbar-width:none/);
   assert.match(css, /html::-webkit-scrollbar,body::-webkit-scrollbar\s*\{\s*display:none/);
 });
 

@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { homeworkQuestionLabel } from "../../lib/homework-grading-rules.mjs";
+import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
 import type { AssignedHomework, HomeworkDay, HomeworkSubmission } from "../../lib/types";
 
 type Result = AssignedHomework["questions"][number]["result"];
 const STATE: Record<string, string> = { correct: "对", partial: "部分对", incorrect: "错", pending: "待处理", missing: "未交" };
 function resultState(result: Result) {
   if (!result) return "missing";
-  return result.requiresReview || result.verdict === "unreadable" || result.verdict === "review_required" ? "pending" : result.verdict;
+  return isPendingGradingItem(result) ? "pending" : result.verdict;
 }
 const plain = (text: string) => text.replace(/\$+/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
 const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
@@ -55,8 +55,9 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
   const { assigned } = submission;
   // The first day being picked while 改日期 is open.
   const [moving, setMoving] = useState<string | null>(null);
-  const counts = assigned.questions.reduce<Record<string, number>>((all, item) => { const state = resultState(item.result); all[state] = (all[state] ?? 0) + 1; return all; }, {});
-  const handedIn = assigned.questions.length - (counts.missing ?? 0);
+  const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.correct, incorrect: all.incorrect + day.incorrect,
+    pending: all.pending + day.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
+  const handedIn = assigned.questions.length - counts.missing;
   const latest = assigned.uploads.at(-1);
   const today = calendarDay();
   const days = assigned.days.map((item, index) => {
@@ -66,7 +67,7 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
   const first = days[0], last = days[days.length - 1], several = days.length > 1;
   return <section className="assigned-sheet" aria-label="整份作业">
     <header>
-      <div><h2>整份作业</h2><p>{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 对 ${counts.correct ?? 0} · 错 ${(counts.incorrect ?? 0) + (counts.partial ?? 0)}` : ""}{counts.pending ? ` · 待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
+      <div><h2>整份作业</h2><p>{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 对 ${counts.correct} · 错 ${counts.incorrect}` : ""}{counts.pending ? ` · 待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
         {first && (moving === null ? <p className={`assigned-schedule${several ? "" : ` ${first.state}`}`}>
           <span>{several ? `${shortDate(first.date)} – ${shortDate(last.date)}，每天一份` : `交作业日期 ${shortDate(first.date)}${first.state === "today" ? " · 今天" : first.state === "late" ? " · 没交" : ""}`}</span>
           <button type="button" disabled={busy} onClick={() => setMoving(first.date)}>改日期</button>

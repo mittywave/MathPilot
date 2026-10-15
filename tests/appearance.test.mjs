@@ -84,15 +84,15 @@ const luminance = (hex) => {
 };
 const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
 
-test("text, buttons and status colours stay readable in every new style", () => {
+test("text, buttons and status colours stay readable in every appearance", () => {
   const pairs = [
-    ["ink", "page", 7], ["ink", "surface", 7], ["ink", "surface-soft", 6], ["muted", "surface", 3.2], ["muted", "page", 3],
-    ["green", "surface", 4.5], ["green", "green-soft", 4], ["on-accent", "accent-strong", 4.5], ["on-inverse", "inverse", 4.5], ["on-fill", "danger-fill", 4.5],
-    ["warn-strong", "surface", 4.5], ["danger-strong", "surface", 4.5], ["success", "surface", 3], ["danger", "surface", 3.5], ["amber", "surface", 3.5],
+    ["ink", "page", 7], ["ink", "surface", 7], ["ink", "surface-soft", 6], ["muted", "surface", 4.5], ["muted", "page", 4.5], ["muted", "surface-soft", 4.5],
+    ["green", "surface", 4.5], ["green", "green-soft", 4.5], ["on-accent", "accent-strong", 4.5], ["on-inverse", "inverse", 4.5], ["on-fill", "danger-fill", 4.5],
+    ["warn-strong", "surface", 4.5], ["warn-strong", "warn-soft", 4.5], ["danger-strong", "surface", 4.5], ["danger-strong", "danger-soft", 4.5], ["success", "surface", 3], ["danger", "surface", 3.5], ["amber", "surface", 3.5],
     ["info", "surface", 3.5], ["sky", "surface", 3.5], ["teal", "surface", 3.5], ["violet", "surface", 3.5],
     ["success", "success-soft", 3], ["danger", "danger-soft", 3.2], ["amber", "amber-soft", 3.2], ["info", "info-soft", 3.2], ["violet", "violet-soft", 3.2],
   ];
-  for (const [id, palette] of Object.entries(styles)) {
+  for (const [id, palette] of Object.entries({ light, dark, ...styles })) {
     const failures = pairs.filter(([fg, bg, min]) => contrast(palette[fg], palette[bg]) < min).map(([fg, bg, min]) => `${fg}/${bg} ${contrast(palette[fg], palette[bg]).toFixed(2)} < ${min}`);
     assert.deepEqual(failures, [], id);
   }

@@ -63,7 +63,7 @@ test("colleagues are turned away until sharing is on; this machine always gets t
   assert.deepEqual(await call({ url: "/tools/handouts" }), { passedThrough: true });
   const page = await call({ ...lan, headers: { accept: "text/html,application/xhtml+xml" } });
   assert.equal(page.status, 403);
-  assert.match(page.body, /知题暂未共享/);
+  assert.match(page.body, /MathPilot 暂未共享/);
   assert.match(json(await call({ ...lan, url: "/api/library" })).error, /暂未共享/);
   assert.equal((await call({ ...lan, host: "localhost:3001" })).status, 403, "a forged loopback host is refused before anything else");
 
@@ -98,7 +98,7 @@ test("a remembered office network shares again after a restart, and not at home"
   const restarted = harness(root, office);
   assert.deepEqual(await restarted.call({ ...lan, url: "/api/library" }), { passedThrough: true });
   assert.deepEqual(restarted.awake, [true]);
-  assert.deepEqual(restarted.logged, ["知题已共享给同事：http://Mitty-Mac.local:3001  或  http://172.20.5.225:3001"], "the terminal says where colleagues can reach it");
+  assert.deepEqual(restarted.logged, ["MathPilot 已共享给同事：http://Mitty-Mac.local:3001  或  http://172.20.5.225:3001"], "the terminal says where colleagues can reach it");
 
   const atHome = harness(root, home);
   assert.equal((await atHome.call({ remoteAddress: "192.168.1.40", host: "192.168.1.23:3001", url: "/api/library" })).status, 403);

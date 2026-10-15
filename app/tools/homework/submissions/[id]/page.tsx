@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties } from "react";
+import { SiteHeader } from "../../../../components/SiteHeader";
+import { PaperMoreMenu } from "../../../../components/PaperMoreMenu";
+import { fetchMe } from "../../../../../lib/api-client";
 import { AssignedHomeworkSheet } from "../../../../components/AssignedHomeworkSheet";
 import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../../../../components/HomeworkPagePicker";
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
-import { homeworkQuestionLabel, reconcileHomeworkScore } from "../../../../../lib/homework-grading-rules.mjs";
-import type { GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
+import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore, titleWithoutStudent } from "../../../../../lib/homework-grading-rules.mjs";
+import type { AuthUser, GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
 
 const STATUS: Record<string, string> = {
   draft: "待上传", submitted: "已提交", processing: "自动批改中", review_required: "旧版待复核",
   ready: "旧版待发布", published: "结果已发布", failed: "处理失败",
 };
-const OUTPUT_LABELS = [["wrongBook", "写入错题本"], ["report", "生成错题报告"], ["profile", "整合到学生画像"]] as const;
+const OUTPUT_LABELS = [["wrongBook", "写入错题本"], ["report", "生成错题报告"], ["profile", "计入定档"]] as const;
 const VERDICT: Record<string, string> = { correct: "正确", partial: "部分正确", incorrect: "错误", unreadable: "待补图", review_required: "待核实" };
 function verdictLabel(item: GradingItem, international: boolean) {
   const label = international && item.verdict === "unreadable" ? "看不清" : VERDICT[item.verdict] ?? item.verdict;
@@ -22,7 +25,7 @@ type Bucket = "correct" | "partial" | "incorrect" | "pending";
 const BUCKETS: Array<[Bucket, string]> = [["correct", "正确"], ["partial", "部分正确"], ["incorrect", "错误"], ["pending", "待处理"]];
 // Matches the server summary: anything still awaiting review counts as pending, whatever its verdict.
 function bucket(item: GradingItem): Bucket {
-  return item.requiresReview || item.verdict === "unreadable" || item.verdict === "review_required" ? "pending" : item.verdict;
+  return isPendingGradingItem(item) ? "pending" : item.verdict as Bucket;
 }
 type Coverage = NonNullable<HomeworkSubmission["pageCoverage"]>;
 type PageInfo = Coverage["pages"][number];
@@ -96,17 +99,17 @@ function saveBlob(blob: Blob, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-/** IGCSE / A Level: the same report the PDF prints, with the download as the one main action. */
-function InternationalReportCard({ report, onDownload, busy }: { report: InternationalReport; onDownload: (kind: "pdf" | "tex") => void; busy: boolean }) {
+/** IGCSE / A Level: display the same report as the PDF; downloads live in the shared trail. */
+function InternationalReportCard({ report }: { report: InternationalReport }) {
   return <article className="submission-report-card international-report"><header><span>批改报告 · 家长与学生共读</span><h2>{report.priorities.length ? `优先改进：${report.priorities.join("、")}` : "本次没有需要优先改进的问题"}</h2><p className="report-overview"><MathText text={report.overview} /></p></header>
     {report.practice.length > 0 && <section className="report-actions"><b>下一步练习</b><ol>{report.practice.map((row) => <li key={row.action}><MathText text={row.action} /><small>完成标准：<MathText text={row.standard} /></small></li>)}</ol></section>}
     {report.losses.length > 0 && <details className="report-losses"><summary>失分分析与订正（{report.losses.length} 项）</summary>{report.losses.map((loss) => <section key={`${loss.questionNumbers.join("-")}-${loss.title}`}><strong>第 {loss.questionNumbers.join("、")} 题：<MathText text={loss.title} /></strong>{([["失分事实", loss.fact], ["知识与能力", loss.knowledge], ["正确思路", loss.method], ["订正动作", loss.action]] as const).filter(([, value]) => value).map(([label, value]) => <p key={label}><b>{label}</b><MathText text={value} /></p>)}</section>)}</details>}
-    <div className="report-download"><button className="primary" disabled={busy} onClick={() => onDownload("pdf")}>{busy ? "正在排版…" : "下载报告 PDF"}</button><button className="report-source" disabled={busy} onClick={() => onDownload("tex")}>下载 TeX</button></div>
   </article>;
 }
 
 export default function TeacherSubmissionPage() {
   const [id, setId] = useState("");
+  const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
   const [submission, setSubmission] = useState<HomeworkSubmission | null>(null);
   const [items, setItems] = useState<GradingItem[]>([]);
   const [pages, setPages] = useState<HomeworkPage[]>([]);
@@ -118,7 +121,7 @@ export default function TeacherSubmissionPage() {
   const [activeItemId, setActiveItemId] = useState("");
   const [split, setSplit] = useState(45);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState({ text: "", tone: "success" as "success" | "error" });
   const [loading, setLoading] = useState(true);
 
   async function load(submissionId = id) {
@@ -130,10 +133,11 @@ export default function TeacherSubmissionPage() {
   }
 
   useEffect(() => {
+    void fetchMe().then(result => setUser(result.user)).catch(() => setUser(null));
     const frame = requestAnimationFrame(() => {
       const submissionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).at(-1) ?? "");
       setId(submissionId);
-      void load(submissionId).catch((error) => setMessage(error instanceof Error ? error.message : "提交记录读取失败")).finally(() => setLoading(false));
+      void load(submissionId).catch((error) => setMessage({ text: error instanceof Error ? error.message : "提交记录读取失败", tone: "error" })).finally(() => setLoading(false));
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -146,27 +150,48 @@ export default function TeacherSubmissionPage() {
 
   async function repairCoverage(){
     if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);setMessage("已开始逐页补全与重批，修复前记录已保留。");}catch(error){setMessage(error instanceof Error?error.message:"补全失败");}finally{setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);setMessage({ text: "已开始逐页补全与重批，修复前记录已保留。", tone: "success" });}catch(error){setMessage({ text: error instanceof Error?error.message:"补全失败", tone: "error" });}finally{setBusy(false);}
   }
   async function attachFigures(){
-    if(!submission)return;setBusy(true);setMessage("正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…");
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage(left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步");}catch(error){setMessage(error instanceof Error?error.message:"配图校对失败");}finally{setBusy(false);}
+    if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
   }
   async function newVersion() {
     if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage(error instanceof Error?error.message:"创建重交版本失败");setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建重交版本失败", tone: "error" });setBusy(false);}
   }
   // 改日期 of an assigned homework: the days move, the grading stays as it is.
   async function reschedule(start: string) {
     if (!submission) return false;
     setBusy(true);
-    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage("日期已改好"); return true; }
-    catch (error) { setMessage(error instanceof Error ? error.message : "日期没有改成"); return false; }
+    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage({ text: "日期已改好", tone: "success" }); return true; }
+    catch (error) { setMessage({ text: error instanceof Error ? error.message : "日期没有改成", tone: "error" }); return false; }
     finally { setBusy(false); }
+  }
+  async function changeProfile(profile: boolean) {
+    if (!submission || busy || submission.assigned) return;
+    const previous = submission.outputs.profile;
+    setBusy(true);
+    setSubmission({ ...submission, outputs: { ...submission.outputs, profile } });
+    try {
+      const result = await homeworkApi.updateSubmission(submission.id, { action: "profile", profile });
+      setSubmission(result.submission);
+      setMessage({ text: profile ? "已计入定档" : "已从定档移出", tone: "success" });
+    } catch (error) {
+      setSubmission((current) => current && { ...current, outputs: { ...current.outputs, profile: previous } });
+      const reason = error instanceof TypeError ? "网络连接中断" : error instanceof Error ? error.message : "定档设置保存失败，请重试";
+      setMessage({ text: reason, tone: "error" });
+      // A lost response can follow a committed transaction; read the saved flag without replacing an editing draft.
+      try {
+        const saved = (await homeworkApi.submission(submission.id)).submission;
+        setSubmission(saved);
+        setMessage({ text: `${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`, tone: "error" });
+      } catch { /* Keep the previous flag and the error. */ }
+    } finally { setBusy(false); }
   }
   async function reprocessPending() {
     if (!submission) return;
-    setBusy(true); setMessage("正在补充待处理题目的材料…");
+    setBusy(true); setMessage({ text: "正在补充待处理题目的材料…", tone: "success" });
     try {
       const replacements=[];
       if(supplementPages.length) {
@@ -176,8 +201,8 @@ export default function TeacherSubmissionPage() {
       }
       await uploadReferences();
       const result=await homeworkApi.updateSubmission(submission.id,{action:"reprocess-pending",pages:replacements});
-      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);setMessage("已重新处理待处理题，原始页面仍保留在历史原件中");
-    } catch(error){setMessage(error instanceof Error?error.message:"重新处理失败");}finally{setBusy(false);}
+      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);setMessage({ text: "已重新处理待处理题，原始页面仍保留在历史原件中", tone: "success" });
+    } catch(error){setMessage({ text: error instanceof Error?error.message:"重新处理失败", tone: "error" });}finally{setBusy(false);}
   }
 
   // Reference answer pages are appended to the homework in the order they are chosen.
@@ -194,7 +219,7 @@ export default function TeacherSubmissionPage() {
   async function uploadAndSubmit() {
     if (!submission || !pages.length) return;
     setBusy(true);
-    setMessage("正在上传作业原件…");
+    setMessage({ text: "正在上传作业原件…", tone: "success" });
     try {
       for (const file of sourceDocuments) await uploadHomeworkAsset({blob:file,fileName:file.name,role:"submission_document",submissionId:submission.id});
       setSourceDocuments([]);
@@ -202,7 +227,7 @@ export default function TeacherSubmissionPage() {
       for (const [index, page] of pages.entries()) {
         const asset = await uploadHomeworkAsset({ blob: page.blob, fileName: `${submission.studentName}-第${index + 1}页.jpg`, role: "submission_original", submissionId: submission.id });
         saved.push({ assetId: asset.id });
-        setMessage(`正在上传第 ${index + 1}/${pages.length} 页…`);
+        setMessage({ text: `正在上传第 ${index + 1}/${pages.length} 页…`, tone: "success" });
       }
       await uploadReferences();
       await homeworkApi.updateSubmission(submission.id, { action: "save-pages", pages: saved });
@@ -210,9 +235,9 @@ export default function TeacherSubmissionPage() {
       releaseHomeworkPages(pages); setPages([]);
       setSubmission(result.submission);
       setItems(result.submission.gradingItems);
-      setMessage("作业已提交，后台会自动批改并发布结果");
+      setMessage({ text: "作业已提交，后台会自动批改并发布结果", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "作业提交失败");
+      setMessage({ text: error instanceof Error ? error.message : "作业提交失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -248,9 +273,9 @@ export default function TeacherSubmissionPage() {
       setItems(result.submission.gradingItems);
       setEditingId("");
       await load(submission.id);
-      setMessage("判定已修正，错题本和作业报告已同步更新");
+      setMessage({ text: "判定已修正，错题本和作业报告已同步更新", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "修正失败");
+      setMessage({ text: error instanceof Error ? error.message : "修正失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -269,9 +294,9 @@ export default function TeacherSubmissionPage() {
       setSubmission(result);
       setItems(result.gradingItems);
       await load(submission.id);
-      setMessage("旧提交结果已发布");
+      setMessage({ text: "旧提交结果已发布", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "旧提交处理失败");
+      setMessage({ text: error instanceof Error ? error.message : "旧提交处理失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -281,9 +306,9 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "retry" });
       setSubmission(result.submission);
-      setMessage("已重新提交后台批改任务");
+      setMessage({ text: "已重新提交后台批改任务", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重试失败");
+      setMessage({ text: error instanceof Error ? error.message : "重试失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -295,24 +320,24 @@ export default function TeacherSubmissionPage() {
       const { buildHomeworkReportLatex, HOMEWORK_REPORT_MAIN } = await import("../../../../../lib/homework-report-latex");
       const tex = buildHomeworkReportLatex(submission);
       const name = `${submission.studentName}-${submission.assignmentTitle}-批改报告`;
-      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage("TeX 源文件已下载"); return; }
+      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage({ text: "TeX 源文件已下载", tone: "success" }); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../../../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setMessage("这台设备无法排版 PDF，请下载 TeX 源文件，或在运行知题的电脑上打开本页"); return; }
+      if (!(await latexCompilerStatus()).available) { setMessage({ text: "这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页", tone: "error" }); return; }
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);
-      setMessage(issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "报告生成失败"); }
+      setMessage({ text: issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成", tone: "success" });
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "报告生成失败", tone: "error" }); }
     finally { setBusy(false); }
   }
 
   async function refresh() {
     setBusy(true);
-    try { await load(); setMessage("状态已刷新"); }
+    try { await load(); setMessage({ text: "状态已刷新", tone: "success" }); }
     finally { setBusy(false); }
   }
 
-  if (loading) return <main className="homework-loading">正在读取学生作业…</main>;
-  if (!submission) return <main className="homework-loading"><h1>提交记录不存在</h1><a href="/tools/homework">返回作业批改</a></main>;
+  if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
+  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
   const report = submission.report;
   const live = ["submitted", "processing", "failed"].includes(submission.status);
@@ -322,27 +347,33 @@ export default function TeacherSubmissionPage() {
   const coverage = submission.pageCoverage;
   const incomplete = !!coverage && coverage.processed < coverage.total;
   const pendingPages = coverage?.pages.filter(page=>page.kind === "unreadable") ?? [];
-  const pending = items.filter(item=>item.requiresReview || ["unreadable","review_required"].includes(item.verdict) || (["incorrect","partial"].includes(item.verdict) && (!item.standardAnswer || item.referenceVerified === false)));
-  const issues = items.filter((item) => item.verdict === "partial" || item.verdict === "incorrect");
+  const pending = items.filter(isPendingGradingItem);
+  const issues = items.filter((item) => !isPendingGradingItem(item) && (item.verdict === "partial" || item.verdict === "incorrect")).length;
   const outputs = OUTPUT_LABELS.filter(([key])=>submission.outputs[key]).map(([,label])=>label);
   const status = incomplete && submission.status === "published" ? "结果不完整" : submission.status === "published" && coverage?.unreadable ? "有页面待补图" : STATUS[submission.status] ?? submission.status;
 
   const assigned = submission.assigned;
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
-  return <main className="review-shell">
-    <header className="review-topbar">{assigned ? <a href={`${archiveLink}&tab=homework`}>← {submission.studentName}的作业</a> : submission.outputs.wrongBook && !submission.outputs.report && !submission.outputs.profile ? <a href={archiveLink}>← 学生错题本</a> : <a href="/tools/homework">← 作业批改</a>}<button onClick={refresh} disabled={busy}>刷新</button></header>
-    {message && <div className="homework-notice" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">×</button></div>}
-    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{submission.assignmentTitle}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues.length} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
-      {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}</section>
+  return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
+    trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
+    trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={newVersion}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
+    {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
+    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
+      {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
+      <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
+        {submission.outputs.wrongBook && <div><span>写入错题本</span><a href={archiveLink}>已归档错题 {summary?.archived ?? 0} 道 →</a></div>}
+        <label><input type="checkbox" role="switch" aria-label="计入定档" checked={submission.outputs.profile} disabled={busy || Boolean(assigned) || live || submission.status === "ready"}
+          aria-describedby={assigned ? "profile-inclusion-note" : undefined} onChange={(event) => void changeProfile(event.target.checked)} /><span>计入定档</span></label>
+        {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
+      </div></section>
 
     {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onReschedule={reschedule}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
     {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}
     {/* An assigned question keeps the figures it was handed out with; only questions read off the page have figures to check. */}
-    {!assigned && ["published","ready"].includes(submission.status) && <section className="review-callout"><div><b>{submission.figuresPending ? `${submission.figuresPending} 道题配图待核对` : "原卷题图"}</b><p>重新检查图源、共用题图与手写覆盖，并同步到错题本。</p></div><button onClick={attachFigures} disabled={busy}>校对原卷配图</button></section>}
-    {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} />{submission.outputs.wrongBook && <a href={`/?view=wrong-book&studentId=${submission.studentId}`}>已归档错题 {summary.archived} 道 →</a>}</section>}
-    {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>已有结果会保留；需要补图或核实判定的题目暂不计入错题本，已按老师批改归档的题目会保留并补齐参考答案。</p><label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
+    {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={items} total={items.length} /></section>}
+    {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
 
     {submission.status === "draft" && <section className="review-upload"><div><h2>上传学生作业</h2><p>{assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页作业`}</button></section>}
@@ -351,7 +382,7 @@ export default function TeacherSubmissionPage() {
     {["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>这是启用自动发布前产生的旧提交</b><p>保留旧流程兼容，不会被后台自动发布。</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>确认并发布</button></section>}
 
     {["review_required", "ready", "published"].includes(submission.status) && <>
-      {submission.outputs.report && international && report?.details && <section className="diagnosis-grid"><InternationalReportCard report={report.details} onDownload={downloadReport} busy={busy} /></section>}
+      {submission.outputs.report && international && report?.details && <section className="diagnosis-grid"><InternationalReportCard report={report.details} /></section>}
       {submission.outputs.report && !international && <section className="diagnosis-grid">
         <article className="submission-report-card"><header><span>整份诊断</span><h2>{report?.overallSummary || "逐题结果已完成"}</h2><p>{report?.studentMessage || "当前提交尚未生成整份建议。"}</p></header>{report && <><div className="report-columns"><section><b>做得好的地方</b>{report.strengths.length ? report.strengths.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">本次暂无足够证据。</p>}</section><section><b>优先改进</b>{report.gaps.length ? report.gaps.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">暂未发现优先问题。</p>}</section></div><section className="report-actions"><b>下一步建议</b><ol>{report.actions.map((action) => <li key={action}>{action}</li>)}</ol></section></>}</article>
       </section>}
@@ -368,12 +399,11 @@ export default function TeacherSubmissionPage() {
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
         <div className="grading-list" id="review-details" role="region" aria-label="逐题详情，独立滚动" tabIndex={0}><div className="grading-heading"><div><h2>逐题证据</h2><p>展开题目查看学生作答、参考答案和判定依据。</p></div></div>{items.map((item) => {
           const editing = editingId === item.id;
-          return <details id={`grading-${item.id}`} key={item.id} className={`grading-card compact ${item.verdict}${activeItemId === item.id ? " selected" : ""}`} onToggle={event => { if (event.currentTarget.open) focusEvidence(item); }} open={editing || undefined}><summary><span>{homeworkQuestionLabel(item.questionNumber)}</span><b>{verdictLabel(item, international)}</b><small>{item.teacherMark ? "老师批改" : `${Math.round(item.confidence * 100)}% 置信度`}</small></summary><div className="grading-detail">{international && <p className="grading-stem"><MathText text={item.stem} /></p>}{international && !!item.figures?.length && <div className="grading-figures">{item.figures.map((figure, index) => <img key={figure.url} className={figure.kind} src={figure.url} alt={`${homeworkQuestionLabel(item.questionNumber)}配图 ${index + 1}`} loading="lazy" />)}</div>}{editing ? <><div className="grading-fields"><label>批改结论<select value={item.verdict} onChange={(event) => updateItem(item.id, reconcileHomeworkScore(event.target.value as GradingItem["verdict"], null, item.maxScore, submission.curriculum))}><option value="correct">正确</option><option value="partial">部分正确</option><option value="incorrect">错误</option><option value="unreadable">{international ? "看不清（0 分）" : "待补图"}</option><option value="review_required">待核实</option></select></label><label>错误类型<input value={item.errorType} onChange={(event) => updateItem(item.id, { errorType: event.target.value })} placeholder="计算、审题、步骤…" /></label><label>满分<input type="number" min={0} step={0.5} inputMode="decimal" value={item.maxScore ?? ""} onChange={(event) => { const maxScore = event.target.value === "" ? null : Number(event.target.value); updateItem(item.id, { maxScore, ...reconcileHomeworkScore(item.verdict, item.score, maxScore, submission.curriculum) }); }} placeholder="原卷无分值可留空" /></label>{item.maxScore != null && <label>得分<input type="number" min={0} max={item.maxScore} step={0.5} inputMode="decimal" value={item.score ?? ""} onChange={(event) => updateItem(item.id, event.target.value === "" ? { score: null } : reconcileHomeworkScore("partial", event.target.value, item.maxScore))} /></label>}</div><label>题干<textarea rows={3} value={item.stem} onChange={event=>updateItem(item.id,{stem:event.target.value})} /></label><label>参考答案<input value={item.standardAnswer} onChange={event=>updateItem(item.id,{standardAnswer:event.target.value})} /></label><label>参考解析<textarea rows={3} value={item.standardAnalysis} onChange={event=>updateItem(item.id,{standardAnalysis:event.target.value})} /></label><label><input type="checkbox" checked={item.referenceVerified === true} onChange={event=>updateItem(item.id,{referenceVerified:event.target.checked})} />我已核实题目与参考解答</label><label>学生作答<textarea rows={2} value={item.studentAnswer} onChange={(event) => updateItem(item.id, { studentAnswer: event.target.value })} /></label><label>给学生的反馈<textarea rows={3} value={item.feedback} onChange={(event) => updateItem(item.id, { feedback: event.target.value })} /></label><div className="correction-actions"><button onClick={() => { setEditingId(""); void load(submission.id); }}>取消</button><button className="primary" onClick={() => saveCorrection(item)} disabled={busy}>保存修正</button></div></> : <>{international && item.stepAnalysis.length > 0 && <div className="step-analysis"><b>步骤分析</b><ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol></div>}{item.standardAnswer && <div className="standard-answer"><b>参考答案 · {item.referenceSource === "agent" ? "Agent 解题" : item.referenceSource === "unresolved" ? "待校验" : item.referenceEvidence === "题库原题答案" ? "题库答案" : item.referenceEvidence === "布置时资料自带的答案" ? "资料自带答案" : "教师提供"}</b><p><MathText text={item.standardAnswer} /></p>{item.standardAnalysis && <small><MathText text={item.standardAnalysis} /></small>}</div>}{international && (item.evidenceSummary || item.feedback || item.errorType) && <div className="evidence-feedback"><b>判定依据与反馈</b><p>{[item.evidenceSummary, item.feedback].filter(Boolean).join("。")}</p>{item.errorType && <small>问题标签：{item.errorType}</small>}</div>}{!item.standardAnswer && <p className="reference-empty">{item.teacherMark === "correct" ? "老师已判为正确，无需补充参考答案。" : item.referenceEvidence || item.feedback || "参考答案待补全，可在上方待处理区重新处理。"}</p>}{submission.status === "published" && <button className="quiet-correction" onClick={() => setEditingId(item.id)}>修正判定</button>}</>}</div></details>;
+          return <details id={`grading-${item.id}`} key={item.id} className={`grading-card compact ${item.verdict}${activeItemId === item.id ? " selected" : ""}`} onToggle={event => { if (event.currentTarget.open) focusEvidence(item); }} open={editing || undefined}><summary><span>{homeworkQuestionLabel(item.questionNumber)}</span><b>{verdictLabel(item, international)}</b><small>{item.teacherMark ? "老师批改" : `${Math.round(item.confidence * 100)}% 置信度`}</small></summary><div className="grading-detail">{international && <p className="grading-stem"><MathText text={item.stem} /></p>}{international && !!item.figures?.length && <div className="grading-figures">{item.figures.map((figure, index) => <img key={figure.url} className={figure.kind} src={figure.url} alt={`${homeworkQuestionLabel(item.questionNumber)}配图 ${index + 1}`} loading="lazy" />)}</div>}{editing ? <><div className="grading-fields"><label>批改结论<select value={item.verdict} onChange={(event) => updateItem(item.id, reconcileHomeworkScore(event.target.value as GradingItem["verdict"], null, item.maxScore, submission.curriculum))}><option value="correct">正确</option><option value="partial">部分正确</option><option value="incorrect">错误</option><option value="unreadable">{international ? "看不清（0 分）" : "待补图"}</option><option value="review_required">待核实</option></select></label><label>错误类型<input value={item.errorType} onChange={(event) => updateItem(item.id, { errorType: event.target.value })} placeholder="计算、审题、步骤…" /></label><label>满分<input type="number" min={0} step={0.5} inputMode="decimal" value={item.maxScore ?? ""} onChange={(event) => { const maxScore = event.target.value === "" ? null : Number(event.target.value); updateItem(item.id, { maxScore, ...reconcileHomeworkScore(item.verdict, item.score, maxScore, submission.curriculum) }); }} placeholder="原卷无分值可留空" /></label>{item.maxScore != null && <label>得分<input type="number" min={0} max={item.maxScore} step={0.5} inputMode="decimal" value={item.score ?? ""} onChange={(event) => updateItem(item.id, event.target.value === "" ? { score: null } : reconcileHomeworkScore("partial", event.target.value, item.maxScore))} /></label>}</div><label>题干<textarea rows={3} value={item.stem} onChange={event=>updateItem(item.id,{stem:event.target.value})} /></label><label>参考答案<input value={item.standardAnswer} onChange={event=>updateItem(item.id,{standardAnswer:event.target.value})} /></label><label>参考解析<textarea rows={3} value={item.standardAnalysis} onChange={event=>updateItem(item.id,{standardAnalysis:event.target.value})} /></label><label><input type="checkbox" checked={item.referenceVerified === true} onChange={event=>updateItem(item.id,{referenceVerified:event.target.checked})} />我已核实题目与参考解答</label><label>学生作答<textarea rows={2} value={item.studentAnswer} onChange={(event) => updateItem(item.id, { studentAnswer: event.target.value })} /></label><label>给学生的反馈<textarea rows={3} value={item.feedback} onChange={(event) => updateItem(item.id, { feedback: event.target.value })} /></label><div className="correction-actions"><button onClick={() => { setEditingId(""); void load(submission.id); }}>取消</button><button className="primary" onClick={() => saveCorrection(item)} disabled={busy}>保存修正</button></div></> : <>{international && item.stepAnalysis.length > 0 && <div className="step-analysis"><b>步骤分析</b><ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol></div>}{item.standardAnswer && <div className="standard-answer"><b>参考答案 · {item.referenceSource === "agent" ? "独立解题" : item.referenceSource === "unresolved" ? "待校验" : item.referenceEvidence === "题库原题答案" ? "题库答案" : item.referenceEvidence === "布置时资料自带的答案" ? "资料自带答案" : "教师提供"}</b><p><MathText text={item.standardAnswer} /></p>{item.standardAnalysis && <small><MathText text={item.standardAnalysis} /></small>}</div>}{international && (item.evidenceSummary || item.feedback || item.errorType) && <div className="evidence-feedback"><b>判定依据与反馈</b><p>{[item.evidenceSummary, item.feedback].filter(Boolean).join("。")}</p>{item.errorType && <small>问题标签：{item.errorType}</small>}</div>}{!item.standardAnswer && <p className="reference-empty">{item.teacherMark === "correct" ? "老师已判为正确，无需补充参考答案。" : item.referenceEvidence || item.feedback || "参考答案待补全，可在上方待处理区重新处理。"}</p>}{submission.status === "published" && <button className="quiet-correction" onClick={() => setEditingId(item.id)}>修正判定</button>}</>}</div></details>;
         })}</div>
       </section>}
     </>}
-    {submission.status === "published" && !assigned && <details className="homework-panel review-archive-panel"><summary>重新提交本份作业</summary><p>新的作答单独保留一版，之前的批改和原件不会覆盖。</p><button className="primary" disabled={busy} onClick={newVersion}>上传新版本</button></details>}
     {!!submission.originalDocuments?.length && <details className="homework-panel review-archive-panel"><summary>上传的 PDF 原件</summary><div className="original-files">{submission.originalDocuments.map((document,index)=><a key={index} className="original-file" href={document.url} target="_blank" rel="noreferrer"><svg className="pdf-icon" viewBox="0 0 32 40" aria-hidden="true" focusable="false"><path d="M7 1.5h13.5l9 9v24a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4v-29a4 4 0 0 1 4-4Z" /><path d="M20.5 1.5v6a3 3 0 0 0 3 3h6" /><rect x="0" y="20" width="23" height="11" rx="2.5" /><text x="11.5" y="28.3">PDF</text></svg><span><b>{document.name}</b><small>学生上传的原件 · 点击在新窗口打开</small></span><svg className="open-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 17 17 7M9 7h8v8" /></svg></a>)}</div></details>}
     {!!submission.pageRevisions?.length && <details className="homework-panel review-archive-panel"><summary>历史作业原件</summary>{submission.pageRevisions.map((revision,index)=><p key={index}><a href={revision.originalUrl} target="_blank" rel="noreferrer">补图前原件 · {new Date(revision.createdAt).toLocaleString("zh-CN")}</a></p>)}</details>}
-  </main>;
+  </main></>;
 }

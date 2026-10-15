@@ -9,8 +9,25 @@ server database migrations, deployments, or merges into `main` are required.
 
 ## Controls and scheduling
 
-The material-input section has a compact, collapsed speed control. The default
-is **4 text requests**; users can choose **1, 2, 4, or 6**. This is a maximum for
+The original-question entry uses the shared compact drop button in the left
+controls, and handwritten answers use the large button in the right workspace.
+Both support file selection, dropping, and page-level image/PDF paste. Clicking
+the file picker replaces that entry's files; paste and drop append. With no
+recent entry interaction, paste fills the first empty visible entry, then the
+answer entry. A recently clicked or dropped entry takes priority while visible.
+Closed, occluded, off-screen and busy entries do not receive pasted files; plain
+text paste remains unchanged. A populated entry collapses to one row.
+
+Intake retains the original File objects. It does not use HomeworkPagePicker
+or pre-render PDF pages: the existing Studio reader, page ordering and request
+pipeline process them after Start. Unsupported files do not erase accepted
+materials.
+
+The material-input section keeps this control in the collapsed **高级** section,
+labelled **同时处理的页数**. The default is **4 pages**; users can choose
+**1, 2, 4, or 6**. Its note explains that more pages can be faster but can also
+trigger provider rate limits. The stored numeric setting and scheduling remain
+unchanged. This is a maximum for
 one running browser task, not a promise that the provider can support that
 throughput. It does not combine quotas or limit other users/tabs globally.
 

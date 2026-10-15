@@ -26,10 +26,7 @@ export function AssignHomework({ title, questions, groups, studentId, recordId, 
 
   useEffect(() => {
     void homeworkApi.students().then((result) => setStudents(result.students)).catch((reason) => setError(reason instanceof Error ? reason.message : "学生档案读取失败"));
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector(".assign-modal[aria-busy=true]")) onClose(); };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, []);
 
   const answered = questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length;
   const days = groups?.length ?? 0;
@@ -52,7 +49,7 @@ export function AssignHomework({ title, questions, groups, studentId, recordId, 
       <div className="modal-head"><div><span className="eyebrow">{origin}</span><h2>布置给学生</h2></div><button className="close" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
       {assigned ? <>
         <p className="assign-done">已布置给 {assigned.map((item) => item.studentName).join("、")}。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF。</p>
-        <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`} target="_blank" rel="noreferrer">打开{item.studentName}的档案</a>)}</div>
+        <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`}>打开{item.studentName}的档案</a>)}</div>
         <div className="modal-actions"><button className="primary-button" onClick={onClose}>完成</button></div>
       </> : <>
         <div className="assign-fields">

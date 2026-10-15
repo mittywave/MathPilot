@@ -7,23 +7,23 @@
 //
 // Each literal is matched against the classic palette of its context (rules under
 // html[data-theme="dark"] use the dark palette, everything else the light one) and replaced by the
-// closest `color-mix()` of semantically allowed tokens, so the two classic styles keep their look.
+// closest `color-mix()` of semantically allowed tokens. CLASSIC includes the approved readability adjustments.
 import postcss from "postcss";
 import { readFileSync, writeFileSync } from "node:fs";
 
 export const CLASSIC = {
   light: {
-    ink: "#24352f", muted: "#7b8983", line: "#e4e9e6", page: "#f5f7f4", surface: "#ffffff", "surface-soft": "#eef3f0",
+    ink: "#24352f", muted: "#61706a", line: "#e4e9e6", page: "#f5f7f4", surface: "#ffffff", "surface-soft": "#eef3f0",
     green: "#2f6b53", "green-soft": "#edf5f0", "accent-strong": "#2f6b53", "on-accent": "#ffffff",
     inverse: "#203d31", "on-inverse": "#ffffff", "shadow-tint": "#1a2a22",
-    success: "#2b8257", "success-soft": "#e5f2ea", warn: "#c18429", "warn-soft": "#fff0dc", "warn-strong": "#9e6526",
+    success: "#2b8257", "success-soft": "#e5f2ea", warn: "#c18429", "warn-soft": "#fff0dc", "warn-strong": "#956227",
     danger: "#a34f39", "danger-soft": "#fff0e8", "danger-strong": "#b83229", "danger-fill": "#a34f39", "on-fill": "#ffffff", amber: "#8b7134", "amber-soft": "#fff8e6",
     info: "#6675c9", "info-soft": "#edf0fb", sky: "#287cad", "sky-soft": "#e8f2f9", teal: "#197b76", "teal-soft": "#eff9f7",
     violet: "#72558d", "violet-soft": "#f2edf7",
   },
   dark: {
     ink: "#eceef5", muted: "#9ba1b3", line: "#303544", page: "#0e1016", surface: "#171a22", "surface-soft": "#1f232d",
-    green: "#a8b2ff", "green-soft": "#292e4b", "accent-strong": "#6675c9", "on-accent": "#ffffff",
+    green: "#a8b2ff", "green-soft": "#292e4b", "accent-strong": "#616fbf", "on-accent": "#ffffff",
     inverse: "#203d31", "on-inverse": "#ffffff", "shadow-tint": "#000000",
     success: "#9ac8ae", "success-soft": "#23382e", warn: "#e1ad70", "warn-soft": "#3d2d1e", "warn-strong": "#e8b678",
     danger: "#e4a083", "danger-soft": "#3a241f", "danger-strong": "#ff7b6e", "danger-fill": "#a34f39", "on-fill": "#ffffff", amber: "#dec57d", "amber-soft": "#382f1d",

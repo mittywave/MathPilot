@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useConfirm } from "./ConfirmDialog";
 import { PaperMoreMenu } from "./PaperMoreMenu";
 import { createObservation, deleteObservation, fetchStudentProfile, updateObservation } from "../../lib/api-client";
 import { ABILITY_DIMENSIONS, abilityNoteLabel, abilityStateLabel } from "../../lib/student-profile-contract";
@@ -31,7 +32,7 @@ function KnowledgePanel({ profile }: { profile: StudentProfileSummary }) {
   const domains = profile.knowledge.filter((item) => item.level === "domain");
   const answered = profile.types.reduce((sum, item) => sum + total(item), 0);
   const correct = profile.types.reduce((sum, item) => sum + item.correct, 0);
-  if (!profile.knowledge.length && !answered) return <div className="student-panel-empty"><b>还没有批改结果</b><p>布置的作业批改后会自动累计到这里；直接上传批改的作业，上传时勾选“整合到学生画像”才计入。</p></div>;
+  if (!profile.knowledge.length && !answered) return <div className="student-panel-empty"><b>还没有批改结果</b><p>布置的作业批改后会自动计入；直接上传的作业，在批改详情页打开“计入定档”。</p></div>;
   return <>
     <p className="profile-headline"><b>{answered}</b> 道题 · 正确率 <b>{answered ? Math.round(correct / answered * 100) : 0}%</b></p>
     {!!profile.types.length && <ul className="profile-types">{profile.types.map((item) => <li key={item.type}><span>{item.type.replace("单选题", "选择题")}</span><Tally tally={item} /></li>)}</ul>}
@@ -73,6 +74,7 @@ function AbilitySummary({ observations }: { observations: StudentObservation[] }
 }
 
 function ObservationItem({ studentId, observation, onChange, onRemove }: { studentId: string; observation: StudentObservation; onChange: (next: StudentObservation, notice: string) => void; onRemove: () => void }) {
+  const [confirmNode, confirm] = useConfirm();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(observation.text);
   const [busy, setBusy] = useState(false);
@@ -83,11 +85,12 @@ function ObservationItem({ studentId, observation, onChange, onRemove }: { stude
     finally { setBusy(false); }
   }
   return <li className="observation" aria-busy={busy}>
+    {confirmNode}
     <header><b>{day(observation.observedAt)}</b>{busy && <small>正在读取…</small>}
       <PaperMoreMenu label="这条反馈的操作">
         <button type="button" onClick={() => { setDraft(observation.text); setEditing(true); }}>修改</button>
         <button type="button" onClick={() => void change({ extract: true })}>重新提取</button>
-        <button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这条课后反馈？")) onRemove(); }}>删除</button>
+        <hr /><button type="button" className="danger-text" onClick={async () => { if (await confirm({ title: "删除这条课后反馈", body: "删除后无法恢复。", confirmLabel: "删除", danger: true })) onRemove(); }}>删除…</button>
       </PaperMoreMenu>
     </header>
     {editing ? <div className="observation-edit">
@@ -143,7 +146,7 @@ export function StudentProfile({ student }: { student: StudentSummary }) {
   return <section className="student-profile" aria-label={`${student.name}的定档`}>
     <header className="student-panel-head">
       <div className="profile-periods" role="group" aria-label="时间范围">{PERIODS.map(([days, label]) => <button key={days} type="button" className={period === days ? "active" : ""} aria-pressed={period === days} onClick={() => setPeriod(days)}>{label}</button>)}</div>
-      <a className="student-panel-action" href={`/knowledge-graph?student=${encodeURIComponent(student.id)}`} target="_blank" rel="noreferrer">在知识图谱里看</a>
+      <a className="student-panel-action" href={`/knowledge-graph?student=${encodeURIComponent(student.id)}`}>在知识图谱里看</a>
     </header>
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !profile ? <div className="wrong-book-loading"><i></i><span>正在读取定档…</span></div> : <div className="profile-columns">
       <article className="profile-card"><h3>知识点<small>客观 · 来自作业批改</small></h3><KnowledgePanel profile={profile} /></article>

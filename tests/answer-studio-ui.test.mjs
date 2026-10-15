@@ -19,8 +19,9 @@ async function fixture(t){
     bundle:true,format:'cjs',platform:'node',jsx:'automatic',outfile:join(dir,'ui.cjs'),loader:{'.css':'empty'},logLevel:'silent',
     plugins:[{name:'page-hook-seeds',setup(build){
       build.onResolve({filter:/^studio-test-hooks$/},()=>({path:'hooks',namespace:'test'}));
-      build.onResolve({filter:/^react$/},args=>args.importer.endsWith('/tools/answer-studio/page.tsx')?{path:'hooks',namespace:'test'}:undefined);
-      build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'let values=[]; export function seed(state){values=[...state]} export function useState(){if(!values.length)throw Error("Missing page state seed"); return [values.shift(),()=>{}]} export function useEffect(){} export function useRef(value){return {current:value}}',loader:'js'}));
+      // Shared headers use the renderer's React; only this page receives seeded hooks.
+      build.onResolve({filter:/^react(?:\/.*)?$/},args=>args.path==='react'&&args.importer.endsWith('/tools/answer-studio/page.tsx')?{path:'hooks',namespace:'test'}:{path:require.resolve(args.path),external:true});
+      build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'let values=[]; export function seed(state){values=[...state]} export function useState(){if(!values.length)throw Error("Missing page state seed"); return [values.shift(),()=>{}]} export function useEffect(){} export function useRef(value){return {current:value}} export function useCallback(callback){return callback}',loader:'js'}));
     }}],
   });
   return require(join(dir,'ui.cjs'));
@@ -52,4 +53,6 @@ test('processing and actionable errors remain visible, while idle upload has no 
   assert.match(failure,/studio-error/);assert.match(failure,/登录状态读取失败/);
   const idle=render(ui,{saved:null});
   assert.match(idle,/开始转录/);assert.doesNotMatch(idle,/role="status"|本地项目备份|个提示/);
+  const continuation=render(ui,{saved:{...draft,questions:[],pages:[{id:'cached-page',role:'answer',name:'cached.png',page:1,image:'data:image/png;base64,AA==',hash:'cached',selected:true}]}});
+  assert.match(continuation,/>继续转录</);assert.doesNotMatch(continuation,/<button[^>]*disabled[^>]*>继续转录</);assert.doesNotMatch(continuation,/id="studio-missing"/);
 });

@@ -731,7 +731,7 @@ try {
     await page.locator('.export-modal .primary-button:not(:disabled)').waitFor();
     // The compiled Worker has no local typesetter, exactly like the deployed site.
     assert.equal(await exportModal.getByRole('button', { name: '生成 PDF', exact: true }).count(), 0, 'without a typesetter the main action is Word');
-    assert.match(await exportModal.innerText(), /精排 PDF 需要在本机用「启动知题」运行时生成/);
+    assert.match(await exportModal.innerText(), /精排 PDF 需要在运行 MathPilot 的这台电脑上生成/);
     await exportModal.locator('label', { hasText: label }).click();
     if (key === 'none') assert.match(await exportModal.innerText(), /例题留课堂笔记区/);
     if (key === 'each') await page.screenshot({ path: join(out, 'export-dialog.png') });

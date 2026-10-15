@@ -16,7 +16,7 @@ def main():
     results={};calls=[];invalid=False
     with sync_playwright() as pw:
       browser=pw.chromium.launch(headless=True,executable_path=args.chromium)
-      context=browser.new_context(viewport={'width':1440,'height':1050},accept_downloads=True)
+      context=browser.new_context(viewport={'width':1440,'height':1050},accept_downloads=True,reduced_motion='reduce')
       page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
       page.route('**/api/auth/me',lambda route:route.fulfill(json={'user':{'id':'browser-test','local':True}}))
       def recognize(route):
@@ -28,7 +28,7 @@ def main():
         route.fulfill(json={'records':records})
       page.route('**/api/answer-studio/recognize',recognize)
       try:
-        page.goto(origin);expect(page.get_by_role('heading',name='\u624b\u5199\u8f6c\u5f55',exact=True)).to_be_visible()
+        page.goto(origin);expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('手写转录');expect(page).to_have_title('手写转录 · 工具箱 · MathPilot')
         # Real PNG upload; the model is mocked because no real credentials/sample were supplied.
         import base64
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
@@ -50,7 +50,7 @@ def main():
         with page.expect_download() as download:link.click()
         download.value.save_as(out/'browser-formal.docx');assert len(calls)==count
         results['freshStartOnReload']=True
-        for name,width,height in [('desktop',1440,1050),('mobile',390,844)]:
+        for name,width,height in [('desktop-1440',1440,1050),('desktop-1280',1280,900),('desktop-1024',1024,768)]:
           page.set_viewport_size({'width':width,'height':height});page.screenshot(path=str(out/f'{name}.png'),full_page=True)
           sizes=page.evaluate('({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth})');assert sizes['scroll']<=sizes['width'];results[name]=sizes
         page.set_viewport_size({'width':1440,'height':1050});invalid=True;upload('invalid.png')

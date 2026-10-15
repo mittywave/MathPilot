@@ -7,7 +7,7 @@ import type { GradingItem, HomeworkSubmission, InternationalReport, StudentRepor
 // of a period. The visual language follows the confirmed Alevel report: navy headings, teal accents, a pale banner.
 export const HOMEWORK_REPORT_MAIN = "report.tex";
 
-const PREAMBLE = String.raw`% 知题作业批改生成的批改报告。编译：tectonic report.tex，或 xelatex report.tex 两遍。
+const PREAMBLE = String.raw`% MathPilot 作业批改生成的批改报告。编译：tectonic report.tex，或 xelatex report.tex 两遍。
 % 需要 ctex、amsmath、booktabs、tabularx、fancyhdr、lastpage；macOS 使用华文黑体，其他系统退回 Fandol 黑体。
 \documentclass[UTF8,fontset=none,11pt,a4paper]{ctexart}
 \IfFontExistsTF{STHeiti}{\setCJKmainfont{STHeiti}}{\setCJKmainfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]}
