@@ -43,8 +43,35 @@ The existing initial drawing and visual-QA calls for a single question remain
 sequential. Text-only and steps-only modes still make no drawing calls.
 
 Changing the speed setting does not clear the current draft or re-recognize
-completed pages. The selection is component state; a page reload restores the
-default. Controls are disabled while a run is active.
+completed pages. The selection is stored on the server job when it is created;
+a page reload restores the default for the next job.
+
+## Background jobs
+
+Text transcription runs on the server so the teacher can leave the page:
+
+1. The page renders PDF/image pages (PDF.js, canvas) and uploads them one at a
+   time, in source order, to `POST /api/answer-studio/jobs/<id>/pages`: the
+   full page (for figure crops) and the 2200 px recognition copy. Leaving the
+   page before the upload finishes leaves an unfinished job that can only be
+   deleted.
+2. Starting the job sends a `studio_transcription` message on the existing
+   homework queue. The consumer runs the same `transcribeStudio` text phase;
+   checkpoints write the draft to R2 (`studio/<id>/draft.json`) and progress to
+   the `studio_jobs` row. The local queue (miniflare) delivers one batch at a
+   time, so each delivery works for about 2 minutes, then re-queues itself and
+   resumes from the checkpoint: homework grading waits at most one slice. The
+   claiming worker stores a `run_id`; its updates apply only while it still
+   owns the job, so a duplicate message or a continued job never runs twice.
+3. A failed job keeps its processed pages; **继续** re-queues it. A queued or
+   running job with no update for 5 minutes has lost its worker (a server
+   restart drops queued messages) and shows **已中断** with 继续 and 删除.
+4. **打开** on a finished job downloads the draft and the full page images back
+   into the page. Figures and Word are still built in the browser, because the
+   drawing pass composites and rasterizes images on a canvas.
+
+Jobs, page images and drafts stay on the server until the teacher deletes the
+job. The task list polls every 3 seconds only while a job is queued or running.
 
 ## Cross-page continuity
 
@@ -70,7 +97,7 @@ Extra boundary reviews can reduce the speedup and add model requests.
 - At most **two additional attempts** per failed task.
 - Exponential backoff starts at 1 second, then 2 seconds, with random jitter.
 - `Retry-After` is retained through the Gemini/OpenAI-compatible adapter, Studio
-  route, and browser client. Seconds and HTTP-date forms are supported.
+  drawing route, browser client and the server job. Seconds and HTTP-date forms are supported.
 - 429/503 reduce the active window limit, e.g. 4 -> 2 -> 1. This reduced setting
   lasts for the current stage; there is no automatic upward probing in this version.
 - A `Retry-After` longer than 60 seconds stops automatic retries rather than
@@ -101,8 +128,7 @@ are merged and marked processed one by one. If an earlier page fails, later
 successful results remain cached, not silently discarded or merged ahead of it.
 Resume requests only missing pages, plus any required fresh-context review.
 
-The metadata uses the existing browser IndexedDB draft storage. Old drafts
-without it remain supported. It contains results/context only, not duplicate
+The metadata is part of the job draft stored in R2. It contains results/context only, not duplicate
 images or API credentials. A crash before the current window settles may still
 require repeating that window's unfinished/uncheckpointed work.
 

@@ -1,9 +1,11 @@
 """Optional browser regression: pip install playwright; install Chromium.
 Run after: node scripts/build-studio-browser.mjs /path/to/harness
-Mocks ONLY auth and model HTTP responses. Uses the real React component,
-canvas/image encoding, a fresh start on every visit, and browser DOCX download.
+Mocks ONLY auth and the transcription-job HTTP API. Starting a job runs the real
+transcription pipeline in the page with mocked model records, standing in for the
+server queue. Uses the real React component, canvas/image encoding, the job list,
+a fresh page on every visit, and browser DOCX download.
 """
-import argparse, json, functools, threading, tempfile
+import argparse, json, functools, threading, tempfile, base64
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from playwright.sync_api import sync_playwright, expect
@@ -19,27 +21,50 @@ def main():
       context=browser.new_context(viewport={'width':1440,'height':1050},accept_downloads=True,reduced_motion='reduce')
       page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
       page.route('**/api/auth/me',lambda route:route.fulfill(json={'user':{'id':'browser-test','local':True}}))
-      def recognize(route):
-        body=route.request.post_data_json;calls.append(body['pageId']);draft=page.evaluate('studioTest.mathContractDraft()')
-        records=[]
-        for i,q in enumerate(draft['questions']):
-          records.append({**{k:q[k] for k in ('lesson','section','number','stem','analysis','warnings','tables')},'id':body['pageId']+':'+str(i),'source':{'pageId':body['pageId'],'box':{'x':0,'y':0,'width':1000,'height':1000}},'diagramBoxes':[],'continuation':False})
-        if invalid:records[0]['analysis']=r'$\unknown{x}$'
-        route.fulfill(json={'records':records})
-      page.route('**/api/answer-studio/recognize',recognize)
+      # The server runs this pipeline from the queue; here it runs in the page with mocked model records.
+      transcribe=r"""async ({title,pages,invalid})=>{
+        const fixture=studioTest.mathContractDraft(),fail=async()=>{throw new Error('No figures in text transcription');};
+        const records=page=>fixture.questions.map((q,i)=>({lesson:q.lesson,section:q.section,number:q.number,stem:q.stem,analysis:invalid&&!i?'$\\unknown{x}$':q.analysis,warnings:q.warnings,tables:q.tables,id:page.id+':'+i,source:{pageId:page.id,box:{x:0,y:0,width:1000,height:1000}},diagramBoxes:[],continuation:false}));
+        const draft={version:1,title,inputMode:'answers',pages:pages.map(p=>({...p,image:'',selected:true})),questions:[],answers:[],updatedAt:0};
+        return studioTest.transcribeStudio(draft,{recognize:async page=>records(page),checkpoint:async()=>{},progress:()=>{},crop:fail,drawings:fail},{drawings:false});
+      }"""
+      jobs={}
+      def job_api(route):
+        request=route.request;parts=[p for p in request.url.split('/api/answer-studio/jobs',1)[1].split('?')[0].split('/') if p]
+        if not parts:
+          if request.method=='GET':return route.fulfill(json={'jobs':[entry['job'] for entry in reversed(list(jobs.values()))]})
+          body=request.post_data_json;job_id=f'job-{len(jobs)+1}'
+          jobs[job_id]={'job':{'id':job_id,'title':body['title'],'inputMode':body['inputMode'],'status':'uploading','stalled':False,'pageCount':0,'processedCount':0,'questionCount':0,'progress':'','error':'','createdAt':0,'updatedAt':0},'pages':[],'images':{},'draft':None}
+          return route.fulfill(json={'job':jobs[job_id]['job']})
+        entry=jobs[parts[0]]
+        if parts[1:]==['pages']:
+          body=request.post_data_json;entry['pages'].append(body['page']);entry['images'][body['page']['id']]=body['image'];entry['job']['pageCount']=len(entry['pages'])
+          return route.fulfill(json={'job':entry['job']})
+        if len(parts)==3:return route.fulfill(body=base64.b64decode(entry['images'][parts[2]].split(',',1)[1]),content_type='image/jpeg')
+        if request.method=='POST':
+          calls.extend(item['id'] for item in entry['pages'])
+          entry['draft']=page.evaluate(transcribe,{'title':entry['job']['title'],'pages':entry['pages'],'invalid':invalid})
+          entry['job'].update(status='done',processedCount=len(entry['pages']),questionCount=len(entry['draft']['questions']))
+          return route.fulfill(json={'job':entry['job']})
+        return route.fulfill(json={'job':entry['job'],'draft':entry['draft']})
+      page.route('**/api/answer-studio/jobs**',job_api)
       try:
         page.goto(origin);expect(page.get_by_role('navigation',name='面包屑',exact=True)).to_contain_text('手写转录');expect(page).to_have_title('手写转录 · 工具箱 · MathPilot')
         # Real PNG upload; the model is mocked because no real credentials/sample were supplied.
-        import base64
         png=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
         def upload(name):
+          created=len(jobs)
           page.get_by_label('\u53ea\u6709\u7b54\u6848\u6750\u6599',exact=True).check()
           page.locator('input[type=file]').set_input_files({'name':name,'mimeType':'image/png','buffer':png})
           page.get_by_placeholder('\u4f8b\u5982\uff1a\u7b2c\u4e00\u8bb2 \u4e09\u89d2\u5f62\u7684\u5916\u5fc3').fill('Math contract regression')
           page.get_by_role('button',name='\u5f00\u59cb\u8f6c\u5f55',exact=True).click()
+          # The newest job is listed first; open its finished result.
+          expect(page.locator('.studio-jobs tr')).to_have_count(created+1,timeout=30000)
+          row=page.locator('.studio-jobs tr').first;expect(row).to_contain_text('\u5df2\u5b8c\u6210',timeout=30000)
+          row.get_by_role('button',name='\u6253\u5f00',exact=True).click()
           expect(page.get_by_role('heading',name='\u8f6c\u5f55\u7ed3\u679c',exact=True)).to_be_visible(timeout=30000)
         upload('fixture.png');count=len(calls);assert count==1
-        # Every visit starts empty: the previous task is cleared from this browser, never restored.
+        # Every visit starts with an empty page: results stay on the server until a job is opened again.
         page.on('dialog',lambda dialog:dialog.accept())
         page.reload();expect(page.get_by_role('button',name='\u5f00\u59cb\u8f6c\u5f55',exact=True)).to_be_visible()
         expect(page.get_by_role('heading',name='\u8f6c\u5f55\u7ed3\u679c',exact=True)).to_have_count(0)

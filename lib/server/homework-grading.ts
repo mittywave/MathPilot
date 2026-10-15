@@ -130,6 +130,12 @@ async function recordFinalQueueFailure(submissionId: string, error: unknown) {
 export async function processHomeworkQueue(batch: QueueBatch) {
   for (const message of batch.messages) {
     const { kind, submissionId, jobId } = message.body;
+    // Handwritten transcription shares this queue; the job records its own failures.
+    if (kind === "studio_transcription" && jobId) {
+      try { await (await import("./answer-studio-jobs")).processStudioJob(jobId); message.ack(); }
+      catch { message.retry({ delaySeconds: 30 }); }
+      continue;
+    }
     const cleanup = kind === "cleanup_homework_assets" && Boolean(jobId);
     const grading = Boolean(submissionId) && kind === "grade_submission";
     if (!cleanup && !grading) { message.ack(); continue; }

@@ -2,10 +2,12 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SiteHeader } from '../../components/SiteHeader';
+import { useConfirm } from '../../components/ConfirmDialog';
+import { PaperMoreMenu } from '../../components/PaperMoreMenu';
 import { fetchMe } from '../../../lib/api-client';
 import type { AuthUser } from '../../../lib/types';
-import { deduplicateStudioPages, emptyStudioDraft, type StudioDraft, type StudioRecord } from '../../../lib/answer-studio';
-import { studioPreparedImages } from '../../../lib/answer-studio-prepared-images';
+import type { StudioDraft } from '../../../lib/answer-studio';
+import type { StudioJob } from '../../../lib/server/answer-studio-jobs';
 import { studioSnapshot } from '../../../lib/answer-studio-snapshot';
 import { studioStorage } from '../../../lib/answer-studio-storage';
 import { cropStudioImage, readStudioFilesInBatches, resizeStudioImage } from '../../../lib/answer-studio-images';
@@ -13,7 +15,7 @@ import { recognizeStudioDrawings } from '../../../lib/answer-studio-drawings';
 import { transcribeStudio, type StudioDrawingResult } from '../../../lib/answer-studio-pipeline';
 import { StudioDownloads, type StudioDownload } from '../../../lib/answer-studio-downloads';
 import { studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, studioTextReady, type StudioOutputMode } from '../../../lib/answer-studio-output';
-import { studioApi as api, STUDIO_TEXT_CONCURRENCY, STUDIO_CONCURRENCY_CHOICES } from '../../../lib/answer-studio-concurrency';
+import { studioApi as api, StudioRequestError, STUDIO_TEXT_CONCURRENCY, STUDIO_CONCURRENCY_CHOICES } from '../../../lib/answer-studio-concurrency';
 import './studio.css';
 
 function StudioIcon({name}:{name:'spark'|'download'|'steps'|'text'|'check'}) {
@@ -47,6 +49,25 @@ function UploadZone({id,title,files,onFiles,onActivate,compact=false}:{id:string
   </div>;
 }
 
+async function jobsApi<T>(url:string,init?:RequestInit):Promise<T> {
+  const response=await fetch(url,init),data=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(typeof data?.error==='string'?data.error:`HTTP ${response.status}`);
+  return data as T;
+}
+const postJson=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+async function blobDataUrl(blob:Blob) {
+  return new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);});
+}
+function jobState(job:StudioJob) {
+  if(job.stalled)return '已中断';
+  if(job.status==='uploading')return '上传未完成';
+  if(job.status==='queued')return '排队中';
+  if(job.status==='running')return `转录中 ${job.processedCount}/${job.pageCount} 页`;
+  if(job.status==='done')return `已完成 · ${job.questionCount} 题`;
+  return '失败';
+}
+const jobTime=(value:number)=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+
 export default function AnswerStudioPage() {
   const [user,setUser]=useState<AuthUser|null>(null),[loaded,setLoaded]=useState(false);
   const [mode,setMode]=useState<'paired'|'answers'>('paired'),[title,setTitle]=useState('');
@@ -56,6 +77,8 @@ export default function AnswerStudioPage() {
   const [output,setOutput]=useState<StudioOutputMode>('full');
   const [includeTranscriptionWarnings,setIncludeTranscriptionWarnings]=useState(true);
   const [textConcurrency,setTextConcurrency]=useState(STUDIO_TEXT_CONCURRENCY);
+  const [jobs,setJobs]=useState<StudioJob[]>([]),[openJobId,setOpenJobId]=useState('');
+  const [confirmNode,confirm]=useConfirm();
   const links=useRef(new StudioDownloads()),running=useRef(false);
   const lastEntry=useRef<'question'|'answer'|null>(null);
   useEffect(()=>{
@@ -71,14 +94,23 @@ export default function AnswerStudioPage() {
     }).catch(e=>{if(active){setNotice(e instanceof Error?e.message:'登录状态读取失败');setFailed(true);}}).finally(()=>{if(active)setLoaded(true);});
     return()=>{active=false;urls.invalidate();};
   },[]);
-  // Results live only in this page now, so leaving mid-run or before the Word file exists would lose them.
+  const refreshJobs=useCallback(async()=>{try{setJobs((await jobsApi<{jobs:StudioJob[]}>('/api/answer-studio/jobs')).jobs);}catch{/* the list retries on the next poll */}},[]);
+  // Text transcription runs on the server; the list polls only while a job is still moving.
+  const moving=jobs.some(job=>job.status==='queued'||job.status==='running');
   useEffect(()=>{
-    if(!busy&&!(saved&&!downloads.length))return;
+    if(!user)return;
+    const first=setTimeout(()=>void refreshJobs(),0);
+    const timer=moving?setInterval(()=>void refreshJobs(),3000):undefined;
+    return()=>{clearTimeout(first);clearInterval(timer);};
+  },[moving,refreshJobs,user]);
+  // Uploading pages and drawing figures for Word still happen in this page.
+  useEffect(()=>{
+    if(!busy)return;
     const warn=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};
     window.addEventListener('beforeunload',warn);
     return()=>window.removeEventListener('beforeunload',warn);
-  },[busy,saved,downloads]);
-  const changed=useCallback(()=>{setDownloads(links.current.invalidate());setSaved(null);setNotice('');setFailed(false);},[]);
+  },[busy]);
+  const changed=useCallback(()=>{setDownloads(links.current.invalidate());setSaved(null);setOpenJobId('');setNotice('');setFailed(false);},[]);
   const files=useCallback((role:'question'|'answer',selected:FileList|File[]|null,append=false)=>{
     if(busy||running.current)return;
     const incoming=Array.from(selected||[]),list=incoming.filter(isStudioFile);
@@ -100,48 +132,90 @@ export default function AnswerStudioPage() {
     };
     document.addEventListener('paste',paste);return()=>document.removeEventListener('paste',paste);
   },[answerFiles,busy,files,mode,questionFiles]);
-  async function start(variant?:StudioOutputMode){
+  // Pages are rendered here, uploaded in source order, then transcribed by the server even after this page closes.
+  async function submit(){
     if(running.current)return;
     running.current=true;setBusy(true);setFailed(false);setDownloads(links.current.invalidate());
+    let unfinished='';
     try{
       if(!user)throw new Error('请先登录');
       if(!title.trim())throw new Error('请填写资料名称');
-      const resume=!!saved;
-      if(!resume&&(!answerFiles.length||(mode==='paired'&&!questionFiles.length)))throw new Error(mode==='paired'?'请上传原件和答案文件':'请上传答案文件');
-      const draft=resume?studioSnapshot(saved):{...emptyStudioDraft(),title:title.trim(),inputMode:mode};
-      if(variant){const blocker=studioOutputBlocker(draft,variant);if(blocker)throw new Error(blocker);}
-      // Progress is kept in memory for "继续转录" after a failure; nothing is stored between visits.
-      const checkpoint=async(value:StudioDraft)=>{setSaved(value);};
-      if(!resume){
-        const input:[File[],'question'|'answer',string][]=mode==='paired'?[[questionFiles,'question',''],[answerFiles,'answer','']]:[[answerFiles,'answer','']];
-        for(const [selected,role,range] of input) await readStudioFilesInBatches(selected,role,range,setNotice,async(batch,meta)=>{
-          draft.pages=deduplicateStudioPages([...draft.pages,...batch]);
-          await checkpoint(draft);
-          setNotice(`已读取 ${meta.fileName} 第 ${meta.batchIndex}/${meta.batchCount} 批（${draft.pages.length} 页），继续转录中…`);
-        });
+      if(!answerFiles.length||(mode==='paired'&&!questionFiles.length))throw new Error(mode==='paired'?'请上传原件和答案文件':'请上传答案文件');
+      const {job}=await jobsApi<{job:StudioJob}>('/api/answer-studio/jobs',postJson({title:title.trim(),inputMode:mode,textConcurrency}));
+      unfinished=job.id;setJobs(current=>[job,...current]);
+      const input:[File[],'question'|'answer'][]=mode==='paired'?[[questionFiles,'question'],[answerFiles,'answer']]:[[answerFiles,'answer']];
+      let uploaded=0;
+      for(const [selected,role] of input) await readStudioFilesInBatches(selected,role,'',setNotice,async batch=>{
+        for(const page of batch){
+          setNotice(`正在上传第 ${uploaded+1} 页（${page.name}）…上传完成前请勿离开本页`);
+          const {image,...meta}=page;
+          await jobsApi(`/api/answer-studio/jobs/${job.id}/pages`,postJson({page:meta,image,recognizeImage:await resizeStudioImage(image)}));
+          uploaded++;
+        }
+      });
+      await jobsApi(`/api/answer-studio/jobs/${job.id}`,{method:'POST'});
+      unfinished='';setQuestionFiles([]);setAnswerFiles([]);setTitle('');
+    }catch(e){
+      setFailed(true);setNotice(e instanceof Error?e.message:'上传失败');
+      // Without the files a half-uploaded job can never start, so do not leave it in the list.
+      if(unfinished)await jobsApi(`/api/answer-studio/jobs/${unfinished}`,{method:'DELETE'}).catch(()=>undefined);
+    }
+    finally{running.current=false;setBusy(false);void refreshJobs();}
+  }
+  async function openJob(job:StudioJob){
+    if(running.current)return;
+    running.current=true;setBusy(true);setFailed(false);setDownloads(links.current.invalidate());
+    try{
+      const {draft}=await jobsApi<{draft:StudioDraft}>(`/api/answer-studio/jobs/${job.id}`);
+      // Figures are cut from the original pages, so Word generation needs them back in the browser.
+      for(const [index,page] of draft.pages.entries()){
+        setNotice(`正在读取原件 ${index+1}/${draft.pages.length}…`);
+        const response=await fetch(`/api/answer-studio/jobs/${job.id}/pages/${encodeURIComponent(page.id)}`);
+        if(!response.ok)throw new Error(`第 ${page.page} 页原件读取失败`);
+        page.image=await blobDataUrl(await response.blob());
       }
-      await checkpoint(draft);
-      const preparedImage=studioPreparedImages((page:typeof draft.pages[number])=>resizeStudioImage(page.image));
+      setQuestionFiles([]);setAnswerFiles([]);setMode(draft.inputMode||'paired');setTitle(draft.title);
+      setSaved(draft);setOpenJobId(job.id);setNotice('');
+    }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'打开失败');}
+    finally{running.current=false;setBusy(false);}
+  }
+  async function resumeJob(job:StudioJob){
+    try{await jobsApi(`/api/answer-studio/jobs/${job.id}`,{method:'POST'});setFailed(false);setNotice('');await refreshJobs();}
+    catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'继续失败');}
+  }
+  async function deleteJob(job:StudioJob){
+    if(!await confirm({title:'删除转录任务',body:`「${job.title}」的原件和转录结果会从服务器删除，无法恢复。`,confirmLabel:'删除',danger:true}))return;
+    try{
+      await jobsApi(`/api/answer-studio/jobs/${job.id}`,{method:'DELETE'});
+      if(openJobId===job.id){setSaved(null);setOpenJobId('');setDownloads(links.current.invalidate());}
+      setJobs(current=>current.filter(item=>item.id!==job.id));
+    }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'删除失败');}
+  }
+  // Figures and Word are built here from the finished server draft.
+  async function generate(variant:StudioOutputMode){
+    if(running.current||!saved)return;
+    running.current=true;setBusy(true);setFailed(false);setDownloads(links.current.invalidate());
+    try{
+      const draft=studioSnapshot(saved);
+      const blocker=studioOutputBlocker(draft,variant);if(blocker)throw new Error(blocker);
       const result=await transcribeStudio(draft,{
-        progress:setNotice,checkpoint,
+        progress:setNotice,checkpoint:async value=>{setSaved(value);},
         crop:(image,box)=>cropStudioImage(image,box,1200),
-        recognize:async(page,context,requestOptions)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await preparedImage(page),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context,concurrent:!!requestOptions?.concurrent})).records,
+        recognize:async()=>{throw new StudioRequestError('文字转录已在后台完成，不应再次识别',0,0,false);},
         drawings:(question,bases,evidence,context)=>recognizeStudioDrawings(question,bases,evidence,body=>api<StudioDrawingResult>('/api/answer-studio/drawings',body),undefined,context),
-      },{textConcurrency,drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
-      if(!variant){setNotice(`文字转录完成：${result.questions.length} 题。请选择结果版本；无图版本无需等待配图。`);return;}
+      },{drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../../lib/answer-studio-export');
       const label=studioOutputs.find(item=>item.value===variant)!.label;
       const blob=await buildStudioWord(result,variant,{transcription:true,includeTranscriptionWarnings});
       setDownloads(links.current.offer(blob,`${result.title}_${label}.docx`,'下载 Word'));
       setNotice('');
-    }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'转录失败');}
-    finally{
-      running.current=false;setBusy(false);
-    }
+    }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'生成失败');}
+    finally{running.current=false;setBusy(false);}
   }
   const missing=[!title.trim()&&{label:'资料名称',target:'.studio-controls .field-label input'},!saved&&mode==='paired'&&!questionFiles.length&&{label:'原题',target:'#studio-question-files-entry'},!saved&&!answerFiles.length&&{label:mode==='paired'?'手写答案':'答案材料',target:'#studio-answer-files-entry'}].filter(field=>field!==false);
-  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'手写转录'}]} onSignOut={async exit=>{if(busy||(saved&&!downloads.length)){setNotice('请完成转录并生成 Word 后再退出登录。');setFailed(true);return;}await exit();}} />
+  return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'手写转录'}]} onSignOut={async exit=>{if(busy){setNotice('请等上传或生成 Word 完成后再退出登录。');setFailed(true);return;}await exit();}} />
+    {confirmNode}
     {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href="/">返回题库登录</a></main>:<main className="answer-studio">
     <fieldset className="studio-fields studio-workspace" disabled={busy}>
       <aside className="studio-controls">
@@ -163,7 +237,7 @@ export default function AnswerStudioPage() {
 
         {mode==='paired'&&<UploadZone id="studio-question-files" title="原题" compact files={questionFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='question';}} onFiles={(list,append)=>files('question',list,append)}/>}
 
-        {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" aria-describedby={!busy&&missing.length?'studio-missing':undefined} disabled={busy||missing.length>0} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
+        {!saved&&<button className="primary simple-start" aria-describedby={!busy&&missing.length?'studio-missing':undefined} disabled={busy||missing.length>0} onClick={()=>void submit()}>{busy?'正在上传…':'开始转录'}</button>}
         {!busy&&missing.length>0&&<p className="missing-reason" id="studio-missing">还差：{missing.map((field,index)=><span key={field.label}>{index>0?'、':''}<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLElement>(field.target);control?.focus({preventScroll:true});control?.scrollIntoView({block:'nearest'});}}>{field.label}</button></span>)}</p>}
         {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role={failed?'alert':'status'}>{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
       </aside>
@@ -183,10 +257,23 @@ export default function AnswerStudioPage() {
           <span style={{display:'block',minWidth:0}}><span style={{display:'block',fontWeight:600,fontSize:14,lineHeight:1.45}}>在 Word 中加入转录问题提示</span><small style={{display:'block',marginTop:2,lineHeight:1.45}}>显示识别疑点和格式问题；关闭后不附加这些红色提示。</small></span>
         </label>
         {studioOutputBlocker(saved,output)&&<p id="studio-output-missing" className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
-        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" aria-describedby={studioOutputBlocker(saved,output)?'studio-output-missing':undefined} disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':'生成 Word'}</button>}
+        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" aria-describedby={studioOutputBlocker(saved,output)?'studio-output-missing':undefined} disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void generate(output)}>{busy?'正在生成…':'生成 Word'}</button>}
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
       </section>}
-      <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。每次打开都是新任务，结果不会留在浏览器中，刷新或关闭页面后清空，请及时生成并下载 Word；识别有疑问处是否写入 Word 可用上方勾选项设置。</small>
+      {jobs.length>0&&<section className="studio-jobs" aria-labelledby="studio-jobs-title">
+        <h2 id="studio-jobs-title">转录任务</h2>
+        <table><tbody>{jobs.map(job=><tr key={job.id} className={job.id===openJobId?'current':undefined}>
+          <td className="job-title">{job.title}</td>
+          <td className={`job-state${job.status==='failed'||job.stalled?' danger-text':''}`} title={job.error||job.progress||undefined}>{jobState(job)}{job.stalled?<small>可能因服务重启而中断，点继续从断点接着转录</small>:job.status==='running'&&job.progress?<small>{job.progress}</small>:null}{job.status==='failed'&&job.error?<small>{job.error}</small>:null}</td>
+          <td className="job-time">{jobTime(job.createdAt)}</td>
+          <td className="job-actions">
+            {job.status==='done'&&<button type="button" className="text-button" disabled={busy||job.id===openJobId} onClick={()=>void openJob(job)}>{job.id===openJobId?'已打开':'打开'}</button>}
+            {(job.status==='failed'||job.stalled)&&<button type="button" className="text-button" disabled={busy} onClick={()=>void resumeJob(job)}>继续</button>}
+            {(job.stalled||job.status!=='queued'&&job.status!=='running')&&<PaperMoreMenu label="这个转录任务的操作"><button type="button" className="danger-text" onClick={()=>void deleteJob(job)}>删除…</button></PaperMoreMenu>}
+          </td>
+        </tr>)}</tbody></table>
+      </section>}
+      <small className="studio-privacy">所选材料会发送至已配置的 AI 服务，并保存在服务器上直到删除任务。上传完成后可以离开本页，文字转录在后台继续；配图和 Word 在本页生成，生成期间请勿离开。识别有疑问处是否写入 Word 可用上方勾选项设置。</small>
 
       </section>
     </fieldset>
