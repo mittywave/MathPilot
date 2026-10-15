@@ -4,6 +4,7 @@
 
 import "./knowledge-graph.css";
 import { PaperMoreMenu } from "../components/PaperMoreMenu";
+import { useToast } from "../components/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { homeworkApi } from "../../lib/homework-api-client";
 import { knowledgeGraphApi } from "../../lib/knowledge-graph-api-client";
@@ -26,7 +27,6 @@ import { STATUS_META, buildChainView, buildCloudView, buildHighlight, learningSt
 import { useGraphEditor } from "./use-graph-editor";
 
 type Mode = "explore" | "edit";
-type Notice = { tone: "info" | "success" | "error"; text: string } | null;
 type Dialog = "" | "publish" | "history" | "import";
 type SelectionView = "chain" | "cloud";
 
@@ -66,7 +66,7 @@ export default function KnowledgeGraphPage() {
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentId, setStudentId] = useState("");
   const [profileLoading, setProfileLoading] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
+  const [toastNode, show] = useToast();
   const [mode, setMode] = useState<Mode>("explore");
   const [selection, setSelection] = useState<GraphSelection>(null);
   const [trail, setTrail] = useState<string[]>([]);
@@ -81,7 +81,7 @@ export default function KnowledgeGraphPage() {
   const [selectionView, setSelectionView] = useState<SelectionView>("chain");
   const [chainAll, setChainAll] = useState(false);
 
-  const showNotice = useCallback((text: string, tone: "info" | "success" | "error" = "info") => setNotice({ text, tone }), []);
+  const showNotice = useCallback((text: string, tone: "success" | "error" = "success") => show({ text, tone }), [show]);
   const editor = useGraphEditor(graphId, mode === "edit", useCallback((message: string) => showNotice(`${message}，已重新载入最新草稿`, "error"), [showNotice]));
 
   useEffect(() => {
@@ -100,11 +100,6 @@ export default function KnowledgeGraphPage() {
     return () => cancelAnimationFrame(frame);
   }, [graphId, showNotice]);
 
-  useEffect(() => {
-    if (!notice || notice.tone === "error") return;
-    const timer = window.setTimeout(() => setNotice(null), 4200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   const editing = mode === "edit" && Boolean(editor.session);
   const published = editing ? editor.session!.published : overview?.graph ?? null;
@@ -377,9 +372,7 @@ export default function KnowledgeGraphPage() {
 
     {profileLoading && <div className="kg-pill" role="status">正在叠加学情…</div>}
 
-    {notice && <div className={`kg-toast ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>
-      <span>{notice.text}</span><button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}>×</button>
-    </div>}
+    {toastNode}
 
     {dialog === "publish" && diff && <PublishDialog diff={diff} nextVersion={nextVersion} labelOf={labelOf} onCancel={() => setDialog("")} onConfirm={publishDraft} />}
     {dialog === "history" && <HistoryDrawer graph={graphId} currentVersion={version} onClose={() => setDialog("")}

@@ -1,5 +1,4 @@
 'use client';
-import { useEffect, useRef, type ReactNode } from 'react';
 import type { ProviderConfig, ProviderWrite } from '../../../../lib/ai-provider-types';
 export function providerDraft(p: ProviderConfig): ProviderWrite { return { name: p.name, kind: p.kind, baseUrl: p.baseUrl, wireApi: p.wireApi, endpoints: { ...p.endpoints }, enabled: p.enabled, timeoutMs: p.timeoutMs, catalogTimeoutMs: p.catalogTimeoutMs, outputStrategy: p.outputStrategy, reasoningEffort: p.reasoningEffort, expectedRevision: p.revision, credential: { action: 'keep' } }; }
 export async function api<T>(path: string, body?: unknown, method = 'GET', signal?: AbortSignal): Promise<T> {
@@ -20,16 +19,5 @@ export async function api<T>(path: string, body?: unknown, method = 'GET', signa
         throw error;
     }
     return data as T;
-}
-export function ConfirmDialog({ title, children, accept, cancel, action = '确认' }: {
-    title: string;
-    children: ReactNode;
-    accept: () => void;
-    cancel: () => void;
-    action?: string;
-}) {
-    const ref = useRef<HTMLDialogElement>(null);
-    useEffect(() => { const active = document.activeElement as HTMLElement | null; const previous = active?.closest(".basket-more")?.querySelector<HTMLElement>("button.more-toggle") ?? active; const dialog = ref.current; dialog?.showModal(); return () => { dialog?.close(); previous?.focus(); }; }, []);
-    return <dialog ref={ref} aria-labelledby="ai-dialog-title" onCancel={event => { event.preventDefault(); cancel(); }}><h2 id="ai-dialog-title">{title}</h2><div>{children}</div><div className="ai-dialog-actions"><button className="secondary" type="button" onClick={cancel}>取消</button><button className="primary-button" type="button" data-primary onClick={accept}>{action}</button></div></dialog>;
 }
 export const time = (value: number) => value ? new Date(value).toLocaleString('zh-CN') : '未测试';

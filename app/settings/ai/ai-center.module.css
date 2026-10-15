@@ -8,9 +8,9 @@
 .root small, .hint { font-size:13px; color:var(--muted); }
 .root code { font-size:13px; word-break:break-word; }
 .root a { color:var(--ink); text-underline-offset:4px; }
-.root button { cursor:pointer; white-space:nowrap; flex-shrink:0; font-weight:600; }
+.root button:not(:global(.modal) *) { cursor:pointer; white-space:nowrap; flex-shrink:0; font-weight:600; }
 .root button[data-primary] {background:var(--accent-strong);color:var(--on-accent);border-color:var(--accent-strong);margin:0; }
-.root button:disabled { cursor:not-allowed; opacity:1; color:var(--muted); background:var(--surface-soft); border-color:var(--line); }
+.root button:not(:global(.modal) *):disabled { cursor:not-allowed; opacity:1; color:var(--muted); background:var(--surface-soft); border-color:var(--line); }
 .root :is(button,input,select,summary,a):focus-visible { outline:3px solid var(--green); outline-offset:3px; }
 .root input, .root select { min-width:0; width:100%; scroll-margin-block:120px; }
 .root input::placeholder { color:var(--muted); opacity:1; }
@@ -47,11 +47,8 @@
 .probeStates { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:24px 0; }
 .probeStates>div { background:var(--surface-soft); padding:16px; border-radius:calc(10px*var(--radius-scale)); display:grid; }
 .mobile { display:none; }
-.root dialog { color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:calc(16px*var(--radius-scale)); max-width:480px; width:calc(100% - 32px); padding:24px; }
-.root dialog::backdrop { background:color-mix(in srgb,var(--shadow-tint) 50%,transparent); }
-.root :global(.ai-dialog-actions) { display:flex; justify-content:flex-end; gap:12px; margin-top:24px; }
 @media(max-width:899px) { .grid{grid-template-columns:minmax(0,1fr)} .sidebar{display:none} .mobile{display:block} .root{padding:20px 16px 80px} .panel{padding:20px} }
 @media(max-width:560px) { .fields,.capabilities{grid-template-columns:minmax(0,1fr)} .panel{padding:16px} .savebar{padding:12px} .probeStates{gap:8px} }
 @media(prefers-reduced-motion:reduce) { .root *{transition:none!important; animation:none!important} }
-.root button, .root input, .root select{font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:calc(8px*var(--radius-scale));min-height:36px;background:var(--surface);padding:8px 12px}
-.root button:not([data-primary]):hover:not(:disabled){background:var(--surface-soft)}
+.root :is(button,input,select):not(:global(.modal) *){font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:calc(8px*var(--radius-scale));min-height:36px;background:var(--surface);padding:8px 12px}
+.root button:not([data-primary]):not(:global(.modal) *):hover:not(:disabled){background:var(--surface-soft)}

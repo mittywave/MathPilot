@@ -111,7 +111,7 @@ type QuestionEntryProps = {
   moduleIds: string[];
   onSaved: (questions: Question[]) => void;
   onClose: () => void;
-  onNotice: (message: string) => void;
+  onNotice: (message: string, tone?: "success" | "error") => void;
   // Handout imports reuse the same parser/editor, but save to the handout instead of the library.
   saveTemporaryQuestions?: (questions: Question[]) => Promise<Question[]>;
   startWithFile?: boolean;
@@ -314,9 +314,9 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   async function saveImportedQuestions() {
     if (fileImportSavingRef.current) return;
     const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && (item.categoryId || saveTemporaryQuestions));
-    if (!selected.length) { setNotice("请至少选择一道题，并确认题干和分类"); return; }
+    if (!selected.length) { setNotice("请至少选择一道题，并确认题干和分类", "error"); return; }
     const incompleteIndex = selected.findIndex((item) => { if (!isAlevelCategory(item.categoryId)) return false; const versions = alevelTagVersions(item); return versions.zh.length !== versions.en.length; });
-    if (incompleteIndex >= 0) { setNotice(`第 ${incompleteIndex + 1} 道已选题目的中英文知识点数量不一致，请按顺序配对`); return; }
+    if (incompleteIndex >= 0) { setNotice(`第 ${incompleteIndex + 1} 道已选题目的中英文知识点数量不一致，请按顺序配对`, "error"); return; }
     const saved: Question[] = selected.map((item) => {
       const question = { ...item } as Partial<FileImportDraft>;
       delete question.importId; delete question.selected; delete question.documentNumber;
@@ -338,7 +338,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       if (result.failed.length) {
         const errors = [...new Set(result.failed.map((item) => item.error))];
         setFileImportErrors([`已保存 ${uploaded.length} 道，剩余 ${result.failed.length} 道保存失败。可再次保存剩余题目。`, ...errors]);
-        setNotice(`已保存 ${uploaded.length} 道题，剩余 ${result.failed.length} 道请重试`);
+        setNotice(`已保存 ${uploaded.length} 道题，剩余 ${result.failed.length} 道请重试`, "error");
       } else {
         setFileImportOpen(false); setNotice(`已从文件录入 ${uploaded.length} 道云端试题`); onClose();
       }
@@ -430,7 +430,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   async function handleManualImages(files: File[]) {
     const available = Math.max(0, 4 - (questionDraft?.contentImages?.length ?? 0));
-    if (!available) { setNotice("每道题最多添加 4 张配图"); return; }
+    if (!available) { setNotice("每道题最多添加 4 张配图", "error"); return; }
     const selected = files.filter((file) => file.type.startsWith("image/")).slice(0, available);
     if (!selected.length) { setOptimizationError("请选择 PNG、JPG 或 WebP 图片"); return; }
     if (selected.some((file) => file.size > 15 * 1024 * 1024)) { setOptimizationError("单张图片不能超过 15MB"); return; }
@@ -501,15 +501,15 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   }
 
   async function applyManualCrop() {
-    if (!questionDraft?.originalImage || !cropSelection || cropSelection.width < 10 || cropSelection.height < 10) { setNotice("请先框选完整配图"); return; }
+    if (!questionDraft?.originalImage || !cropSelection || cropSelection.width < 10 || cropSelection.height < 10) { setNotice("请先框选完整配图", "error"); return; }
     const diagramImage = await cropExactDataUrl(questionDraft.originalImage, cropSelection); setQuestionDraft({ ...questionDraft, diagramImage, diagramOriginalImage: undefined, diagramSource: "extracted", diagramBox: cropSelection, geogebraBase64: undefined, geogebraPlan: undefined, vectorDiagramSvg: undefined, vectorDiagramPlan: undefined, diagramReconstructionConfidence: undefined, diagramVisualFitScore: undefined, diagramReconstructionWarnings: undefined, diagramReconstructedAt: undefined }); setCropDialog(false); setNotice("配图已重新裁剪");
   }
 
   async function persistQuestion() {
     if (fileImportSavingRef.current) return;
-    if (!questionDraft || !questionDraft.stem.trim() || (!questionDraft.categoryId && !saveTemporaryQuestions)) { setNotice("请填写题干并选择分类"); return; }
+    if (!questionDraft || !questionDraft.stem.trim() || (!questionDraft.categoryId && !saveTemporaryQuestions)) { setNotice("请填写题干并选择分类", "error"); return; }
     const tagVersions = alevelTagVersions(questionDraft);
-    if (questionDraftIsAlevel && tagVersions.zh.length !== tagVersions.en.length) { setNotice("请让中文和 English 知识点一一对应；不填写时两边都留空"); return; }
+    if (questionDraftIsAlevel && tagVersions.zh.length !== tagVersions.en.length) { setNotice("请让中文和 English 知识点一一对应；不填写时两边都留空", "error"); return; }
     const timestamp = currentTimestamp();
     const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), moduleId: questionDraftModule?.id || questionDraft.moduleId, examYear: questionDraft.examYear?.trim(), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), ...(questionDraftIsAlevel ? { tags: tagVersions.zh, tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true);
@@ -517,7 +517,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       if (saveTemporaryQuestions) { onSaved(await saveTemporaryQuestions([saved])); setNotice("临时题目已保存"); onClose(); return; }
       const result = questionDraft.id ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
       onSaved([result.question]); setNotice(questionDraft.id ? "云端试题已更新" : "试题已保存到云端"); onClose();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败"); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败", "error"); }
     finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
   }
 

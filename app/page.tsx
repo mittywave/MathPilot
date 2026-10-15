@@ -1,12 +1,13 @@
 "use client";
 
-import { ChangeEvent, lazy, memo, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, lazy, memo, useCallback, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CategoryTree } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
 import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { useConfirm } from "./components/ConfirmDialog";
+import { useToast } from "./components/Toast";
 import { SiteHeader } from "./components/SiteHeader";
 import { StudentHomework } from "./components/StudentHomework";
 import { StudentProfile } from "./components/StudentProfile";
@@ -29,7 +30,6 @@ const NEW_STUDENT_OPTION = "__new_student__";
 type ArchiveTab = "homework" | "profile" | "report" | "wrong";
 const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["profile", "定档"], ["report", "学情报告"], ["wrong", "错题本"]];
 const ARCHIVE_TAB_KEY = "student-archive-tab";
-const TRASH_HINT = "可在“分类与数据管理”的回收站恢复";
 const questionTypes: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
 // (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
@@ -99,7 +99,6 @@ export default function Home() {
   // starts where this one stopped; a question's own spacing is kept only while the same questions stay in the same order.
   const [typesetting, setTypesetting] = useState(false);
   const [typesetKept, setTypesetKept] = useState<{ ids: string; settings: TypesetSettings } | null>(null);
-  const [notice, setNotice] = useState("");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authDialog, setAuthDialog] = useState(false);
@@ -133,6 +132,8 @@ export default function Home() {
   const isAlevelPage = !showWrongBook && !showSelected && isAlevel9709ModuleName(activeModule?.name);
   const pageLocale: AlevelPageLocale = isAlevelPage ? alevelPageLocale : "zh";
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
+  const [toastNode, show] = useToast(pageLocale);
+  const onNotice = useCallback((text: string, tone: "success" | "error" = "success") => show({ text, tone }), [show]);
   // 机构共用一个题库：登录老师都能录题、改题、建分类；删除只开放给管理员。
   const canManageLibrary = Boolean(authUser);
   const canDelete = authUser?.role === "admin";
@@ -203,14 +204,13 @@ export default function Home() {
           setShowWrongBook(true); setWrongBookLoading(true);
           try { await loadStudents(params.get("studentId") ?? ""); } finally { setWrongBookLoading(false); }
         } else if (auth.user && params.get("view") === "selected") setShowSelected(true);
-      } catch { setNotice("云端题库读取失败，请刷新页面重试"); }
+      } catch { show({ text: "云端题库读取失败，请刷新页面重试", tone: "error" }); }
       finally { setAuthLoading(false); }
     })();
   // The initial URL view is intentionally read once; later switches are handled by page actions.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2600); return () => clearTimeout(timer); }, [notice]);
 
   const descendantsOf = (id: string) => categoryDescendants(categories, id);
   const moduleById = (id: string | null) => modules.find((item) => item.id === id);
@@ -312,14 +312,14 @@ export default function Home() {
     if (!requireLogin()) return;
     setShowWrongBook(true); setShowSelected(false); setQuery(""); setWrongMonth("全部"); setWrongBookLoading(true);
     try { await loadStudents(); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "错题本读取失败"); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "错题本读取失败", tone: "error" }); }
     finally { setWrongBookLoading(false); }
   }
 
   async function selectStudent(id: string) {
     setActiveStudentId(id); setWrongBookLoading(true); setQuery(""); setWrongMonth("全部");
     try { showWrongEntries((await fetchWrongQuestions(id)).entries); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "错题记录读取失败"); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "错题记录读取失败", tone: "error" }); }
     finally { setWrongBookLoading(false); }
   }
 
@@ -328,15 +328,15 @@ export default function Home() {
   }
 
   async function saveStudent() {
-    if (!studentName.trim()) { setNotice("请填写学生姓名或昵称"); return; }
+    if (!studentName.trim()) { show({ text: "请填写学生姓名或昵称", tone: "error" }); return; }
     try {
       const payload = { name: studentName, className: studentClassName, notes: studentNotes };
       const result = studentDraft
         ? await updateStudentProfile({ ...studentDraft, ...payload })
         : await createStudentProfile(payload);
       setStudentDialog(false); await loadStudents(result.student.id);
-      setNotice(studentDraft ? "学生档案已更新" : `已创建学生档案：${result.student.name}`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案保存失败"); }
+      show({ text: studentDraft ? "学生档案已更新" : `已创建学生档案：${result.student.name}`, tone: "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "学生档案保存失败", tone: "error" }); }
   }
 
   async function removeStudent(student: StudentSummary) {
@@ -350,8 +350,8 @@ export default function Home() {
       const nextId = activeStudentId === student.id ? students[index + 1]?.id ?? students[index - 1]?.id ?? "" : activeStudentId;
       await deleteStudentProfile(student.id);
       await loadStudents(nextId);
-      setNotice(`已删除学生档案：${student.name}`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "学生档案删除失败"); }
+      show({ text: `已删除学生档案：${student.name}`, tone: "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "学生档案删除失败", tone: "error" }); }
     finally { deleting.current = false; }
   }
 
@@ -361,26 +361,30 @@ export default function Home() {
     setSelectedIds((current) => allFilteredSelected ? current.filter((id) => !selectableIds.includes(id)) : [...current, ...selectableIds.filter((id) => !current.includes(id))]);
   };
   const openNewQuestion = () => { if (!requireLogin() || !canManageLibrary) return; if (!activeModule) { setModuleDialog("new"); return; } setEntryDraft(newQuestionDraft(activeModule, activeCategory ?? activeModule.id)); };
-  const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { setNotice("当前题库为只读"); return; } const questionModule = modules.find((item) => item.id === question.moduleId); if (questionModule && questionModule.id !== activeModuleId) { setActiveModuleId(questionModule.id); setPaperTitle(`${questionModule.name}专项练习`); setActiveCategory(question.categoryId); } setEntryDraft(editableQuestionDraft(question, questionModule)); };
+  const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { show({ text: "当前题库为只读", tone: "error" }); return; } const questionModule = modules.find((item) => item.id === question.moduleId); if (questionModule && questionModule.id !== activeModuleId) { setActiveModuleId(questionModule.id); setPaperTitle(`${questionModule.name}专项练习`); setActiveCategory(question.categoryId); } setEntryDraft(editableQuestionDraft(question, questionModule)); };
 
   async function submitAuth() {
     setAuthSubmitting(true); setAuthError("");
     try {
       const result = authMode === "register" ? await register(authEmail, authPassword, authInvite) : await login(authEmail, authPassword);
       setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite(""); await refreshLibrary(true);
-      setNotice(authMode === "register" ? "注册成功，已登录云端题库" : "登录成功");
+      show({ text: authMode === "register" ? "注册成功，已登录云端题库" : "登录成功", tone: "success" });
     } catch (error) { setAuthError(error instanceof Error ? error.message : "操作失败，请重试"); }
     finally { setAuthSubmitting(false); }
   }
 
   async function signOut() {
-    try { await logout(); setAuthUser(null); setSelectedIds([]); setShowSelected(false); setShowWrongBook(false); setStudents([]); setWrongEntries([]); await refreshLibrary(false); setNotice("已退出登录，当前为访客浏览"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "退出失败"); }
+    try { await logout(); setAuthUser(null); setSelectedIds([]); setShowSelected(false); setShowWrongBook(false); setStudents([]); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "退出失败", tone: "error" }); }
   }
 
   async function deleteQuestion(question: Question) {
-    try { await deleteCloudQuestion(question.id); setQuestions((current) => current.filter((item) => item.id !== question.id)); setSelectedIds((current) => current.filter((id) => id !== question.id)); setNotice(`试题已删除，${TRASH_HINT}`); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "删除失败"); }
+    try {
+      await deleteCloudQuestion(question.id);
+      setQuestions(current => current.filter(item => item.id !== question.id));
+      setSelectedIds(current => current.filter(id => id !== question.id));
+      show({ text: pageLocale === "en" ? "Deleted 1 question. Available in the recycle bin." : "已删除 1 道题，可在回收站找回", tone: "success", action: { label: pageCopy.undo, run: () => restoreQuestions([question.id]) } });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "删除失败", tone: "error", action: { label: pageCopy.retry, run: () => deleteQuestion(question) } }); }
   }
 
   // Cards keep one stable set of actions; each call reaches this render's handlers, so a card need not re-render for them.
@@ -396,79 +400,104 @@ export default function Home() {
   }), []);
 
   async function deleteWrongEntries(entries: WrongQuestionEntry[]) {
+    if (!entries.length) return;
+    const results = await Promise.allSettled(entries.map(entry => deleteWrongQuestion(entry.studentId, entry.id)));
+    const removed = entries.filter((_entry, index) => results[index].status === "fulfilled");
+    const failure = results.find(result => result.status === "rejected");
+    const ids = removed.map(entry => entry.question.id);
+    setSelectedIds(current => current.filter(id => !ids.includes(id)));
     try {
-      await Promise.all(entries.map((entry) => deleteWrongQuestion(entry.studentId, entry.id)));
-      const ids = entries.map((entry) => entry.question.id);
-      setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
-      await loadStudents(entries[0].studentId); setNotice(`已删除 ${entries.length} 道错题，可在页面底部“历史记录”恢复`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "错题删除失败"); }
+      const current = new URLSearchParams(window.location.search).get("studentId");
+      if (current) await loadStudents(current); else setStudents((await fetchStudents()).students);
+      show({ text: failure ? `已删除 ${removed.length} 道错题，${entries.length - removed.length} 道未删除，请重试` : `已删除 ${removed.length} 道错题，可在历史记录找回`, tone: failure ? "error" : "success",
+        action: removed.length ? { label: "撤销", run: () => restoreWrongEntries(removed) } : { label: "重试", run: () => deleteWrongEntries(entries) } });
+    } catch (error) { show({ text: `已删除 ${removed.length} 道错题，但列表读取失败：${error instanceof Error ? error.message : "请重试"}`, tone: "error", action: removed.length ? { label: "撤销", run: () => restoreWrongEntries(removed) } : { label: "重试", run: () => deleteWrongEntries(entries) } }); }
   }
 
-  async function restoreWrongEntry(entry: WrongQuestionEntry) {
-    try { await restoreWrongQuestion(entry.studentId, entry.id); await loadStudents(entry.studentId); setNotice("错题已恢复"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "错题恢复失败"); }
+  async function restoreWrongEntries(entries: WrongQuestionEntry[], restored = 0) {
+    const results = await Promise.allSettled(entries.map(entry => restoreWrongQuestion(entry.studentId, entry.id)));
+    const recovered = entries.filter((_entry, index) => results[index].status === "fulfilled");
+    const failed = entries.filter((_entry, index) => results[index].status === "rejected");
+    const total = restored + recovered.length;
+    try {
+      const current = new URLSearchParams(window.location.search).get("studentId");
+      if (current) await loadStudents(current); else setStudents((await fetchStudents()).students);
+      show({ text: failed.length ? `已恢复 ${total} 道错题，${failed.length} 道未恢复，请重试` : `已恢复 ${total} 道错题`, tone: failed.length ? "error" : "success",
+        ...(failed.length ? { action: { label: "重试", run: () => restoreWrongEntries(failed, total) } } : {}) });
+    } catch (error) { show({ text: `已恢复 ${total} 道错题，但列表读取失败：${error instanceof Error ? error.message : "请重试"}`, tone: "error", action: { label: "重试", run: () => restoreWrongEntries(failed, total) } }); }
   }
 
   async function deleteSelectedQuestions() {
-    const ids = selectedIds.filter((id) => questions.some((item) => item.id === id));
+    const ids = selectedIds.filter(id => questions.some(item => item.id === id));
     if (!ids.length) return;
-    const editableIds = ids.filter((id) => questions.find((item) => item.id === id)?.canEdit);
-    if (!editableIds.length) { setNotice("所选题目中没有你可以删除的内容"); return; }
-    try {
-      await Promise.all(editableIds.map((id) => deleteCloudQuestion(id)));
-      setQuestions((current) => current.filter((item) => !editableIds.includes(item.id)));
-      setExpandedAnswers((current) => current.filter((id) => !editableIds.includes(id)));
-      setSelectedIds((current) => current.filter((id) => !editableIds.includes(id))); setNotice(`已删除 ${editableIds.length} 道试题，${TRASH_HINT}`);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "批量删除失败"); }
+    const editableIds = ids.filter(id => questions.find(item => item.id === id)?.canEdit);
+    if (!editableIds.length) { show({ text: "所选题目中没有你可以删除的内容", tone: "error" }); return; }
+    const results = await Promise.allSettled(editableIds.map(id => deleteCloudQuestion(id)));
+    const removed = editableIds.filter((_id, index) => results[index].status === "fulfilled");
+    const failure = results.find(result => result.status === "rejected");
+    setQuestions(current => current.filter(item => !removed.includes(item.id)));
+    setExpandedAnswers(current => current.filter(id => !removed.includes(id)));
+    setSelectedIds(current => current.filter(id => !removed.includes(id)));
+    show({ text: pageLocale === "en" ? failure ? `Deleted ${alevelQuestionCount(removed.length, pageLocale)}; ${alevelQuestionCount(editableIds.length - removed.length, pageLocale)} could not be deleted. Please retry.` : `Deleted ${alevelQuestionCount(removed.length, pageLocale)}. Available in the recycle bin.` : failure ? `已删除 ${removed.length} 道题，${editableIds.length - removed.length} 道未删除，请重试` : `已删除 ${removed.length} 道题，可在回收站找回`, tone: failure ? "error" : "success",
+      action: removed.length ? { label: pageCopy.undo, run: () => restoreQuestions(removed) } : { label: pageCopy.retry, run: deleteSelectedQuestions } });
   }
 
   async function createCategory() {
-    if (!categoryName.trim() || !activeModule) { setNotice("请填写分类名称"); return; }
+    if (!categoryName.trim() || !activeModule) { show({ text: "请填写分类名称", tone: "error" }); return; }
     const category: Category = { id: uid("cat"), name: categoryName.trim(), moduleId: activeModule.id, parentId: categoryParent || activeModule.id, createdAt: currentTimestamp() };
-    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); setNotice("分类已创建"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "分类创建失败"); }
+    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); show({ text: "分类已创建", tone: "success" }); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "分类创建失败", tone: "error" }); }
   }
 
   async function openTrash() {
     setCategoryDialog("trash"); setTrashQuestions(null);
     try { setTrashQuestions((await fetchDeletedQuestions()).questions); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "回收站读取失败"); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "回收站读取失败", tone: "error" }); }
   }
 
-  async function restoreQuestion(question: Question) {
-    try { await restoreCloudQuestion(question.id); setTrashQuestions((current) => current?.filter((item) => item.id !== question.id) ?? null); await refreshLibrary(); setNotice("试题已恢复"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "恢复失败"); }
+  async function restoreQuestions(ids: string[], restored = 0) {
+    const results = await Promise.allSettled(ids.map(id => restoreCloudQuestion(id)));
+    const recovered = ids.filter((_id, index) => results[index].status === "fulfilled");
+    const failed = ids.filter((_id, index) => results[index].status === "rejected");
+    const total = restored + recovered.length;
+    setTrashQuestions(current => current?.filter(item => !recovered.includes(item.id)) ?? null);
+    try {
+      const data = await fetchLibrary();
+      setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
+      show({ text: pageLocale === "en" ? failed.length ? `Restored ${alevelQuestionCount(total, pageLocale)}; ${alevelQuestionCount(failed.length, pageLocale)} could not be restored. Please retry.` : `Restored ${alevelQuestionCount(total, pageLocale)}.` : failed.length ? `已恢复 ${total} 道题，${failed.length} 道未恢复，请重试` : `已恢复 ${total} 道题`, tone: failed.length ? "error" : "success",
+        ...(failed.length ? { action: { label: pageCopy.retry, run: () => restoreQuestions(failed, total) } } : {}) });
+    } catch (error) { show({ text: pageLocale === "en" ? `Restored ${alevelQuestionCount(total, pageLocale)}, but the list could not be refreshed. ${error instanceof Error ? error.message : "Please retry."}` : `已恢复 ${total} 道题，但列表读取失败：${error instanceof Error ? error.message : "请重试"}`, tone: "error", action: { label: pageCopy.retry, run: () => restoreQuestions(failed, total) } }); }
   }
 
   async function deleteCategory(category: Category) {
     const categoryIds = descendantsOf(category.id); const questionIds = questions.filter((item) => categoryIds.includes(item.categoryId)).map((item) => item.id);
-    if (!window.confirm(`删除“${category.name}”及其子分类？其中 ${questionIds.length} 道试题会移入回收站。`)) return;
-    try { await deleteCloudCategory(category.id); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(activeModule?.id ?? null); setNotice("分类已删除"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "分类删除失败"); }
+    if (!await confirm({ title: `删除分类「${category.name}」`, body: "分类与子分类无法恢复，题目可从回收站找回。", items: [`${categoryIds.length} 个分类（含当前分类）`, `${questionIds.length} 道题移入回收站`], confirmLabel: "删除分类", danger: true })) return;
+    try { await deleteCloudCategory(category.id); setCategories((current) => current.filter((item) => !categoryIds.includes(item.id))); setQuestions((current) => current.filter((item) => !questionIds.includes(item.id))); setSelectedIds((current) => current.filter((id) => !questionIds.includes(id))); setActiveCategory(activeModule?.id ?? null); show({ text: "分类已删除", tone: "success" }); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "分类删除失败", tone: "error" }); }
   }
 
   function exportBackup() {
     const data: LibraryData = { scope: "public", modules, categories, questions };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `MathPilot题库备份-${new Date().toISOString().slice(0, 10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("备份文件已导出");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `MathPilot题库备份-${new Date().toISOString().slice(0, 10)}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); show({ text: "备份文件已导出", tone: "success" });
   }
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; if (!file) return;
-    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!window.confirm("导入后会把备份中的模块、分类和题目追加到当前题库，是否继续？")) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); setNotice(`已迁移 ${result.imported} 道题到当前题库`); } catch (error) { setNotice(error instanceof Error ? error.message : "无法识别这个备份文件"); } finally { event.target.value = ""; }
+    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!await confirm({ title: "导入备份到题库", body: "将追加到当前题库，不覆盖已有内容；导入后不能一键撤销。", items: [`${Array.isArray(data.modules) ? data.modules.length : 0} 个模块`, `${data.categories.length} 个分类`, `${data.questions.length} 道题`], confirmLabel: "导入备份" })) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); show({ text: `已迁移 ${result.imported} 道题到当前题库`, tone: "success" }); } catch (error) { show({ text: error instanceof Error ? error.message : "无法识别这个备份文件", tone: "error" }); } finally { event.target.value = ""; }
   }
 
   async function generateWord() {
     if (!selectedQuestions.length || isExporting) return;
     setIsExporting(true);
-    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); setNotice("Word 练习已生成"); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "下载失败"); }
+    try { await authorizeDownload(selectedQuestions.map((question) => question.id)); await exportQuestionsToWord(selectedQuestions, paperTitle.trim() || "练习题", includeAnswers, "basket"); show({ text: "Word 练习已生成", tone: "success" }); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "下载失败", tone: "error" }); }
     finally { setIsExporting(false); }
   }
 
   async function openTypeset() {
     if (!selectedQuestions.length || isExporting) return;
     try { await authorizeDownload(selectedQuestions.map((question) => question.id)); setTypesetting(true); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "无法排版所选题目"); }
+    catch (error) { show({ text: error instanceof Error ? error.message : "无法排版所选题目", tone: "error" }); }
   }
 
   function openNewModule() {
@@ -481,20 +510,20 @@ export default function Home() {
   }
 
   async function saveModule() {
-    if (!moduleName.trim()) { setNotice("请填写模块名称"); return; }
+    if (!moduleName.trim()) { show({ text: "请填写模块名称", tone: "error" }); return; }
     try {
       if (moduleDraft) {
         const result = await updateCloudModule({ ...moduleDraft, name: moduleName.trim(), subtitle: moduleSubtitle.trim() });
         setModules((current) => current.map((item) => item.id === result.module.id ? result.module : item));
         if (activeModuleId === result.module.id) setPaperTitle(`${result.module.name}专项练习`);
-        setNotice("模块已更新");
+        show({ text: "模块已更新", tone: "success" });
       } else {
         const result = await createCloudModule({ name: moduleName.trim(), subtitle: moduleSubtitle.trim() });
         setModules((current) => [...current, result.module]); setActiveModuleId(result.module.id); setActiveCategory(result.module.id); setPaperTitle(`${result.module.name}专项练习`);
-        setNotice("模块已创建");
+        show({ text: "模块已创建", tone: "success" });
       }
       setModuleDialog(null); setModuleDraft(null); setModuleName(""); setModuleSubtitle("");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "模块保存失败"); }
+    } catch (error) { show({ text: error instanceof Error ? error.message : "模块保存失败", tone: "error" }); }
   }
 
   async function moveModule(id: string, direction: -1 | 1) {
@@ -504,7 +533,7 @@ export default function Home() {
     const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder }));
     setModules(ordered);
     try { await reorderCloudModules(ordered.map((item) => item.id)); }
-    catch (error) { await refreshLibrary(true); setNotice(error instanceof Error ? error.message : "模块排序失败"); }
+    catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
   }
 
   async function dropModule(targetId: string) {
@@ -514,7 +543,7 @@ export default function Home() {
     const next = modules.filter((item) => item.id !== draggedModuleId); next.splice(targetIndex, 0, source);
     const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder })); setModules(ordered); setDraggedModuleId("");
     try { await reorderCloudModules(ordered.map((item) => item.id)); }
-    catch (error) { await refreshLibrary(true); setNotice(error instanceof Error ? error.message : "模块排序失败"); }
+    catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
   }
 
   async function removeModule(module: LibraryModule) {
@@ -532,9 +561,9 @@ export default function Home() {
       setSelectedIds((current) => current.filter((id) => !removedQuestions.includes(id)));
       setModuleDialog(null);
       setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
-      setNotice("模块及其内容已删除");
+      show({ text: "模块及其内容已删除", tone: "success" });
       requestAnimationFrame(() => moduleManager.current?.querySelector<HTMLButtonElement>(".more-toggle")?.focus());
-    } catch (error) { setNotice(error instanceof Error ? error.message : "模块删除失败"); }
+    } catch (error) { show({ text: error instanceof Error ? error.message : "模块删除失败", tone: "error" }); }
     finally { deleting.current = false; }
   }
 
@@ -595,7 +624,7 @@ export default function Home() {
                   </article>;
                 })}</section>)}
               </div>
-              {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>删除、部分正确及已修正的记录保留在此，不计入当前错题统计；删除的错题可以恢复。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small>{entry.archiveReason === WRONG_QUESTION_DELETED && <button className="secondary" onClick={() => restoreWrongEntry(entry)}>恢复</button>}<WrongQuestionEvidence entry={entry} /></article>)}</details>}
+              {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>删除、部分正确及已修正的记录保留在此，不计入当前错题统计；删除的错题可以恢复。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small>{entry.archiveReason === WRONG_QUESTION_DELETED && <button className="secondary" onClick={() => restoreWrongEntries([entry])}>恢复</button>}<WrongQuestionEvidence entry={entry} /></article>)}</details>}
               </>}
             </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立档案"}</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
           </> : <>
@@ -630,7 +659,7 @@ export default function Home() {
 
 {authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
 
-      {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} onClose={() => setEntryDraft(null)} onNotice={setNotice} onSaved={(saved) => setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt))} />}
+      {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} onClose={() => setEntryDraft(null)} onNotice={onNotice} onSaved={(saved) => setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt))} />}
 
       {categoryDialog && activeModule && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理">
         <div className="modal-head"><div><span className="eyebrow">{activeModule.name}</span><h2>{categoryDialog === "new" ? "新建模块内分类" : categoryDialog === "trash" ? "回收站" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>
@@ -671,7 +700,7 @@ export default function Home() {
         <div className="modal-actions"><button className="secondary" onClick={() => setStudentDialog(false)}>取消</button><button className="primary-button" onClick={saveStudent}>{studentDraft ? "保存档案" : "创建学生"}</button></div>
       </section></div>}
 
-      {wrongUploadOpen && activeStudent && <WrongQuestionUpload student={activeStudent} onClose={() => setWrongUploadOpen(false)} onGraded={(submission) => { void loadStudents(submission.studentId); if (submission.status !== "published") return; const archived = submission.gradingSummary?.archived ?? 0; setWrongUploadOpen(false); setNotice(archived ? `已收录 ${archived} 道错题` : "批改完成，没有需要收录的错题"); }} />}
+      {wrongUploadOpen && activeStudent && <WrongQuestionUpload student={activeStudent} onClose={() => setWrongUploadOpen(false)} onGraded={(submission) => { void loadStudents(submission.studentId); if (submission.status !== "published") return; const archived = submission.gradingSummary?.archived ?? 0; setWrongUploadOpen(false); show({ text: archived ? `已收录 ${archived} 道错题` : "批改完成，没有需要收录的错题", tone: "success" }); }} />}
 
 
       {authDialog && <div className="modal-backdrop"><section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === "login" ? "登录" : "注册"}>
@@ -685,7 +714,7 @@ export default function Home() {
         <div className="modal-actions"><button className="secondary" onClick={() => setAuthDialog(false)}>取消</button><button className="primary-button" disabled={authSubmitting || !authEmail || !authPassword || (authMode === "register" && !authInvite)} onClick={submitAuth}>{authSubmitting ? "请稍候…" : authMode === "login" ? "登录" : "注册并登录"}</button></div>
       </section></div>}
       {confirmDialog}
-      {notice && <div className="toast">✓ {notice}</div>}
+      {toastNode}
     </main>
   );
 }

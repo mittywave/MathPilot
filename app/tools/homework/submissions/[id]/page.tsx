@@ -121,7 +121,7 @@ export default function TeacherSubmissionPage() {
   const [activeItemId, setActiveItemId] = useState("");
   const [split, setSplit] = useState(45);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState({ text: "", tone: "success" as "success" | "error" });
   const [loading, setLoading] = useState(true);
 
   async function load(submissionId = id) {
@@ -137,7 +137,7 @@ export default function TeacherSubmissionPage() {
     const frame = requestAnimationFrame(() => {
       const submissionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).at(-1) ?? "");
       setId(submissionId);
-      void load(submissionId).catch((error) => setMessage(error instanceof Error ? error.message : "提交记录读取失败")).finally(() => setLoading(false));
+      void load(submissionId).catch((error) => setMessage({ text: error instanceof Error ? error.message : "提交记录读取失败", tone: "error" })).finally(() => setLoading(false));
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -150,22 +150,22 @@ export default function TeacherSubmissionPage() {
 
   async function repairCoverage(){
     if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);setMessage("已开始逐页补全与重批，修复前记录已保留。");}catch(error){setMessage(error instanceof Error?error.message:"补全失败");}finally{setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);setMessage({ text: "已开始逐页补全与重批，修复前记录已保留。", tone: "success" });}catch(error){setMessage({ text: error instanceof Error?error.message:"补全失败", tone: "error" });}finally{setBusy(false);}
   }
   async function attachFigures(){
-    if(!submission)return;setBusy(true);setMessage("正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…");
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage(left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步");}catch(error){setMessage(error instanceof Error?error.message:"配图校对失败");}finally{setBusy(false);}
+    if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
   }
   async function newVersion() {
     if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage(error instanceof Error?error.message:"创建重交版本失败");setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version"});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建重交版本失败", tone: "error" });setBusy(false);}
   }
   // 改日期 of an assigned homework: the days move, the grading stays as it is.
   async function reschedule(start: string) {
     if (!submission) return false;
     setBusy(true);
-    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage("日期已改好"); return true; }
-    catch (error) { setMessage(error instanceof Error ? error.message : "日期没有改成"); return false; }
+    try { setSubmission((await homeworkApi.updateSubmission(submission.id, { action: "schedule", start })).submission); setMessage({ text: "日期已改好", tone: "success" }); return true; }
+    catch (error) { setMessage({ text: error instanceof Error ? error.message : "日期没有改成", tone: "error" }); return false; }
     finally { setBusy(false); }
   }
   async function changeProfile(profile: boolean) {
@@ -176,22 +176,22 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "profile", profile });
       setSubmission(result.submission);
-      setMessage(profile ? "已计入定档" : "已从定档移出");
+      setMessage({ text: profile ? "已计入定档" : "已从定档移出", tone: "success" });
     } catch (error) {
       setSubmission((current) => current && { ...current, outputs: { ...current.outputs, profile: previous } });
       const reason = error instanceof TypeError ? "网络连接中断" : error instanceof Error ? error.message : "定档设置保存失败，请重试";
-      setMessage(reason);
+      setMessage({ text: reason, tone: "error" });
       // A lost response can follow a committed transaction; read the saved flag without replacing an editing draft.
       try {
         const saved = (await homeworkApi.submission(submission.id)).submission;
         setSubmission(saved);
-        setMessage(`${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`);
+        setMessage({ text: `${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`, tone: "error" });
       } catch { /* Keep the previous flag and the error. */ }
     } finally { setBusy(false); }
   }
   async function reprocessPending() {
     if (!submission) return;
-    setBusy(true); setMessage("正在补充待处理题目的材料…");
+    setBusy(true); setMessage({ text: "正在补充待处理题目的材料…", tone: "success" });
     try {
       const replacements=[];
       if(supplementPages.length) {
@@ -201,8 +201,8 @@ export default function TeacherSubmissionPage() {
       }
       await uploadReferences();
       const result=await homeworkApi.updateSubmission(submission.id,{action:"reprocess-pending",pages:replacements});
-      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);setMessage("已重新处理待处理题，原始页面仍保留在历史原件中");
-    } catch(error){setMessage(error instanceof Error?error.message:"重新处理失败");}finally{setBusy(false);}
+      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);setMessage({ text: "已重新处理待处理题，原始页面仍保留在历史原件中", tone: "success" });
+    } catch(error){setMessage({ text: error instanceof Error?error.message:"重新处理失败", tone: "error" });}finally{setBusy(false);}
   }
 
   // Reference answer pages are appended to the homework in the order they are chosen.
@@ -219,7 +219,7 @@ export default function TeacherSubmissionPage() {
   async function uploadAndSubmit() {
     if (!submission || !pages.length) return;
     setBusy(true);
-    setMessage("正在上传作业原件…");
+    setMessage({ text: "正在上传作业原件…", tone: "success" });
     try {
       for (const file of sourceDocuments) await uploadHomeworkAsset({blob:file,fileName:file.name,role:"submission_document",submissionId:submission.id});
       setSourceDocuments([]);
@@ -227,7 +227,7 @@ export default function TeacherSubmissionPage() {
       for (const [index, page] of pages.entries()) {
         const asset = await uploadHomeworkAsset({ blob: page.blob, fileName: `${submission.studentName}-第${index + 1}页.jpg`, role: "submission_original", submissionId: submission.id });
         saved.push({ assetId: asset.id });
-        setMessage(`正在上传第 ${index + 1}/${pages.length} 页…`);
+        setMessage({ text: `正在上传第 ${index + 1}/${pages.length} 页…`, tone: "success" });
       }
       await uploadReferences();
       await homeworkApi.updateSubmission(submission.id, { action: "save-pages", pages: saved });
@@ -235,9 +235,9 @@ export default function TeacherSubmissionPage() {
       releaseHomeworkPages(pages); setPages([]);
       setSubmission(result.submission);
       setItems(result.submission.gradingItems);
-      setMessage("作业已提交，后台会自动批改并发布结果");
+      setMessage({ text: "作业已提交，后台会自动批改并发布结果", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "作业提交失败");
+      setMessage({ text: error instanceof Error ? error.message : "作业提交失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -273,9 +273,9 @@ export default function TeacherSubmissionPage() {
       setItems(result.submission.gradingItems);
       setEditingId("");
       await load(submission.id);
-      setMessage("判定已修正，错题本和作业报告已同步更新");
+      setMessage({ text: "判定已修正，错题本和作业报告已同步更新", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "修正失败");
+      setMessage({ text: error instanceof Error ? error.message : "修正失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -294,9 +294,9 @@ export default function TeacherSubmissionPage() {
       setSubmission(result);
       setItems(result.gradingItems);
       await load(submission.id);
-      setMessage("旧提交结果已发布");
+      setMessage({ text: "旧提交结果已发布", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "旧提交处理失败");
+      setMessage({ text: error instanceof Error ? error.message : "旧提交处理失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -306,9 +306,9 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "retry" });
       setSubmission(result.submission);
-      setMessage("已重新提交后台批改任务");
+      setMessage({ text: "已重新提交后台批改任务", tone: "success" });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重试失败");
+      setMessage({ text: error instanceof Error ? error.message : "重试失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -320,24 +320,24 @@ export default function TeacherSubmissionPage() {
       const { buildHomeworkReportLatex, HOMEWORK_REPORT_MAIN } = await import("../../../../../lib/homework-report-latex");
       const tex = buildHomeworkReportLatex(submission);
       const name = `${submission.studentName}-${submission.assignmentTitle}-批改报告`;
-      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage("TeX 源文件已下载"); return; }
+      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage({ text: "TeX 源文件已下载", tone: "success" }); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../../../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setMessage("这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页"); return; }
+      if (!(await latexCompilerStatus()).available) { setMessage({ text: "这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页", tone: "error" }); return; }
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);
-      setMessage(issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "报告生成失败"); }
+      setMessage({ text: issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成", tone: "success" });
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "报告生成失败", tone: "error" }); }
     finally { setBusy(false); }
   }
 
   async function refresh() {
     setBusy(true);
-    try { await load(); setMessage("状态已刷新"); }
+    try { await load(); setMessage({ text: "状态已刷新", tone: "success" }); }
     finally { setBusy(false); }
   }
 
   if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
-  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
+  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
   const report = submission.report;
   const live = ["submitted", "processing", "failed"].includes(submission.status);
@@ -357,7 +357,7 @@ export default function TeacherSubmissionPage() {
   return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
     trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
     trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={newVersion}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
-    {message && <div className="homework-notice" role="status">{message}<button onClick={() => setMessage("")} aria-label="关闭提示">×</button></div>}
+    {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
     <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
       <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">

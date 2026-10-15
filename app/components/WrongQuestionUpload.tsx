@@ -65,7 +65,7 @@ export default function WrongQuestionUpload({ student, onClose, onGraded }: { st
   return <div className="modal-backdrop"><section className="modal wrong-entry" role="dialog" aria-modal="true" aria-label={`给${student.name}新建错题`} aria-busy={busy && !submitted}>
     <header className="wrong-entry-head"><h2>新建错题<span>{student.name}</span></h2><button className="close" aria-label="关闭" disabled={busy && !submitted} onClick={onClose}>×</button></header>
     <div className="wrong-entry-modes" role="tablist" aria-label="录入方式">{MODES.map(([value, label]) => <button key={value} role="tab" aria-selected={mode === value} disabled={mode !== value && (busy || !!draft)} onClick={() => switchMode(value)}>{label}</button>)}</div>
-    {upload.message && <div className="homework-notice" role="status">{upload.message}</div>}
+    {upload.message && <div className={`homework-notice${busy?"":" inline-error"}`} role={busy?"status":"alert"}>{upload.message}</div>}
     {mode === "screenshot" ? <>
       {!pages.length ? <button type="button" className="drop-entry" onClick={() => captureRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = droppedImage(event); if (file) void capture(file); else setCaptureError("请选择图片文件"); }}>
         <kbd>⌘V</kbd><span><b>粘贴错题截图</b><small>或点击选择、拖入图片。截图要包含题目和学生的作答。</small></span>

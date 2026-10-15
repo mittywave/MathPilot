@@ -147,7 +147,7 @@ export default function AnswerStudioPage() {
         </details>
 
         {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
-        {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role="status">{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
+        {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role={failed?'alert':'status'}>{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
       </aside>
       <section className="simple-panel">
         {mode==='paired'&&<UploadZone id="studio-question-files" icon="file" title="上传原题" hint="干净、未作答的原题页" files={questionFiles} onFiles={list=>files('question',list)}/>}

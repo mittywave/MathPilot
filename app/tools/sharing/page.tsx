@@ -1,5 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
+import { useToast } from "../../components/Toast";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { SiteHeader } from "../../components/SiteHeader";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useState } from "react";
@@ -29,11 +31,10 @@ function lastLogin(time: number | null) {
 export default function SharingPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [toast, setToast] = useState<{ message: string; ok: boolean } | null>(null);
-  const notify = useCallback<Notify>((message, ok = true) => setToast({ message, ok }), []);
+  const [toastNode, show] = useToast();
+  const notify = useCallback<Notify>((text, ok = true) => show({ text, tone: ok ? "success" : "error" }), [show]);
 
   useEffect(() => { void fetchMe().then((result) => setUser(result.user)).catch(() => notify("登录状态读取失败，请刷新重试", false)).finally(() => setLoaded(true)); }, [notify]);
-  useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 2800); return () => clearTimeout(timer); }, [toast]);
 
   let body;
   if (!loaded) body = <p className="sharing-muted">正在读取…</p>;
@@ -42,7 +43,7 @@ export default function SharingPage() {
   else body = <><ShareSection notify={notify} /><TeamSections me={user} notify={notify} /></>;
   return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:"工具箱",href:"/tools"},{label:"共享办公"}]} /><main className="toolbox sharing">
     {body}
-    {toast && <div className={`toast${toast.ok ? "" : " sharing-toast-error"}`} role="status">{toast.ok ? "✓ " : ""}{toast.message}</div>}
+    {toastNode}
   </main></>;
 }
 
@@ -80,7 +81,7 @@ function ShareSection({ notify }: { notify: Notify }) {
     try { setStatus(await forgetSharedNetwork(id)); notify("已忘记这个网络"); }
     catch (error) { notify(errorText(error, "操作失败"), false); }
   }
-  async function copy(text: string, what: string) { notify(await copyText(text) ? `${what}已复制` : "复制失败，请手动选中复制", true); }
+  async function copy(text: string, what: string) { const ok = await copyText(text); notify(ok ? `${what}已复制` : "复制失败，请手动选中复制", ok); }
 
   if (status === undefined) return <section className="sharing-card"><p className="sharing-muted">正在检查共享状态…</p></section>;
   if (status === null) return <section className="sharing-card"><h2>共享给同事</h2><p className="sharing-muted">这里没有共享开关：网站部署在线上时，同事直接用网址访问。共享开关只出现在运行 MathPilot 的这台电脑上。</p></section>;
@@ -125,6 +126,7 @@ function ShareSection({ notify }: { notify: Notify }) {
 }
 
 function TeamSections({ me, notify }: { me: AuthUser; notify: Notify }) {
+  const [confirmNode, confirm] = useConfirm();
   const [team, setTeam] = useState<Team | null>(null);
   const [failure, setFailure] = useState("");
   const [busy, setBusy] = useState("");
@@ -133,8 +135,8 @@ function TeamSections({ me, notify }: { me: AuthUser; notify: Notify }) {
   useEffect(() => { void fetchTeam().then(setTeam).catch((error) => setFailure(errorText(error, "成员读取失败"))); }, []);
 
   async function changeInvite(action: "rotate" | "close") {
-    if (action === "rotate" && team?.invite.mode === "code" && !window.confirm("换一个新邀请码？旧的立即失效，已经注册的同事不受影响。")) return;
-    if (action === "close" && !window.confirm("关闭注册？同事将无法用邀请码注册新账号，已有账号照常使用。")) return;
+    if (action === "rotate" && team?.invite.mode === "code" && !await confirm({ title: "更换邀请码", body: "旧邀请码立即失效，已经注册的同事不受影响。", confirmLabel: "更换邀请码", danger: true })) return;
+    if (action === "close" && !await confirm({ title: "关闭注册", body: "同事将无法用邀请码注册新账号，已有账号照常使用。", confirmLabel: "关闭注册", danger: true })) return;
     setBusy("invite");
     try { const result = await changeTeamInvite(action); setTeam((current) => current && { ...current, invite: result.invite }); notify(action === "rotate" ? "已生成新的邀请码" : "已关闭注册"); }
     catch (error) { notify(errorText(error, "邀请码更新失败"), false); }
@@ -149,7 +151,7 @@ function TeamSections({ me, notify }: { me: AuthUser; notify: Notify }) {
   }
 
   async function reset(member: TeamMember) {
-    if (!window.confirm(`为 ${member.email} 生成新密码？TA 当前的登录会失效。`)) return;
+    if (!await confirm({ title: `重置 ${member.email} 的密码`, body: "将生成新密码，TA 当前的登录会失效。", confirmLabel: "重置密码", danger: true })) return;
     setBusy(member.id);
     try { setPassword({ email: member.email, value: (await resetTeamPassword(member.id)).password }); }
     catch (error) { notify(errorText(error, "密码重置失败"), false); }
@@ -164,7 +166,7 @@ function TeamSections({ me, notify }: { me: AuthUser; notify: Notify }) {
       <div className="sharing-card-head"><div><h2 id="invite-title">邀请码</h2><p>同事打开共享地址，点右上角「登录 / 注册」，注册时填这个邀请码。</p></div></div>
       {invite.mode === "code" && invite.code ? <div className="sharing-invite">
         <code>{invite.code}</code>
-        <button className="secondary" onClick={() => void copyText(invite.code!).then((ok) => notify(ok ? "邀请码已复制" : "复制失败，请手动选中复制"))}>复制</button>
+        <button className="secondary" onClick={() => void copyText(invite.code!).then((ok) => notify(ok ? "邀请码已复制" : "复制失败，请手动选中复制", ok))}>复制</button>
         <button className="secondary" disabled={busy === "invite"} onClick={() => void changeInvite("rotate")}>换一个</button>
         <button className="text-button" disabled={busy === "invite"} onClick={() => void changeInvite("close")}>关闭注册</button>
       </div> : <div className="sharing-invite empty">
@@ -188,16 +190,17 @@ function TeamSections({ me, notify }: { me: AuthUser; notify: Notify }) {
             {!disabled && <button className="secondary" disabled={working} onClick={() => void update(member, { role: member.role === "admin" ? "member" : "admin" }, member.role === "admin" ? "已取消管理员" : "已设为管理员")}>{member.role === "admin" ? "取消管理员" : "设为管理员"}</button>}
             {!disabled && <button className="secondary" disabled={working} onClick={() => void reset(member)}>重置密码</button>}
             <button className={disabled ? "secondary" : "text-button sharing-danger"} disabled={working}
-              onClick={() => { if (disabled || window.confirm(`停用 ${member.email}？TA 会立即退出、无法再登录；录入的题目和讲义都会保留。`)) void update(member, { disabled: !disabled }, disabled ? "已恢复账号" : "已停用账号"); }}>{disabled ? "恢复" : "停用"}</button>
+              onClick={async () => { if (disabled || await confirm({ title: `停用 ${member.email}`, body: "TA 会立即退出、无法再登录；录入的题目和讲义都会保留。", confirmLabel: "停用账号", danger: true })) void update(member, { disabled: !disabled }, disabled ? "已恢复账号" : "已停用账号"); }}>{disabled ? "恢复" : "停用"}</button>
           </span>}
         </li>;
       })}</ul>}
     </section>
 
+    {confirmNode}
     {password && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="新密码">
       <div className="modal-head"><div><span className="eyebrow">重置密码</span><h2>{password.email}</h2></div><button className="close" aria-label="关闭" onClick={() => setPassword(null)}>×</button></div>
       <p className="sharing-muted">把新密码告诉这位同事，TA 用它登录。这个密码只显示这一次。</p>
-      <div className="sharing-invite"><code>{password.value}</code><button className="secondary" onClick={() => void copyText(password.value).then((ok) => notify(ok ? "新密码已复制" : "复制失败，请手动选中复制"))}>复制</button></div>
+      <div className="sharing-invite"><code>{password.value}</code><button className="secondary" onClick={() => void copyText(password.value).then((ok) => notify(ok ? "新密码已复制" : "复制失败，请手动选中复制", ok))}>复制</button></div>
       <div className="modal-actions"><button className="primary-button" onClick={() => setPassword(null)}>我已记下</button></div>
     </section></div>}
   </>;

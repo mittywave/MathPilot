@@ -55,7 +55,6 @@
 .sharing-badges em.off{border-color:color-mix(in srgb,var(--danger,#b4442f) 35%,var(--surface,#fff));color:var(--danger,#b4442f)}
 .sharing-actions{display:flex;flex-wrap:wrap;gap:6px}
 .sharing .sharing-danger{color:var(--danger,#b4442f)}
-.sharing-toast-error{background:var(--danger-fill,#b4442f)}
 
 @media(max-width:600px){
   .sharing-card{padding:14px 14px 16px}

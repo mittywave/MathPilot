@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useConfirm } from "./ConfirmDialog";
 import { PaperMoreMenu } from "./PaperMoreMenu";
 import { createObservation, deleteObservation, fetchStudentProfile, updateObservation } from "../../lib/api-client";
 import { ABILITY_DIMENSIONS, abilityNoteLabel, abilityStateLabel } from "../../lib/student-profile-contract";
@@ -73,6 +74,7 @@ function AbilitySummary({ observations }: { observations: StudentObservation[] }
 }
 
 function ObservationItem({ studentId, observation, onChange, onRemove }: { studentId: string; observation: StudentObservation; onChange: (next: StudentObservation, notice: string) => void; onRemove: () => void }) {
+  const [confirmNode, confirm] = useConfirm();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(observation.text);
   const [busy, setBusy] = useState(false);
@@ -83,11 +85,12 @@ function ObservationItem({ studentId, observation, onChange, onRemove }: { stude
     finally { setBusy(false); }
   }
   return <li className="observation" aria-busy={busy}>
+    {confirmNode}
     <header><b>{day(observation.observedAt)}</b>{busy && <small>正在读取…</small>}
       <PaperMoreMenu label="这条反馈的操作">
         <button type="button" onClick={() => { setDraft(observation.text); setEditing(true); }}>修改</button>
         <button type="button" onClick={() => void change({ extract: true })}>重新提取</button>
-        <hr /><button type="button" className="danger-text" onClick={() => { if (window.confirm("删除这条课后反馈？")) onRemove(); }}>删除…</button>
+        <hr /><button type="button" className="danger-text" onClick={async () => { if (await confirm({ title: "删除这条课后反馈", body: "删除后无法恢复。", confirmLabel: "删除", danger: true })) onRemove(); }}>删除…</button>
       </PaperMoreMenu>
     </header>
     {editing ? <div className="observation-edit">

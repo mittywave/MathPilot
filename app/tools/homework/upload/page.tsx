@@ -30,7 +30,7 @@ export default function CompletedHomeworkUpload(){
   const trail=fromStudent&&student?[{label:'学生档案',href:'/?view=wrong-book'},{label:student.name,href:`/?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:'上传作业'}]:[{label:'工具箱',href:'/tools'},{label:'作业批改',href:'/tools/homework'},{label:'上传作业'}];
   return <><SiteHeader active={fromStudent?'students':'tools'} user={user??null} loading={user===undefined} trail={trail}/>
     {loading?<main className="homework-loading">正在读取学生档案…</main>:!user?<main className="homework-loading"><p>请先登录教师账号。</p><a href="/">返回题库登录</a></main>:<main className="homework-upload-page">
-      {message&&<div role="status" className="homework-notice">{message}</div>}
+      {message&&<div role={busy?"status":"alert"} className={`homework-notice${busy?"":" inline-error"}`}>{message}</div>}
       <aside className="completed-upload-controls">
         <div className="completed-upload-fields"><label>学生<select value={studentId} disabled={busy||!!draft} onChange={e=>setStudentId(e.target.value)}>{students.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>作业名称<input value={title} disabled={busy||!!draft} onChange={e=>setTitle(e.target.value)} placeholder={international?'例如：9709 P1 Week 3 Quiz':'例如：一元一次方程练习'} /></label><label>课程<select aria-label="课程" value={curriculum} disabled={busy||!!draft} onChange={e=>upload.chooseCurriculum(e.target.value as HomeworkCurriculum)}>{CURRICULA.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label></div>
         {international&&<p className="homework-curriculum-note">按每个小问的印刷分值和 mark scheme 给分；看不清或空白的作答记 0 分。报告可下载 PDF。</p>}
