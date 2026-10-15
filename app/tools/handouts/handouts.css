@@ -105,11 +105,11 @@
 .handout-bank-pane,.handout-draft{min-height:0}
 .handout-bank{display:grid;grid-template-columns:minmax(0,1fr);height:100%;min-width:0;overflow:hidden;border-right:1px solid var(--line);background:var(--page)}
 .picker-tree{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line,#e4e9e6)}
-.picker-tree h2{margin:16px 16px 8px;font-family:"Songti SC",serif;font-size:16px}
+.picker-tree>.secondary{align-self:flex-start;margin:12px}
 .picker-tree .tree{flex:1;min-height:0;padding:0 8px 12px 6px;overscroll-behavior:contain}
 .picker-main{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;padding:12px;container-type:inline-size}
-.picker-source{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-.picker-source>.secondary{min-height:36px;font-size:13px}
+.picker-source{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.picker-tree>.secondary,.picker-source>.secondary{min-height:36px;font-size:13px}
 .picker-temporary-help{flex:1;padding:0 16px;color:var(--muted);font-size:13px;line-height:1.8}
 .picker-archive-item{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 0 2px;font-size:12px}
 .picker-archive-item label{display:flex;align-items:center;gap:6px;margin-right:auto;min-height:36px}

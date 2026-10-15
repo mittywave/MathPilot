@@ -105,14 +105,14 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题">
     <aside className="picker-tree" aria-label="知识目录" hidden={!treeOpen}>
-      <h2>{temporary ? "临时题库" : "知识目录"}</h2>
+      <button className="secondary" type="button" aria-label="收起知识目录" aria-expanded={true} onClick={() => setTreeOpen(false)}><span aria-hidden="true">←</span> 收起目录</button>
       {temporary ? <div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div> : <CategoryTree module={activeModule} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} onSelect={(id) => { setScope({ moduleId: activeModuleId, categoryId: id === activeModuleId ? "" : id }); setLimit(PAGE_SIZE); }} />}
     </aside>
     <div className="picker-main">
-      <div className="picker-source"><div className="handout-sheets" role="tablist" aria-label="选题来源">
+      <div className="picker-source">{!treeOpen && <button className="secondary" type="button" aria-label="展开知识目录" aria-expanded={false} onClick={() => setTreeOpen(true)}>展开目录 <span aria-hidden="true">→</span></button>}<div className="handout-sheets" role="tablist" aria-label="选题来源">
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
-      </div><button className="secondary" aria-label="切换知识目录" aria-expanded={treeOpen} onClick={() => setTreeOpen(!treeOpen)}>目录</button>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
+      </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <details ref={target} className={`picker-target${list ? " list" : ""}`}>
         <summary><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span><button className="text-button" aria-label="恢复默认选题目标" title="恢复默认选题目标" onClick={(event) => { event.preventDefault(); if (target.current) target.current.open = false; onModeChange(null); }}>×</button></summary>
         <div className="picker-target-fields">
