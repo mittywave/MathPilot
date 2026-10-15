@@ -269,7 +269,7 @@
 .handout-column>header.row-tail{padding-right:42px;flex-wrap:wrap;gap:4px 10px}
 .handout-column>header.row-tail>.basket-more{right:6px}
 
-.handout-brand{display:flex;flex:none;color:var(--ink)}.handout-brand .brand-word{height:15px}
+.handout-brand{display:flex;flex:none;color:var(--ink)}.handout-brand .brand-word{height:24px}
 .handout-back span{white-space:nowrap}
 .handout-back span:last-child{overflow:hidden;text-overflow:ellipsis}
 .handout-save::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--muted)}
