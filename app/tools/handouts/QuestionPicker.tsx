@@ -124,7 +124,7 @@ export function QuestionPicker({ library, mode, sheet, taken, usedIn, onPick, se
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
       </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <details ref={target} className={`picker-target${list ? " list" : ""}`}>
-        <summary><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span><button className="text-button" aria-label="恢复默认选题目标" title="恢复默认选题目标" onClick={(event) => { event.preventDefault(); if (target.current) target.current.open = false; onModeChange(null); }}>×</button></summary>
+        <summary title="展开或收起选题目标"><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></summary>
         <div className="picker-target-fields">
         <select aria-label={list ? "考查模块" : "加入模块"} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
           {!sections.length && <option value="">{list ? "讲义还没有知识模块" : "请先添加知识模块"}</option>}
