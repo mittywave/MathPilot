@@ -26,6 +26,7 @@ export default function CompletedHomeworkUpload(){
     if(submission)location.href=`/tools/homework/submissions/${submission.id}`;
   }
   const message=upload.message||loadError;
+  const missing=[!studentId&&{label:'学生',target:'.completed-upload-fields select'},!title.trim()&&{label:'作业名称',target:'.completed-upload-fields input'},!pages.length&&{label:'学生的作业页面',target:'.completed-upload-materials button.drop-entry'}].filter(field=>field!==false);
   const student=students.find(s=>s.id===studentId);
   const trail=fromStudent&&student?[{label:'学生档案',href:'/?view=wrong-book'},{label:student.name,href:`/?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:'上传作业'}]:[{label:'工具箱',href:'/tools'},{label:'作业批改',href:'/tools/homework'},{label:'上传作业'}];
   return <><SiteHeader active={fromStudent?'students':'tools'} user={user??null} loading={user===undefined} trail={trail}/>
@@ -36,7 +37,8 @@ export default function CompletedHomeworkUpload(){
         {international&&<p className="homework-curriculum-note">按每个小问的印刷分值和 mark scheme 给分；看不清或空白的作答记 0 分。报告可下载 PDF。</p>}
         {!students.length&&<p>请先在学生档案中创建学生。<a href="/?view=wrong-book">创建学生档案</a></p>}
         <fieldset className="homework-outputs" disabled={busy||!!draft}><legend>批改结果写入</legend>{OUTPUT_OPTIONS.map(([key,label,hint])=><label key={key}><input type="checkbox" aria-label={label} checked={outputs[key]} onChange={e=>setOutputs(current=>({...current,[key]:e.target.checked}))}/><span><b>{label}</b><small>{hint}</small></span></label>)}</fieldset>
-        <button className="primary upload-submit" disabled={busy||pickerBusy||!studentId||!title.trim()||!pages.length} onClick={start}>{busy?'正在提交…':'开始自动批改'}</button>
+        <button className="primary upload-submit" aria-describedby={!busy&&!pickerBusy&&missing.length?'homework-upload-missing':undefined} disabled={busy||pickerBusy||!studentId||!title.trim()||!pages.length} onClick={start}>{busy?'正在提交…':'开始自动批改'}</button>
+        {!busy&&!pickerBusy&&missing.length>0&&<p className="missing-reason" id="homework-upload-missing">还差：{missing.map((field,index)=><span key={field.label}>{index>0?'、':''}<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLElement>(field.target);control?.focus({preventScroll:true});control?.scrollIntoView({block:'nearest'});}}>{field.label}</button></span>)}</p>}
       </aside>
       <section className="completed-upload-materials"><h2>学生已完成的作业</h2><p>看不清的题目单独待处理，其余正常批改。</p><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onBusyChange={setPickerBusy} onSourceFile={file=>setDocuments(current=>[...current,file])}/><details className="completed-reference" open={international||undefined}><summary>{international?'Mark Scheme（建议上传）':'参考答案（选填）'}</summary><p>{international?'有 mark scheme 时逐个得分点对照；未提供时按考试局惯例拟定得分点并校验。':'有答案时优先使用；未提供时独立解题并校验。'}</p><input type="file" aria-label="上传参考答案" accept="image/*,application/pdf" multiple disabled={busy||referencesSaved} onChange={e=>setReferences([...(e.target.files??[])])}/>{references.map((f,index)=><p key={index}>{f.name}</p>)}</details></section>
     </main>}</>;

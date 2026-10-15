@@ -1331,3 +1331,8 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .app-toast>button:hover{background:color-mix(in srgb,currentColor 10%,transparent)}
 .app-toast>button:focus-visible{outline:2px solid currentColor;outline-offset:1px}
 .app-toast>button:disabled{opacity:.5;cursor:wait}
+
+main p.missing-reason{grid-column:1/-1;margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.missing-reason .text-button{min-height:0;height:auto;margin:0;padding:0;border:0;background:transparent;box-shadow:none;color:var(--green);font:inherit;text-decoration:underline;text-underline-offset:3px;white-space:normal}
+.studio-controls>.missing-reason,.completed-upload-controls>.missing-reason{margin-top:-14px}
+.handout-editor>.missing-reason{flex:none;margin:0;padding:2px 20px;text-align:right;border-bottom:1px solid var(--line)}

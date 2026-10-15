@@ -770,8 +770,9 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       <a className="brand-mark" href={backHref} aria-label="返回讲义书架">题</a>
       <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><span>讲义编撰</span><span aria-hidden="true">/</span><span>{backLabel}</span></a>
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
-      <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+      <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </header>
+    {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>至少一道题</button></p>}
     <div className="handout-workspace">
       <div className="handout-bank-pane" ref={bankPane}>
         <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}

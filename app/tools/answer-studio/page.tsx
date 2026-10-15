@@ -140,6 +140,7 @@ export default function AnswerStudioPage() {
       running.current=false;setBusy(false);
     }
   }
+  const missing=[!title.trim()&&{label:'资料名称',target:'.studio-controls .field-label input'},!saved&&mode==='paired'&&!questionFiles.length&&{label:'原题',target:'#studio-question-files-entry'},!saved&&!answerFiles.length&&{label:mode==='paired'?'手写答案':'答案材料',target:'#studio-answer-files-entry'}].filter(field=>field!==false);
   return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'手写转录'}]} onSignOut={async exit=>{if(busy||(saved&&!downloads.length)){setNotice('请完成转录并生成 Word 后再退出登录。');setFailed(true);return;}await exit();}} />
     {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href="/">返回题库登录</a></main>:<main className="answer-studio">
     <fieldset className="studio-fields studio-workspace" disabled={busy}>
@@ -162,7 +163,8 @@ export default function AnswerStudioPage() {
 
         {mode==='paired'&&<UploadZone id="studio-question-files" title="原题" compact files={questionFiles} onActivate={()=>{if(!busy&&!running.current)lastEntry.current='question';}} onFiles={(list,append)=>files('question',list,append)}/>}
 
-        {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" disabled={busy} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
+        {(!saved||!studioTextReady(saved))&&<button className="primary simple-start" aria-describedby={!busy&&missing.length?'studio-missing':undefined} disabled={busy||missing.length>0} onClick={()=>void start()}>{busy?'正在转录…':saved?'继续转录':'开始转录'}</button>}
+        {!busy&&missing.length>0&&<p className="missing-reason" id="studio-missing">还差：{missing.map((field,index)=><span key={field.label}>{index>0?'、':''}<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLElement>(field.target);control?.focus({preventScroll:true});control?.scrollIntoView({block:'nearest'});}}>{field.label}</button></span>)}</p>}
         {(busy||failed)&&<p className={`studio-notice${failed?' studio-error':''}`} role={failed?'alert':'status'}>{notice||(busy?'正在处理…':'操作失败，请重试。')}</p>}
       </aside>
       <section className="simple-panel">
@@ -180,8 +182,8 @@ export default function AnswerStudioPage() {
           <input id="studio-include-transcription-warnings" type="checkbox" checked={includeTranscriptionWarnings} disabled={busy} style={{flex:'0 0 auto',width:18,height:18,margin:'3px 0 0'}} onChange={e=>{const checked=e.target.checked;setIncludeTranscriptionWarnings(checked);setDownloads(links.current.invalidate());setNotice(checked?'生成的 Word 将保留转录提示和格式问题。':'生成的 Word 将不附加转录提示或格式问题。');setFailed(false);}}/>
           <span style={{display:'block',minWidth:0}}><span style={{display:'block',fontWeight:600,fontSize:14,lineHeight:1.45}}>在 Word 中加入转录问题提示</span><small style={{display:'block',marginTop:2,lineHeight:1.45}}>显示识别疑点和格式问题；关闭后不附加这些红色提示。</small></span>
         </label>
-        {studioOutputBlocker(saved,output)&&<p className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
-        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':'生成 Word'}</button>}
+        {studioOutputBlocker(saved,output)&&<p id="studio-output-missing" className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
+        {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" aria-describedby={studioOutputBlocker(saved,output)?'studio-output-missing':undefined} disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':'生成 Word'}</button>}
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
       </section>}
       <small className="studio-privacy">所选材料会发送至已配置的 AI 服务。每次打开都是新任务，结果不会留在浏览器中，刷新或关闭页面后清空，请及时生成并下载 Word；识别有疑问处是否写入 Word 可用上方勾选项设置。</small>

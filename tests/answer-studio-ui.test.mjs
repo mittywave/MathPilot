@@ -53,4 +53,6 @@ test('processing and actionable errors remain visible, while idle upload has no 
   assert.match(failure,/studio-error/);assert.match(failure,/登录状态读取失败/);
   const idle=render(ui,{saved:null});
   assert.match(idle,/开始转录/);assert.doesNotMatch(idle,/role="status"|本地项目备份|个提示/);
+  const continuation=render(ui,{saved:{...draft,questions:[],pages:[{id:'cached-page',role:'answer',name:'cached.png',page:1,image:'data:image/png;base64,AA==',hash:'cached',selected:true}]}});
+  assert.match(continuation,/>继续转录</);assert.doesNotMatch(continuation,/<button[^>]*disabled[^>]*>继续转录</);assert.doesNotMatch(continuation,/id="studio-missing"/);
 });

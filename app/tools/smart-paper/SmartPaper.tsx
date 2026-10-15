@@ -211,9 +211,10 @@ export default function SmartPaper() {
           <button type="button" className="secondary" disabled={!instruction.trim() || Boolean(busy)} onClick={revise}>调整方案</button>
         </section>}
         <div className="smart-paper-actions">
-        <button type="button" className={`${plan ? "secondary" : "primary-button"} smart-paper-go`} disabled={!request.trim() || Boolean(busy) || !library} onClick={generate}>
+        <button type="button" className={`${plan ? "secondary" : "primary-button"} smart-paper-go`} aria-describedby={ready&&!request.trim()&&!busy?"smart-paper-missing":undefined} disabled={!request.trim() || Boolean(busy) || !library} onClick={generate}>
           <SmartIcon name="spark" />{plan ? "重新生成方案" : "生成方案"}
         </button>
+        {ready&&!request.trim()&&!busy&&<p className="missing-reason" id="smart-paper-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLTextAreaElement>(".smart-paper-panel textarea");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>说一句要出什么练习</button></p>}
         {busy && <p className="smart-paper-busy"><i className="smart-paper-spinner" />{busy}</p>}
         {error && <p className="smart-paper-note error" role="alert">{error}</p>}
         </div>

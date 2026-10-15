@@ -343,8 +343,9 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       </section>}
 
       <div className="typeset-actions">
-      <button className="primary-button typeset-download" disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      <button className="primary-button typeset-download" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
+      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习</button></p>}
       {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign} />}
       {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
