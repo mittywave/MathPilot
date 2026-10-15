@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { coursePath, handoutModules, handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
+import { HANDOUT_TOPIC_ROOT, coursePath, handoutModules, handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
 import { prepareQuestion, requireAdmin, resolveLibraryContext, retainQuestionAssetsForUser, teacherNamespaceId } from "./library";
 import type { AuthUser, CourseLessonDetail, Handout, HandoutCourseNode, HandoutGrade, HandoutGroup, HandoutSummary, Question } from "../types";
 
@@ -35,7 +35,7 @@ function toHandout(row: HandoutRow, nodes: HandoutCourseNode[] = []): Handout {
   try { const raw = JSON.parse(row.items_json); stored = Array.isArray(raw) ? { items: raw } : raw ?? {}; } catch { /* Older rows store just the items array. */ }
   const group = storedGroup(row);
   return {
-    id: row.id, title: row.title, coursePath: coursePath(nodes, row.course_unit_id), items: normalizeHandoutDraft({ title: row.title, items: stored.items }).items,
+    id: row.id, title: row.title, coursePath: coursePath(nodes, row.course_unit_id), domainName: nodes.find((node) => node.parentId === HANDOUT_TOPIC_ROOT && node.id === group.domain)?.name ?? null, items: normalizeHandoutDraft({ title: row.title, items: stored.items }).items,
     temporaryQuestions: Array.isArray(stored.temporaryQuestions) ? stored.temporaryQuestions : [], ...group,
     studentName: group.studentId ? row.student_name : null, position: row.position, createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -71,6 +71,7 @@ async function groupOf(raw: unknown) {
   const group = normalizeHandoutGroup(raw);
   if (!group) throw responseError("讲义位置无效", 400);
   if (group.courseUnitId && coursePath(await listHandoutCourses(), group.courseUnitId).length !== 3) throw responseError("请选择存在的学期或单元", 400);
+  if (group.domain && !(await listHandoutCourses()).some((node) => node.parentId === HANDOUT_TOPIC_ROOT && node.id === group.domain)) throw responseError("请选择存在的专题", 400);
   return group;
 }
 
@@ -107,7 +108,8 @@ export async function createHandout(user: AuthUser, raw: unknown): Promise<Hando
   const row = await db().prepare(`INSERT INTO handouts (id, title, items_json, course_unit_id, domain, student_id, position, created_at, updated_at, owner_user_id)
     SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?, ?, ? FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ?
     RETURNING position`).bind(id, title, itemsJson, group.courseUnitId, group.domain, group.studentId, now, now, user.id, group.courseUnitId, group.domain, group.studentId).first<{ position: number }>();
-  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(await listHandoutCourses(), group.courseUnitId), studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
+  const nodes = await listHandoutCourses();
+  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
 }
 
 export async function updateHandout(user: AuthUser, id: string, raw: unknown): Promise<Handout> {
@@ -120,7 +122,8 @@ export async function updateHandout(user: AuthUser, id: string, raw: unknown): P
   if (!row) throw responseError("讲义不存在", 404);
   const group = storedGroup(row);
   const studentName = group.studentId ? await ownStudentName(user, group.studentId) : null;
-  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(await listHandoutCourses(), group.courseUnitId), studentName, position: row.position, createdAt: row.created_at, updatedAt: now };
+  const nodes = await listHandoutCourses();
+  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row.position, createdAt: row.created_at, updatedAt: now };
 }
 
 // Puts the listed handouts into one group in this order: the 课次 of a term, the topics of a domain or a student's handouts.
@@ -178,15 +181,16 @@ export async function listHandoutCourses(): Promise<HandoutCourseNode[]> {
   return rows.results;
 }
 
-// A single path manages all three levels; a lesson is still an ordinary handout.
+// Course outlines and topic folders share names, order, permissions and APIs.
 export async function saveHandoutCourse(raw: unknown) {
   const source = raw && typeof raw === "object" ? raw as { id?: unknown; parentId?: unknown; name?: unknown; direction?: unknown } : {};
   const nodes = await listHandoutCourses();
   const existing = source.id === undefined ? null : nodes.find((node) => node.id === source.id);
   if (source.id !== undefined && !existing) throw responseError("大纲位置不存在，请刷新后重试", 404);
+  if (existing?.id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能修改", 400);
   if (existing && source.direction !== undefined) {
     if (source.direction !== -1 && source.direction !== 1) throw responseError("调整方向无效", 400);
-    const siblings = nodes.filter((node) => node.parentId === existing.parentId);
+    const siblings = nodes.filter((node) => node.parentId === existing.parentId && node.id !== HANDOUT_TOPIC_ROOT);
     const from = siblings.findIndex((node) => node.id === existing.id); const to = from + source.direction;
     if (to >= 0 && to < siblings.length) {
       [siblings[from], siblings[to]] = [siblings[to], siblings[from]];
@@ -198,7 +202,8 @@ export async function saveHandoutCourse(raw: unknown) {
   if (!name || name.length > 80) throw responseError("名称请填写 1 至 80 个字", 400);
   const parentId = existing ? existing.parentId : source.parentId ?? null;
   if (parentId !== null && (typeof parentId !== "string" || !nodes.some((node) => node.id === parentId) || coursePath(nodes, parentId).length >= 3)) throw responseError("请选择体系或年级 / 阶段", 400);
-  if (nodes.some((node) => node.parentId === parentId && node.name === name && node.id !== existing?.id)) throw responseError("同一层级已有这个名称", 409);
+  if (nodes.some((node) => node.id === parentId && node.parentId === HANDOUT_TOPIC_ROOT)) throw responseError("请直接在专题下新建讲义", 400);
+  if (nodes.some((node) => node.parentId === parentId && node.name === name && node.id !== existing?.id && node.id !== HANDOUT_TOPIC_ROOT)) throw responseError("同一层级已有这个名称", 409);
   const id = existing?.id ?? crypto.randomUUID();
   try {
     if (existing) await db().prepare("UPDATE handout_course_nodes SET name = ? WHERE id = ?").bind(name, id).run();
@@ -214,9 +219,10 @@ export async function saveHandoutCourse(raw: unknown) {
 export async function deleteHandoutCourse(user: AuthUser, id: unknown) {
   requireAdmin(user);
   if (typeof id !== "string") throw responseError("大纲位置无效", 400);
+  if (id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能删除", 400);
   const result = await db().prepare(`DELETE FROM handout_course_nodes WHERE id = ?
     AND NOT EXISTS (SELECT 1 FROM handout_course_nodes child WHERE child.parent_id = ?)
-    AND NOT EXISTS (SELECT 1 FROM handouts WHERE course_unit_id = ?)`).bind(id, id, id).run();
+    AND NOT EXISTS (SELECT 1 FROM handouts WHERE course_unit_id = ? OR domain = ?)`).bind(id, id, id, id).run();
   if (!result.meta.changes) throw responseError("请先移走讲义，并删除空的下级目录，再删除这里", 409);
   return { courseNodes: await listHandoutCourses() };
 }

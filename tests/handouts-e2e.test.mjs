@@ -14,7 +14,7 @@ const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
 const CONFIG = join(ROOT, "dist", "server", "wrangler.json");
 const INVITE = "handouts-e2e-invite";
 
-test("0035 preserves old course, topic and student handouts while replacing fixed placement", async () => {
+test("0035 and 0036 preserve course, topic and student handouts while adding directories", async () => {
   const db = new DatabaseSync(":memory:");
   try {
     db.exec("PRAGMA foreign_keys=ON; CREATE TABLE users(id TEXT PRIMARY KEY); CREATE TABLE students(id TEXT PRIMARY KEY); INSERT INTO users VALUES ('teacher'); INSERT INTO students VALUES ('student');");
@@ -33,6 +33,14 @@ test("0035 preserves old course, topic and student handouts while replacing fixe
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
     assert.throws(() => db.exec("DELETE FROM handout_course_nodes WHERE id='course-7-summer'"), /FOREIGN KEY/);
     assert.throws(() => db.exec("DELETE FROM handout_course_nodes WHERE id='course-default'"), /FOREIGN KEY/);
+    db.exec("INSERT INTO handout_course_nodes VALUES ('custom-system', NULL, '专题库', 1)");
+    const beforeTopics = db.prepare("SELECT * FROM handouts ORDER BY id").all();
+    db.exec(await readFile(join(ROOT, "migrations", "0036_handout_topics.sql"), "utf8"));
+    assert.deepEqual(db.prepare("SELECT * FROM handouts ORDER BY id").all(), beforeTopics, "topic folders preserve all handout data");
+    assert.deepEqual(db.prepare("SELECT id, name FROM handout_course_nodes WHERE parent_id='topic-library' ORDER BY position").all().map((row) => ({ ...row })), [
+      { id: "function", name: "函数" }, { id: "geometry", name: "几何" }, { id: "algebra", name: "代数" }, { id: "number", name: "数论" }, { id: "thinking", name: "数学思想" },
+    ]);
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { db.close(); }
 });
 
@@ -230,6 +238,40 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal(movedDiy.courseUnitId, secondUnit);
     assert.deepEqual(movedDiy.items, diy.items);
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: unit } })).response.status, 200);
+
+    // Topics reuse the directory workflow, while handouts retain their domain ID.
+    const topic = (await course({ name: "计算能力", parentId: "topic-library" })).payload.id;
+    const emptyTopic = (await course({ name: "空专题", parentId: "topic-library" }, two)).payload.id;
+    const listedTopics = (await jsonRequest(base, "/api/handouts", { cookie: two })).payload;
+    assert.ok(listedTopics.courseNodes.some((node) => node.id === topic && node.parentId === "topic-library"));
+    assert.ok(!listedTopics.handouts.some((item) => item.domain === topic), "an empty topic persists without a placeholder handout");
+    assert.equal((await course({ name: "计算能力", parentId: "topic-library" })).response.status, 409);
+    assert.equal((await course({ name: "子目录", parentId: topic })).response.status, 400);
+    assert.equal((await course({ id: "topic-library", name: "入口" })).response.status, 400);
+    assert.equal((await course({ id: "topic-library", direction: 1 })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: "topic-library" } })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "invalid", domain: system } } })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "invalid", courseUnitId: topic } } })).response.status, 400);
+    const topicHandout = (await jsonRequest(base, "/api/handouts", { cookie: two, method: "POST", body: { handout: { title: "分式计算", domain: topic, items: diy.items } } })).payload.handout;
+    assert.deepEqual([topicHandout.domain, topicHandout.domainName, topicHandout.courseUnitId], [topic, "计算能力", null]);
+    await course({ id: topic, name: "运算能力" }, two);
+    const renamedTopicHandout = (await jsonRequest(base, `/api/handouts/${topicHandout.id}`, { cookie: one })).payload.handout;
+    assert.equal(renamedTopicHandout.domainName, "运算能力");
+    assert.deepEqual(renamedTopicHandout.items, topicHandout.items);
+    assert.equal((await course({ id: topic, name: "空专题" })).response.status, 409);
+    const reorderedTopics = (await course({ id: emptyTopic, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === "topic-library");
+    assert.deepEqual(reorderedTopics.slice(-2).map((node) => node.id), [emptyTopic, topic]);
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: topic } })).response.status, 409, "a topic containing handouts cannot be deleted");
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: emptyTopic } })).response.status, 403);
+    await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: emptyTopic, ids: [topicHandout.id] } });
+    const movedTopicHandout = (await jsonRequest(base, `/api/handouts/${topicHandout.id}`, { cookie: two })).payload.handout;
+    assert.deepEqual([movedTopicHandout.domain, movedTopicHandout.domainName, movedTopicHandout.position], [emptyTopic, "空专题", 0]);
+    assert.deepEqual(movedTopicHandout.items, topicHandout.items);
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: topic } })).response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: topic, ids: [topicHandout.id] } })).response.status, 400, "deleted topics cannot receive handouts");
+    await course({ id: "geometry", name: "平面几何" });
+    const originalTopicHandout = (await jsonRequest(base, `/api/handouts/${geometry.payload.handout.id}`, { cookie: two })).payload.handout;
+    assert.deepEqual([originalTopicHandout.domain, originalTopicHandout.domainName], ["geometry", "平面几何"], "renaming an original topic preserves its existing handouts");
 
     const tempQuestion = { id: "temp-equation", categoryId: "", type: "解答题", difficulty: "中等", stem: "解方程 $x+2=5$。", options: [], answer: "3", analysis: "移项得 $x=3$。", source: "", importFileName: "外部试卷.docx", contentImages: [pixel],
       stemDocxXml: ['<w:p><m:oMath><m:r><m:t>x+2=5</m:t></m:r></m:oMath></w:p>'], createdAt: Date.now(), updatedAt: Date.now() };
