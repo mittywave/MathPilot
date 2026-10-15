@@ -6,6 +6,11 @@ import { ALEVEL_PAGE_COPY, type AlevelPageLocale } from "../../lib/alevel-page-l
 import { logout } from "../../lib/api-client";
 import type { AuthUser } from "../../lib/types";
 
+// MathPilot mark: a radical sign whose bar runs out to a waypoint — math, steered to its destination.
+export function BrandGlyph() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 13.1 6.7 11.8 10.2 18.6 14.7 5.6H18.4" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" /><circle cx="20.6" cy="5.6" r="1.75" fill="currentColor" /></svg>;
+}
+
 export type SiteSection = "library" | "basket" | "handouts" | "students" | "tools";
 
 // The one top bar shared by the home page and top-level pages such as the toolbox. Its entries read
@@ -68,7 +73,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   const link = (href: string, label: string, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
   return <><header className="topbar">
     {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection; the home page switches in place. */}
-    <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><span className="brand-mark">题</span><strong>MathPilot</strong></a>
+    <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><span className="brand-mark"><BrandGlyph /></span><strong>MathPilot</strong></a>
     <nav ref={navigation} className="library-entries" aria-label="题库入口">
       {entry("library", "/", copy.navPublic)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
