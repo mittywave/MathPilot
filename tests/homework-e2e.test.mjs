@@ -306,6 +306,16 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(direct.response.status,201,JSON.stringify(direct.payload));
     const directId=direct.payload.submission.id,directAssignmentId=direct.payload.submission.assignmentId;
     assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo})).response.status,404);
+    assert.equal((await jsonRequest(base, "/api/submissions?count=grading")).response.status, 401);
+    for (const status of ["submitted", "processing", "published", "failed", "review_required", "ready", "draft"]) {
+      command(["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc"),
+        "--command", `UPDATE homework_submissions SET status='${status}' WHERE id='${directId}'`]);
+      const count = await jsonRequest(base, "/api/submissions?count=grading", { cookie: teacherOne });
+      assert.equal(count.response.status, 200);
+      assert.equal(count.response.headers.get("cache-control"), "private, no-store");
+      assert.deepEqual(count.payload, { count: ["submitted", "processing"].includes(status) ? 1 : 0 }, `${status} grading count without submission details`);
+      assert.deepEqual((await jsonRequest(base, "/api/submissions?count=grading", { cookie: teacherTwo })).payload, { count: 0 }, "other teachers' homework is excluded");
+    }
     assert.equal((await upload(base,`/api/homework-assets?submissionId=${directId}&role=submission_processed`,teacherOne,bytes)).response.status,400);
     const directPage=await uploadPage(base,teacherOne,directId,bytes);
     assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"save-pages",pages:[directPage]}})).response.status,404);

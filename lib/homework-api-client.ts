@@ -10,6 +10,7 @@ export const homeworkApi = {
   me: () => request<{ user: AuthUser | null }>("/api/auth/me"),
   students: () => request<{ students: StudentSummary[] }>("/api/students"),
   submissions: () => request<{ submissions: HomeworkSubmission[] }>("/api/submissions"),
+  gradingCount: () => request<{ count: number }>("/api/submissions?count=grading"),
   createSubmission: (studentId: string, title: string, outputs: HomeworkOutputs, curriculum: HomeworkCurriculum) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ studentId, title, outputs, curriculum }) }),
   submission: (id: string) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`),
   updateSubmission: (id: string, body: { action: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: number }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),

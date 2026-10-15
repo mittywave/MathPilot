@@ -239,6 +239,13 @@ export async function readTeacherSubmissions(user: AuthUser) {
   return Promise.all(rows.results.map((row) => submissionDetails(row)));
 }
 
+export async function countGradingHomework(user: AuthUser) {
+  const row = await appEnv().DB.prepare(`SELECT COUNT(DISTINCT assignment_id) AS count FROM (${SUBMISSION_SELECT}
+    AND homework_assignments.owner_user_id = ? AND homework_submissions.status IN ('submitted', 'processing'))`)
+    .bind(user.id).first<{ count: number }>();
+  return Number(row?.count ?? 0);
+}
+
 export async function readTeacherSubmission(id: string, user: AuthUser) { return submissionDetails(await teacherSubmissionRow(id, user)); }
 
 export async function createCompletedSubmission(input: { studentId: string; title: string; outputs?: unknown; curriculum?: unknown }, user: AuthUser) {

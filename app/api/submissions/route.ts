@@ -1,8 +1,10 @@
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
-import { createAssignedHomework, createCompletedSubmission, readTeacherSubmissions } from "../../../lib/server/homework";
+import { countGradingHomework, createAssignedHomework, createCompletedSubmission, readTeacherSubmissions } from "../../../lib/server/homework";
 export async function GET(request: Request) {
   try { const user = await requireUser(request);
-    return Response.json({ submissions: await readTeacherSubmissions(user) }, { headers: { "Cache-Control": "private, no-store" } }); }
+    const result = new URL(request.url).searchParams.get("count") === "grading"
+      ? { count: await countGradingHomework(user) } : { submissions: await readTeacherSubmissions(user) };
+    return Response.json(result, { headers: { "Cache-Control": "private, no-store" } }); }
   catch (error) { if (error instanceof Response) return error; return Response.json({ error: error instanceof Error ? error.message : "提交记录读取失败" }, { status: 500 }); }
 }
 // A body with questions assigns a material to students (布置作业); otherwise it starts the upload of a completed homework.

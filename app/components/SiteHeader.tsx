@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppearancePicker } from "./AppearancePicker";
 import { ALEVEL_PAGE_COPY, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
 import { logout } from "../../lib/api-client";
+import { homeworkApi } from "../../lib/homework-api-client";
 import type { AuthUser } from "../../lib/types";
 
 // MathPilot wordmark, the "01 editorial" design: "Math" upright in the ink colour, "Pilot" italic in a soft accent,
@@ -39,6 +40,9 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   const navigation = useRef<HTMLElement>(null);
   const signOutPhase = useRef<"idle" | "callback" | "logout">("idle");
   const [signOutStatus, setSignOutStatus] = useState<"idle" | "busy" | "error">("idle");
+  const [grading, setGrading] = useState<{ userId: string; count: number } | null>(null);
+  const userId = user?.id;
+  const gradingCount = userId && grading?.userId === userId ? grading.count : 0;
   const sectionTitle = active ? { library: copy.navPublic, basket: copy.navBasket, handouts: copy.navHandouts, students: copy.navStudents, tools: copy.navTools }[active] : copy.navPublic;
   const trailTitle = trail?.length ? [...new Set([trail[trail.length - 1].label, trail[0].label])].join(" · ") : "";
   const browserTitle = `${title?.trim() || trailTitle || sectionTitle} · MathPilot`;
@@ -46,8 +50,26 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
 
   useEffect(() => { document.title = browserTitle; }, [browserTitle]);
   useEffect(() => {
+    if (!userId) return;
+    let current = true, reading = false;
+    const refresh = async () => {
+      if (document.hidden || reading) return;
+      reading = true;
+      try {
+        const result = await homeworkApi.gradingCount();
+        if (current) setGrading({ userId, count: result.count });
+      } catch { /* Keep the last confirmed count until the next refresh. */ }
+      finally { reading = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 4000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { current = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [userId]);
+  useEffect(() => {
     navigation.current?.querySelector<HTMLElement>(".active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active, basketCount, locale, signOutStatus, user?.id]);
+  }, [active, basketCount, gradingCount, locale, signOutStatus, user?.id]);
 
   // The continuation may run after a page's discard confirmation, or immediately on a clean page.
   async function exit() {
@@ -83,7 +105,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
     <nav ref={navigation} className="library-entries" aria-label="题库入口">
       {entry("library", "/", copy.navPublic)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
-      {entry("students", "/?view=wrong-book", copy.navStudents)}
+      {entry("students", "/?view=wrong-book", <>{copy.navStudents}{gradingCount > 0 && <i title={`${gradingCount} 份作业正在批改`} aria-label={`${gradingCount} 份作业正在批改`}>{gradingCount}</i>}</>)}
       {user && link("/tools", copy.navTools, active === "tools")}
     </nav>
     <div className="account-area">
