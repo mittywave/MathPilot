@@ -5,9 +5,10 @@ export const HANDOUT_LIMITS: { title: number; items: number; id: number; section
 export const DEFAULT_HANDOUT_TITLE: string;
 export const HANDOUT_GRADES: { value: HandoutGrade; label: string }[];
 export const HANDOUT_DOMAINS: { value: HandoutDomain; label: string }[];
+export const HANDOUT_TOPIC_ROOT: string;
 export const HANDOUT_SHELVES: { value: HandoutShelf; label: string }[];
 export const UNSORTED_TOPIC_LABEL: string;
-type GroupLike = { courseUnitId?: string | null; coursePath?: HandoutCourseNode[]; domain?: HandoutDomain | null; studentId?: string | null; studentName?: string | null } | null | undefined;
+type GroupLike = { courseUnitId?: string | null; coursePath?: HandoutCourseNode[]; domain?: HandoutDomain | null; domainName?: string | null; studentId?: string | null; studentName?: string | null } | null | undefined;
 export function shelfOf(group: GroupLike): HandoutShelf;
 export function normalizeHandoutGroup(raw: unknown): HandoutGroup | null;
 export function sameGroup(a: GroupLike, b: GroupLike): boolean;

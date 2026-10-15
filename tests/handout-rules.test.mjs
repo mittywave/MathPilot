@@ -100,10 +100,11 @@ test("a group is a term, a topic domain or a student, and the shelf follows from
   assert.deepEqual(normalizeHandoutGroup({ courseUnitId: "course-8-autumn" }), { ...none, courseUnitId: "course-8-autumn" });
   assert.deepEqual(normalizeHandoutGroup({ courseUnitId: " custom-unit " }), { ...none, courseUnitId: "custom-unit" });
   assert.deepEqual(normalizeHandoutGroup({ domain: "geometry" }), { ...none, domain: "geometry" });
+  assert.deepEqual(normalizeHandoutGroup({ domain: " custom-topic " }), { ...none, domain: "custom-topic" });
   assert.deepEqual(normalizeHandoutGroup({ domain: "number", grade: 8, term: "autumn" }), { ...none, domain: "number" }, "a domain places a topic, whatever else is sent");
   assert.deepEqual(normalizeHandoutGroup({ studentId: " s1 ", domain: "function", grade: 8, term: "autumn" }), { ...none, studentId: "s1" }, "a student handout belongs to the student alone");
   for (const raw of [null, {}, { grade: null, term: null }, { title: "x", items: [] }]) assert.deepEqual(normalizeHandoutGroup(raw), none, "nothing given is the unsorted part of the topic library");
-  for (const raw of [{ courseUnitId: 7 }, { courseUnitId: "x".repeat(201) }, { courseUnitId: "  " }, { term: "spring" }, { grade: 8 }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { domain: "physics" }, { studentId: 5 }, { studentId: "x".repeat(201) }]) assert.equal(normalizeHandoutGroup(raw), null, JSON.stringify(raw));
+  for (const raw of [{ courseUnitId: 7 }, { courseUnitId: "x".repeat(201) }, { courseUnitId: "  " }, { term: "spring" }, { grade: 8 }, { grade: 6, term: "spring" }, { grade: 7, term: "fall" }, { domain: 5 }, { domain: " " }, { domain: "x".repeat(201) }, { studentId: 5 }, { studentId: "x".repeat(201) }]) assert.equal(normalizeHandoutGroup(raw), null, JSON.stringify(raw));
   assert.equal(shelfOf({ ...none, courseUnitId: "course-8-autumn" }), "course");
   assert.equal(shelfOf({ ...none, domain: "algebra" }), "topic");
   assert.equal(shelfOf(none), "topic", "old unfiled handouts wait in the topic library");
@@ -116,6 +117,8 @@ test("a group is a term, a topic domain or a student, and the shelf follows from
   assert.ok(!sameGroup({ courseUnitId: "unit" }, { courseUnitId: "different" }));
   assert.equal(groupLabel({ domain: "geometry" }), "几何专题");
   assert.equal(groupLabel({ domain: "thinking" }), "数学思想专题");
+  assert.equal(groupLabel({ domain: "custom-topic", domainName: "计算能力" }), "计算能力");
+  assert.equal(groupLabel({ domain: "custom-topic" }), "专题库");
   assert.equal(groupLabel(none), "未分板块");
   assert.equal(groupLabel({ studentId: "s1", studentName: "CICI" }), "CICI");
   assert.ok(sameGroup({ ...none, domain: "function" }, { domain: "function" }));

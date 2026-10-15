@@ -204,14 +204,15 @@ export type HandoutItem =
 // 已有深圳创新知识图谱中的初一至初三记为 7–9。
 export type HandoutGrade = 7 | 8 | 9;
 export type HandoutShelf = "course" | "topic" | "student";
-// 专题库的五个板块：函数、几何、代数、数论、数学思想。
-export type HandoutDomain = "function" | "geometry" | "algebra" | "number" | "thinking";
-// 课程体系指向自定义树的单元；专题库和学生讲义沿用原来的位置。
+// 专题的稳定目录 ID；五个原板块保留原 ID，自建专题使用目录生成的 ID。
+export type HandoutDomain = string;
+// 课程体系和专题库复用同一棵目录树，专题挂在固定的专题库根目录下。
 export type HandoutCourseNode = { id: string; parentId: string | null; name: string; position: number };
 export type HandoutGroup = { courseUnitId: string | null; domain: HandoutDomain | null; studentId: string | null };
 
 export type Handout = HandoutGroup & {
   coursePath: HandoutCourseNode[];
+  domainName: string | null;
   id: string;
   title: string;
   items: HandoutItem[];
