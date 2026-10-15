@@ -2,7 +2,7 @@ import { AlignmentType, BorderStyle, Document, ImageRun, LineRuleType, Math as W
 import JSZip from "jszip";
 import katex from "katex";
 import { mml2omml } from "mathml2omml";
-import { splitMathText, toLatexMath } from "./math-text";
+import { splitMathLines, splitMathText, toLatexMath } from "./math-text";
 import { needsWordMathEquation, normalizeMathNotation } from "./math-notation.mjs";
 import { isCompactConclusionQuestion, resolveQuestionImageLayout, sourceFigureWidth } from "./question-layout";
 import { optionColumnCount } from "./question-presentation-rules.mjs";
@@ -442,17 +442,18 @@ export async function buildWordBlob({ title, sections, answers }: { title: strin
   const pushAnswer = (question: Question, label: string) => {
     children.push(new Paragraph({ spacing: { ...BODY_LINE, after: 80 }, children: [...textRuns(label, BODY_SIZE, { bold: true }), ...richText(question.answer || "略", { bold: true })] }));
     if (!question.analysis) return;
-    const originalParagraphs = question.analysis.split(/\r?\n/).filter((line) => line.length > 0);
+    const originalParagraphs = splitMathLines(question.analysis).filter((line) => line.trim().length > 0);
     if (question.analysisDocxXml?.length) {
       question.analysisDocxXml.forEach((xml) => {
         const token = `__ZHITI_RAW_ANALYSIS_${rawParagraphs.length}__`;
         rawParagraphs.push({ token, xml, assets: question.analysisDocxAssets });
         children.push(new Paragraph({ children: textRuns(token) }));
       });
-    } else if (originalParagraphs[0]?.startsWith("【")) {
-      originalParagraphs.forEach((line, lineIndex) => children.push(new Paragraph({ spacing: { ...BODY_LINE, after: lineIndex === originalParagraphs.length - 1 ? 180 : 40 }, children: richText(line) })));
     } else {
-      children.push(new Paragraph({ spacing: { ...BODY_LINE, after: 180 }, children: [...textRuns("解析："), ...richText(question.analysis)] }));
+      originalParagraphs.forEach((line, lineIndex) => children.push(new Paragraph({
+        spacing: { ...BODY_LINE, after: lineIndex === originalParagraphs.length - 1 ? 180 : 40 },
+        children: [...(lineIndex === 0 && !line.startsWith("【") ? textRuns("解析：") : []), ...richText(line)],
+      })));
     }
   };
   for (const section of sections) {

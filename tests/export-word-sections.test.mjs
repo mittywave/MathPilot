@@ -79,6 +79,54 @@ test("answers can be omitted, collected at the end, or placed after each questio
   assert.doesNotMatch(between, /\u3000/, "no blank working lines when the answer follows directly");
 });
 
+test("calculation analyses retain one paragraph per derivation step in both answer placements", async () => {
+  const calculations = [
+    { ...base, id: "calculation-one", type: "解答题", stem: String.raw`$(-6)\div(-\frac{1}{3})^{2}-7^{2}+2\times(-3)^{2}$`, options: [], answer: "$-85$",
+      analysis: ["原式：", String.raw`$=\left(-6\right)\div \left(- \frac{1}{3}\right)^{2}-7^{2}+2\times \left(-3\right)^{2}$`, String.raw`$=\left(-6\right)\div \frac{1}{9}-49+2\times 9$`, String.raw`$=\left(-6\right)\times 9-49+2\times 9$`, "$=-54-49+18$", "$=-85$"].join("\n") },
+    { ...base, id: "calculation-two", type: "解答题", stem: String.raw`$-3^{2}\times(-\frac{1}{9})+(-8)\div(-2)^{2}$`, options: [], answer: "$-1$",
+      analysis: ["原式：", String.raw`$=-3^{2}\times \left(- \frac{1}{9}\right)+\left(-8\right)\div \left(-2\right)^{2}$`, String.raw`$=-9\times \left(- \frac{1}{9}\right)+\left(-8\right)\div 4$`, String.raw`$=\left(-9\right)\times \left(- \frac{1}{9}\right)-2$`, "$=1-2$", "$=-1$"].join("\r\n") },
+  ];
+  for (const answers of ["end", "each"]) {
+    const blob = await buildWordBlob({ title: "递等式回归", sections: [{ questions: calculations }], answers });
+    const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml").async("string");
+    assert.equal(XMLValidator.validate(xml), true);
+    const paragraphs = xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? [];
+    const text = paragraph => paragraph.replace(/<[^>]+>/g, "");
+    const starts = paragraphs.map((paragraph, index) => text(paragraph) === "解析：原式：" ? index : -1).filter(index => index >= 0);
+    assert.equal(starts.length, 2, `${answers}: each analysis starts in its own paragraph`);
+    for (const start of starts) {
+      const steps = paragraphs.slice(start + 1, start + 6);
+      assert.equal(steps.length, 5);
+      for (const paragraph of steps) {
+        assert.match(text(paragraph), /^[=＝]/, "every step starts with an equals sign");
+        assert.equal((text(paragraph).match(/[=＝]/g) ?? []).length, 1, "steps never merge into one paragraph");
+        assert.doesNotMatch(text(paragraph), /[\r\n]/, "newlines become Word paragraphs, not ignored text characters");
+      }
+      assert.equal(text(steps[4]), start === starts[0] ? "＝−85" : "＝−1");
+    }
+    assert.equal((xml.match(/<m:f>/g) ?? []).length, 7, "fractions remain editable Word structures");
+  }
+});
+
+test("analysis paragraph boundaries preserve prose, tags, legacy breaks and complete multiline equations", async () => {
+  const variants = [
+    { analysis: "先算乘方。\n再算乘除。\n最后算加减。", expected: ["解析：先算乘方。", "再算乘除。", "最后算加减。"] },
+    { analysis: "【解答】原式：\n$=2+3$\n$=5$", expected: ["【解答】原式：", "＝2＋3", "＝5"] },
+    { analysis: String.raw`原式：\n$=2+3$\n$=5$`, expected: ["解析：原式：", "＝2＋3", "＝5"] },
+    { analysis: "计算如下：\n$$\\begin{aligned}\na&=1\\\\\nb&=2\n\\end{aligned}$$\n因此成立。", expected: ["解析：计算如下：", "a=1b=2", "因此成立。"], matrix: true },
+    { analysis: "$$\\frac{1}{2}=0.5$$\n结论成立。", expected: ["解析：12=0.5", "结论成立。"] },
+  ];
+  for (const variant of variants) {
+    const question = { ...questions[0], analysis: variant.analysis };
+    const blob = await buildWordBlob({ title: "解析分段回归", sections: [{ questions: [question] }], answers: "each" });
+    const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml").async("string");
+    assert.equal(XMLValidator.validate(xml), true);
+    const paragraphs = (xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? []).map(paragraph => paragraph.replace(/<[^>]+>/g, ""));
+    assert.deepEqual(paragraphs.slice(paragraphs.indexOf("答案：ALPHAANSWER") + 1), variant.expected);
+    if (variant.matrix) assert.equal((xml.match(/<m:m>/g) ?? []).length, 1, "an aligned formula stays intact");
+  }
+});
+
 test("section notes keep sub-headings, bold points and figures in Word", async t => {
   const OriginalImage = globalThis.Image; const originalFetch = globalThis.fetch;
   // Only browser image decoding and the asset request are stubbed; the DOCX builder is real.
