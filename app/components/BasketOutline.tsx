@@ -71,8 +71,7 @@ export function BasketOutline({ structure, pool, disabled, onChange, onLocate, o
               <button disabled={disabled} onClick={() => onChange((current) => removeBasketSection(current, section.id!))}>删除标题，题目移回未分组</button>
             </PaperMoreMenu>}
           </header>
-          {!closed && <div className="basket-outline-questions">
-            {!section.questions.length && <p className="basket-outline-empty">{section.id ? "拖入题目，或用题卡的“移动到”归组" : "新选的题目会放在这里"}</p>}
+          {!closed && !!section.questions.length && <div className="basket-outline-questions">
             {section.questions.map((question, index) => <div key={question.id} className={`basket-outline-question${over === question.id ? " drop-target" : ""}`}
               onDragOver={(event) => { if (dragged?.kind === "question") accept(event, question.id); }} onDrop={(event) => drop(event, section.id, question.id)}>
               <button type="button" className="basket-outline-locate" data-question-id={question.id} draggable={!disabled} onDragStart={(event) => start(event, "question", question.id)} disabled={disabled}
