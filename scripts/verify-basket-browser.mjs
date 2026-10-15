@@ -80,6 +80,27 @@ try {
   await titleInput().fill('结构化组卷验收');
   assert.deepEqual(await outline.locator('.basket-outline-locate').allTextContents(), ['1', '2', '3', '4', '5', '6'], 'the compact outline shows only global question numbers');
   assert.equal(await outline.locator('.katex').count(), 0, 'question stems and equations stay in the right-hand cards');
+  // A true gap drop must insert between its neighbours, not append to the section.
+  const fourth = outline.locator(`[data-question-id="${questions[3].id}"]`);
+  const secondBox = await outline.getByRole('button', { name: '定位第 2 题', exact: true }).boundingBox();
+  const sourceBox = await fourth.boundingBox();
+  await page.mouse.move(sourceBox.x + 16, sourceBox.y + 16);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox.x + 24, sourceBox.y + 16, { steps: 3 });
+  await page.mouse.move(secondBox.x + secondBox.width + 2, secondBox.y + 16, { steps: 8 });
+  await outline.locator('.insert-before').waitFor();
+  assert.equal(await outline.locator('.insert-before [data-question-id]').getAttribute('data-question-id'), questions[2].id);
+  await page.screenshot({ path: join(out, 'insertion-preview.png'), fullPage: false });
+  await page.mouse.up(); await ready();
+  assert.deepEqual((await stored('local-admin')).structure.unassignedIds, [questions[0].id, questions[1].id, questions[3].id, questions[2].id, questions[4].id, questions[5].id]);
+  assert.equal(await outline.locator('.is-moved [data-question-id]').getAttribute('data-question-id'), questions[3].id);
+  assert.match(await page.locator('.app-toast').innerText(), /原第 4 题.*第 3 位/);
+  await page.screenshot({ path: join(out, 'insertion-result.png'), fullPage: false });
+  // The right half of a tile places after it, including forward movement.
+  await fourth.dragTo(outline.locator(`[data-question-id="${questions[2].id}"]`), { targetPosition: { x: 28, y: 16 } });
+  await ready();
+  assert.deepEqual((await stored('local-admin')).structure.unassignedIds, questions.slice(0, 6).map((question) => question.id));
+  step('native gap insertion previews the exact slot, confirms/highlights the moved question, and right-half drops insert after a tile');
   await outline.getByRole('button', { name: '按题型分类', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.basket-section-heading').length === 5);
   assert.deepEqual(await headings().allTextContents(), ['一、单选题1 题', '二、多选题1 题', '三、填空题1 题', '四、判断题1 题', '五、解答题2 题']);
