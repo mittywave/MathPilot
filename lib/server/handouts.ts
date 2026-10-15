@@ -35,7 +35,7 @@ function toHandout(row: HandoutRow, nodes: HandoutCourseNode[] = []): Handout {
   try { const raw = JSON.parse(row.items_json); stored = Array.isArray(raw) ? { items: raw } : raw ?? {}; } catch { /* Older rows store just the items array. */ }
   const group = storedGroup(row);
   return {
-    id: row.id, title: row.title, coursePath: coursePath(nodes, row.course_unit_id), domainName: nodes.find((node) => node.parentId === HANDOUT_TOPIC_ROOT && node.id === group.domain)?.name ?? null, items: normalizeHandoutDraft({ title: row.title, items: stored.items }).items,
+    id: row.id, title: row.title, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, items: normalizeHandoutDraft({ title: row.title, items: stored.items }).items,
     temporaryQuestions: Array.isArray(stored.temporaryQuestions) ? stored.temporaryQuestions : [], ...group,
     studentName: group.studentId ? row.student_name : null, position: row.position, createdAt: row.created_at, updatedAt: row.updated_at,
   };
@@ -70,8 +70,10 @@ async function encode(raw: unknown, user: AuthUser, previous: Question[] = [], s
 async function groupOf(raw: unknown) {
   const group = normalizeHandoutGroup(raw);
   if (!group) throw responseError("讲义位置无效", 400);
-  if (group.courseUnitId && coursePath(await listHandoutCourses(), group.courseUnitId).length !== 3) throw responseError("请选择存在的学期或单元", 400);
-  if (group.domain && !(await listHandoutCourses()).some((node) => node.parentId === HANDOUT_TOPIC_ROOT && node.id === group.domain)) throw responseError("请选择存在的专题", 400);
+  const path = group.courseUnitId || group.domain ? coursePath(await listHandoutCourses(), group.courseUnitId ?? group.domain) : [];
+  if (group.courseUnitId && (path.length !== 3 || path[0].id === HANDOUT_TOPIC_ROOT)) throw responseError("请选择存在的学期或单元", 400);
+  // Categories retain old handouts in 未分系列; new series use the same domain field.
+  if (group.domain && (path[0]?.id !== HANDOUT_TOPIC_ROOT || path.length < 2)) throw responseError("请选择存在的专题分类或系列", 400);
   return group;
 }
 
@@ -109,7 +111,7 @@ export async function createHandout(user: AuthUser, raw: unknown): Promise<Hando
     SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?, ?, ? FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ?
     RETURNING position`).bind(id, title, itemsJson, group.courseUnitId, group.domain, group.studentId, now, now, user.id, group.courseUnitId, group.domain, group.studentId).first<{ position: number }>();
   const nodes = await listHandoutCourses();
-  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
+  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
 }
 
 export async function updateHandout(user: AuthUser, id: string, raw: unknown): Promise<Handout> {
@@ -123,7 +125,7 @@ export async function updateHandout(user: AuthUser, id: string, raw: unknown): P
   const group = storedGroup(row);
   const studentName = group.studentId ? await ownStudentName(user, group.studentId) : null;
   const nodes = await listHandoutCourses();
-  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row.position, createdAt: row.created_at, updatedAt: now };
+  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row.position, createdAt: row.created_at, updatedAt: now };
 }
 
 // Puts the listed handouts into one group in this order: the 课次 of a term, the topics of a domain or a student's handouts.
@@ -201,8 +203,7 @@ export async function saveHandoutCourse(raw: unknown) {
   const name = typeof source.name === "string" ? source.name.trim() : "";
   if (!name || name.length > 80) throw responseError("名称请填写 1 至 80 个字", 400);
   const parentId = existing ? existing.parentId : source.parentId ?? null;
-  if (parentId !== null && (typeof parentId !== "string" || !nodes.some((node) => node.id === parentId) || coursePath(nodes, parentId).length >= 3)) throw responseError("请选择体系或年级 / 阶段", 400);
-  if (nodes.some((node) => node.id === parentId && node.parentId === HANDOUT_TOPIC_ROOT)) throw responseError("请直接在专题下新建讲义", 400);
+  if (parentId !== null && (typeof parentId !== "string" || !nodes.some((node) => node.id === parentId) || coursePath(nodes, parentId).length >= 3)) throw responseError("请选择体系、年级 / 阶段或专题分类", 400);
   if (nodes.some((node) => node.parentId === parentId && node.name === name && node.id !== existing?.id && node.id !== HANDOUT_TOPIC_ROOT)) throw responseError("同一层级已有这个名称", 409);
   const id = existing?.id ?? crypto.randomUUID();
   try {
