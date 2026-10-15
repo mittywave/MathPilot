@@ -16,7 +16,7 @@ import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutCourseNode, 
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
-import { BrandGlyph, SiteHeader } from "../../components/SiteHeader";
+import { BrandWordmark, SiteHeader } from "../../components/SiteHeader";
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { QuestionPicker, type PickerMode } from "./QuestionPicker";
@@ -767,7 +767,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   return <main className="toolbox handouts handout-editor">
     {confirmNode}
     <header className="handout-bar">
-      <a className="brand-mark" href={backHref} aria-label="返回讲义书架"><BrandGlyph /></a>
+      <a className="handout-brand" href={backHref} aria-label="返回讲义书架"><BrandWordmark /></a>
       <a className="handout-back" aria-label={`返回${backLabel}`} href={backHref}><span>讲义编撰</span><span aria-hidden="true">/</span><span>{backLabel}</span></a>
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
       <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
