@@ -31,7 +31,7 @@ export function VerdictTally({ items, total, international = false }: { items: R
   </div>;
 }
 const plain = (text: string) => text.replace(/\$+/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
-const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }).replaceAll("/", ".");
 
 export type DayState = "done" | "partial" | "missing";
 /** Each day is a task group; its progress depends only on what has been handed in. */
