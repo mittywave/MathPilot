@@ -211,7 +211,9 @@ def exercise(page,app,out,upstream):
     tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');expect(page.get_by_text('Model-A',exact=True).first).to_be_visible()
     for theme in ['light','dark']:
         for width in [1024,1280,1440]:
-            page.set_viewport_size({'width':width,'height':1000});button('外观').click();page.get_by_role('radio',name='经典深色' if theme=='dark' else '经典浅色',exact=True).click();page.keyboard.press('Escape');assert page.locator('html').get_attribute('data-theme')==theme
+            page.set_viewport_size({'width':width,'height':1000})
+            if page.locator('html').get_attribute('data-theme')!=theme:button('外观').click()
+            assert page.locator('html').get_attribute('data-theme')==theme
             sizes=page.evaluate('({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth})');assert sizes['scroll']<=sizes['width'],sizes
             for label in ['重新获取上游模型','添加模型']:
                 b=button(label);expect(b).to_be_visible();metric=b.evaluate('e=>({height:e.getBoundingClientRect().height,fg:getComputedStyle(e).color,bg:getComputedStyle(e).backgroundColor})');assert metric['height']>=36;assert contrast(metric['fg'],metric['bg'])>=4.5,metric
@@ -244,7 +246,9 @@ def exercise(page,app,out,upstream):
     for label,p,m in [(labels[1],ds,'Model-A'),(labels[2],cl,'Claude-Alias'),(labels[3],ds,'Model-A')]:page.get_by_label(label+'主目标',exact=True).select_option(target(p,m))
     button('保存任务分配').click();expect(page.get_by_role('status')).to_contain_text('任务分配已保存');page.screenshot(path=str(out/'routing-dark-1440.png'),full_page=True)
     page.set_viewport_size({'width':1024,'height':768});page.screenshot(path=str(out/'routing-dark-1024.png'),full_page=True);assert page.evaluate('document.documentElement.scrollWidth<=document.documentElement.clientWidth');page.set_viewport_size({'width':1440,'height':1000})
-    tab('提供方');page.set_viewport_size({'width':1024,'height':768});page.locator('aside').get_by_role('button').filter(has_text=gm['name']).click();expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+'/tenant/antigravity/v1beta');button('外观').click();page.get_by_role('radio',name='经典浅色',exact=True).click();page.keyboard.press('Escape');assert page.evaluate('[document.documentElement.dataset.theme,document.documentElement.dataset.style]')==['light','classic'];page.screenshot(path=str(out/'connection-light-1024.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
+    tab('提供方');page.set_viewport_size({'width':1024,'height':768});page.locator('aside').get_by_role('button').filter(has_text=gm['name']).click();expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+'/tenant/antigravity/v1beta')
+    if page.locator('html').get_attribute('data-theme')!='light':button('外观').click()
+    assert page.evaluate('[document.documentElement.dataset.theme,document.documentElement.dataset.style]')==['light','classic'];page.screenshot(path=str(out/'connection-light-1024.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
     page.get_by_role('button',name=re.compile('的连接操作$')).click();button('复制连接（无 Key）').click();expect(page.get_by_label('密钥操作',exact=True)).to_have_value('keep');assert page.locator('[name=apiKey]').count()==0;expect(page.get_by_label('允许任务使用此连接',exact=False)).not_to_be_checked();button('保存配置').click();settle();copied=next(p for p in app.ok(API)['providers'] if p['name'].endswith(' 副本'));assert copied['hasApiKey'] is False
     page.get_by_role('button',name=re.compile('的连接操作$')).click();button('删除提供方…').click();page.get_by_role('dialog').get_by_role('button',name='删除提供方',exact=True).click();expect(page.get_by_role('status')).to_contain_text('提供方已删除');assert len(app.ok(API)['providers'])==3
     page.get_by_label('允许任务使用此连接',exact=False).uncheck();button('保存配置').click();expect(page.get_by_role('dialog')).to_contain_text('处引用');page.screenshot(path=str(out/'referenced-disable-confirmation.png'),full_page=True);page.get_by_role('dialog').get_by_role('button',name='取消',exact=True).click();button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='放弃修改',exact=True).click()

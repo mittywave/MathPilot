@@ -1,5 +1,5 @@
 @import "tailwindcss";
-/* 外观 = 基调 html[data-theme]（light/dark）+ 风格 html[data-style]（classic/dopamine/tech/cute/eyecare），由 app/layout.tsx 首屏脚本设置。
+/* 外观 = 基调 html[data-theme]（light/dark）+ 风格 html[data-style]（classic/tech），由 app/layout.tsx 首屏脚本设置。
    页面颜色都写成这些语义变量或它们的 color-mix() 组合（scripts/tokenize-colors.mjs 转换），新增风格只需给变量赋值。
    --green 沿用旧名，表示主强调色；--accent-strong 是实心按钮底色，配 --on-accent 文字；--inverse 是始终深色的浮条（组卷条、提示）。 */
 :root { color-scheme:light; --radius-scale:1; --topbar-h:56px;
@@ -8,31 +8,7 @@
   --success:#2b8257; --success-soft:#e5f2ea; --warn:#c18429; --warn-soft:#fff0dc; --warn-strong:#956227; --danger:#a34f39; --danger-soft:#fff0e8; --danger-strong:#b83229; --danger-fill:#a34f39; --on-fill:#fff;
   --amber:#8b7134; --amber-soft:#fff8e6; --info:#6675c9; --info-soft:#edf0fb; --sky:#287cad; --sky-soft:#e8f2f9; --teal:#197b76; --teal-soft:#eff9f7; --violet:#72558d; --violet-soft:#f2edf7;
 }
-html[data-theme="dark"] { color-scheme:dark;
-  --page:#0e1016; --surface:#171a22; --surface-soft:#1f232d; --ink:#eceef5; --muted:#9ba1b3; --line:#303544;
-  --green:#a8b2ff; --green-soft:#292e4b; --accent-strong:#616fbf; --on-accent:#fff; --inverse:#203d31; --on-inverse:#fff; --shadow-tint:#000;
-  --success:#9ac8ae; --success-soft:#23382e; --warn:#e1ad70; --warn-soft:#3d2d1e; --warn-strong:#e8b678; --danger:#e4a083; --danger-soft:#3a241f; --danger-strong:#ff7b6e; --danger-fill:#a34f39; --on-fill:#fff;
-  --amber:#dec57d; --amber-soft:#382f1d; --info:#a9c7ff; --info-soft:#1f2d46; --sky:#88bdf6; --sky-soft:#1e3140; --teal:#6fcfc4; --teal-soft:#17302d; --violet:#c9a8df; --violet-soft:#2c2532;
-}
-html[data-style="dopamine"] { /* 多巴胺：奶油底、玫红主色、高饱和点缀 */
-  --page:#fff8ef; --surface:#fff; --surface-soft:#fff1e4; --ink:#2a1b3d; --muted:#7b668b; --line:#f6e0d2;
-  --green:#d21d60; --green-soft:#fff0f5; --accent-strong:#e11d63; --on-accent:#fff; --inverse:#2a1b3d; --on-inverse:#fff; --shadow-tint:#4a1d4a;
-  --success:#0b9a6d; --success-soft:#ddf8ec; --warn:#ff8a00; --warn-soft:#fff0d4; --warn-strong:#ab5504; --danger:#e5383b; --danger-soft:#ffe6e3; --danger-strong:#c81d25; --danger-fill:#d62839; --on-fill:#fff;
-  --amber:#a87700; --amber-soft:#fff6c7; --info:#3f5bff; --info-soft:#e6eaff; --sky:#08c; --sky-soft:#def3ff; --teal:#00968a; --teal-soft:#d9f7f3; --violet:#8b3dff; --violet-soft:#f0e6ff;
-}
-html[data-style="cute"] { /* 可爱风：淡粉底、樱花粉主色、更圆的角 */ --radius-scale:1.5;
-  --page:#fff6f9; --surface:#fff; --surface-soft:#ffeef5; --ink:#4b2a3c; --muted:#886275; --line:#f8dce7;
-  --green:#c2366f; --green-soft:#fff0f6; --accent-strong:#c93a76; --on-accent:#fff; --inverse:#5a2e48; --on-inverse:#fff5fa; --shadow-tint:#7a3a5c;
-  --success:#2f9a77; --success-soft:#e2f7ee; --warn:#f0a03c; --warn-soft:#fff1dc; --warn-strong:#a15c1c; --danger:#d4475e; --danger-soft:#ffeef1; --danger-strong:#c02e47; --danger-fill:#c93a52; --on-fill:#fff;
-  --amber:#a57a1c; --amber-soft:#fff6d9; --info:#6a6fd6; --info-soft:#f1f2ff; --sky:#2f80bd; --sky-soft:#edf6fd; --teal:#238b80; --teal-soft:#eaf8f5; --violet:#9a5ed3; --violet-soft:#f4ebff;
-}
-html[data-style="eyecare"] { /* 护眼：米色纸张底、低饱和墨绿、柔和对比 */
-  --page:#f3ecda; --surface:#faf5e8; --surface-soft:#efe6cf; --ink:#3a382e; --muted:#6c6655; --line:#e1d6ba;
-  --green:#4a6e45; --green-soft:#e5e8cf; --accent-strong:#4c7448; --on-accent:#fcf9ef; --inverse:#3d4a3a; --on-inverse:#f7f2e2; --shadow-tint:#4a3f2a;
-  --success:#4b7d50; --success-soft:#e1e9d0; --warn:#b27a2c; --warn-soft:#f4e4c4; --warn-strong:#835716; --danger:#a3523d; --danger-soft:#f3dfd2; --danger-strong:#96362a; --danger-fill:#a3523d; --on-fill:#fdf8ee;
-  --amber:#856b2b; --amber-soft:#f3e8c8; --info:#5a679b; --info-soft:#e6e4da; --sky:#3d6f8c; --sky-soft:#e0e5dc; --teal:#3b766c; --teal-soft:#dfe8d9; --violet:#75608a; --violet-soft:#eae2dd;
-}
-html[data-style="tech"] { /* 科技风（深色基调）：近黑深蓝底、青色霓虹、利落的角 */ --radius-scale:.6;
+html[data-style="tech"] { color-scheme:dark; /* 科技风（深色基调）：近黑深蓝底、青色霓虹、利落的角 */ --radius-scale:.6;
   --page:#060a13; --surface:#0c1322; --surface-soft:#121b2e; --ink:#e1ecff; --muted:#8296b8; --line:#1d2a44;
   --green:#2ee6f6; --green-soft:#0a2836; --accent-strong:#22d3ee; --on-accent:#03121c; --inverse:#0f2340; --on-inverse:#e6f6ff; --shadow-tint:#000;
   --success:#3ee6a0; --success-soft:#0b2b24; --warn:#ffc53d; --warn-soft:#2e2408; --warn-strong:#ffd36b; --danger:#ff6b8b; --danger-soft:#33121f; --danger-strong:#ff4d6d; --danger-fill:#e11d48; --on-fill:#fff;
@@ -105,19 +81,6 @@ html[data-theme="dark"],html[data-style]:not([data-style="classic"]) {
   --c-95671f:color-mix(in srgb, var(--warn-strong) 74%, var(--amber));
   --c-96631d:color-mix(in srgb, var(--warn-strong) 89%, var(--amber));
 }
-html[data-theme="dark"] {
-  --cd-e3a176:#e3a176;
-  --cd-32283a:#32283a;
-  --cd-9cc6e7:#9cc6e7;
-  --cd-d39786:#d39786;
-  --cd-493b54:#493b54;
-  --cd-e5a18c:#e5a18c;
-  --cd-e0a08e:#e0a08e;
-  --cd-c39386:#c39386;
-  --cd-80b5ff:#80b5ff;
-  --cd-e0ba70:#e0ba70;
-  --cd-34251f:#34251f;
-}
 html[data-theme="dark"][data-style]:not([data-style="classic"]) {
   --cd-e3a176:color-mix(in srgb, var(--danger) 60%, var(--warn));
   --cd-32283a:color-mix(in srgb, var(--violet) 4%, var(--violet-soft));
@@ -152,8 +115,11 @@ nav { display:flex; align-self:stretch; gap:26px; }
 .account-button { min-height:32px; padding:0 8px; border:0; border-radius:calc(8px*var(--radius-scale)); background:transparent; color:var(--muted); font-size:13px; white-space:nowrap; }
 .account-button:hover:not(:disabled) { background:var(--surface-soft); color:var(--ink); }
 .guest-badge { color:var(--muted); font-size:12px; white-space:nowrap; }
+/* 外观入口：单个图标按钮直接切换两种配色；前缀保持 AI 设置等页面中的按钮样式一致。 */
+.appearance-picker { flex:0 0 auto; }
 .appearance-picker .appearance-toggle { display:grid; place-items:center; width:32px; height:32px; min-height:0; padding:0; border:0; border-radius:calc(8px*var(--radius-scale)); background:transparent; color:var(--muted); }
-.appearance-picker .appearance-toggle:hover,.appearance-picker .appearance-toggle[aria-expanded="true"] { background:var(--surface-soft); color:var(--ink); }
+.appearance-picker .appearance-toggle:hover { background:var(--surface-soft); color:var(--ink); }
+.appearance-picker .appearance-toggle:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
 .topbar a:focus-visible,.topbar button:focus-visible,.site-trail a:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
 .site-trail { display:flex; align-items:center; gap:20px; min-height:48px; padding:0 32px; border-bottom:1px solid var(--line); background:var(--page); font-size:13px; }
 .site-trail>nav { display:flex; flex:1; align-items:center; min-width:0; }
@@ -295,24 +261,6 @@ nav { display:flex; align-self:stretch; gap:26px; }
 .file-draft-structure { margin-top:8px; padding:8px 10px; border-left:3px solid var(--c-5f8c74); background:color-mix(in srgb, var(--surface-soft) 76%, var(--surface)); color:color-mix(in srgb, color-mix(in srgb, var(--green) 56%, var(--page)) 52%, var(--ink)); font-size:12px; }
 
 
-/* 外观入口：按钮 + 风格卡片弹层（app/components/AppearancePicker.tsx） */
-.appearance-picker { position:relative; flex:0 0 auto; }
-/* 前缀提高优先级：嵌在自带按钮样式的页面（AI 设置）里也保持一致 */
-
-.appearance-picker .appearance-toggle:focus-visible,.appearance-picker .appearance-option:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-.appearance-panel { position:absolute; top:calc(100% + 8px); right:0; z-index:60; width:min(360px, calc(100vw - 28px)); display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; padding:10px; border:1px solid var(--line); border-radius:calc(14px*var(--radius-scale)); background:var(--surface); box-shadow:0 18px 48px color-mix(in srgb, var(--shadow-tint) 22%, transparent); }
-.appearance-picker .appearance-option { min-height:0; display:grid; gap:7px; padding:6px 6px 9px; border:1.5px solid transparent; border-radius:calc(11px*var(--radius-scale)); background:transparent; color:var(--ink); font-size:12px; line-height:1.2; text-align:center; }
-.appearance-picker .appearance-option:hover { background:var(--surface-soft); }
-.appearance-picker .appearance-option[aria-checked="true"] { border-color:var(--green); background:var(--green-soft); }
-.appearance-option b { font-weight:600; white-space:nowrap; }
-/* 预览固定画出该风格自身的颜色，不跟随当前风格 */
-.appearance-preview { position:relative; display:block; height:54px; border-radius:8px; background:var(--preview-page); box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); overflow:hidden; }
-.appearance-preview i { position:absolute; display:block; }
-.appearance-preview i:nth-child(1) { left:8px; right:8px; top:8px; height:24px; border-radius:5px; background:var(--preview-surface); box-shadow:0 1px 3px rgba(0,0,0,.14); }
-.appearance-preview i:nth-child(2) { left:14px; top:15px; width:30px; height:10px; border-radius:4px; background:var(--preview-accent); }
-.appearance-preview i:nth-child(3) { left:9px; bottom:7px; width:11px; height:11px; border-radius:50%; background:var(--preview-first); }
-.appearance-preview i:nth-child(4) { left:24px; bottom:7px; width:11px; height:11px; border-radius:50%; background:var(--preview-second); }
-.appearance-option[aria-checked="true"] .appearance-preview::after { content:"✓"; position:absolute; right:6px; bottom:5px; width:18px; height:18px; display:grid; place-items:center; border-radius:50%; background:var(--accent-strong); color:var(--on-accent); font-size:12px; font-weight:700; }
 html[data-theme="dark"] .sidebar { background:color-mix(in srgb, var(--line) 9%, var(--page)); }
 html[data-theme="dark"] .tree-row:hover { background:color-mix(in srgb, var(--line) 43%, var(--page)); }
 html[data-theme="dark"] .tree-row.active-leaf { background:var(--green-soft); }

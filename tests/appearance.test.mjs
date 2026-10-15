@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { loadSource } from "./load-source.mjs";
 import { CLASSIC } from "../scripts/tokenize-colors.mjs";
 
-const { APPEARANCES, APPEARANCE_KEY, LEGACY_THEME_KEY, appearanceBootstrapScript, resolveAppearance, saveAppearance } = await loadSource("lib/appearance.ts");
+const { APPEARANCES, APPEARANCE_KEY, LEGACY_THEME_KEY, appearanceBootstrapScript, resolveAppearance, readAppearance, saveAppearance } = await loadSource("lib/appearance.ts");
 const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
 function fakeBrowser({ stored = {}, prefersDark = false, storageThrows = false } = {}) {
@@ -26,31 +26,46 @@ function runBootstrap(options) {
 
 test("a saved appearance wins; the old light/dark setting migrates; otherwise the system preference decides", () => {
   assert.equal(resolveAppearance("tech", "light", false), "tech");
-  assert.equal(resolveAppearance(null, "dark", false), "dark");
+  assert.equal(resolveAppearance("light", "dark", true), "light");
+  assert.equal(resolveAppearance("dark", "light", false), "tech");
+  for (const id of ["dopamine", "cute", "eyecare"]) assert.equal(resolveAppearance(id, "dark", true), "light");
+  assert.equal(resolveAppearance(null, "dark", false), "tech");
   assert.equal(resolveAppearance("unknown-style", "light", true), "light");
-  assert.equal(resolveAppearance(null, null, true), "dark");
+  assert.equal(resolveAppearance(null, null, true), "tech");
   assert.equal(resolveAppearance(null, null, false), "light");
 });
 
 test("the first-paint script sets both attributes before the page draws", () => {
-  assert.deepEqual({ ...runBootstrap({ stored: { [APPEARANCE_KEY]: "dopamine" } }) }, { theme: "light", style: "dopamine" });
   assert.deepEqual({ ...runBootstrap({ stored: { [APPEARANCE_KEY]: "tech" } }) }, { theme: "dark", style: "tech" });
-  assert.deepEqual({ ...runBootstrap({ stored: { [LEGACY_THEME_KEY]: "dark" } }) }, { theme: "dark", style: "classic" }, "old dark setting becomes classic dark");
-  assert.deepEqual({ ...runBootstrap({ prefersDark: true }) }, { theme: "dark", style: "classic" });
+  assert.deepEqual({ ...runBootstrap({ stored: { [LEGACY_THEME_KEY]: "dark" } }) }, { theme: "dark", style: "tech" }, "old dark setting becomes tech");
+  assert.deepEqual({ ...runBootstrap({ prefersDark: true }) }, { theme: "dark", style: "tech" });
   assert.deepEqual({ ...runBootstrap({ storageThrows: true }) }, { theme: "light", style: "classic" });
-  for (const item of APPEARANCES) assert.deepEqual({ ...runBootstrap({ stored: { [APPEARANCE_KEY]: item.id } }) }, { theme: item.theme, style: item.style });
+  for (const saved of ["light", "tech", "dark", "dopamine", "cute", "eyecare", "unknown-style", "constructor", null]) {
+    for (const legacy of ["light", "dark", null]) {
+      for (const prefersDark of [true, false]) {
+        const item = APPEARANCES.find((entry) => entry.id === resolveAppearance(saved, legacy, prefersDark));
+        assert.deepEqual({ ...runBootstrap({ stored: { [APPEARANCE_KEY]: saved, [LEGACY_THEME_KEY]: legacy }, prefersDark }) }, { theme: item.theme, style: item.style });
+      }
+    }
+  }
 });
 
 test("choosing an appearance applies it and remembers it under both keys", () => {
   const browser = fakeBrowser({ stored: { [LEGACY_THEME_KEY]: "light" } });
   globalThis.window = browser.window; globalThis.document = browser.document;
   try {
-    saveAppearance("cute");
-    assert.deepEqual({ ...browser.dataset }, { theme: "light", style: "cute" });
-    assert.equal(browser.data[APPEARANCE_KEY], "cute");
+    saveAppearance("light");
+    assert.deepEqual({ ...browser.dataset }, { theme: "light", style: "classic" });
+    assert.equal(browser.data[APPEARANCE_KEY], "light");
     assert.equal(browser.data[LEGACY_THEME_KEY], "light", "pages that only know light/dark keep working");
     saveAppearance("tech");
+    assert.deepEqual({ ...browser.dataset }, { theme: "dark", style: "tech" });
+    assert.equal(browser.data[APPEARANCE_KEY], "tech");
     assert.equal(browser.data[LEGACY_THEME_KEY], "dark");
+    assert.equal(readAppearance(), "tech");
+    saveAppearance("light");
+    assert.equal(readAppearance(), "light");
+    assert.equal(browser.data[LEGACY_THEME_KEY], "light");
   } finally { delete globalThis.window; delete globalThis.document; }
 });
 
@@ -61,12 +76,12 @@ function tokenBlock(selector) {
   return Object.fromEntries([...body.matchAll(/--([\w-]+):([^;]+);/g)].map(([, name, value]) => [name, value.trim().toLowerCase()]));
 }
 const long = (hex) => hex.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/, "#$1$1$2$2$3$3");
-const light = tokenBlock(":root"); const dark = tokenBlock('html[data-theme="dark"]');
-const styles = Object.fromEntries(APPEARANCES.filter((item) => item.style !== "classic").map((item) => [item.id, { ...(item.theme === "dark" ? dark : light), ...tokenBlock(`html[data-style="${item.style}"]`) }]));
+const light = tokenBlock(":root");
+const styles = Object.fromEntries(APPEARANCES.map((item) => [item.id, item.style === "classic" ? light : tokenBlock(`html[data-style="${item.style}"]`)]));
 
-test("the classic styles keep their exact colours", () => {
+test("the retained appearances keep their original colours", () => {
   for (const [name, value] of Object.entries(CLASSIC.light)) assert.equal(long(light[name]), value, `light --${name}`);
-  for (const [name, value] of Object.entries(CLASSIC.dark)) assert.equal(long(dark[name]), value, `dark --${name}`);
+  assert.deepEqual([styles.tech.page, styles.tech.surface, styles.tech["accent-strong"]], ["#060a13", "#0c1322", "#22d3ee"]);
 });
 
 test("every style sets every colour token", () => {
@@ -92,22 +107,14 @@ test("text, buttons and status colours stay readable in every appearance", () =>
     ["info", "surface", 3.5], ["sky", "surface", 3.5], ["teal", "surface", 3.5], ["violet", "surface", 3.5],
     ["success", "success-soft", 3], ["danger", "danger-soft", 3.2], ["amber", "amber-soft", 3.2], ["info", "info-soft", 3.2], ["violet", "violet-soft", 3.2],
   ];
-  for (const [id, palette] of Object.entries({ light, dark, ...styles })) {
+  for (const [id, palette] of Object.entries(styles)) {
     const failures = pairs.filter(([fg, bg, min]) => contrast(palette[fg], palette[bg]) < min).map(([fg, bg, min]) => `${fg}/${bg} ${contrast(palette[fg], palette[bg]).toFixed(2)} < ${min}`);
     assert.deepEqual(failures, [], id);
-  }
-});
-
-test("picker previews show each style's real page, card and button colours", () => {
-  for (const item of APPEARANCES) {
-    const palette = item.style === "classic" ? (item.theme === "dark" ? dark : light) : styles[item.id];
-    assert.deepEqual(item.swatches.slice(0, 3).map(long), [palette.page, palette.surface, palette["accent-strong"]].map(long), item.id);
   }
 });
 
 test("every colour variable the stylesheet uses is defined", () => {
   const defined = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map(([, name]) => name));
   const used = new Set([...css.matchAll(/var\((--[\w-]+)\)/g)].map(([, name]) => name));
-  const preview = /^--preview-/; // set inline by the picker
-  assert.deepEqual([...used].filter((name) => !defined.has(name) && !preview.test(name)), []);
+  assert.deepEqual([...used].filter((name) => !defined.has(name)), []);
 });
