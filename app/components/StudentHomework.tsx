@@ -10,7 +10,7 @@ import { AssignHomework } from "./AssignHomework";
 import { dayNote, dayState, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
-export const homeworkInProgress = (item: Homework) => item.latest.status !== "published" || item.pending > 0 || (item.assigned && item.done < item.total);
+export const homeworkInProgress = (item: Homework) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total);
 
 // An assigned homework goes by task completion; an uploaded one goes by its grading.
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
