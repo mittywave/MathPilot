@@ -1,6 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { loadSource } from "./load-source.mjs";
 import { finalizeHomeworkVerdict, isPendingGradingItem, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel, titleWithoutStudent } from "../lib/homework-grading-rules.mjs";
+
+test("school distribution shares whole-question states with the sheet and keeps exam step marks separate", async () => {
+  const { resultState, VerdictTally } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
+  const correct = { verdict: "correct", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true, wasIncorrect: false };
+  const partial = { ...correct, verdict: "partial" };
+  const corrected = { ...correct, wasIncorrect: true };
+  const pending = { ...partial, requiresReview: true, wasIncorrect: true };
+  assert.deepEqual([correct, partial, corrected, pending, null].map((item) => resultState(item)), ["correct", "incorrect", "corrected", "pending", "missing"]);
+  assert.equal(resultState({ ...partial, wasIncorrect: true }), "incorrect");
+  const html = renderToStaticMarkup(createElement(VerdictTally, { items: [correct, partial, corrected, pending, null], total: 5 }));
+  for (const [state, label] of [["correct", "正确"], ["incorrect", "错误（待订正）"], ["corrected", "已订正"]]) assert.ok(html.includes(`<div class="${state}"><dt>${label}</dt><dd>1</dd>`), label);
+  assert.equal((html.match(/<dt>/g) ?? []).length, 3);
+  assert.doesNotMatch(html, /部分正确|<dt>待处理/);
+  assert.match(html, /待核实 1 道 · 未交 1 道/);
+  assert.equal((html.match(/width:33\.33333333333333%/g) ?? []).length, 3, "only confirmed questions enter the distribution");
+  const exam = renderToStaticMarkup(createElement(VerdictTally, { items: [correct, partial, pending], total: 3, international: true }));
+  assert.match(exam, /<dt>部分正确<\/dt><dd>1<\/dd>/);
+  assert.equal((exam.match(/<dt>/g) ?? []).length, 4);
+});
 
 test("pending counts separate unsettled answers from the teacher's existing judgement", () => {
   const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true };

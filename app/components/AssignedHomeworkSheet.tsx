@@ -1,15 +1,34 @@
 "use client";
 
 import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
-import type { AssignedHomework, HomeworkDay, HomeworkSubmission } from "../../lib/types";
+import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission } from "../../lib/types";
 
-type Result = AssignedHomework["questions"][number]["result"];
-const STATE: Record<string, string> = { correct: "对", corrected: "已订正", partial: "部分对", incorrect: "错", pending: "待处理", missing: "未交" };
-function resultState(result: Result) {
+type Result = GradingItem | AssignedHomework["questions"][number]["result"];
+type Bucket = "correct" | "corrected" | "partial" | "incorrect" | "pending" | "missing";
+const STATE: Record<string, string> = { correct: "对", corrected: "已订正", incorrect: "错", pending: "待处理", missing: "未交" };
+/** School questions are either wholly correct or still need correction; exam papers retain step marks. */
+export function resultState(result: Result, international = false): Bucket {
   if (!result) return "missing";
   if (isPendingGradingItem(result)) return "pending";
-  if (result.wasIncorrect) return result.verdict === "correct" ? "corrected" : "incorrect";
-  return result.verdict;
+  if (international) return result.verdict as Bucket;
+  if (result.verdict !== "correct") return "incorrect";
+  return "wasIncorrect" in result && result.wasIncorrect ? "corrected" : "correct";
+}
+
+/** The same question states drive both the numbered squares and the distribution. */
+export function VerdictTally({ items, total, international = false }: { items: Result[]; total: number; international?: boolean }) {
+  const buckets: Array<[Bucket, string]> = international
+    ? [["correct", "正确"], ["partial", "部分正确"], ["incorrect", "错误"], ["pending", "待处理"]]
+    : [["correct", "正确"], ["incorrect", "错误（待订正）"], ["corrected", "已订正"]];
+  const counts: Record<Bucket, number> = { correct: 0, corrected: 0, partial: 0, incorrect: 0, pending: 0, missing: 0 };
+  for (const item of items) counts[resultState(item, international)]++;
+  const confirmed = counts.correct + counts.incorrect + counts.corrected;
+  const scale = international ? Math.max(total, items.length, 1) : Math.max(confirmed, 1);
+  return <div className={`verdict-tally${international ? "" : " school"}`}>
+    <div className="tally-bar" role="img" aria-label={international ? `${total} 道题中已批改 ${items.length} 道` : `已确认 ${confirmed} 道题：正确 ${counts.correct}，错误（待订正）${counts.incorrect}，已订正 ${counts.corrected}`}>{buckets.map(([key]) => counts[key] > 0 && <i key={key} className={key} style={{ width: `${counts[key] / scale * 100}%` }} />)}</div>
+    <dl>{buckets.map(([key, label]) => <div key={key} className={key}><dt>{label}</dt><dd>{counts[key]}</dd></div>)}</dl>
+    {!international && (counts.pending > 0 || counts.missing > 0) && <small>{[counts.pending ? `待核实 ${counts.pending} 道` : "", counts.missing ? `未交 ${counts.missing} 道` : ""].filter(Boolean).join(" · ")}</small>}
+  </div>;
 }
 const plain = (text: string) => text.replace(/\$+/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
 const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
