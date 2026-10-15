@@ -1,4 +1,4 @@
-// Every PDF the app reads (录入, 作业批改, 手写转录, the 快速排版 preview) is opened here.
+// Every PDF the app reads (录入, 作业批改, 文件转录, the 快速排版 preview) is opened here.
 // scripts/prepare-pdf-worker.mjs serves PDF.js byte for byte from public: a ?url worker would still be transformed in
 // development, which injects page-only HMR (window is undefined) into it. PDF.js also loads data on demand: the CMaps
 // for Chinese fonts, the standard fonts for text whose font is not embedded, the JPEG 2000 / JBIG2 decoders for

@@ -32,7 +32,36 @@ export type StudioQuestion = {
 };
 export type StudioAnswerPlacement = { kind: "choice" | "blank"; placeholder: string; answer: string };
 export type StudioTable = { rows: string[][]; warnings: string[]; red?: boolean };
-export type StudioDraft = { version: 1; inputMode?: "paired" | "answers"; title: string; pages: StudioPage[]; questions: StudioQuestion[]; answers: StudioRecord[]; updatedAt: number };
+export type StudioInputMode = "paired" | "answers" | "questions";
+export type StudioDraft = { version: 1; inputMode?: StudioInputMode; title: string; pages: StudioPage[]; questions: StudioQuestion[]; answers: StudioRecord[]; updatedAt: number };
+/** The uploaded materials decide the mode: originals only become an editable question paper,
+ * answers only are transcribed alone, and both are paired. */
+export function studioInputMode(roles: StudioPage["role"][]): StudioInputMode | null {
+  const questions = roles.includes("question"), answers = roles.includes("answer");
+  return questions && answers ? "paired" : questions ? "questions" : answers ? "answers" : null;
+}
+type StudioPixels = { width: number; height: number; data: ArrayLike<number> };
+type StudioRect = { left: number; top: number; right: number; bottom: number };
+/** Model figure boxes are often a little tight and cut a circle or label. Grow each side
+ * while the three lines just outside it still hold ink, at most `max` pixels per side. */
+export function growStudioRectToBlankEdges(image: StudioPixels, rect: StudioRect, max: number): StudioRect {
+  const dark = (x: number, y: number) => { const i = (y * image.width + x) * 4; return image.data[i] + image.data[i + 1] + image.data[i + 2] < 510; };
+  const column = (x: number, r: StudioRect) => { for (let y = r.top; y <= r.bottom; y++) if (dark(x, y)) return true; return false; };
+  const row = (y: number, r: StudioRect) => { for (let x = r.left; x <= r.right; x++) if (dark(x, y)) return true; return false; };
+  const near = (from: number, step: number, limit: number, test: (n: number) => boolean) => {
+    for (let n = from, k = 0; k < 3 && n >= 0 && n < limit; n += step, k++) if (test(n)) return true;
+    return false;
+  };
+  const r = { ...rect };
+  for (let grew = true; grew;) {
+    grew = false;
+    if (rect.left - r.left < max && near(r.left - 1, -1, image.width, x => column(x, r))) { r.left--; grew = true; }
+    if (r.right - rect.right < max && near(r.right + 1, 1, image.width, x => column(x, r))) { r.right++; grew = true; }
+    if (rect.top - r.top < max && near(r.top - 1, -1, image.height, y => row(y, r))) { r.top--; grew = true; }
+    if (r.bottom - rect.bottom < max && near(r.bottom + 1, 1, image.height, y => row(y, r))) { r.bottom++; grew = true; }
+  }
+  return r;
+}
 export const emptyStudioDraft = (): StudioDraft => ({ version: 1, title: "答案整理", pages: [], questions: [], answers: [], updatedAt: Date.now() });
 export function hasStudioControlCharacters(s:string) {return Array.from(s).some(c=>{const n=c.charCodeAt(0);return n<32 && ![9,10,13].includes(n);});}
 export const studioKey = (q: Pick<StudioRecord, "lesson" | "section" | "number">) => [q.lesson, q.section, q.number].map(v => v.replace(/\s/g, "")).join("|");
@@ -151,7 +180,7 @@ export function validateStudioTables(value: unknown): StudioTable[] {
 }
 export function validateStudioDraft(value: unknown): StudioDraft {
   const d = value as StudioDraft;
-  if (d?.inputMode !== undefined && !["paired","answers"].includes(d.inputMode)) throw new Error("材料模式无效");
+  if (d?.inputMode !== undefined && !["paired","answers","questions"].includes(d.inputMode)) throw new Error("材料模式无效");
   if (!d || d.version !== 1 || typeof d.title !== "string" || !Array.isArray(d.pages) || d.pages.length > 160 || !Array.isArray(d.questions) || d.questions.length > 500 || !Array.isArray(d.answers)) throw new Error("不是有效的答案整理草稿");
   const ids = new Set<string>();
   for (const p of d.pages) {

@@ -7,8 +7,8 @@ export const TOOLBOX_TOOLS: ToolboxTool[] = [
     summary: "上传学生拍好的作业照片或 PDF，自动批改，可写入错题本和定档。",
   },
   {
-    key: "answer-studio", href: "/tools/answer-studio", name: "手写转录", icon: "pen",
-    summary: "把手写答案、讲义照片或 PDF 转成可编辑的 Word 解析。",
+    key: "answer-studio", href: "/tools/answer-studio", name: "文件转录", icon: "pen",
+    summary: "把题目或答案的照片、PDF 转成可编辑的 Word：只放原题得到题目，加上答案得到解析。",
   },
   {
     key: "typeset", href: "/tools/typeset", name: "快速排版", icon: "page",

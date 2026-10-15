@@ -484,7 +484,7 @@ try {
   const nav = page.getByRole('navigation', { name: '题库入口' });
   await nav.getByRole('link', { name: '讲义编撰', exact: true }).waitFor();
   assert.deepEqual(await nav.locator('.nav-item').allInnerTexts(), ['题库', '组卷篮', '讲义编撰', '知识图谱', '学生档案', '工具箱']);
-  assert.deepEqual(await page.locator('.tool-card strong').allInnerTexts(), ['作业批改', '手写转录', '共享办公']);
+  assert.deepEqual(await page.locator('.tool-card strong').allInnerTexts(), ['作业批改', '文件转录', '共享办公']);
   await page.locator('.topbar').screenshot({ path: join(out, 'site-header.png') });
   await nav.getByRole('link', { name: '讲义编撰', exact: true }).click();
   await page.waitForURL('**/tools/handouts');

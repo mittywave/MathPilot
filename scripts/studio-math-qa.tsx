@@ -46,7 +46,7 @@ function Harness(){
   return <main><h1>答案导出回归验证</h1><p>仅使用生产代码的文字规范化、网页公式与 Word 导出器。无登录、无数据库、无模型请求。</p>
     <label>导入待验证 DOCX<input type="file" accept=".docx" disabled={busy} onChange={e=>void open(e.target.files?.[0])}/></label>
     <p role="status">{message}</p>
-    <div className="actions">{studioOutputs.map(o=><button key={o.value} disabled={busy||!questions.length} onClick={()=>void generate(o.value)}>{o.label}</button>)}</div>
+    <div className="actions">{studioOutputs({inputMode:'answers'}).map(o=><button key={o.value} disabled={busy||!questions.length} onClick={()=>void generate(o.value)}>{o.label}</button>)}</div>
     {url&&<a href={url} download={filename}>下载回归 Word</a>}
     <section>{questions.map(q=><article key={q.id}><h2>原段落 {q.number}</h2><div className="sample"><MathText text={normalizeStudioTextFields(q).analysis}/></div></article>)}</section>
   </main>;

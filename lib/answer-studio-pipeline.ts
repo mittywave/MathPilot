@@ -121,7 +121,8 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
     await runStudioOrdered(remaining,recognize,textState,consume,persist);
   }
   delete next.pendingTranscriptions;
-  if(next.inputMode!=='answers' && (hadUnprocessedPages || !studioTextReady(next))) {
+  // Only paired materials have answers to match; an originals-only paper keeps its questions as they are.
+  if((next.inputMode??'paired')==='paired' && (hadUnprocessedPages || !studioTextReady(next))) {
     for(const q of next.questions.filter(q=>!q.answerOnly)) {
       const matched=matchStudioAnswers(q,next.answers);
       q.answerIds=matched.map(a=>a.id);q.analysis=matched.map(a=>a.analysis).join('\n');q.tables=[...(q.tables||[]),...matched.flatMap(a=>a.tables||[])];

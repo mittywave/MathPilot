@@ -9,12 +9,15 @@ server database migrations, deployments, or merges into `main` are required.
 
 ## Controls and scheduling
 
-The original-question entry uses the shared compact drop button in the left
-controls, and handwritten answers use the large button in the right workspace.
-Both support file selection, dropping, and page-level image/PDF paste. Clicking
-the file picker replaces that entry's files; paste and drop append. With no
-recent entry interaction, paste fills the first empty visible entry, then the
-answer entry. A recently clicked or dropped entry takes priority while visible.
+The original-question and answer entries sit side by side in the right
+workspace; there is no mode switch. The entries decide the mode
+(`studioInputMode`): originals only become an editable question paper, answers
+only are transcribed alone, and both are paired. The page shows the mode above
+Start, and the server reads it from the uploaded page roles when the job starts.
+Both entries support file selection, dropping, and page-level image/PDF paste.
+Clicking the file picker replaces that entry's files; paste and drop append.
+With no recent entry interaction, paste fills the first empty visible entry
+(originals first), then the answer entry. A recently clicked or dropped entry takes priority while visible.
 Closed, occluded, off-screen and busy entries do not receive pasted files; plain
 text paste remains unchanged. A populated entry collapses to one row.
 

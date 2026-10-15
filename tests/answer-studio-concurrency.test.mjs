@@ -213,7 +213,7 @@ test('browser HTTP client keeps status and retry advice instead of throwing a pl
 });
 test('new speed selector does not clear saved results or change the existing Word controls', () => {
   const page=readFileSync(resolve(root,'app/tools/answer-studio/page.tsx'),'utf8');
-  assert.match(page,/id="studio-text-concurrency"/);assert.match(page,/inputMode:mode,textConcurrency\}/);
+  assert.match(page,/id="studio-text-concurrency"/);assert.match(page,/title:title.trim\(\),textConcurrency\}/);
   assert.match(page,/onChange=\{e=>setTextConcurrency\(Number\(e.target.value\)\)\}/);
   assert.match(page,/'\u751f\u6210 Word'/);assert.match(page,/includeTranscriptionWarnings/);
 });
