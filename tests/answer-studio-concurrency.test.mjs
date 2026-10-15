@@ -213,7 +213,7 @@ test('browser HTTP client keeps status and retry advice instead of throwing a pl
 });
 test('new speed selector does not clear saved results or change the existing Word controls', () => {
   const page=readFileSync(resolve(root,'app/tools/answer-studio/page.tsx'),'utf8');
-  assert.match(page,/id="studio-text-concurrency"/);assert.match(page,/textConcurrency,drawingConcurrency:2/);
+  assert.match(page,/id="studio-text-concurrency"/);assert.match(page,/inputMode:mode,textConcurrency\}/);
   assert.match(page,/onChange=\{e=>setTextConcurrency\(Number\(e.target.value\)\)\}/);
   assert.match(page,/'\u751f\u6210 Word'/);assert.match(page,/includeTranscriptionWarnings/);
 });
@@ -246,19 +246,19 @@ test('Chat Completions non-JSON HTTP errors preserve retry metadata', async t =>
 test('actual Studio routes expose transient HTTP codes, reject malformed output without retry, and retain authentication', async t => {
   const oldKey=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='test-key';
   t.after(()=>{if(oldKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldKey;});
-  let upstream={status:429,error:'limited',retryAfter:'6'},denied=false,captured;
+  let upstream={status:429,error:'limited',retryAfter:'6'},denied=false;
   const routed=loader({
     '../../../../lib/server/auth':{requireSameOrigin:()=>{},requireUser:async()=>{if(denied)throw new Response('Forbidden',{status:403});}},
-    '../../../../lib/server/recognition-model':{callRecognitionModel:async input=>{captured=input;return upstream;},parseRecognitionModelText:JSON.parse},
+    '../../../../lib/server/recognition-model':{callRecognitionModel:async()=>upstream,parseRecognitionModelText:JSON.parse},
     '../../../../lib/answer-studio-contract':{normalizeStudioRecords:x=>x.records,studioRecognitionPrompt:()=> 'TRANSCRIBE',studioRecognitionSchema:{},normalizeStudioDrawings:x=>x,studioDrawingSchema:{}},
   });
-  for(const kind of ['recognize','drawings']) {
+  // Page recognition now runs inside the server job (lib/server/answer-studio-jobs.ts).
+  for(const kind of ['drawings']) {
     const {POST}=routed(`app/api/answer-studio/${kind}/route.ts`);
-    const data=kind==='recognize'?{image:'data:image/png;base64,AA==',role:'answer',lesson:'Lesson',pageId:'p',concurrent:true}:{image:'data:image/png;base64,AA==',stem:'x',analysis:'y',bases:[]};
+    const data={image:'data:image/png;base64,AA==',stem:'x',analysis:'y',bases:[]};
     const request=()=>new Request('http://localhost/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     upstream={status:429,error:'limited',retryAfter:'6'};
     const limited=await POST(request());assert.equal(limited.status,429);assert.equal(limited.headers.get('retry-after'),'6');assert.equal((await limited.json()).retryable,true);
-    if(kind==='recognize')assert.match(captured.prompt,/\u5e76\u53d1\u8bc6\u522b/);
     upstream={status:200,text:'not JSON'};
     const malformed=await POST(request());assert.equal((await malformed.json()).retryable,false);
     denied=true;assert.equal((await POST(request())).status,403);denied=false;

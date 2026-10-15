@@ -27,10 +27,10 @@ async function fixture(t){
   return require(join(dir,'ui.cjs'));
 }
 const draft={version:1,inputMode:'answers',title:'界面验证',pages:[],answers:[],questions:[{id:'q',stem:'原题',analysis:'解析',answerIds:[],diagrams:[],tables:[],warnings:Array.from({length:102},(_,i)=>`原有提示${i}`)}]};
-function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[]}={}){
+function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[],jobs=[],openJobId=''}={}){
   // useState order in AnswerStudioPage: auth, input fields, lifecycle, result,
-  // transcription-warning preference, then text concurrency.
-  seed([{id:'local',local:true},true,'answers','界面验证',[],[],busy,notice,failed,saved,downloads,'full',true,4]);
+  // transcription-warning preference, text concurrency, then server jobs.
+  seed([{id:'local',local:true},true,'answers','界面验证',[],[],busy,notice,failed,saved,downloads,'full',true,4,jobs,openJobId]);
   return renderToStaticMarkup(createElement(Page));
 }
 test('ready and downloaded results hide issue statistics and backup controls without changing the draft',async t=>{
@@ -53,6 +53,9 @@ test('processing and actionable errors remain visible, while idle upload has no 
   assert.match(failure,/studio-error/);assert.match(failure,/登录状态读取失败/);
   const idle=render(ui,{saved:null});
   assert.match(idle,/开始转录/);assert.doesNotMatch(idle,/role="status"|本地项目备份|个提示/);
-  const continuation=render(ui,{saved:{...draft,questions:[],pages:[{id:'cached-page',role:'answer',name:'cached.png',page:1,image:'data:image/png;base64,AA==',hash:'cached',selected:true}]}});
-  assert.match(continuation,/>继续转录</);assert.doesNotMatch(continuation,/<button[^>]*disabled[^>]*>继续转录</);assert.doesNotMatch(continuation,/id="studio-missing"/);
+  const job={title:'第一讲',inputMode:'answers',pageCount:3,processedCount:1,questionCount:0,progress:'',error:'',createdAt:0,updatedAt:0};
+  const list=render(ui,{saved:null,jobs:[{...job,id:'a',status:'running'},{...job,id:'b',status:'done',questionCount:5},{...job,id:'c',status:'failed',error:'识别服务异常'},{...job,id:'d',status:'running',stalled:true}]});
+  assert.match(list,/转录任务/);assert.match(list,/转录中 1\/3 页/);assert.match(list,/已完成 · 5 题/);assert.match(list,/识别服务异常/);assert.match(list,/已中断/);assert.match(list,/点继续从断点接着转录/);
+  assert.match(list,/>打开</);assert.equal((list.match(/>继续</g)||[]).length,2,'failed and stalled jobs continue');
+  assert.equal((list.match(/aria-label="这个转录任务的操作"/g)||[]).length,3,'a live running job cannot be deleted');
 });
