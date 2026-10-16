@@ -12,7 +12,7 @@ function TextField({ value, label, placeholder = "", singleLine = false, onChang
   </Suspense>;
 }
 import { renderImportFile, structuredDocxQuestions } from "../../lib/file-import";
-import { orderedImportTimestamp } from "../../lib/question-order-rules.mjs";
+import { crossPageRepeat, numberedImportTarget, orderedImportTimestamp } from "../../lib/question-order-rules.mjs";
 import { saveQuestionImportBatch } from "../../lib/question-import-save.mjs";
 import { clipboardImage, compressDataUrl, cropExactDataUrl, fileToDataUrl, imageAspectRatio, materializeImageDataUrl, type NormalizedBox } from "../../lib/image-tools";
 import { droppedImage, readScreenshot, recognizeScreenshot } from "../../lib/screenshot-recognition";
@@ -222,13 +222,17 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         }
       });
       if (controller.signal.aborted) return;
-      const imported: FileImportDraft[] = []; const pageErrors: string[] = []; const seen = new Set<string>(); const seenNumbers = new Set<string>(); const importStartedAt = currentTimestamp();
+      const imported: FileImportDraft[] = []; const pageErrors: string[] = []; const seen = new Set<string>(); const importStartedAt = currentTimestamp();
+      // Sections may restart their numbering, so the same number is kept; only a page-break repeat is left unselected.
+      let previous: { pageNumber: number; type: string; number: string } | undefined;
       for (const recognized of recognizedPages.sort((a, b) => a.page.pageNumber - b.page.pageNumber)) {
         if ("error" in recognized) { pageErrors.push(`第 ${recognized.page.pageNumber} 页：${recognized.error}`); continue; }
         if (recognized.page.documentSection === "answers") continue;
-        for (const item of recognized.result.questions ?? []) {
-          const stemKey = item.stem.replace(/\s+/g, "").replace(/[，。；：,.!?！？]/g, "").slice(0, 100); const numberKey = `${item.type}:${item.question_number.trim()}`;
-          if (!stemKey || seen.has(stemKey) || (item.question_number.trim() && seenNumbers.has(numberKey))) continue; seen.add(stemKey); if (item.question_number.trim()) seenNumbers.add(numberKey);
+        for (const [index, item] of (recognized.result.questions ?? []).entries()) {
+          const position = { pageNumber: recognized.page.pageNumber, type: item.type, number: item.question_number.trim() };
+          const repeat = crossPageRepeat(previous, position, index === 0); previous = position;
+          const stemKey = item.stem.replace(/\s+/g, "").replace(/[，。；：,.!?！？]/g, "").slice(0, 100);
+          if (!stemKey || seen.has(stemKey)) continue; seen.add(stemKey);
           const extracted = await extractRecognizedDiagram(recognized.page.image, item); item.warnings = extracted.warnings;
           let reconstruction: Partial<Question> = extracted.fields;
           if (shouldReconstructRecognizedDiagram(extracted.diagramImage, item.diagram_quality)) {
@@ -242,13 +246,21 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
           const timestamp = orderedImportTimestamp(importStartedAt, imported.length); const categoryId = item.suggested_category_id && entryCategories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
           const normalized = normalizeAnswerFields(item.answer, item.analysis);
           const tagVersions = alevelTagVersions({ tags: item.tags });
-          imported.push({ id: uid("q"), importId: uid("import"), selected: true, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, examYear: "", stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: isAlevelImport ? tagVersions.zh : item.tags, ...(isAlevelImport ? { tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
+          if (repeat) item.warnings = [...item.warnings, `与上一页最后一题同为第 ${position.number} 题，可能是跨页重复识别，已默认不选；如是另一道题请勾选`];
+          imported.push({ id: uid("q"), importId: uid("import"), selected: !repeat, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, examYear: "", stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: isAlevelImport ? tagVersions.zh : item.tags, ...(isAlevelImport ? { tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
         }
       }
+      // The source gives answers and some content by number; fill in only a number that names one question.
+      const numbered = (questionNumber: string) => {
+        const { target, clash } = numberedImportTarget(imported, questionNumber);
+        const warning = `有多道第 ${questionNumber} 题，原件按题号给出的答案、解析等未自动填入，请对照原件核对`;
+        for (const entry of clash) if (!entry.recognitionWarnings?.includes(warning)) entry.recognitionWarnings = [...(entry.recognitionWarnings ?? []), warning];
+        return target;
+      };
       for (const recognized of recognizedPages) {
         if ("error" in recognized) continue;
         for (const answerItem of recognized.result.answers ?? []) {
-          const target = imported.find((entry) => entry.documentNumber === answerItem.question_number);
+          const target = numbered(answerItem.question_number);
           if (!target) continue;
           const normalized = normalizeAnswerFields(answerItem.answer, answerItem.analysis);
           if (isUsableImportedAnswer(normalized.answer)) target.answer = normalized.answer;
@@ -259,38 +271,38 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       for (const recognized of recognizedPages) {
         if ("error" in recognized || !recognized.page.textHint) continue;
         for (const [questionNumber, answer] of explicitChoicesFromSourceText(recognized.page.textHint)) {
-          const target = imported.find((entry) => entry.documentNumber === questionNumber);
+          const target = numbered(questionNumber);
           if (target) target.answer = answer;
         }
       }
       const sourceAnswers = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnswers)?.page.sourceAnswers;
       for (const [questionNumber, answer] of Object.entries(sourceAnswers ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target) target.answer = answer;
       }
       const sourceAnalyses = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalyses)?.page.sourceAnalyses;
       for (const [questionNumber, analysis] of Object.entries(sourceAnalyses ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target && analysis.trim()) target.analysis = analysis.trim();
       }
       const sourceAnalysisXml = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalysisXml)?.page.sourceAnalysisXml;
       for (const [questionNumber, analysisDocxXml] of Object.entries(sourceAnalysisXml ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target && analysisDocxXml.length) target.analysisDocxXml = analysisDocxXml;
       }
       const sourceAnalysisAssets = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalysisAssets)?.page.sourceAnalysisAssets;
       for (const [questionNumber, analysisDocxAssets] of Object.entries(sourceAnalysisAssets ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target && Object.keys(analysisDocxAssets).length) target.analysisDocxAssets = analysisDocxAssets;
       }
       const sourceQuestionImages = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceQuestionImages)?.page.sourceQuestionImages;
       for (const [questionNumber, contentImages] of Object.entries(sourceQuestionImages ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target && contentImages.length) { target.contentImages = contentImages; target.diagramImage = undefined; target.diagramBox = undefined; }
       }
       const sourceOptions = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceOptions)?.page.sourceOptions;
       for (const [questionNumber, options] of Object.entries(sourceOptions ?? {})) {
-        const target = imported.find((entry) => entry.documentNumber === questionNumber);
+        const target = numbered(questionNumber);
         if (target && options.length >= 2) target.options = options;
       }
       for (const target of imported) {
