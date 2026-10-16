@@ -17,6 +17,7 @@ import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
 import WrongQuestionUpload from "./components/WrongQuestionUpload";
 import { QuestionBody } from "./components/QuestionBody";
 import { BasketOutline } from "./components/BasketOutline";
+import BasketKnowledgeMap from "./components/knowledge-graph/BasketKnowledgeMap";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./components/QuestionEntry";
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
@@ -41,7 +42,7 @@ const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
 
-type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; place: (id: string, sectionId: string | null) => void };
+type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; activate: (id: string) => void; place: (id: string, sectionId: string | null) => void };
 
 // A click anywhere on a selectable card ticks it, as its check box does. Buttons, links and the grading record keep
 // their own clicks, and dragging across the text to copy it ticks nothing.
@@ -53,15 +54,15 @@ function selectOnCardClick(event: MouseEvent<HTMLElement>, toggle: () => void) {
 
 // One card of the library list. It re-renders only when its own question or state changes, so ticking one question
 // in a long category does not rebuild every other card on the page.
-const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, isFirst = index === 0, sectionId, sections, path, checked, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
-  question: Question; index: number; isLast: boolean; path: string; checked: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
+const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, isFirst = index === 0, sectionId, sections, path, checked, active = false, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
+  question: Question; index: number; isLast: boolean; path: string; checked: boolean; active?: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
   canDelete: boolean; isExporting: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
   isFirst?: boolean; sectionId?: string | null; sections?: Array<{ id: string | null; title: string }>;
 }) {
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
   // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
-  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : undefined}>
+  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""} ${active ? "active" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : basket ? (event) => selectOnCardClick(event, () => actions.activate(question.id)) : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
@@ -336,9 +337,13 @@ export default function Home() {
   const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
   const [locatingQuestion, setLocatingQuestion] = useState<string | null>(null);
   const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_PAGE;
+  // The basket question shown on the knowledge map: the one last clicked in the outline or the list, else the first.
+  const [activeBasketId, setActiveBasketId] = useState("");
+  const activeBasketQuestion = selectedQuestions.find((question) => question.id === activeBasketId) ?? selectedQuestions[0] ?? null;
   const locateBasketQuestion = (id: string) => {
     const index = selectedIds.indexOf(id);
     if (index < 0) return;
+    setActiveBasketId(id);
     setListPaging((current) => ({ key: listKey, count: Math.max(current.key === listKey ? current.count : LIBRARY_PAGE, index + 1) }));
     setLocatingQuestion(id);
   };
@@ -498,6 +503,7 @@ export default function Home() {
         : { ...current, unassignedIds: moveBasketQuestion(current.unassignedIds, id, direction) };
     }),
     drop: (id) => setSelectedIds((ids) => ids.filter((item) => item !== id)),
+    activate: setActiveBasketId,
     place: (id, sectionId) => setBasketStructure((current) => placeBasketQuestion(current, id, sectionId)),
   }), [setSelectedIds]);
 
@@ -752,9 +758,10 @@ export default function Home() {
             <aside className="basket-settings">
               <label className="basket-title">练习标题<input value={paperTitle} disabled={basketBusy} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
               <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={basketBusy} onChange={(event) => { setIncludeAnswers(event.target.checked); setTypesetKept((current) => current ? { ...current, settings: { ...current.settings, answers: event.target.checked ? "end" : "none" } } : null); }} /><span><b>附带答案与解析</b><small>文末另起一页</small></span></label>
-              <BasketOutline structure={basketStructure} pool={basketPool} disabled={basketBusy} onChange={setBasketStructure} onLocate={locateBasketQuestion} onGroupByType={() => void classifyBasket()} onNotice={onNotice} />
+              <BasketOutline structure={basketStructure} pool={basketPool} disabled={basketBusy} activeId={activeBasketQuestion?.id ?? ""} onChange={setBasketStructure} onLocate={locateBasketQuestion} onGroupByType={() => void classifyBasket()} onNotice={onNotice} />
               <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题<small role="status">{draftStatus}</small></span><button className="primary-button" disabled={basketBusy || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={basketBusy || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={basketBusy || !selectedQuestions.length && !basketStructure.sections.length} onClick={() => setBasketStructure({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu></div>
             </aside>
+            {!!selectedQuestions.length && <BasketKnowledgeMap question={activeBasketQuestion} number={activeBasketQuestion ? selectedQuestions.indexOf(activeBasketQuestion) + 1 : 0} />}
           </> : <>
           <div className="filters">
             <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
@@ -776,7 +783,7 @@ export default function Home() {
                 {section?.heading && index === section.start && <h2 className="basket-section-heading">{section.heading}<small>{section.questions.length} 题</small></h2>}
                 <LibraryQuestionCard question={question} index={index} isFirst={section ? index === section.start : index === 0} isLast={section ? index === section.start + section.questions.length - 1 : index === filteredQuestions.length - 1}
                   sectionId={section?.id} sections={showSelected ? sectionChoices : undefined}
-                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected && question.id === activeBasketQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
                   basket={showSelected} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />
               </Fragment>;
             })}

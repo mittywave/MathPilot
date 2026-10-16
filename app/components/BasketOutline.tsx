@@ -8,8 +8,8 @@ import type { Question } from "../../lib/types";
 
 // CategoryTree edits the library's taxonomy. This outline instead places the
 // selected questions in one paper, without changing their library categories.
-export function BasketOutline({ structure, pool, disabled, onChange, onLocate, onGroupByType, onNotice }: {
-  structure: BasketStructure; pool: Question[]; disabled: boolean;
+export function BasketOutline({ structure, pool, disabled, activeId, onChange, onLocate, onGroupByType, onNotice }: {
+  structure: BasketStructure; pool: Question[]; disabled: boolean; activeId: string;
   onChange: Dispatch<SetStateAction<BasketStructure>>; onLocate: (id: string) => void; onGroupByType: () => void; onNotice: (message: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<string[]>([]);
@@ -21,6 +21,8 @@ export function BasketOutline({ structure, pool, disabled, onChange, onLocate, o
     const timer = setTimeout(() => setMoved(""), 2000);
     return () => clearTimeout(timer);
   }, [moved]);
+  // A question picked in the list keeps its number in view here.
+  useEffect(() => { if (activeId) document.querySelector(`.basket-outline-locate[data-question-id="${CSS.escape(activeId)}"]`)?.scrollIntoView({ block: "nearest" }); }, [activeId]);
   const sections = basketSections(structure, pool);
   const end = () => { setDragged(null); setOver(null); };
   const start = (event: DragEvent, kind: "section" | "question", id: string) => {
@@ -99,9 +101,9 @@ export function BasketOutline({ structure, pool, disabled, onChange, onLocate, o
             </button>}
           </header>
           {!closed && !!section.questions.length && <div className="basket-outline-questions">
-            {section.questions.map((question, index) => <div key={question.id} className={`basket-outline-question${over?.anchorId === question.id ? ` insert-${over.side}` : ""}${dragged?.kind === "question" && dragged.id === question.id ? " is-dragging" : ""}${moved === question.id ? " is-moved" : ""}`}>
+            {section.questions.map((question, index) => <div key={question.id} className={`basket-outline-question${over?.anchorId === question.id ? ` insert-${over.side}` : ""}${dragged?.kind === "question" && dragged.id === question.id ? " is-dragging" : ""}${moved === question.id ? " is-moved" : ""}${activeId === question.id ? " is-active" : ""}`}>
               <button type="button" className="basket-outline-locate" data-question-id={question.id} draggable={!disabled} onDragStart={(event) => start(event, "question", question.id)} disabled={disabled}
-                aria-label={`定位第 ${section.start + index + 1} 题`} onClick={() => onLocate(question.id)} title={`第 ${section.start + index + 1} 题 · 点击定位，拖动排序或归组`}>
+                aria-label={`定位第 ${section.start + index + 1} 题`} aria-current={activeId === question.id || undefined} onClick={() => onLocate(question.id)} title={`第 ${section.start + index + 1} 题 · 点击定位，拖动排序或归组`}>
                 {section.start + index + 1}
               </button>
             </div>)}
