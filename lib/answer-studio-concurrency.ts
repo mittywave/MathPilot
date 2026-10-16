@@ -105,11 +105,28 @@ export async function studioApi<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-/** Used only by Studio routes; ordinary question-bank API responses stay unchanged. */
-export function studioUpstreamFailure(result: { status: number; error?: string; retryAfter?: string | null; terminal?: boolean }, fallback: string) {
+// The AI engine marks every failure terminal, so ordinary callers never re-send a request
+// that may already be billed. A Studio request only reads a page or a figure, so a timeout,
+// a dropped connection, a gateway 5xx (including 524), a rate limit or an empty reply is
+// retried by the scheduler instead of stopping the whole run. Its text drops the engine's
+// "未自动重试" note, which would no longer be true.
+const transientMessages: Record<string, string> = {
+  UPSTREAM_TIMEOUT: 'AI 请求超时', UPSTREAM_TRANSPORT: '与 AI 服务的连接中断', UPSTREAM_FAILED: 'AI 服务暂时出错',
+  UPSTREAM_RATE_LIMITED: 'AI 服务限流', UPSTREAM_INVALID_RESPONSE: 'AI 服务返回了无法解析的响应', OUTPUT_EMPTY: 'AI 服务返回空结果',
+};
+type StudioUpstreamResult = { status: number; error?: string; retryAfter?: string | null; terminal?: boolean; code?: string };
+export function studioUpstreamError(result: StudioUpstreamResult, fallback: string) {
   const status = result.status >= 400 && result.status <= 599 ? result.status : 502;
-  return Response.json({ error: result.error || fallback, retryable: !result.terminal && result.status >= 400 && retryStatuses.has(status) }, {
-    status, headers: result.retryAfter ? { 'Retry-After': result.retryAfter } : undefined,
+  const transient = result.code ? transientMessages[result.code] : undefined;
+  const retryable = result.code ? !!transient : !result.terminal && result.status >= 400 && retryStatuses.has(status);
+  return new StudioRequestError(transient ? `${transient}（HTTP ${status}）` : result.error || fallback, status, studioRetryAfter(result.retryAfter), retryable);
+}
+
+/** Used only by Studio routes; ordinary question-bank API responses stay unchanged. */
+export function studioUpstreamFailure(result: StudioUpstreamResult, fallback: string) {
+  const error = studioUpstreamError(result, fallback);
+  return Response.json({ error: error.message, retryable: error.retryable }, {
+    status: error.status, headers: result.retryAfter ? { 'Retry-After': result.retryAfter } : undefined,
   });
 }
 

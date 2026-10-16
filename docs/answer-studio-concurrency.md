@@ -107,6 +107,13 @@ Extra boundary reviews can reduce the speedup and add model requests.
 ## Retries and provider status
 
 - Only temporary network failures and HTTP 408, 429, 500, 502, 503, 504 are retried.
+  With the AI provider center, the engine's failure code decides instead: timeouts,
+  dropped connections, gateway 5xx (including 524), rate limits, empty and unparseable
+  replies are retried. The engine marks every failure terminal so ordinary callers
+  never re-send a possibly billed request; Studio requests only read a page or a figure,
+  so `studioUpstreamError` retries those anyway. Before 2026-10-15 a single page timeout
+  therefore stopped the whole job without any retry. When the retries run out, the
+  job's error says so (“自动重试 2 次仍未成功”) and **继续** resumes at that page.
 - At most **two additional attempts** per failed task.
 - Exponential backoff starts at 1 second, then 2 seconds, with random jitter.
 - `Retry-After` is retained through the Gemini/OpenAI-compatible adapter, Studio

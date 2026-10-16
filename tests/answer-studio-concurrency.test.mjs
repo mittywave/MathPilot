@@ -33,7 +33,7 @@ function loader(overrides = {}) {
 }
 const load = loader();
 const { runStudioWindow, studioConcurrencyState, studioConcurrency, studioRetryAfter, StudioRequestError,
-  studioApi, studioUpstreamFailure, studioCaughtFailure } = load('lib/answer-studio-concurrency.ts');
+  studioApi, studioUpstreamError, studioUpstreamFailure, studioCaughtFailure } = load('lib/answer-studio-concurrency.ts');
 const { transcribeStudio } = load('lib/answer-studio-pipeline.ts');
 const { emptyStudioDraft } = load('lib/answer-studio.ts');
 const { studioTextReady } = load('lib/answer-studio-output.ts');
@@ -284,6 +284,25 @@ test('Studio HTTP response preserves upstream 429 and Retry-After, while missing
   const schema=studioUpstreamFailure({status:200},'empty output');assert.equal((await schema.json()).retryable,false);
   const error=studioCaughtFailure(new SyntaxError('bad JSON'),'error');assert.equal((await error.json()).retryable,false);
   const network=studioCaughtFailure(new TypeError('fetch failed'),'error');assert.equal((await network.json()).retryable,true);
+});
+test('engine timeouts and gateway errors are retryable for Studio even though the engine marks them terminal', async () => {
+  const timeout=studioUpstreamError({status:504,code:'UPSTREAM_TIMEOUT',terminal:true,error:'请求超时；上游是否执行不确定，未自动重试。'},'fallback');
+  assert.equal(timeout.retryable,true);assert.equal(timeout.status,504);assert.equal(timeout.message,'AI 请求超时（HTTP 504）');
+  assert.equal(studioUpstreamError({status:524,code:'UPSTREAM_FAILED',terminal:true},'fallback').retryable,true);
+  assert.equal((await studioUpstreamFailure({status:502,code:'UPSTREAM_TRANSPORT',terminal:true},'fallback').json()).retryable,true);
+  for(const code of ['UPSTREAM_AUTH_FAILED','UPSTREAM_QUOTA','OUTPUT_INVALID','REQUEST_BUDGET_EXHAUSTED']) {
+    const error=studioUpstreamError({status:code==='UPSTREAM_AUTH_FAILED'?401:422,code,terminal:true,error:'engine text'},'fallback');
+    assert.equal(error.retryable,false,code);assert.equal(error.message,'engine text');
+  }
+});
+test('a page timeout is retried, and the final message says retries were made', async () => {
+  const s=services(),calls={};
+  s.recognize=async p=>{calls[p.page]=(calls[p.page]||0)+1;if(p.page===2&&calls[2]<3)throw studioUpstreamError({status:504,code:'UPSTREAM_TIMEOUT',terminal:true},'x');return [record(p)];};
+  const result=await transcribeStudio(draft(4),s,{drawings:false,retryRuntime:clock()});
+  assert.equal(calls[2],3);assert.equal(result.questions.length,4);
+  const stuck=services();
+  stuck.recognize=async p=>{if(p.page===2)throw studioUpstreamError({status:504,code:'UPSTREAM_TIMEOUT',terminal:true},'x');return [record(p)];};
+  await assert.rejects(transcribeStudio(draft(4),stuck,{drawings:false,retryRuntime:clock()}),/第 2 页.*AI 请求超时（HTTP 504），自动重试 2 次仍未成功/);
 });
 test('browser HTTP client keeps status and retry advice instead of throwing a plain Error', async t => {
   t.mock.method(globalThis,'fetch',async()=>Response.json({error:'limited'},{status:429,headers:{'retry-after':'3'}}));

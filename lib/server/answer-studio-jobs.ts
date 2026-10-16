@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import type { AuthUser } from "../types";
 import { studioInputMode, type StudioDraft, type StudioPage, type StudioRecord } from "../answer-studio";
 import { normalizeStudioRecords, studioRecognitionPrompt, studioRecognitionSchema } from "../answer-studio-contract";
-import { StudioRequestError, studioConcurrency, studioRetryAfter } from "../answer-studio-concurrency";
+import { StudioRequestError, studioConcurrency, studioUpstreamError } from "../answer-studio-concurrency";
 import { transcribeStudio } from "../answer-studio-pipeline";
 import { callRecognitionModel, parseRecognitionModelText } from "./recognition-model";
 
@@ -156,11 +156,7 @@ async function recognizeStudioPage(image: string, page: StudioPage, draft: Studi
     const network = error instanceof TypeError && /fetch|network|socket|ECONN|timeout/i.test(error.message);
     throw new StudioRequestError(error instanceof Error ? error.message : "识别失败", network ? 502 : 500, 0, network);
   }
-  if (result.status >= 400 || !result.text) {
-    const status = result.status >= 400 && result.status <= 599 ? result.status : 502;
-    // An empty successful reply or a terminal failure is not worth retrying; the status decides the rest.
-    throw new StudioRequestError(result.error || "识别服务未返回结果，请重试当前页", status, studioRetryAfter(result.retryAfter), result.terminal || result.status < 400 ? false : undefined);
-  }
+  if (result.status >= 400 || !result.text) throw studioUpstreamError(result, "识别服务未返回结果，请重试当前页");
   return normalizeStudioRecords(parseRecognitionModelText(result.text), page.id, draft.title);
 }
 
