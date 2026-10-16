@@ -891,6 +891,12 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 /* Paper basket: drafting and export, without library navigation. */
 .basket-workspace {grid-template-columns:minmax(0,1fr);max-width:none; }
 .basket-workspace .content {display:grid;grid-template-columns:350px minmax(0,1fr);align-items:start;min-width:0;overflow:visible;padding:0; }
+.basket-workspace .content:has(>.kgb-shell) {grid-template-columns:350px minmax(0,1fr) clamp(380px,30vw,520px); }
+.basket-workspace .content>* {grid-column:2; }
+.basket-workspace .content>.basket-settings {grid-column:1;grid-row:1; }
+.basket-workspace .content>.kgb-shell {grid-column:3;grid-row:1; }
+.basket-workspace .question-card.active {border-color:var(--green);box-shadow:inset 3px 0 0 var(--green),0 6px 20px color-mix(in srgb, var(--green) 12%, transparent); }
+.basket-workspace .basket-outline-question.is-active>.basket-outline-locate {background:var(--green);border-color:var(--green);color:var(--on-accent);box-shadow:0 0 0 3px var(--success-soft); }
 .basket-workspace button { white-space:nowrap; min-height:44px; }
 .basket-settings {display:flex;flex-direction:column;gap:8px;position:sticky;top:var(--topbar-h);height:calc(100dvh - var(--topbar-h));overflow:hidden;padding:12px;border-right:1px solid var(--line);background:var(--surface); }
 .basket-title { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px;white-space:nowrap; }
