@@ -27,6 +27,9 @@ export async function upsertResult(input: {
   feedback: string; errorType: string; stepAnalysis?: string[]; evidenceSummary?: string; capabilityKeys?: string[];
   confidence: number; bbox: unknown; requiresReview: boolean;
 }) {
+  // A run the teacher stopped (back to 待上传) may still be finishing a batch; it no longer writes results.
+  const live = await homeworkDb().prepare("SELECT 1 AS live FROM homework_submissions WHERE id = ? AND status IN ('submitted', 'processing', 'failed')").bind(input.submissionId).first();
+  if (!live) return;
   const existing = await homeworkDb().prepare("SELECT id, created_at FROM grading_items WHERE submission_id = ? AND assignment_question_id = ?")
     .bind(input.submissionId, input.question.id).first<{ id: string; created_at: number }>();
   const id = existing?.id ?? crypto.randomUUID(); const now = Date.now();
@@ -123,7 +126,7 @@ async function recordQueueRetry(submissionId: string, error: unknown, attempt: n
 
 async function recordFinalQueueFailure(submissionId: string, error: unknown) {
   const reason = error instanceof Error ? error.message.slice(0, 500) : "批改失败";
-  await homeworkDb().prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?")
+  await homeworkDb().prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status IN ('submitted', 'processing')")
     .bind(reason, Date.now(), submissionId).run();
 }
 

@@ -37,7 +37,7 @@ function pageFailures(coverage: Coverage) {
 
 const STAGES = ["读取页面", "识别题目", "准备参考答案", "逐题批改"];
 /** While grading runs: the four pipeline stages, every page as it is read, and each verdict as soon as it is saved. */
-function LiveBoard({ submission, international, busy, onRetry }: { submission: HomeworkSubmission; international: boolean; busy: boolean; onRetry(): void }) {
+function LiveBoard({ submission, international, busy, onRetry, onCancel }: { submission: HomeworkSubmission; international: boolean; busy: boolean; onRetry(): void; onCancel(): void }) {
   const coverage = submission.pageCoverage, failed = submission.status === "failed";
   // While the queue waits to retry, the server keeps the run in progress and leaves its note here.
   const retrying = !failed && !!submission.failureReason;
@@ -50,7 +50,7 @@ function LiveBoard({ submission, international, busy, onRetry }: { submission: H
   const recent = [...fresh].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
   const failures = coverage ? pageFailures(coverage) : [];
   return <section className={`live-board${failed ? " failed" : retrying ? " retrying" : ""}`} aria-label="批改进度">
-    <header><div><h2>{failed ? "自动批改遇到问题" : current === 2 && graded > 0 ? "正在准备参考答案并批改" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div>{failed && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</header>
+    <header><div><h2>{failed ? "自动批改遇到问题" : current === 2 && graded > 0 ? "正在准备参考答案并批改" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div><div className="live-actions"><button onClick={onCancel} disabled={busy} title="传错了页面时停止这次批改，回到待上传，重新选页面">停止批改，重新上传</button>{failed && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</div></header>
     <ol className="live-stages">{STAGES.map((label, index) => {
       const [value, max] = stages[index], state = index < current ? "done" : index > current && !(index === 3 && graded > 0) ? "waiting" : failed ? "stalled" : "active";
       const fill = max ? Math.min(1, value / max) : index < current ? 1 : 0;
@@ -287,6 +287,18 @@ export default function TeacherSubmissionPage() {
     } finally { setBusy(false); }
   }
 
+  async function cancelGrading() {
+    if (!submission || !confirm("停止这次批改并回到待上传？这次上传已有的批改结果会清除，之后重新选页面提交。")) return;
+    setBusy(true);
+    try {
+      const result = await homeworkApi.updateSubmission(submission.id, { action: "cancel" });
+      setSubmission(result.submission); setItems(result.submission.gradingItems);
+      setMessage({ text: "已停止批改，请重新上传页面", tone: "success" });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : "停止批改失败", tone: "error" });
+    } finally { setBusy(false); }
+  }
+
   // The report is typeset on this computer; where no typesetter runs, the TeX source is still available.
   async function downloadReport(kind: "pdf" | "tex") {
     if (!submission?.report?.details) return;
@@ -328,7 +340,11 @@ export default function TeacherSubmissionPage() {
   const status = incomplete && submission.status === "published" ? "结果不完整" : submission.status === "published" && coverage?.unreadable ? "有页面待补图" : STATUS[submission.status] ?? submission.status;
 
   const assigned = submission.assigned;
-  const correctionQuestions = assigned?.questions.filter((question) => submission.questionScope?.includes(question.id)) ?? [];
+  const scoped = assigned?.questions.filter((question) => submission.questionScope?.includes(question.id)) ?? [];
+  // A scope of questions already handed in is a correction; one of questions not yet handed in is one 打卡 day's upload.
+  const correctionQuestions = scoped.every((question) => question.result) ? scoped : [];
+  let dayEnd = 0;
+  const uploadDay = !correctionQuestions.length && scoped.length ? assigned!.days.find((entry) => (dayEnd += entry.size) > assigned!.questions.indexOf(scoped[0])) : undefined;
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
   return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
     trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
@@ -345,14 +361,14 @@ export default function TeacherSubmissionPage() {
 
     {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onCorrect={newVersion}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
-    {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} />}
+    {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} onCancel={cancelGrading} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}
     {/* An assigned question keeps the figures it was handed out with; only questions read off the page have figures to check. */}
     {summary && !live && !!items.length && <section className="review-ledger" aria-label="批改结果统计"><VerdictTally items={assigned ? assigned.questions.map((question) => question.result) : items} total={assigned ? assigned.questions.length : items.length} international={international} /></section>}
     {submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
 
-    {submission.status === "draft" && <section className="review-upload"><div><h2>{correctionQuestions.length ? "上传错题订正" : "上传学生作业"}</h2><p>{correctionQuestions.length ? `本次订正：${correctionQuestions.map((question) => homeworkQuestionLabel(question.number)).join("、")}。上传订正照片或 PDF，只更新本次找到的错题，其他题保留原状态。` : assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页${correctionQuestions.length ? "订正" : "作业"}`}</button></section>}
+    {submission.status === "draft" && <section className="review-upload"><div><h2>{correctionQuestions.length ? "上传错题订正" : scoped.length ? `上传${uploadDay?.title || "这一天"}的作业` : "上传学生作业"}</h2><p>{correctionQuestions.length ? `本次订正：${correctionQuestions.map((question) => homeworkQuestionLabel(question.number)).join("、")}。上传订正照片或 PDF，只更新本次找到的错题，其他题保留原状态。` : scoped.length ? `本次只批改这一天还没交的 ${scoped.length} 道题：${scoped.map((question) => homeworkQuestionLabel(question.number)).join("、")}。` : assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页${correctionQuestions.length ? "订正" : "作业"}`}</button></section>}
 
 
     {["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>这是启用自动发布前产生的旧提交</b><p>保留旧流程兼容，不会被后台自动发布。</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>确认并发布</button></section>}

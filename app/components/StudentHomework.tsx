@@ -90,6 +90,14 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
   const closeAssign = useCallback(() => setAssigning(false), []);
   const assigned = useCallback(() => { setAssigning(false); setReads((count) => count + 1); }, []);
   const [handedOut, setHandedOut] = useState<string[]>([]);
+  const [opening, setOpening] = useState("");
+  const [dayError, setDayError] = useState("");
+  // One 打卡 day is uploaded and graded on its own: a new upload scoped to that day's questions not handed in yet.
+  async function uploadDay(item: Homework, index: number) {
+    setOpening(`${item.assignmentId}:${index}`); setDayError("");
+    try { window.location.assign(`/tools/homework/submissions/${encodeURIComponent((await homeworkApi.updateSubmission(item.latest.id, { action: "new-version", uploadDay: index })).submission.id)}`); }
+    catch (reason) { setDayError(reason instanceof Error ? reason.message : "打开上传失败"); setOpening(""); }
+  }
 
   const rows = homework?.map((item) => ({ item, states: item.days?.map(dayState) ?? [] })) ?? [];
   const waiting = rows.filter(({ item }) => item.assigned && item.done < item.total && !busy(item));
@@ -101,6 +109,7 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
         <a className="primary-button" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
       </div>
     </header>
+    {dayError && <p className="inline-error" role="alert">{dayError}</p>}
     {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !homework ? <div className="wrong-book-loading"><i></i><span>正在读取作业…</span></div>
       : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>点“布置作业”把给这位学生组好的卷布置下去，Word 练习在快速排版里点“布置给学生”；题目和答案会存进这里，学生做完后上传学生拍好的照片或 PDF 批改。也可以直接批改一份学校发的作业。</p></div>
@@ -110,20 +119,21 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
-            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `${days.length} 天任务 · ${item.total} 道题`
+            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `打卡任务 · ${days.length} 天 · ${item.total} 道题`
               : days.length ? `${item.total} 道题${days[0].handedInAt == null ? "" : ` · ${day(days[0].handedInAt)} 提交`}` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
-            {(days.length > 1 || graded > 0) && <span className="homework-tally">
-              {days.length > 1 && <span className="homework-days" aria-label="各天任务进度">{days.map((entry, index) => {
-                const note = dayNote(entry);
-                return <i key={index} className={states[index]} title={`第 ${index + 1} 天 · ${note}`}>{index + 1}</i>;
-              })}</span>}
+            {graded > 0 && <span className="homework-tally">
               {graded > 0 && <span className="homework-bar" aria-label={`对 ${item.correct} 道，错 ${item.incorrect} 道，待处理 ${item.pending} 道`}>
                 <i className="bar">{(["correct", "incorrect", "pending"] as const).map((key) => item[key] > 0 && <em key={key} className={key} style={{ width: `${item[key] / Math.max(item.total, graded) * 100}%` }} />)}</i>
                 <small>对 {item.correct} · 错 {item.incorrect}{item.pending ? ` · 待处理 ${item.pending}` : ""}</small>
               </span>}
             </span>}
-            {item.assigned && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
+            {item.assigned && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
+          {days.length > 1 && <ol className="homework-days" aria-label="打卡日">{days.map((entry, index) => <li key={index} className={states[index]}>
+            <b>第 {index + 1} 天{entry.title ? ` · ${entry.title.replace(/^第\s*\d+\s*天\s*[·・:：]?\s*/, "")}` : ""}</b><small>{dayNote(entry)}</small>
+            {states[index] !== "done" && <button type="button" disabled={busy(item) || Boolean(opening)} onClick={() => void uploadDay(item, index)}
+              title={busy(item) ? "这份作业正在批改，完成或停止后再上传" : `上传第 ${index + 1} 天的作业照片或 PDF，只批改这一天还没交的题`}>{opening === `${item.assignmentId}:${index}` ? "正在打开…" : "上传这天"}</button>}
+          </li>)}</ol>}
         </li>;
       })}</ol>}
   </section>;

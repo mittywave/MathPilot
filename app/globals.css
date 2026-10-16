@@ -593,10 +593,16 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-tally { grid-column:3; display:grid; gap:7px; }
 .homework-bar { display:grid; gap:5px; }
 /* One cell per task group: handed in, partially handed in, or unsubmitted. */
-.homework-days { display:flex; flex-wrap:wrap; gap:3px; }
-.homework-days i { display:grid; place-items:center; min-width:20px; height:20px; padding:0 3px; border-radius:calc(5px*var(--radius-scale)); background:var(--surface-soft); color:var(--muted); font-size:12px; font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
-.homework-days i.done { background:var(--success-soft); color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
-.homework-days i.partial { background:var(--warn-soft); color:var(--warn-strong); }
+.homework-days { margin:0; padding:0 16px 10px 130px; list-style:none; display:grid; gap:2px; }
+.homework-days li { display:grid; grid-template-columns:minmax(0,320px) minmax(0,1fr) auto; align-items:center; gap:14px; min-height:34px; border-top:1px dashed var(--line); }
+.homework-rows .homework-days li + li { border-top:1px dashed var(--line); }
+.homework-days b { overflow:hidden; font-size:12.5px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.homework-days small { color:var(--muted); font-size:12px; }
+.homework-days li.done small { color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
+.homework-days li.partial small { color:var(--warn-strong); }
+.homework-days button { grid-column:3; padding:4px 10px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; white-space:nowrap; cursor:pointer; }
+.homework-days button:hover:not(:disabled) { border-color:var(--green); }
+.homework-days button:disabled { opacity:.5; cursor:default; }
 .homework-tally .bar { display:flex; height:6px; border-radius:999px; background:var(--surface-soft); overflow:hidden; }
 .homework-tally em { display:block; height:100%; }
 .homework-tally em.correct { background:var(--success); }
@@ -1054,6 +1060,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .live-board.failed header p { color:var(--danger); }
 .live-board.retrying header p,.live-board.retrying .live-stages .active span { color:var(--warn-strong); }
 .live-board header button { min-height:42px; padding:0 18px; }
+.live-actions { display:flex; gap:8px; flex:none; }
 .live-stages { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; margin:26px 0 0; padding:0 0 24px; list-style:none; border-bottom:1px solid var(--line); }
 .live-stages li { display:grid; gap:6px; min-width:0; }
 .live-stages span { color:var(--muted); font-size:12px; letter-spacing:.06em; }
