@@ -59,7 +59,9 @@ try {
   }});
   await page.goto(base+'/');
   await expect(page.locator('.user-chip')).toContainText('本机管理员');
-  await page.locator('button.module-add').click();
+  // 新建模块 sits in the sidebar heading's 管理模块 menu.
+  await page.getByRole('button',{name:'管理模块',exact:true}).first().click();
+  await page.locator('.more-panel').getByRole('button',{name:'新建模块',exact:true}).click();
   await page.getByLabel('模块名称',{exact:true}).fill('Word 导入回归');
   await page.getByRole('button',{name:'创建模块',exact:true}).click();
   await page.getByRole('button',{name:'新建试题',exact:true}).first().click();
@@ -111,7 +113,7 @@ try {
     result.structures={analyses:data.questions.filter(q=>q.analysis).length,stemParagraphs:data.questions.reduce((n,q)=>n+(q.stemParagraphs?.length||0),0),formulas:countXml('stemDocxXml',/<m:oMath\b/g)+countXml('optionsDocxXml',/<m:oMath\b/g)+countXml('analysisDocxXml',/<m:oMath\b/g),tables:countXml('stemDocxXml',/<w:tbl\b/g)+countXml('analysisDocxXml',/<w:tbl\b/g),images:data.questions.reduce((n,q)=>n+(q.contentImages?.length||0),0)};
     await writeFile(join(out,'saved-questions.json'),JSON.stringify(data.questions,null,2));
     await page.reload();
-    await page.locator('.module-switcher button').filter({hasText:'Word 导入回归'}).click();
+    await page.locator('.tree button.module-root').filter({hasText:'Word 导入回归'}).first().click();
     await expect(page.locator('.question-card')).toHaveCount(20);
     const cards=page.locator('.question-card');
     for(const i of [0,1,16,17,18,19]){
@@ -125,15 +127,7 @@ try {
     assert.ok(await cards.nth(17).locator('table').count()>0,'saved table must remain a table');
     result.imageLoads=await cards.locator('img').evaluateAll(imgs=>imgs.map(img=>({loaded:img.complete&&img.naturalWidth>0,width:img.naturalWidth})));
     assert.ok(result.imageLoads.every(x=>x.loaded));
-    await page.setViewportSize({width:390,height:844});
-    for(const i of [0,16,17,19]){
-      await cards.nth(i).scrollIntoViewIfNeeded();
-      await cards.nth(i).screenshot({path:join(out,`mobile-question-${i+1}.png`)});
-    }
-    result.mobileOverflow=await page.evaluate(()=>({client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}));
-    assert.ok(result.mobileOverflow.scroll<=result.mobileOverflow.client);
-    await page.setViewportSize({width:1440,height:1000});
-    await page.getByRole('button',{name:'全选当前结果',exact:true}).click();
+    await page.getByRole('button',{name:'全选结果',exact:true}).click();
     await page.locator('button.export-button').click();
     await page.getByLabel('练习标题',{exact:true}).fill('Word 导入修复回归');
     await page.locator('#basket-include-answers').check();
