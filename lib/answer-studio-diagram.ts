@@ -26,12 +26,12 @@ export function studioDiagramSvg(d: StudioDiagram) {
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${b.x} ${b.y} ${b.width} ${b.height}" width="${b.width}" height="${b.height}"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" fill="white"/>${d.baseImage ? `<image href="${xmlEscape(d.baseImage)}" xlink:href="${xmlEscape(d.baseImage)}" width="${d.width}" height="${d.height}"/>` : ""}${shapes}</svg>`;
 }
 /** Native Office VML objects, not a flattened image. All coordinates share one group, in one inline run; the
- * paragraph around it decides where it sits. */
-export function studioDiagramVml(d: StudioDiagram, imageRelation: string, unique: string) {
-  // Keep diagrams compact in the handout; the editable VML objects retain
-  // their full coordinate system while the rendered group is about half the
-  // previous maximum size.
-  const b = diagramBounds(d), scale = Math.min(130/b.width,100/b.height,1);
+ * paragraph around it decides where it sits. A source picture gets its print width from the caller. */
+export function studioDiagramVml(d: StudioDiagram, imageRelation: string, unique: string, widthPt?: number) {
+  // Keep solution drawings compact in the handout; the editable VML objects
+  // retain their full coordinate system while the rendered group is about
+  // half the previous maximum size.
+  const b = diagramBounds(d), scale = widthPt ? widthPt/b.width : Math.min(130/b.width,100/b.height,1);
   const width = b.width*scale, height = b.height*scale;
   function shape(s: StudioShape, index: number) {
     const id = `${unique}_${index}`, color = xmlEscape(s.color), weight = s.weight*scale;

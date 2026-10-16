@@ -93,7 +93,7 @@ $\phantom{\therefore \angle FED}=\angle FAE=\angle FDE$`;
     }
   }finally{await rm(dir,{recursive:true,force:true});}
 });
-test('source pictures keep their place on the original page: rows side by side, aligned to their side of the question',async()=>{
+test('source pictures keep their place and print size from the original page; a printed question number stays one run',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'mitty-studio-figures-'));
   try {
     const output=join(dir,'export.cjs');
@@ -101,7 +101,7 @@ test('source pictures keep their place on the original page: rows side by side, 
     const {buildStudioWord}=require(output);
     const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     const figure=(id,pageId,box)=>({id,caption:'',baseImage:png,...(box?{baseSource:{pageId,box}}:{}),width:200,height:100,shapes:[],warnings:[]});
-    const q={id:'q',lesson:'一',section:'例题精练',number:'2',stem:'如图，求 $\\triangle ABC$ 的外接圆半径．',analysis:'略',answerIds:['a'],warnings:[],resolutions:{},reviewed:true,
+    const q={id:'q',lesson:'一',section:'例题精练',number:'2',stem:'2. 如图，求 $\\triangle ABC$ 的外接圆半径．',analysis:'略',answerIds:['a'],warnings:[],resolutions:{},reviewed:true,
       questionSources:[{pageId:'p',box:{x:100,y:100,width:800,height:600}}],
       diagrams:[
         figure('row-a','p',{x:450,y:300,width:200,height:100}),figure('row-b','p',{x:680,y:310,width:200,height:90}), // one printed row, ending at the right margin
@@ -109,11 +109,19 @@ test('source pictures keep their place on the original page: rows side by side, 
         figure('left','p',{x:100,y:600,width:200,height:90}),
         figure('unplaced'),
         figure('other-page','p2',{x:700,y:100,width:200,height:100}),
+        {...figure('tall','p',{x:500,y:700,width:400,height:200}),width:100,height:400},
       ]};
     const zip=await JSZip.loadAsync(await(await buildStudioWord({version:1,title:'配图',inputMode:'questions',pages:[],questions:[q],answers:[{id:'a'}]},'full')).arrayBuffer());
     const xml=await zip.file('word/document.xml').async('string');
     const rows=[...xml.matchAll(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ >])[\s\S])*?<v:group[\s\S]*?<\/w:p>/g)].map(m=>m[0]);
-    assert.deepEqual(rows.map(p=>[p.match(/<w:jc w:val="(\w+)"\/>/)?.[1],(p.match(/<v:group /g)||[]).length]),[['right',2],['center',1],['left',1],['center',1],['center',1]]);
+    assert.deepEqual(rows.map(p=>[p.match(/<w:jc w:val="(\w+)"\/>/)?.[1],(p.match(/<v:group /g)||[]).length]),[['right',2],['center',1],['left',1],['center',1],['center',1],['right',1]]);
+    // A row keeps its share of the original line (a quarter each here, beside a 22 pt gap), a lone picture gets at least
+    // 40% of the 487.3 pt line, an unplaced one keeps the compact size, and none is taller than 240 pt.
+    const sizes=[...xml.matchAll(/<v:group id="studio\d+" style="width:([\d.]+)pt;height:([\d.]+)pt"/g)].map(m=>[Number(m[1]),Number(m[2])]);
+    const line=487.3;
+    for(const [[width],expected] of sizes.slice(0,6).map((size,i)=>[size,[(line-22)/4,(line-22)/4,line*.4,line*.4,130,130][i]]))assert.ok(Math.abs(width-expected)<.01,`${width} ≠ ${expected}`);
+    assert.ok(Math.abs(sizes[6][1]-240)<.01&&sizes[6][0]<80,'a tall picture is capped at 240 pt high');
+    assert.match(xml,/<w:t xml:space="preserve">2\.<\/w:t><\/w:r><w:r>(?:<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<\/w:rPr>)?<w:t xml:space="preserve">如图/,'the printed question number is one run, straight before its text');
     assert.match(rows[0],/<v:group [\s\S]*?<\/w:pict><\/w:r><w:r><w:t xml:space="preserve">\u3000\u3000<\/w:t><\/w:r><w:r><w:pict /,'pictures on one row sit side by side');
     for(const p of rows)assert.match(p,/<w:spacing (?=[^>]*w:before="100")(?=[^>]*w:after="140")[^>]*\/>/);
     assert.doesNotMatch(xml,/STUDIO_DIAGRAM_/);
