@@ -661,6 +661,7 @@ try {
   await lane(0, 'example').locator('.handout-question').first().hover();
   await grip('practice', '练习 1').dragTo(lane(0, 'example').locator('.handout-question').first(), { targetPosition: { x: 200, y: 5 } });
   await saved();
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('handout-drag')), false, 'a mouse drag leaves no focus ring on the handle');
   assert.deepEqual(await labels(lane(0, 'example')), ['例1.', '例2.'], 'a dragged question takes the band it lands in');
   assert.match(await lane(0, 'example').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/);
   assert.deepEqual(await labels(lane(1, 'example')), ['例3.']);

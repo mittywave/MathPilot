@@ -50,7 +50,7 @@ function BackIcon() {
 }
 
 function GripIcon() {
-  return <svg viewBox="0 0 10 16" aria-hidden="true" focusable="false">{[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.4" />))}</svg>;
+  return <svg viewBox="0 0 10 16" aria-hidden="true" focusable="false">{[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" />))}</svg>;
 }
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -753,11 +753,11 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const backLabel = groupLabel(home);
   const backHref = homeShelf === "student" ? `/tools/handouts?shelf=student&student=${encodeURIComponent(home.studentId ?? "")}` : homeShelf === "course" ? `/tools/handouts?shelf=course&course=${encodeURIComponent(home.coursePath[0]?.id ?? "")}&stage=${encodeURIComponent(home.coursePath[1]?.id ?? "")}` : `/tools/handouts?shelf=topic&topic=${encodeURIComponent(home.coursePath[2]?.id ?? home.coursePath[1]?.id ?? home.domain ?? "unsorted")}`;
 
-  // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
-  // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
+  // The six-dot handle drags its question; focused, ↑ ↓ move it one place. A mouse never leaves focus on it, so no ring stays behind.
   const dragHandle = (item: HandoutItem, name: string) => <button className="handout-drag" draggable aria-label={`拖动${name}调整顺序`} title="拖动调整顺序，也可按 ↑ ↓ 键"
     onDragStart={(event) => { dragging.current = item.id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", name); const card = event.currentTarget.closest("article"); if (card) event.dataTransfer.setDragImage(card, 16, 16); }}
-    onDragEnd={() => { dragging.current = null; setDropAt(null); }}
+    onClick={(event) => { if (event.detail) event.currentTarget.blur(); }}
+    onDragEnd={(event) => { event.currentTarget.blur(); dragging.current = null; setDropAt(null); }}
     onKeyDown={(event) => { const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0; if (direction) { event.preventDefault(); setItems(moveHandoutItem(doc.items, item.id, direction)); } }}><GripIcon /></button>;
   const drop = (event: DragEvent) => { if (!dragging.current || !dropAt) return; event.preventDefault(); event.stopPropagation(); setItems(dropHandoutItem(doc.items, dragging.current, dropAt)); dragging.current = null; setDropAt(null); };
   const dropMark = (item: HandoutItem) => dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dragging.current !== item.id ? dropAt.after ? " drop-after" : " drop-before" : "";
@@ -765,6 +765,8 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     onDragOver: (event: DragEvent<HTMLElement>) => { if (!dragging.current) return; event.preventDefault(); event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); const after = event.clientY > box.top + box.height / 2; if (!(dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dropAt.after === after)) setDropAt({ itemId: item.id, after }); },
     onDrop: drop,
   });
+  // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
+  // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
   const questionCard = (item: QuestionItem, band: HandoutBand) => {
     const question = resolve(item.questionId);
     const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);

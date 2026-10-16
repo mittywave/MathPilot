@@ -294,13 +294,15 @@
 @container(max-width:620px){.picker-item .docx-web-options,.picker-item .docx-web-options.long-formula{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px;padding-left:0}}
 @container(max-width:280px){.picker-item .docx-web-options,.picker-item .docx-web-options.long-formula{grid-template-columns:minmax(0,1fr)}}
 @container(max-width:340px){.picker-item .question-presentation.layout-right{grid-template-columns:minmax(0,1fr)}.picker-item .question-images{max-width:100%}}
-/* Notion-style handle: six dots at the card's top-left, shown on hover; drop lines mark where it lands.
-   It sits on the question number's line: card padding 14px + .stem margin 14px, one 15px × 1.8 line high. */
+/* Notion-style handle: six light dots at the card's top-left, faded in on hover; drop lines mark where it lands.
+   It sits on the question number's line: card padding 14px + .stem margin 14px, one 15px × 1.8 line high.
+   Keyboard focus gets the page's green ring; a mouse never leaves focus on it (see dragHandle). */
 .handout-question{position:relative;padding-left:28px}
-.handout-drag{position:absolute;top:28px;left:4px;display:grid;place-items:center;width:20px;height:27px;padding:0;border:0;border-radius:calc(5px*var(--radius-scale));background:transparent;color:var(--muted);cursor:grab;opacity:0}
+.handout-drag{position:absolute;top:28px;left:4px;display:grid;place-items:center;width:20px;height:27px;padding:0;border:0;border-radius:calc(5px*var(--radius-scale));background:transparent;color:color-mix(in srgb,var(--muted) 50%,transparent);cursor:grab;opacity:0;transition:opacity .15s,background-color .15s,color .15s}
 .handout-drag svg{width:10px;height:16px;fill:currentColor}
 .handout-question:hover .handout-drag,.handout-drag:focus-visible{opacity:1}
-.handout-drag:hover{background:var(--surface-soft,#eef3f0);color:var(--green,#2f6b53)}
+.handout-drag:hover,.handout-drag:focus-visible{background:var(--surface-soft,#eef3f0);color:var(--green,#2f6b53)}
+.handout-drag:focus-visible{outline:2px solid var(--green,#2f6b53);outline-offset:-2px}
 .handout-drag:active{cursor:grabbing}
 .handout-question.drop-before{box-shadow:inset 0 3px 0 var(--green,#2f6b53)}
 .handout-question.drop-after{box-shadow:inset 0 -3px 0 var(--green,#2f6b53)}
