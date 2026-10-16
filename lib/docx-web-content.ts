@@ -406,6 +406,21 @@ export function docxFigureLine(xml: string): DocxFigureLine | null {
   return figures.length ? { align: parseParagraph(paragraph).align, figures } : null;
 }
 
+// Every Word equation (m:oMath) of a document part, in document order, as LaTeX: the conversion the web cards use.
+export function docxMathLatex(xml: string): string[] {
+  let entries: XmlEntry[];
+  try { entries = parser.parse(xml) as XmlEntry[]; } catch { return []; }
+  const formulas: string[] = [];
+  const visit = (list: XmlEntry[]) => {
+    for (const entry of list) {
+      if (entryName(entry) === "oMath") formulas.push(mathEntryLatex(entry));
+      else visit(entryChildren(entry));
+    }
+  };
+  visit(entries);
+  return formulas;
+}
+
 export function docxWebInlineText(inlines: DocxWebInline[]) {
   return inlines.map((inline) => inline.type === "text" ? inline.value : inline.type === "math" ? `$${inline.latex}$` : inline.type === "break" ? "\n" : "\t").join("");
 }

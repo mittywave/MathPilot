@@ -6,7 +6,8 @@ const failure = (error: unknown) => error instanceof Response ? error : Response
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
-    return Response.json(new URL(request.url).searchParams.get("count") === "active" ? { count: await countActiveStudioJobs(user) } : { jobs: await listStudioJobs(user) });
+    const query = new URL(request.url).searchParams, kind = query.get("kind");
+    return Response.json(query.get("count") === "active" ? { count: await countActiveStudioJobs(user, kind) } : { jobs: await listStudioJobs(user, kind) });
   } catch (error) { return failure(error); }
 }
 export async function POST(request: Request) {

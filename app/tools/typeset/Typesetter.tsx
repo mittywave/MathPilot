@@ -196,9 +196,16 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     try {
       const { renderImportFile, structuredDocxQuestions } = await import("../../../lib/file-import");
       const items = structuredDocxQuestions(await renderImportFile(file, () => {}));
-      if (!items.length) { setBusy(""); setSource(null); setError("没有从这份 Word 里读出题目。题目需要以「1.」「2.」这样的题号开头，大题用「一、选择题」这类标题。"); return; }
-      // The questions are only typeset, never saved, so they carry no library fields.
-      const questions: Question[] = items.map(({ questionNumber, ...item }) => ({ ...item, id: `typeset-${questionNumber}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 }));
+      if (!items.length) { setBusy(""); setSource(null); setError("没有从这份 Word 里读出题目。题目需要以「1.」「2.」这样的题号开头，大题用「一、选择题」这类标题；讲义也可以每题单独一行加粗标题，如「例题精练 1」。"); return; }
+      // The questions are only typeset, never saved, so they carry no library fields. A number repeated in a later
+      // section gets a suffix, so the per-question spacing saved for the first one keeps its id.
+      const seen = new Map<string, number>();
+      const questions: Question[] = items.map((item) => {
+        const repeat = seen.get(item.questionNumber) ?? 0; seen.set(item.questionNumber, repeat + 1);
+        const question: Question & { questionNumber?: string; warnings?: string[] } = { ...item, id: `typeset-${item.questionNumber}${repeat ? `-${repeat + 1}` : ""}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 };
+        delete question.questionNumber; delete question.warnings;
+        return question;
+      });
       const name = record?.title ?? file.name.replace(/\.docx$/i, "").trim();
       const settings = record ? restoredSettings(record.settings) : { answers, showSource, linePitch, groupRoom: {}, ownRoom: {} };
       await show(file.name, questions, name, settings);

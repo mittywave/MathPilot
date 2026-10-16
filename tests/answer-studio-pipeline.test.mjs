@@ -105,7 +105,8 @@ test('PDF worker preparation serves exactly the package bytes under a versioned 
   const opener=await readFile('lib/pdfjs.ts','utf8');
   assert.match(opener,/workerSrc\s*=\s*`\$\{base\}pdf\.worker\.min\.mjs`/);
   for(const option of ['cMapUrl','standardFontDataUrl','wasmUrl','iccUrl'])assert.match(opener,new RegExp(`${option}: \`\\$\\{base\\}`),option);
-  for(const file of ['lib/answer-studio-images.ts','lib/file-import.ts','app/tools/typeset/PdfPreview.tsx']){
+  // 题库 file imports read PDFs through lib/answer-studio-images.ts, as 文件转录 does.
+  for(const file of ['lib/answer-studio-images.ts','app/tools/typeset/PdfPreview.tsx']){
     const source=await readFile(file,'utf8');
     assert.doesNotMatch(source,/pdf\.worker\.min\.mjs|getDocument\(/,file);assert.match(source,/openPdf\(/,file);
   }

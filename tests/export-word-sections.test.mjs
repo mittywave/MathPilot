@@ -39,6 +39,21 @@ test("imported equations leave invalid text-run wrappers without losing mixed te
   assert.match(xml, /<w:tbl><w:tr><w:tc><w:p><m:oMath>/);
   assert.match(xml, /<w:p><m:oMathPara><m:oMath>/);
 });
+test("an imported stem gets the paper's number, whether or not the Word file printed one", async () => {
+  const headed = { ...base, id: "headed", type: "解答题", stem: "已知 2.5", options: [],
+    stemDocxXml: ['<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">已知 </w:t></w:r><w:r><w:t>2.5 与 3．</w:t></w:r></w:p>'] };
+  const printed = { ...base, id: "printed", type: "解答题", stem: "7．求值", options: [], stemDocxXml: ['<w:p><w:r><w:t>7．求值</w:t></w:r></w:p>'] };
+  const formulaFirst = { ...base, id: "formula", type: "解答题", stem: "$x$ 为 2．", options: [],
+    stemDocxXml: ['<w:p><w:r><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath><w:t xml:space="preserve"> 为 2．</w:t></w:r></w:p>'] };
+  const blob = await buildWordBlob({ title: "题号", answers: "none", sections: [{ questions: [headed, printed, formulaFirst] }] });
+  const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file("word/document.xml").async("string");
+  assert.equal(XMLValidator.validate(xml), true);
+  assert.match(xml, /<w:pStyle w:val="Normal"\/><\/w:pPr><w:r><w:rPr><w:sz w:val="22"\/><\/w:rPr><w:t xml:space="preserve">1．<\/w:t><\/w:r><w:r><w:rPr><w:sz w:val="22"\/><\/w:rPr><w:t xml:space="preserve">已知 <\/w:t>/);
+  assert.match(xml, /<w:t>2\.5 与 3．<\/w:t>/, "a number later in the paragraph is text, not the question number");
+  assert.match(xml, /<w:t>2．求值<\/w:t>/);
+  assert.match(xml, /<w:p><w:r><w:t xml:space="preserve">3．<\/w:t><\/w:r>(?:<w:r>)?<m:oMath>/);
+  assert.match(xml, / 为 2．/);
+});
 const questions = [
   { ...base, id: "a", type: "解答题", stem: "ALPHAQUESTION", options: [], answer: "ALPHAANSWER", analysis: "ALPHAANALYSIS" },
   { ...base, id: "b", type: "单选题", stem: "BETAQUESTION", options: ["一", "二", "三", "四"], answer: "BETAANSWER" },

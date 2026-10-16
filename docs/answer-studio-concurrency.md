@@ -84,10 +84,27 @@ Text transcription runs on the server so the teacher can leave the page:
    its completed result.
 6. A job really in progress (queued or running, and not 已中断) shows a pulsing
    green dot before its state, the same dot as homework being graded. The top
-   nav's **工具箱** shows how many such jobs the teacher has, like the 学生档案
-   grading badge. On every page the header reads both counts every 4 seconds
-   (`/api/answer-studio/jobs?count=active` beside `/api/submissions?count=grading`)
-   and hides a badge at 0. A job that stalled is not counted.
+   nav's **工具箱** shows how many such transcriptions the teacher has, and
+   **题库** how many file imports (below), like the 学生档案 grading badge. On
+   every page the header reads the counts every 4 seconds
+   (`/api/answer-studio/jobs?count=active&kind=transcription|import` beside
+   `/api/submissions?count=grading`) and hides a badge at 0. A job that stalled
+   is not counted.
+7. 题库 file imports (新建试题 → 文件批量录入, and 讲义 → 导入文件) are jobs of
+   `kind = 'import'` in the same table (migration 0039): the same queue, run
+   slices, `run_id` fencing, stall detection, 取消识别, 继续 and 删除, listed and
+   counted separately from transcriptions. PDF and pictures are read by the same
+   page reader as transcription (`readStudioFilesInBatches`: full page plus the
+   2200 px copy the AI reads); a Word file without a readable structure uploads
+   the page pictures its page renderer drew, with each page's text hint. The job
+   sends the 题库 batch prompt one page at a time (two at a time by default),
+   through `runStudioWindow`, so imports get the transcription's retries,
+   `Retry-After` and slow-down. Results go to `studio/<id>/import.json` page by
+   page; a page that still fails keeps its error, the job fails naming those
+   pages, **继续** reads only them, and **打开** works on the pages already read.
+   Opening downloads the results and full pages; figures are cut and the review
+   is built in the browser as before. The former `/api/recognize-batch` route
+   and the browser-side retry loop are gone.
 
 Jobs, page images and drafts stay on the server until the teacher deletes the
 job. The task list polls every 3 seconds only while a job is queued or running.

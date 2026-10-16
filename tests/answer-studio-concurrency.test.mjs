@@ -62,6 +62,7 @@ function jobFixture(t, recognize = async () => ({ status: 200, text: JSON.string
   sql.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('owner');");
   sql.exec(readFileSync(resolve(root,'migrations/0037_studio_jobs.sql'),'utf8'));
   sql.exec(readFileSync(resolve(root,'migrations/0038_studio_jobs_mode_from_pages.sql'),'utf8'));
+  sql.exec(readFileSync(resolve(root,'migrations/0039_studio_jobs_kind.sql'),'utf8'));
   const user = { id: 'owner' }, objects = new Map(), messages = [], requests = [];
   const bindings = {
     DB: { prepare(query) { return { bind(...values) { return {
@@ -94,8 +95,70 @@ test('the 工具箱 badge counts only the owner\'s queued and running jobs that 
   for(const status of ['queued','running','running','failed','done','uploading'])await f.seed(status);
   const stalled=await f.seed('running');
   f.sql.prepare('UPDATE studio_jobs SET updated_at = ? WHERE id = ?').run(Date.now()-6*60_000,stalled);
-  assert.equal(await f.api.countActiveStudioJobs(f.user),3);
-  assert.equal(await f.api.countActiveStudioJobs({id:'another-user'}),0);
+  assert.equal(await f.api.countActiveStudioJobs(f.user,'transcription'),3);
+  assert.equal(await f.api.countActiveStudioJobs({id:'another-user'},'transcription'),0);
+});
+// 题库 file imports run in the same job system, one batch-recognition request per page.
+const importQuestion=(number,stem)=>({question_number:number,type:'解答题',stem,options:[],answer:'',analysis:'',difficulty:'中等',source:'',tags:[],confidence:.9,warnings:[]});
+async function importJob(f,pages=3){
+  const job=await f.api.createStudioJob(f.user,{kind:'import',title:'讲义.pdf',categories:[{id:'c1',path:'深圳中考 / 圆'}],notes:['Word 中有 2 张图片，页面转换只画出 1 张'],source:{answers:{'1':'B'}}});
+  for(let n=1;n<=pages;n++)await f.api.addStudioJobPage(f.user,job.id,{page:{id:`p${n}`,page:n,name:'讲义.pdf',hash:`h${n}`,textHint:`第${n}页文字`},image:'data:image/jpeg;base64,AA==',recognizeImage:'data:image/jpeg;base64,AA=='});
+  await f.api.startStudioJob(f.user,job.id);
+  return job.id;
+}
+test('an import job reads every page with the batch prompt, keeps its own record and counts in its own list',async t=>{
+  const f=jobFixture(t,async input=>({status:200,text:JSON.stringify({questions:[importQuestion(String(input.prompt.match(/第 (\d+) 页/)[1]),'题干')],answers:[]})}));
+  await f.seed('queued');
+  const id=await importJob(f);
+  assert.equal((await f.api.countActiveStudioJobs(f.user,'import')),1);
+  assert.equal((await f.api.countActiveStudioJobs(f.user,'transcription')),1);
+  await f.api.processStudioJob(id);
+  const [listed]=await f.api.listStudioJobs(f.user,'import');
+  assert.equal(listed.id,id);assert.equal(listed.kind,'import');assert.equal(listed.status,'done');assert.equal(listed.questionCount,3);
+  assert.equal((await f.api.listStudioJobs(f.user,'transcription')).length,1,'the transcription list keeps only transcriptions');
+  assert.equal(f.requests.length,3);
+  assert.equal(f.requests[0].schemaName,'batch_question_extraction');
+  assert.match(f.requests[0].prompt,/讲义\.pdf/);assert.match(f.requests[0].prompt,/第1页文字/);assert.match(f.requests[0].prompt,/c1: 深圳中考 \/ 圆/);
+  const {draft}=await f.api.getStudioJobDraft(f.user,id);
+  assert.deepEqual(draft.pages.map(p=>draft.results[p.id].result.questions[0].question_number),['1','2','3']);
+  assert.deepEqual(draft.notes,['Word 中有 2 张图片，页面转换只画出 1 张']);assert.deepEqual(draft.source,{answers:{'1':'B'}});
+  assert.equal(f.sql.prepare("SELECT text_concurrency FROM studio_jobs WHERE id = ?").get(id).text_concurrency,2,'imports keep two pages at a time');
+});
+test('an import retries a timed-out page; pages that keep failing fail the job by name, open partially, and 继续 retries only them',async t=>{
+  let failPage3=true;
+  const f=jobFixture(t,async input=>{
+    const page=input.prompt.match(/第 (\d+) 页/)[1];
+    if(page==='2'&&!f.timedOut){f.timedOut=true;return {status:504,code:'UPSTREAM_TIMEOUT',terminal:true,error:'请求超时；上游是否执行不确定，未自动重试。'};}
+    if(page==='3'&&failPage3)return {status:401,code:'UPSTREAM_AUTH_FAILED',terminal:true,error:'上游鉴权或权限失败，请检查密钥与分组。'};
+    if(page==='4'&&failPage3)return {status:504,code:'UPSTREAM_TIMEOUT',terminal:true,error:'请求超时；上游是否执行不确定，未自动重试。'};
+    return {status:200,text:JSON.stringify({questions:[importQuestion(page,'题干'+page)],answers:[]})};
+  });
+  const id=await importJob(f,4);
+  await f.api.processStudioJob(id);
+  const pagesAsked=()=>f.requests.map(r=>r.prompt.match(/第 (\d+) 页/)[1]);
+  assert.deepEqual(pagesAsked().filter(p=>p==='2').length,2,'the timeout on page 2 was retried');
+  assert.deepEqual(pagesAsked().filter(p=>p==='3').length,1,'an authentication failure is not retried');
+  const [failed]=await f.api.listStudioJobs(f.user,'import');
+  assert.equal(failed.status,'failed');assert.match(failed.error,/第 3、4 页识别失败：上游鉴权或权限失败/);assert.match(failed.error,/继续/);
+  assert.equal(failed.processedCount,2);assert.equal(failed.questionCount,2);
+  assert.equal(pagesAsked().filter(p=>p==='4').length,3,'a page that keeps timing out is tried three times');
+  const partial=(await f.api.getStudioJobDraft(f.user,id)).draft;
+  assert.match(partial.results.p3.error,/鉴权/);assert.doesNotMatch(partial.results.p3.error,/自动重试/);
+  assert.equal(partial.results.p4.error,'AI 请求超时（HTTP 504），自动重试 2 次仍未成功');assert.ok(partial.results.p1.result&&partial.results.p2.result);
+  failPage3=false;const before=f.requests.length;
+  await f.api.startStudioJob(f.user,id);await f.api.processStudioJob(id);
+  assert.deepEqual(f.requests.slice(before).map(r=>r.prompt.match(/第 (\d+) 页/)[1]).sort(),['3','4'],'继续 reads only the failed pages');
+  const [done]=await f.api.listStudioJobs(f.user,'import');
+  assert.equal(done.status,'done');assert.equal(done.questionCount,4);
+});
+test('an import with nothing read yet cannot be opened, and a bad page or Word record is refused',async t=>{
+  const f=jobFixture(t,async()=>({status:401,code:'UPSTREAM_AUTH_FAILED',terminal:true,error:'鉴权失败'}));
+  const id=await importJob(f,1);
+  await f.api.processStudioJob(id);
+  await assert.rejects(f.api.getStudioJobDraft(f.user,id),error=>error instanceof Response&&error.status===400);
+  await assert.rejects(f.api.createStudioJob(f.user,{kind:'import',title:'x.pdf',source:{answers:{'1':3}}}),error=>error instanceof Response&&error.status===400);
+  const job=await f.api.createStudioJob(f.user,{kind:'import',title:'x.pdf'});
+  await assert.rejects(f.api.addStudioJobPage(f.user,job.id,{page:{id:'p1',page:1,name:'x.pdf',hash:'h',documentSection:'other'},image:'data:image/jpeg;base64,AA==',recognizeImage:'data:image/jpeg;base64,AA=='}),error=>error instanceof Response&&error.status===400);
 });
 test('cancelling a queued job retains its checkpoint, prevents queue delivery, and enforces ownership',async t=>{
   const f=jobFixture(t),id=await f.seed(),key=`studio/${id}/draft.json`,before=f.objects.get(key);
