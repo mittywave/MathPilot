@@ -1,8 +1,8 @@
 import { WORD_MATH_STYLE } from './math-capabilities.mjs';
-import { Document, Packer, Paragraph, TextRun, AlignmentType, Tab, TabStopType, Table, TableRow, TableCell, BorderStyle, WidthType, TableLayoutType, type ParagraphChild } from "docx";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell, BorderStyle, WidthType, TableLayoutType, type ParagraphChild } from "docx";
 import JSZip from "jszip";
 import { richText } from "./answer-studio-rich-text";
-import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, type StudioQuestion } from "./answer-studio";
+import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, type StudioQuestion, type StudioSource } from "./answer-studio";
 import { studioDiagramVml } from "./answer-studio-diagram";
 import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
 import { splitMathText } from "./answer-studio-math-text";
@@ -37,6 +37,29 @@ export function studioAnswerParagraphs(text: string) {
     if(/^[（(]\d+[)）]$/.test(lines[i])&&!/^[（(]\d+[)）]/.test(lines[i+1]))lines.splice(i,2,`${lines[i]} ${lines[i+1]}`);
   }
   return lines.map((text, index)=>({text, keepNext:index<lines.length-1 && /^(?:(?:证明|解|解答)\s*[：:]|[（(]\d+[)）])$/.test(text)}));
+}
+
+/** A question's source pictures as the original page printed them: pictures on one row share a paragraph, side by
+ * side, and each row keeps its side of the question — right, centre or left, by the space left on either side.
+ * A picture without a recorded place on the page stays centred. */
+function studioFigureRows(q: StudioQuestion) {
+  const rows: Array<{ indexes: number[]; source?: StudioSource }> = [];
+  q.diagrams.forEach((d, index) => {
+    if (!d.baseImage) return;
+    const row = rows.at(-1), box = d.baseSource?.box, last = row?.source?.box;
+    if (row && box && last && row.source!.pageId === d.baseSource!.pageId && box.y < last.y + last.height && last.y < box.y + box.height) {
+      const x = Math.min(last.x, box.x), y = Math.min(last.y, box.y);
+      row.indexes.push(index);
+      row.source = { pageId: row.source!.pageId, box: { x, y, width: Math.max(last.x + last.width, box.x + box.width) - x, height: Math.max(last.y + last.height, box.y + box.height) - y } };
+    } else rows.push({ indexes: [index], source: d.baseSource });
+  });
+  return rows.map(({ indexes, source }) => {
+    const text = source && q.questionSources.find(s => s.pageId === source.pageId)?.box;
+    if (!source || !text) return { indexes, alignment: AlignmentType.CENTER };
+    const left = Math.min(text.x, source.box.x), right = Math.max(text.x + text.width, source.box.x + source.box.width);
+    const leftGap = source.box.x - left, rightGap = right - source.box.x - source.box.width;
+    return { indexes, alignment: Math.abs(leftGap - rightGap) <= (right - left) * .1 ? AlignmentType.CENTER : leftGap > rightGap ? AlignmentType.RIGHT : AlignmentType.LEFT };
+  });
 }
 
 export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode | "answers", options:{reviewCopy?:boolean;transcription?:boolean;bestEffort?:boolean;includeTranscriptionWarnings?:boolean}={}) {
@@ -95,6 +118,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // still visible and editable in Word.
   const warningParagraph = (text:string) => new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:[new TextRun({text,color:'C00000',size:22,font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman'}})]});
   if(includeTranscriptionWarnings&&globalIssues.length)children.push(warningParagraph('格式问题：'+[...new Set(globalIssues)].join('；')));
+  const figureSpacing={before:100,after:140};
   const studioTable = (table:{rows:string[][];red?:boolean},q:StudioQuestion,tableIndex:number) => {
     const columns=Math.max(...table.rows.map(row=>row.length));
     const width=Math.max(1,Math.floor(9300/columns));
@@ -138,7 +162,9 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       const match=line.text.match(/^([（(]\d+[)）])\s*([\s\S]*)$/);
       if(match)inPart=true;
       const display=isStudioDisplayMathLine(match?match[2]:line.text);
-      return new Paragraph({style:display?(red?'StudioMathAnswer':'StudioMathBody'):red?'StudioAnswer':'Normal',keepNext:line.keepNext,spacing:{line:360,after:80},indent:inPart?{left:420,...(match?{hanging:420}:{})}:undefined,tabStops:match?[{type:TabStopType.LEFT,position:420}]:undefined,children:match?[new TextRun({text:match[1],italics:false,color:red?'C00000':'000000'}),new TextRun({children:[new Tab()]}),...safeRichText(match[2],{color:red?'C00000':'000000'},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
+      // The label runs straight into its text, as printed. A tab after it overran the two-character hanging indent
+      // when the label was a full-width “（1）”, leaving a gap that every reader drew at a different width.
+      return new Paragraph({style:display?(red?'StudioMathAnswer':'StudioMathBody'):red?'StudioAnswer':'Normal',keepNext:line.keepNext,spacing:{line:360,after:80},indent:inPart?{left:420,...(match?{hanging:420}:{})}:undefined,children:match?[new TextRun({text:match[1],italics:false,color:red?'C00000':'000000'}),...safeRichText(match[2],{color:red?'C00000':'000000'},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
     });
   };
   let lesson='';
@@ -154,13 +180,12 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
         lines.forEach(runs=>children.push(new Paragraph({spacing:{line:360,after:80},children:runs})));
       }else children.push(...aligned(q.stem,false,q,'题干'));
     }
-    // Source picture remains unchanged; solution overlays accompany the analysis below.
-    if (withQuestionFigures) q.diagrams.forEach((d,index)=> {
-      if (!d.baseImage) return;
+    // Source pictures remain unchanged and keep their place on the original page; solution overlays accompany the analysis below.
+    if (withQuestionFigures) for (const row of studioFigureRows(q)) children.push(new Paragraph({alignment:row.alignment,spacing:figureSpacing,children:row.indexes.flatMap((index,i)=>{
       const token=`STUDIO_DIAGRAM_${diagrams.length}`;
-      diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,i)=>i===index?{...x,shapes:[]}:x)},index});
-      children.push(new Paragraph({children:[new TextRun(token)]}));
-    });
+      diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,j)=>j===index?{...x,shapes:[]}:x)},index});
+      return [...(i?[new TextRun('　　')]:[]),new TextRun(token)];
+    })}));
     if(mode!=='steps')(q.tables||[]).forEach((table,tableIndex)=>{try{children.push(studioTable(table,q,tableIndex));}catch(error){if(!bestEffort)throw new Error(`${q.number} / table ${tableIndex+1}`,{cause:error});addIssue(q,`表格${tableIndex+1}：${error instanceof Error?error.message:'表格排版失败'}`);}});
     if(!withStem)for(const p of q.answerPlacements||[])children.push(new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:p.kind==='choice'?[...safeRichText('（',{color:'C00000'},q,'短答案'),...safeRichText(p.answer,{color:'C00000',italicMath:false,displayMath:false},q,'短答案'),...safeRichText('）',{color:'C00000'},q,'短答案')]:safeRichText(p.answer,{color:'C00000',underline:true,displayMath:false},q,'短答案')}));
     // When the entire recorded solution is exactly the short answer, the
@@ -171,7 +196,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if (mode === "full" && !d.shapes.length) return;
       const token=`STUDIO_DIAGRAM_${diagrams.length}`; diagrams.push({token,question:q,index});
       if (d.caption) children.push(paragraph(d.caption,true,true,q,'图注'));
-      children.push(new Paragraph({children:[new TextRun(token)]}));
+      children.push(new Paragraph({alignment:AlignmentType.CENTER,spacing:figureSpacing,children:[new TextRun(token)]}));
     });
     if(options.transcription&&includeTranscriptionWarnings){
       const textWarnings=q.warnings.filter(w=>withFigures||!['尚未检查解答图与辅助线','仅答案材料：请确认未补写原件没有的步骤'].includes(w));
@@ -190,6 +215,8 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   let contentTypes = await zip.file("[Content_Types].xml")!.async("string");
   for (const [i,entry] of diagrams.entries()) {
     const d = entry.question.diagrams[entry.index], relation=`rIdStudio${i}`;
+    // The token's own run becomes the picture; its paragraph already carries the alignment and spacing.
+    const pattern=new RegExp(`<w:r>(?:<w:rPr>(?:(?!</w:rPr>)[\\s\\S])*</w:rPr>)?<w:t[^>]*>${entry.token}</w:t></w:r>`);
     try {
     if (d.baseImage) {
       const match = d.baseImage.match(/^data:image\/(png|jpeg|webp);base64,([\s\S]+)$/);
@@ -200,14 +227,12 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       rels=rels.replace("</Relationships>",`<Relationship Id="${relation}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/studio-${i}.${extension}"/></Relationships>`);
       if (!contentTypes.includes(`Extension="${extension}"`)) contentTypes=contentTypes.replace("</Types>",`<Default Extension="${extension}" ContentType="image/${match[1]}"/></Types>`);
     }
-    const pattern=new RegExp(`<w:p(?:\\s[^>]*)?>(?:(?!<w:p[ >])[\\s\\S])*?${entry.token}(?:(?!<w:p[ >])[\\s\\S])*?</w:p>`);
     if (!pattern.test(xml)) throw new Error("未找到配图导出位置");
-    xml=xml.replace(pattern,studioDiagramVml(d,relation,`studio${i}`));
+    xml=xml.replace(pattern,()=>studioDiagramVml(d,relation,`studio${i}`));
     } catch(error) {
       if(!bestEffort)throw new Error(`${entry.question.number} / diagram ${entry.index+1}: ${error instanceof Error?error.message:String(error)}`,{cause:error});
       addIssue(entry.question,`配图：${error instanceof Error?error.message:'配图排版失败'}，已跳过损坏图形`);
-      const tokenPattern=new RegExp(`<w:p(?:\\s[^>]*)?>(?:(?!<w:p[ >])[\\s\\S])*?${entry.token}(?:(?!<w:p[ >])[\\s\\S])*?</w:p>`);
-      xml=xml.replace(tokenPattern,'<w:p/>');
+      xml=xml.replace(pattern,'');
     }
   }
   // Include the paragraph end-mark properties as well as OMML run properties:

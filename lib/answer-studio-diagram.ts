@@ -25,7 +25,8 @@ export function studioDiagramSvg(d: StudioDiagram) {
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${b.x} ${b.y} ${b.width} ${b.height}" width="${b.width}" height="${b.height}"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" fill="white"/>${d.baseImage ? `<image href="${xmlEscape(d.baseImage)}" xlink:href="${xmlEscape(d.baseImage)}" width="${d.width}" height="${d.height}"/>` : ""}${shapes}</svg>`;
 }
-/** Native Office VML objects, not a flattened image. All coordinates share one group. */
+/** Native Office VML objects, not a flattened image. All coordinates share one group, in one inline run; the
+ * paragraph around it decides where it sits. */
 export function studioDiagramVml(d: StudioDiagram, imageRelation: string, unique: string) {
   // Keep diagrams compact in the handout; the editable VML objects retain
   // their full coordinate system while the rendered group is about half the
@@ -75,5 +76,5 @@ export function studioDiagramVml(d: StudioDiagram, imageRelation: string, unique
     return `<v:rect id="${id}" style="${labelStyle}" filled="f" stroked="f"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>${runs}</w:p></w:txbxContent></v:textbox></v:rect>`;
   }
   const image = d.baseImage ? `<v:rect id="${unique}_base" style="position:absolute;left:0;top:0;width:${d.width};height:${d.height}" stroked="f"><v:imagedata r:id="${imageRelation}" o:title="原题底图"/></v:rect>` : "";
-  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="100" w:after="140"/></w:pPr><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:group id="${unique}" style="width:${width}pt;height:${height}pt" coordorigin="${b.x},${b.y}" coordsize="${b.width},${b.height}">${image}${d.shapes.map(shape).join("")}</v:group></w:pict></w:r></w:p>`;
+  return `<w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:group id="${unique}" style="width:${width}pt;height:${height}pt" coordorigin="${b.x},${b.y}" coordsize="${b.width},${b.height}">${image}${d.shapes.map(shape).join("")}</v:group></w:pict></w:r>`;
 }
