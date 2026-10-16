@@ -67,6 +67,9 @@ function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: Stud
         </li>)}</ul>
         : <p className="assign-empty">没有给{student.name}组好、还没布置的卷。</p>}
       <p className="assign-hint">要新组一份，点 <a href={`/tools/smart-paper?student=${encodeURIComponent(student.id)}`}>智能组卷</a>，排好后点“布置给学生”。Word 练习在快速排版里打开后点“布置给学生”。</p>
+      <ul className="assign-plans" aria-label="学校发的作业"><li>
+        <a href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}><b>学校发的作业</b><small>学生做完后，上传学生拍好的照片或 PDF 直接批改</small><span>上传作业</span></a>
+      </li></ul>
       {error && <p className="assign-error" role="alert">{error}</p>}
     </section>
   </div>;
@@ -105,14 +108,13 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
     <header className="student-panel-head">
       <p>{homework ? waiting.length ? `${waiting.length} 份作业还没交齐` : `共 ${homework.length} 份作业` : "　"}</p>
       <div className="student-panel-actions">
-        <button type="button" className="student-panel-action" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
-        <a className="primary-button" href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}>批改一份作业</a>
+        <button type="button" className="primary-button" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
       </div>
     </header>
     {dayError && <p className="inline-error" role="alert">{dayError}</p>}
     {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !homework ? <div className="wrong-book-loading"><i></i><span>正在读取作业…</span></div>
-      : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>点“布置作业”把给这位学生组好的卷布置下去，Word 练习在快速排版里点“布置给学生”；题目和答案会存进这里，学生做完后上传学生拍好的照片或 PDF 批改。也可以直接批改一份学校发的作业。</p></div>
+      : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>点“布置作业”把给这位学生组好的卷布置下去，Word 练习在快速排版里点“布置给学生”；题目和答案会存进这里，学生做完后上传学生拍好的照片或 PDF 批改。学校发的作业，在“布置作业”里点“上传作业”直接批改。</p></div>
       : <ol className="homework-rows">{rows.map(({ item, states }) => {
         const state = homeworkState(item, states); const graded = item.correct + item.incorrect + item.pending;
         const days = item.days ?? [];

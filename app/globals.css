@@ -635,8 +635,8 @@ button.student-panel-action { font-family:inherit; cursor:pointer; }
 .assign-links a { color:var(--green); font-size:13px; font-weight:600; }
 /* The plans made for one student that are not handed out yet, in the archive's 布置作业. */
 .assign-plans { display:grid; gap:8px; margin:0 0 14px; padding:0; list-style:none; }
-.assign-plans button { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:3px 14px; width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:calc(10px*var(--radius-scale)); background:var(--surface); color:inherit; font-family:inherit; text-align:left; cursor:pointer; }
-.assign-plans button:hover:not(:disabled) { border-color:var(--green); background:var(--green-soft); }
+.assign-plans button,.assign-plans a { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:3px 14px; width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:calc(10px*var(--radius-scale)); background:var(--surface); color:inherit; font-family:inherit; text-align:left; text-decoration:none; cursor:pointer; }
+.assign-plans button:hover:not(:disabled),.assign-plans a:hover { border-color:var(--green); background:var(--green-soft); }
 .assign-plans button:disabled { cursor:progress; opacity:.7; }
 .assign-plans b { overflow:hidden; font-size:14px; text-overflow:ellipsis; white-space:nowrap; }
 .assign-plans small { grid-column:1; color:var(--muted); font-size:12px; }
