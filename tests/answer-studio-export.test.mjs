@@ -57,7 +57,7 @@ test('both studio exports preserve OMML, native geometry, media relationships an
       const p=[...layoutXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(m=>m[0].includes(`>${label}</w:t>`))?.[0];
       assert.ok(p);
       if(label==='证明：')assert.match(p,/<w:keepNext\b/);
-      else {assert.match(p,/<w:tab\/>/);assert.match(p,/<m:oMath>/);assert.match(p,/w:hanging="420"/);}
+      else {assert.doesNotMatch(p,/<w:tab\/>|<w:tabs>/);assert.ok(p.includes(`>${label}</w:t></w:r><m:oMath`),'the label runs straight into its text');assert.match(p,/w:hanging="420"/);}
     }
     assert.match(layoutXml,/<w:i w:val="false"\/>[^]*?<w:t xml:space="preserve">12点<\/w:t>/);
     q.analysis='$\\sqrt{10}$';q.answerPlacements=[{kind:'blank',placeholder:'____',answer:q.analysis}];q.drawingsChecked=true;
@@ -91,5 +91,31 @@ $\phantom{\therefore \angle FED}=\angle FAE=\angle FDE$`;
       assert.match(xml,/<m:phant>[\s\S]*?<w:color w:val="C00000"\/>/);
       assert.doesNotMatch(xml,/\\phantom|STUDIO_MATH_/);
     }
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('source pictures keep their place on the original page: rows side by side, aligned to their side of the question',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'mitty-studio-figures-'));
+  try {
+    const output=join(dir,'export.cjs');
+    await build({entryPoints:['lib/answer-studio-export.ts'],bundle:true,platform:'node',format:'cjs',packages:'external',alias:{docx:require.resolve('docx'),jszip:require.resolve('jszip')},external:[require.resolve('docx'),require.resolve('jszip')],outfile:output,logLevel:'silent'});
+    const {buildStudioWord}=require(output);
+    const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const figure=(id,pageId,box)=>({id,caption:'',baseImage:png,...(box?{baseSource:{pageId,box}}:{}),width:200,height:100,shapes:[],warnings:[]});
+    const q={id:'q',lesson:'一',section:'例题精练',number:'2',stem:'如图，求 $\\triangle ABC$ 的外接圆半径．',analysis:'略',answerIds:['a'],warnings:[],resolutions:{},reviewed:true,
+      questionSources:[{pageId:'p',box:{x:100,y:100,width:800,height:600}}],
+      diagrams:[
+        figure('row-a','p',{x:450,y:300,width:200,height:100}),figure('row-b','p',{x:680,y:310,width:200,height:90}), // one printed row, ending at the right margin
+        figure('centred','p',{x:400,y:450,width:200,height:100}),
+        figure('left','p',{x:100,y:600,width:200,height:90}),
+        figure('unplaced'),
+        figure('other-page','p2',{x:700,y:100,width:200,height:100}),
+      ]};
+    const zip=await JSZip.loadAsync(await(await buildStudioWord({version:1,title:'配图',inputMode:'questions',pages:[],questions:[q],answers:[{id:'a'}]},'full')).arrayBuffer());
+    const xml=await zip.file('word/document.xml').async('string');
+    const rows=[...xml.matchAll(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ >])[\s\S])*?<v:group[\s\S]*?<\/w:p>/g)].map(m=>m[0]);
+    assert.deepEqual(rows.map(p=>[p.match(/<w:jc w:val="(\w+)"\/>/)?.[1],(p.match(/<v:group /g)||[]).length]),[['right',2],['center',1],['left',1],['center',1],['center',1]]);
+    assert.match(rows[0],/<v:group [\s\S]*?<\/w:pict><\/w:r><w:r><w:t xml:space="preserve">\u3000\u3000<\/w:t><\/w:r><w:r><w:pict /,'pictures on one row sit side by side');
+    for(const p of rows)assert.match(p,/<w:spacing (?=[^>]*w:before="100")(?=[^>]*w:after="140")[^>]*\/>/);
+    assert.doesNotMatch(xml,/STUDIO_DIAGRAM_/);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
