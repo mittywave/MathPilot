@@ -647,11 +647,32 @@ try {
   assert.deepEqual(await labels(lane(0, 'example')), ['例1.']);
   assert.deepEqual(await labels(lane(0, 'practice')), ['1.', '2.'], 'a question changing band joins the end of that lane');
   assert.deepEqual(await labels(lane(1, 'example')), ['例2.'], 'later 例题 renumber');
-  assert.equal(await lane(0, 'practice').getByRole('button', { name: '练习 1 上移' }).isDisabled(), true, 'a lane edge cannot move further');
-  await lane(0, 'practice').getByRole('button', { name: '练习 2 上移' }).click();
+  const practiceText = async () => (await lane(0, 'practice').locator('.handout-question').allInnerTexts()).map((text) => text.replace(/\s+/g, ''));
+  const before = await practiceText();
+  await lane(0, 'practice').getByRole('button', { name: '拖动练习 1调整顺序', exact: true }).press('ArrowUp');
+  assert.deepEqual(await practiceText(), before, 'a lane edge cannot move further');
+  await lane(0, 'practice').getByRole('button', { name: '拖动练习 2调整顺序', exact: true }).press('ArrowUp');
   await saved();
   assert.match(await lane(0, 'practice').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/);
-  step('讲义 更多 → 改为练习 moves 例1 to the end of 练习; ↑ reorders inside the lane only');
+  step('讲义 更多 → 改为练习 moves 例1 to the end of 练习; ↑ on the handle reorders inside the lane only');
+
+  // Drag by the six-dot handle: onto 例1's top half lands before it in 例题, then back to the top of 练习.
+  const grip = (band, name) => lane(0, band).getByRole('button', { name: `拖动${name}调整顺序`, exact: true });
+  await lane(0, 'example').locator('.handout-question').first().hover();
+  await grip('practice', '练习 1').dragTo(lane(0, 'example').locator('.handout-question').first(), { targetPosition: { x: 200, y: 5 } });
+  await saved();
+  assert.deepEqual(await labels(lane(0, 'example')), ['例1.', '例2.'], 'a dragged question takes the band it lands in');
+  assert.match(await lane(0, 'example').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/);
+  assert.deepEqual(await labels(lane(1, 'example')), ['例3.']);
+  await grip('example', '例1').dragTo(lane(0, 'practice').locator('.handout-question').first(), { targetPosition: { x: 200, y: 5 } });
+  await saved();
+  assert.deepEqual(await labels(lane(0, 'practice')), ['1.', '2.']);
+  assert.match(await lane(0, 'practice').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/);
+  await page.reload();
+  await page.locator('.handout-question').first().waitFor();
+  await page.waitForFunction(() => !document.body.innerText.includes('正在读取题目'));
+  assert.match(await lane(0, 'practice').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/, 'drag order persists');
+  step('讲义 drag handle moves a question across lanes and back; order persists across reload');
 
   const untagged = lane(0, 'practice').locator('.handout-question').first();
   await untagged.getByRole('button', { name: '未标知识点 · 补充', exact: true }).click();

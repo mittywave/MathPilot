@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HANDOUT_SHEETS, chineseNumeral, coursePath, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetCounts, sheetLabel, sheetQuestions, shelfOf } from "../lib/handout-rules.mjs";
+import { HANDOUT_SHEETS, chineseNumeral, coursePath, copyHandoutItems, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutOutline, handoutSections, insertIndexForSection, dropHandoutItem, moduleHeading, moveHandoutItem, normalizeHandoutDraft, normalizeHandoutGroup, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetCounts, sheetLabel, sheetQuestions, shelfOf } from "../lib/handout-rules.mjs";
 
 const q = (id, band = "example", questionId = id, scope = "mine") => ({ id, kind: "question", scope, questionId, band });
 const t = (id, moduleId = null, kind = "quiz", questionId = id) => ({ id, kind, scope: "public", questionId, moduleId });
@@ -156,6 +156,16 @@ test("小测 and 作业 are lists of their own, stored after the 讲义, each qu
   const bank = new Map([["t1", { id: "t1" }], ["h1", { id: "h1" }]]);
   assert.deepEqual(sheetQuestions(draft.items, "quiz", (scope, id) => bank.get(id)), { questions: [{ id: "t1" }], missingCount: 1 });
   assert.deepEqual(HANDOUT_SHEETS.map(sheet => sheetLabel(sheet.value)), ["讲义", "小测", "作业"]);
+});
+
+test("a dragged question lands beside another of its sheet or at the end of a lane", () => {
+  const items = [s("m1"), q("e1"), q("p1", "practice"), s("m2"), q("e3"), t("t1", "m1"), t("t2", "m2")];
+  assert.deepEqual(ids(dropHandoutItem(items, "e3", { itemId: "e1", after: false })), ["m1", "e3", "e1", "p1", "m2", "t1", "t2"], "crosses into another module");
+  assert.equal(dropHandoutItem(items, "e1", { itemId: "p1", after: true }).find(item => item.id === "e1").band, "practice", "takes the band it lands in");
+  assert.deepEqual(ids(dropHandoutItem(items, "e1", { sectionId: "m2", band: "variant" })), ["m1", "p1", "m2", "e3", "e1", "t1", "t2"]);
+  assert.deepEqual(ids(dropHandoutItem(items, "t1", { itemId: "t2", after: true })), ["m1", "e1", "p1", "m2", "e3", "t2", "t1"]);
+  assert.equal(dropHandoutItem(items, "t1", { itemId: "e1", after: false }), items, "never crosses sheets");
+  assert.equal(dropHandoutItem(items, "m1", { itemId: "e3", after: true }), items, "modules are not dragged");
 });
 
 test("list questions move inside their list; 讲义 edits keep the lists after the 讲义", () => {

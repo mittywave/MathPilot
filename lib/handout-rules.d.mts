@@ -35,6 +35,7 @@ export function handoutSections(items: HandoutItem[], resolve: (scope: LibrarySc
   missingCount: number;
 };
 export function moveHandoutItem(items: HandoutItem[], id: string, direction: -1 | 1): HandoutItem[];
+export function dropHandoutItem(items: HandoutItem[], id: string, to: { itemId: string; after: boolean } | { itemId?: undefined; sectionId: string | null; band: HandoutBand }): HandoutItem[];
 export function removeHandoutModule(items: HandoutItem[], sectionId: string): HandoutItem[];
 export function copyHandoutItems(items: HandoutItem[], newId: () => string): HandoutItem[];
 export function sheetCounts(items: HandoutItem[]): Record<Exclude<HandoutSheet, 'handout'>, number>;

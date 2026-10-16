@@ -1,9 +1,9 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
-import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
+import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, dropHandoutItem, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
@@ -47,6 +47,10 @@ const newId = () => randomClientId();
 
 function BackIcon() {
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m10 5-7 7 7 7M3 12h18" /></svg>;
+}
+
+function GripIcon() {
+  return <svg viewBox="0 0 10 16" aria-hidden="true" focusable="false">{[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.4" />))}</svg>;
 }
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -471,6 +475,9 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const pending = useRef(false);
   const [noteImport, setNoteImport] = useState<string | null>(null);
   const [dropNote, setDropNote] = useState<string | null>(null);
+  // A question dragged by its handle lands beside another question or at the end of a 讲义 lane.
+  const dragging = useRef<string | null>(null);
+  const [dropAt, setDropAt] = useState<Parameters<typeof dropHandoutItem>[2] | null>(null);
   const noteFile = useRef<HTMLInputElement>(null);
   const noteTarget = useRef<string | null>(null);
 
@@ -748,12 +755,23 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
   // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
   // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
-  const questionCard = (item: QuestionItem, band: HandoutBand, laneIndex: number, laneSize: number) => {
+  const dragHandle = (item: HandoutItem, name: string) => <button className="handout-drag" draggable aria-label={`拖动${name}调整顺序`} title="拖动调整顺序，也可按 ↑ ↓ 键"
+    onDragStart={(event) => { dragging.current = item.id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", name); const card = event.currentTarget.closest("article"); if (card) event.dataTransfer.setDragImage(card, 16, 16); }}
+    onDragEnd={() => { dragging.current = null; setDropAt(null); }}
+    onKeyDown={(event) => { const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0; if (direction) { event.preventDefault(); setItems(moveHandoutItem(doc.items, item.id, direction)); } }}><GripIcon /></button>;
+  const drop = (event: DragEvent) => { if (!dragging.current || !dropAt) return; event.preventDefault(); event.stopPropagation(); setItems(dropHandoutItem(doc.items, dragging.current, dropAt)); dragging.current = null; setDropAt(null); };
+  const dropMark = (item: HandoutItem) => dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dragging.current !== item.id ? dropAt.after ? " drop-after" : " drop-before" : "";
+  const cardDrop = (item: HandoutItem) => ({
+    onDragOver: (event: DragEvent<HTMLElement>) => { if (!dragging.current) return; event.preventDefault(); event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); const after = event.clientY > box.top + box.height / 2; if (!(dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dropAt.after === after)) setDropAt({ itemId: item.id, after }); },
+    onDrop: drop,
+  });
+  const questionCard = (item: QuestionItem, band: HandoutBand) => {
     const question = resolve(item.questionId);
     const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = numbers.get(item.id) ?? ""; const name = band === "practice" ? `练习 ${label}` : label;
     const points = question ? questionPoints(question) : [];
-    return <article className="handout-question" key={item.id}>
+    return <article className={`handout-question${dropMark(item)}`} key={item.id} {...cardDrop(item)}>
+      {dragHandle(item, name)}
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
         {question && library && <small>{question.type} · {temporary ? "临时题库" : categoryPath(library.modules, library.categories, question.categoryId)}</small>}
@@ -761,8 +779,6 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           ? points.map((point) => <b key={point}>{point}</b>)
           : question.canEdit ? <button className="text-button" onClick={() => openEditEntry(question)}>未标知识点 · 补充</button> : <em>未标知识点</em>}</span>}
         <div className="handout-actions">
-          <button aria-label={`${name} 上移`} disabled={laneIndex === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
-          <button aria-label={`${name} 下移`} disabled={laneIndex === laneSize - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
           <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
           <PaperMoreMenu label="题目更多操作">
             {HANDOUT_BANDS.filter((other) => other !== band).map((other) => <button key={other} onClick={() => changeBand(item.id, other)}>改为{HANDOUT_PARTS[other].label}</button>)}
@@ -775,11 +791,12 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   };
 
   // A 小测 or 作业 question: numbered in its list, with the module it tests in place of the 考点.
-  const listCard = (item: ListItem, index: number, size: number) => {
+  const listCard = (item: ListItem, index: number) => {
     const question = resolve(item.questionId);
     const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = String(index + 1); const list = sheetLabel(item.kind); const name = `${list} ${label}`;
-    return <article className="handout-question" key={item.id}>
+    return <article className={`handout-question${dropMark(item)}`} key={item.id} {...cardDrop(item)}>
+      {dragHandle(item, name)}
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
         {question && library && <small>{question.type} · {temporary ? "临时题库" : categoryPath(library.modules, library.categories, question.categoryId)}</small>}
@@ -790,8 +807,6 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           </select>
         </label>
         <div className="handout-actions">
-          <button aria-label={`${name} 上移`} disabled={index === 0} onClick={() => setItems(moveHandoutItem(doc.items, item.id, -1))}>↑</button>
-          <button aria-label={`${name} 下移`} disabled={index === size - 1} onClick={() => setItems(moveHandoutItem(doc.items, item.id, 1))}>↓</button>
           <button disabled={!libraryReady} onClick={() => choosePicker({ kind: "replace", itemId: item.id, label: `替换 ${name}` })}>替换</button>
           {question?.canEdit && <PaperMoreMenu label="题目更多操作"><button onClick={() => openEditEntry(question)}>{temporary ? "编辑临时题" : "编辑原题"}</button></PaperMoreMenu>}
           <button className="danger" aria-label={`${name} 移出${list}`} onClick={() => setItems(doc.items.filter((entry) => entry.id !== item.id))}>移出{list}</button>
@@ -839,7 +854,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
             <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(addTarget, "example")}>录入新题</button>
           </div>
         </div>
-        {listed.map((item, index) => listCard(item, index, listed.length))}
+        {listed.map((item, index) => listCard(item, index))}
       </div>
     </section> : <>
     {modules.map(({ section, bands }, moduleIndex) => {
@@ -874,14 +889,16 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           const lane = bands[band];
           // The lane the bank is adding to is marked, so it is always clear where picked questions go.
           const target = activePicker.kind === "add" && activePicker.sectionId === section.id && activePicker.band === band;
-          return <div className={`handout-lane ${band}${target ? " target" : ""}`} key={band}>
+          const landing = dropAt && !("itemId" in dropAt) && dropAt.sectionId === section.id && dropAt.band === band;
+          return <div className={`handout-lane ${band}${target ? " target" : ""}${landing ? " dropping" : ""}`} key={band}
+            onDragOver={(event) => { if (!dragging.current) return; event.preventDefault(); if (!landing) setDropAt({ sectionId: section.id, band }); }} onDrop={drop}>
             <div className="handout-lane-head"><b>{HANDOUT_PARTS[band].label}</b><span className={`handout-count${lane.length ? "" : " zero"}`} aria-label={`${lane.length} 道题`}>{lane.length}</span>
               <div className="handout-lane-add">
                 <button className="text-button" aria-pressed={target} disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>从题库选题</button>
                 <button className="text-button" disabled={!libraryReady} onClick={() => openNewEntry(section.id, band)}>录入新题</button>
               </div>
             </div>
-            {lane.map((item, laneIndex) => questionCard(item, band, laneIndex, lane.length))}
+            {lane.map((item) => questionCard(item, band))}
           </div>;
         })}
       </section>;
