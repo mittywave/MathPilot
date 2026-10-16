@@ -17,12 +17,17 @@ function doubleStruck(text:string) {
 const run = (s:string,style?:Style) => `<m:r><m:rPr>${/^\s+$/.test(s)?'<m:nor/>':''}${style==='double-struck'?'<m:scr m:val="double-struck"/>':''}<m:sty m:val="${style==='double-struck'?'p':/[0-9]/.test(s)?'p':style??(/^[A-Za-zα-ωΑ-Ω]+$/.test(s)?'i':'p')}"/></m:rPr><m:t xml:space="preserve">${escape(style==='double-struck'?doubleStruck(s):s)}</m:t></m:r>`;
 const wrap = (name:string,inner:string) => `<m:${name}>${inner}</m:${name}>`;
 const delimiter = (body:string,begin:string,end:string) => wrap('d',`<m:dPr><m:begChr m:val="${escape(begin)}"/><m:endChr m:val="${escape(end)}"/></m:dPr>${wrap('e',body)}`);
+// A ( or [ with no ) or ] before its group ends. OCR keeps a blank outside the
+// formula, so one pair can span two formulas: "=($____$+...)^2$". KaTeX shows
+// such a bracket as a plain character, and so does Word.
+class UnpairedBracket extends Error {}
 
 /** Strict native OMML: unsupported notation fails instead of leaking command names. */
 function compileMathOmml(source:string):string {
   if(xmlSafeText(source)!==source)throw new Error('公式含异常控制字符，请对照原件校正');
   const text:string=normalizeMathNotation(source).replace(/\*\*/g,'^').replace(/（/g,'(').replace(/）/g,')').replace(/＝/g,'=').replace(/＋/g,'+').replace(/－/g,'−').replace(/＜/g,'<').replace(/＞/g,'>');
   let i=0,parseDepth=0;
+  const unpaired=new Set<number>();
   const skip=()=>{while(i<text.length&&/\s/.test(text[i]))i++;};
   function rawGroup():string {
     skip();const group=readMathGroup(text,i);i=group.end;return group.body;
@@ -101,9 +106,14 @@ function compileMathOmml(source:string):string {
     if(c==='\\')return command(style);
     if(c==='{'){i++;return sequence('}',style);}
     if(c==='('||c==='['){
-      i++;let closing=c==='('?')':']';
-      const body=sequence(')]',style,end=>{closing=end;});
-      return delimiter(body,c,closing);
+      // Each position is tried once, so many open brackets cannot multiply the work.
+      const start=i;
+      if(!unpaired.has(start))try{
+        i++;let closing=c==='('?')':']';
+        const body=sequence(')]',style,end=>{closing=end;});
+        return delimiter(body,c,closing);
+      }catch(error){if(!(error instanceof UnpairedBracket))throw error;unpaired.add(start);}
+      i=start+1;return run(c,style);
     }
     if(c==='√'){i++;return wrap('rad','<m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/>'+wrap('e',group(style)));}
     if(c==='$')throw new Error('Unescaped math delimiter inside equation');
@@ -116,7 +126,7 @@ function compileMathOmml(source:string):string {
     const result:string[]=[];
     while(i<text.length){
       const c=text[i];if(end&&end.includes(c)){onClose?.(c);i++;return result.join('');}
-      if(c==='}')throw new Error('公式出现多余的右花括号');
+      if(c==='}'){if(end===')]')throw new UnpairedBracket();throw new Error('公式出现多余的右花括号');}
       if(c==='^'||c==='_'){
         i++;if(!result.length)throw new Error('公式上下标缺少底数');
         const base=result.pop()!;const script=group(style);
@@ -135,6 +145,7 @@ function compileMathOmml(source:string):string {
       if(/\s/.test(c)){i++;continue;}
       result.push(atom(style));
     }
+    if(end===')]')throw new UnpairedBracket();
     if(end)throw new Error(`公式 ${end} 未闭合`);
     return result.join('');
     } finally {parseDepth--;}
