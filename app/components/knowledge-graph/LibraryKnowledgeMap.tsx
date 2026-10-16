@@ -6,6 +6,7 @@ import { createKnowledgeGraphIndex, layoutKnowledgeChain, layoutKnowledgeFunnel,
 import { DEFAULT_KNOWLEDGE_GRAPH } from "../../../lib/knowledge-graph-course.mjs";
 import { knowledgeGraphApi } from "../../../lib/knowledge-graph-api-client";
 import type { Category, PublishedKnowledgeGraph, Question } from "../../../lib/types";
+import type { CloudPalette } from "./cloud-renderer";
 import type { TreeLight } from "../CategoryTree";
 import GraphCloud, { type CloudCommand, type CloudTip } from "./GraphCloud";
 import { buildChainView, buildCloudView, buildHighlight, stageName, stageShort, type GraphFilters } from "./graph-model";
@@ -19,6 +20,30 @@ const CHAIN_SUCCESSORS = 18;
 let graphRequest: Promise<PublishedKnowledgeGraph> | null = null;
 
 const normalized = (value: string) => value.trim().toLowerCase().replace(/\s+/g, "");
+
+// The panel is drawn in the site's own colours, so it follows 浅色/深色 and 风格: text and lines from the ink tokens,
+// the four domains from the accent palette (数与代数, 图形与几何, 统计与概率, 综合与实践 in the graph's order).
+type SitePalette = { cloud: CloudPalette; domains: string[] };
+const DOMAIN_TOKENS = ["--green", "--sky", "--warn", "--violet"];
+function readSitePalette(): SitePalette {
+  const style = getComputedStyle(document.documentElement);
+  const context = document.createElement("canvas").getContext("2d");
+  const color = (token: string, fallback: string) => {
+    if (!context) return fallback;
+    context.fillStyle = fallback; context.fillStyle = style.getPropertyValue(token).trim() || fallback;
+    return String(context.fillStyle);
+  };
+  const rgb = (hex: string) => [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16) || 0);
+  const ink = color("--ink", "#24352f"); const muted = color("--muted", "#61706a"); const surface = color("--surface", "#ffffff");
+  const soft = rgb(ink).map((value, channel) => Math.round((value + rgb(muted)[channel]) / 2)).join(",");
+  return {
+    cloud: {
+      ink, muted, soft: `rgb(${soft})`, halo: `rgba(${rgb(surface)},.92)`, shadow: surface,
+      edge: rgb(muted).join(","), label: rgb(muted).join(","), band: rgb(ink).join(","), pill: `rgba(${rgb(surface)},.96)`, pillLine: `rgba(${rgb(muted)},.3)`,
+    },
+    domains: DOMAIN_TOKENS.map((token) => color(token, "#8a94a6")),
+  };
+}
 
 // A teacher's category meets the graph through its name: the whole name (数与代数, 二次函数), else the categories
 // under it (函数), else each part of a joined name (实数与代数式 → 实数, 代数式; 方程 → every topic named with it).
@@ -56,14 +81,21 @@ function categoryKnowledge(index: KnowledgeGraphIndex, categories: Category[]) {
 
 // 题库 · 右栏: the published 知识图谱 beside the questions. The question the pointer rests on, or else the category picked
 // in the tree, opens its chain (prerequisites below, what it unlocks above); the tree lights the categories it belongs to.
-function LibraryKnowledgeMap({ focus, moduleId, categories, onLight }: {
-  focus: KnowledgeMapFocus; moduleId: string; categories: Category[]; onLight: (light: TreeLight | null) => void;
+function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse }: {
+  focus: KnowledgeMapFocus; moduleId: string; categories: Category[]; onLight: (light: TreeLight | null) => void; onCollapse: () => void;
 }) {
   const shellRef = useRef<HTMLElement>(null);
   const [graph, setGraph] = useState<PublishedKnowledgeGraph | null>(null);
   const [error, setError] = useState("");
   const [picked, setPicked] = useState<{ focus: string; key: string } | null>(null);
   const [command, setCommand] = useState<CloudCommand | null>(null);
+  // Read once on mount (the panel only renders in the browser) and again whenever the appearance changes.
+  const [site, setSite] = useState<SitePalette>(readSitePalette);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setSite(readSitePalette()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style"] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -75,7 +107,14 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight }: {
     return () => { live = false; };
   }, []);
 
-  const index = useMemo(() => graph ? createKnowledgeGraphIndex(graph.document, { version: graph.version }) : null, [graph]);
+  // The domains take the site palette; every topic and point is shaded from its domain as before.
+  const index = useMemo(() => {
+    if (!graph) return null;
+    const domains = graph.document.nodes.filter((node) => node.level === "domain").sort((left, right) => left.order - right.order || left.key.localeCompare(right.key));
+    const colors = new Map(domains.map((domain, position) => [domain.key, site.domains[position % site.domains.length]]));
+    const nodes = graph.document.nodes.map((node) => colors.has(node.key) ? { ...node, color: colors.get(node.key) } : node);
+    return createKnowledgeGraphIndex({ ...graph.document, nodes }, { version: graph.version });
+  }, [graph, site]);
   const funnel = useMemo(() => index ? layoutKnowledgeFunnel(index.document, { index }) : null, [index]);
   const view = useMemo(() => index && funnel ? buildCloudView({ index, funnel, filters: FILTERS, profile: null }) : null, [funnel, index]);
 
@@ -173,11 +212,12 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight }: {
   const note = !index ? "" : domain ? `${focus.kind === "question" ? "这道题只标到领域" : "对应领域"}「${domain.label}」`
     : keys.length ? "" : focus.kind === "question" ? "这道题还没有知识点标签" : focus.id === moduleId ? "鼠标停在题目上，或点左侧分类，图谱会转到对应的知识模块" : `「${focus.name}」没有对应的知识模块`;
 
-  return <aside ref={shellRef} className={`kg-shell kgl-shell ${cloudChain ? "has-chain" : ""}`} aria-label="知识图谱">
-    {view && highlight && <GraphCloud model={view.model} highlight={highlight} chain={cloudChain} spin={!cloudChain} command={command} shellRef={shellRef}
+  return <aside ref={shellRef} className="kgl-shell" aria-label="知识图谱">
+    {view && highlight && <GraphCloud model={view.model} highlight={highlight} chain={cloudChain} spin={!cloudChain} palette={site.cloud} command={command} shellRef={shellRef}
       describe={describe} onPick={pick} onUnavailable={setError} />}
     <header className="kgl-head" data-inset="auto">
-      <p className="kgl-eyebrow"><span>知识图谱</span>{badge && <b key={focusId}>{badge}</b>}</p>
+      <p className="kgl-eyebrow"><span>知识图谱</span>{badge && <b key={focusId}>{badge}</b>}
+        <button type="button" className="kgl-toggle" title="收起知识图谱" aria-label="收起知识图谱" onClick={onCollapse}><PanelIcon open /></button></p>
       <div className="kgl-tags" key={focusId}>
         {points.map((key, position) => <button type="button" key={key} className={key === focusKey ? "active" : ""} aria-pressed={key === focusKey}
           style={{ "--kgl-color": colorOf(key), animationDelay: `${position * 60}ms` } as CSSProperties} onClick={() => pickKey(key)}>
@@ -198,3 +238,16 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight }: {
 
 // The library page re-renders on every keystroke and pointer rest; the graph only follows its own inputs.
 export default memo(LibraryKnowledgeMap);
+
+function PanelIcon({ open }: { open: boolean }) {
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M15 3v18" /><path d={open ? "m8 9 3 3-3 3" : "m10 15-3-3 3-3"} />
+  </svg>;
+}
+
+// The folded panel: a thin rail that keeps the graph one click away and leaves the questions the width.
+export function KnowledgeMapRail({ onExpand }: { onExpand: () => void }) {
+  return <aside className="kgl-rail" aria-label="知识图谱（已收起）">
+    <button type="button" title="展开知识图谱" aria-label="展开知识图谱" onClick={onExpand}><PanelIcon open={false} /><span aria-hidden="true">知识图谱</span></button>
+  </aside>;
+}

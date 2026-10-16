@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { CloudRenderer, type CloudChain, type CloudHighlight, type CloudInsets, type CloudModel } from "./cloud-renderer";
+import { CloudRenderer, DARK_PALETTE, type CloudChain, type CloudHighlight, type CloudInsets, type CloudModel, type CloudPalette } from "./cloud-renderer";
 
 export type CloudTip = { title: string; meta: string; detail: string; color: string };
 export type CloudCommand = { kind: "focus"; index: number; token: number } | { kind: "reset"; token: number } | { kind: "zoom"; factor: number; token: number };
@@ -11,6 +11,7 @@ type Props = {
   highlight: CloudHighlight;
   chain: CloudChain | null;
   spin: boolean;
+  palette?: CloudPalette;
   command: CloudCommand | null;
   shellRef: RefObject<HTMLElement | null>;
   describe: (index: number) => CloudTip | null;
@@ -36,7 +37,7 @@ function measureInsets(shell: HTMLElement): CloudInsets {
   return insets;
 }
 
-export default function GraphCloud({ model, highlight, chain, spin, command, shellRef, describe, onPick, onUnavailable }: Props) {
+export default function GraphCloud({ model, highlight, chain, spin, palette = DARK_PALETTE, command, shellRef, describe, onPick, onUnavailable }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CloudRenderer | null>(null);
   const grownRef = useRef(false);
@@ -67,6 +68,7 @@ export default function GraphCloud({ model, highlight, chain, spin, command, she
   }, [model]);
   useEffect(() => { highlightRef.current = highlight; rendererRef.current?.setHighlight(highlight); }, [highlight]);
   useEffect(() => { rendererRef.current?.setSpin(spin); }, [spin]);
+  useEffect(() => { rendererRef.current?.setPalette(palette); }, [palette]);
 
   // Panels move and resize with selection, mode and content. Measure right after each commit (before a
   // focus command frames the view) and again whenever one of them resizes.

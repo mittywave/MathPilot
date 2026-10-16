@@ -1256,10 +1256,11 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .library-content>.question-list{margin-top:12px}
 
 .library-content .question-card{position:relative}
-/* 题库 · 右栏知识图谱: a third column; the selection dock centres on the questions instead of the window. */
-:root{--kgl-w:clamp(360px,27vw,480px)}
-.workspace:has(>.kgl-shell){grid-template-columns:260px minmax(0,1fr) var(--kgl-w)}
-body:has(.kgl-shell) .paper-dock{left:calc((260px + 100vw - var(--kgl-w)) / 2);width:min(860px,calc(100vw - 260px - var(--kgl-w) - 32px))}
+/* 题库 · 右栏知识图谱: a third column, folded to a thin rail on demand; the selection dock centres on the questions. */
+body:has(.kgl-shell){--kgl-col:clamp(360px,27vw,480px)}
+body:has(.kgl-rail){--kgl-col:44px}
+.workspace:has(>.kgl-shell),.workspace:has(>.kgl-rail){grid-template-columns:260px minmax(0,1fr) var(--kgl-col)}
+body:has(.kgl-shell,.kgl-rail) .paper-dock{left:calc((260px + 100vw - var(--kgl-col)) / 2);width:min(860px,calc(100vw - 260px - var(--kgl-col) - 32px))}
 .library-content .question-card.active{outline:2px solid color-mix(in srgb,var(--green) 40%,transparent);outline-offset:2px}
 .tree-row.lit{background:linear-gradient(90deg,color-mix(in srgb,var(--lit) 18%,transparent),transparent 90%) no-repeat;animation:tree-lit .5s ease both}
 .tree-row.lit .tree-dot{color:var(--lit);font-size:9px;text-shadow:0 0 6px var(--lit),0 0 14px var(--lit);animation:tree-lit-pulse 1.6s ease-in-out infinite}
