@@ -896,7 +896,6 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-workspace .content>.basket-settings {grid-column:1;grid-row:1; }
 .basket-workspace .content>.kgb-shell {grid-column:3;grid-row:1; }
 .basket-workspace .question-card.active {border-color:var(--green);box-shadow:inset 3px 0 0 var(--green),0 6px 20px color-mix(in srgb, var(--green) 12%, transparent); }
-.basket-workspace .basket-outline-question.is-active>.basket-outline-locate {background:var(--green);border-color:var(--green);color:var(--on-accent);box-shadow:0 0 0 3px var(--success-soft); }
 .basket-workspace button { white-space:nowrap; min-height:44px; }
 .basket-settings {display:flex;flex-direction:column;gap:8px;position:sticky;top:var(--topbar-h);height:calc(100dvh - var(--topbar-h));overflow:hidden;padding:12px;border-right:1px solid var(--line);background:var(--surface); }
 .basket-title { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px;white-space:nowrap; }
@@ -950,6 +949,7 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-outline-question.insert-after::after{right:-3px}
 .basket-outline-question.is-dragging{opacity:.4}
 .basket-workspace .basket-outline-question.is-moved>.basket-outline-locate{background:var(--success-soft);border-color:var(--green);color:var(--green);box-shadow:0 0 0 2px var(--success-soft)}
+.basket-workspace .basket-outline-question.is-active>.basket-outline-locate {background:var(--green);border-color:var(--green);color:var(--on-accent);box-shadow:0 0 0 3px var(--success-soft); }
 .basket-toolbar small{font-size:12px;color:var(--muted)}
 .basket-section-heading{display:flex;align-items:center;gap:12px;margin:12px 0 0;padding:8px 0;font-size:18px;color:var(--ink);overflow-wrap:anywhere}
 .basket-section-heading small{flex:none;font-size:12px;font-weight:400;color:var(--muted)}
