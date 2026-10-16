@@ -86,3 +86,18 @@ test('undelimited OCR LaTeX retains Chinese braced text as one parseable line',(
   assert.equal(segments.length,1);assert.equal(segments[0].value,source);assert.doesNotThrow(()=>mathOmml(segments[0].value));
   assert.ok(splitMathText('文字 $x=1$，后续文字').some(s=>s.kind==='text'&&s.value.includes('后续')));
 });
+test('a bracket paired across formulas (blanks between them are text) stays a plain character',()=>{
+  // S8 寒创讲义 例题精练第 8 题：________$+$________$\sqrt{3}=($________$+$________$\sqrt{3})^2$
+  const open=mathOmml(String.raw`\sqrt{3}=(`);
+  assert.doesNotMatch(open,/<m:d>/);assert.match(open,/<m:t xml:space="preserve">\(<\/m:t><\/m:r>$/);
+  assert.match(mathOmml(String.raw`\sqrt{3})^2`),/<m:sSup><m:e><m:r>[\s\S]*?\)<\/m:t><\/m:r><\/m:e><m:sup>/);
+  assert.equal((mathOmml('((a+b)').match(/<m:d>/g)||[]).length,1,'the inner pair still becomes a Word delimiter');
+  assert.match(mathOmml('[0,1'),/\[<\/m:t>/);
+  assert.match(mathOmml(String.raw`\frac{(a}{b}`),/<m:f><m:num>[\s\S]*\(<\/m:t>/,'a bracket left open inside braces ends with that group');
+  assert.match(mathOmml('(a,b]'),/<m:begChr m:val="\("\/><m:endChr m:val="\]"\/>/,'half-open intervals keep their delimiter');
+  assert.throws(()=>mathOmml('(a}'),/多余的右花括号/);
+  assert.throws(()=>mathOmml(String.raw`\frac{a`),/公式 } 未闭合/);
+  assert.throws(()=>mathOmml(String.raw`\sqrt[3`),/公式 \] 未闭合/);
+  const started=Date.now();mathOmml('('.repeat(60)+'a');
+  assert.ok(Date.now()-started<1000,'each open bracket is tried once');
+});
