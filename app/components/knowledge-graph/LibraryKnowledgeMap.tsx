@@ -246,8 +246,8 @@ function PanelIcon({ open }: { open: boolean }) {
 }
 
 // The folded panel: a thin rail that keeps the graph one click away and leaves the questions the width.
-export function KnowledgeMapRail({ onExpand }: { onExpand: () => void }) {
-  return <aside className="kgl-rail" aria-label="知识图谱（已收起）">
+export function KnowledgeMapRail({ open, onExpand }: { open: boolean; onExpand: () => void }) {
+  return <aside className="kgl-rail" aria-label="知识图谱（已收起）" inert={open}>
     <button type="button" title="展开知识图谱" aria-label="展开知识图谱" onClick={onExpand}><PanelIcon open={false} /><span aria-hidden="true">知识图谱</span></button>
   </aside>;
 }

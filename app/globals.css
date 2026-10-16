@@ -1257,10 +1257,12 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 
 .library-content .question-card{position:relative}
 /* 题库 · 右栏知识图谱: a third column, folded to a thin rail on demand; the selection dock centres on the questions. */
-body:has(.kgl-shell){--kgl-col:clamp(360px,27vw,480px)}
-body:has(.kgl-rail){--kgl-col:44px}
-.workspace:has(>.kgl-shell),.workspace:has(>.kgl-rail){grid-template-columns:260px minmax(0,1fr) var(--kgl-col)}
-body:has(.kgl-shell,.kgl-rail) .paper-dock{left:calc((260px + 100vw - var(--kgl-col)) / 2);width:min(860px,calc(100vw - 260px - var(--kgl-col) - 32px))}
+/* The column glides between the rail and the panel width; the dock slides along with it. */
+body:has(.kgl-dock){--kgl-full:clamp(360px,27vw,480px);--kgl-col:44px;--kgl-ease:cubic-bezier(.32,.72,0,1);--kgl-ms:.48s}
+body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
+.workspace:has(>.kgl-dock){grid-template-columns:260px minmax(0,1fr) auto}
+body:has(.kgl-dock) .paper-dock{left:calc((260px + 100vw - var(--kgl-col)) / 2);width:min(860px,calc(100vw - 260px - var(--kgl-col) - 32px));
+  transition:transform .35s cubic-bezier(.2,.8,.2,1),left var(--kgl-ms) var(--kgl-ease),width var(--kgl-ms) var(--kgl-ease)}
 .library-content .question-card.active{outline:2px solid color-mix(in srgb,var(--green) 40%,transparent);outline-offset:2px}
 .tree-row.lit{background:linear-gradient(90deg,color-mix(in srgb,var(--lit) 18%,transparent),transparent 90%) no-repeat;animation:tree-lit .5s ease both}
 .tree-row.lit .tree-dot{color:var(--lit);font-size:9px;text-shadow:0 0 6px var(--lit),0 0 14px var(--lit);animation:tree-lit-pulse 1.6s ease-in-out infinite}
