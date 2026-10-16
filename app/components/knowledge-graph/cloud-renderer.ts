@@ -58,12 +58,13 @@ const LINE_PITCH = 30;
 const LABEL_GAP = 8;
 const NODE_GAP = 28;
 const MARGIN = 26;
-const EDGE = "150,165,205";
-const INK = "#edeff7";
-const MUTED = "#aab1c6";
-const SOFT = "#c6cbdb";
-const HALO = "rgba(10,12,20,.88)";
-const SHADOW = "rgb(8,10,18)";
+// What the cloud is drawn in. The knowledge graph page keeps Marble's dark canvas; a host on a light page passes its own.
+// edge, label and band are "r,g,b" triplets: the renderer varies their alpha.
+export type CloudPalette = { ink: string; muted: string; soft: string; halo: string; shadow: string; edge: string; label: string; band: string; pill: string; pillLine: string };
+export const DARK_PALETTE: CloudPalette = {
+  ink: "#edeff7", muted: "#aab1c6", soft: "#c6cbdb", halo: "rgba(10,12,20,.88)", shadow: "rgb(8,10,18)",
+  edge: "150,165,205", label: "152,160,184", band: "237,239,247", pill: "rgba(14,17,28,.94)", pillLine: "rgba(130,145,190,.25)",
+};
 const FONT = "\"PingFang SC\",\"Microsoft YaHei\",system-ui,sans-serif";
 
 const EMPTY_HIGHLIGHT: CloudHighlight = { focus: -1, upstream: new Set(), next: new Set(), marked: new Set(), labels: [], linkSource: -1 };
@@ -132,6 +133,7 @@ export class CloudRenderer {
   private wake = 0;
   private lastTime = 0;
   private spinEnabled = true;
+  private palette = DARK_PALETTE;
   private reducedMotion = false;
   private readonly motionQuery: MediaQueryList | null;
   private readonly observer: ResizeObserver;
@@ -188,6 +190,8 @@ export class CloudRenderer {
   setHighlight(highlight: CloudHighlight) { this.highlight = highlight; this.request(); }
 
   setSpin(enabled: boolean) { this.spinEnabled = enabled; this.request(); }
+
+  setPalette(palette: CloudPalette) { this.palette = palette; this.request(); }
 
   // Lifts the chain out of the funnel (or lets it fall back with null); nodes glide from wherever they are drawn now.
   setChain(chain: CloudChain | null) {
@@ -429,7 +433,7 @@ export class CloudRenderer {
       return { x: view.centerX + x1 * view.unit * perspective, y: view.centerY - y2 * view.unit * perspective };
     };
     context.save(); context.globalAlpha = fade;
-    context.lineWidth = 1; context.strokeStyle = `rgba(${EDGE},${focused ? 0.035 : 0.07})`;
+    context.lineWidth = 1; context.strokeStyle = `rgba(${this.palette.edge},${focused ? 0.035 : 0.07})`;
     const boundaries = [0, ...model.bands.map((band) => band.y1)];
     for (const y of boundaries) {
       const radius = radiusAt(y) * 1.06; context.beginPath();
@@ -441,7 +445,7 @@ export class CloudRenderer {
       context.stroke();
     }
     context.font = `500 12px ${FONT}`; context.textAlign = "right"; context.textBaseline = "middle";
-    context.fillStyle = `rgba(152,160,184,${focused ? 0.28 : 0.62})`;
+    context.fillStyle = `rgba(${this.palette.label},${focused ? 0.28 : 0.62})`;
     for (const band of model.bands) {
       const y = (band.y0 + band.y1) / 2; const point = place(-(radiusAt(y) * 1.06 + 28), 0, y);
       if (point && point.x > 70) context.fillText(band.label, point.x, point.y);
@@ -473,7 +477,7 @@ export class CloudRenderer {
       if (!used[bucket]) continue;
       const soft = bucket >= 4; const depth = 0.45 + 0.55 * ((bucket % 4) + 0.5) / 4;
       const strength = focused ? 0.04 : (soft ? 0.05 : 0.1) * depth;
-      context.strokeStyle = `rgba(${EDGE},${strength})`;
+      context.strokeStyle = `rgba(${this.palette.edge},${strength})`;
       if (soft) context.setLineDash([3, 4]); else context.setLineDash([]);
       context.stroke(buckets[bucket]);
     }
@@ -483,7 +487,7 @@ export class CloudRenderer {
       context.strokeStyle = model.nodes[edge.source].color;
       context.beginPath(); context.moveTo(this.sx[edge.source], this.sy[edge.source]); context.lineTo(this.sx[edge.target], this.sy[edge.target]); context.stroke();
     }
-    context.globalAlpha = fade * 0.7; context.lineWidth = 1.3; context.setLineDash([5, 4]); context.strokeStyle = INK;
+    context.globalAlpha = fade * 0.7; context.lineWidth = 1.3; context.setLineDash([5, 4]); context.strokeStyle = this.palette.ink;
     for (const edge of forward) {
       context.beginPath(); context.moveTo(this.sx[edge.source], this.sy[edge.source]); context.lineTo(this.sx[edge.target], this.sy[edge.target]); context.stroke();
     }
@@ -507,17 +511,17 @@ export class CloudRenderer {
       } else {
         context.fillStyle = node.color; context.fill();
         if (glowing) context.shadowBlur = 0;
-        context.globalAlpha = opacity * 0.5; context.strokeStyle = SHADOW; context.stroke();
+        context.globalAlpha = opacity * 0.5; context.strokeStyle = this.palette.shadow; context.stroke();
       }
       if (glowing) { context.shadowBlur = 0; context.shadowColor = "transparent"; }
       const ring = index === highlight.focus ? 2.5 : index === this.hover ? 2 : (highlight.next.has(index) || highlight.marked.has(index)) && inChain < 0.5 ? 1.8 : 0;
       if (ring) {
         context.globalAlpha = (index === highlight.focus ? 0.95 : index === this.hover ? 0.85 : highlight.marked.has(index) ? 0.9 : 0.62) * Math.max(opacity, inChain);
-        context.strokeStyle = INK; context.lineWidth = index === highlight.focus ? 1.6 : 1.2;
+        context.strokeStyle = this.palette.ink; context.lineWidth = index === highlight.focus ? 1.6 : 1.2;
         context.beginPath(); context.arc(x, y, radius + ring, 0, Math.PI * 2); context.stroke(); context.lineWidth = 1;
       }
       if (index === highlight.linkSource) {
-        context.globalAlpha = 1; context.strokeStyle = INK; context.lineWidth = 1.5; context.setLineDash([3, 3]);
+        context.globalAlpha = 1; context.strokeStyle = this.palette.ink; context.lineWidth = 1.5; context.setLineDash([3, 3]);
         context.beginPath(); context.arc(x, y, radius + 5, 0, Math.PI * 2); context.stroke(); context.setLineDash([]); context.lineWidth = 1;
       }
     };
@@ -541,7 +545,7 @@ export class CloudRenderer {
   private drawLink() {
     const source = this.highlight.linkSource; if (source < 0 || !this.pointer || !this.scale[source]) return;
     const context = this.context;
-    context.save(); context.globalAlpha = 0.9; context.strokeStyle = INK; context.lineWidth = 1.5; context.setLineDash([6, 5]);
+    context.save(); context.globalAlpha = 0.9; context.strokeStyle = this.palette.ink; context.lineWidth = 1.5; context.setLineDash([6, 5]);
     context.beginPath(); context.moveTo(this.sx[source], this.sy[source]); context.lineTo(this.pointer.x, this.pointer.y); context.stroke();
     context.restore();
   }
@@ -570,8 +574,8 @@ export class CloudRenderer {
       if (!chosen) continue;
       placed.push(box);
       context.textAlign = chosen[2];
-      context.globalAlpha = fade; context.lineWidth = 4; context.strokeStyle = HALO; context.strokeText(text, chosen[0], chosen[1]);
-      context.fillStyle = focus || highlight.marked.has(index) ? INK : MUTED; context.fillText(text, chosen[0], chosen[1]);
+      context.globalAlpha = fade; context.lineWidth = 4; context.strokeStyle = this.palette.halo; context.strokeText(text, chosen[0], chosen[1]);
+      context.fillStyle = focus || highlight.marked.has(index) ? this.palette.ink : this.palette.muted; context.fillText(text, chosen[0], chosen[1]);
     }
     context.restore();
   }
@@ -711,13 +715,13 @@ export class CloudRenderer {
     for (const row of this.chainRows) {
       const bottom = view.y - row.y * view.scale; const top = view.y - row.top * view.scale;
       if (row.rank !== 0 && row.top === row.y) continue;
-      context.fillStyle = row.rank === 0 ? "rgba(237,239,247,.045)" : "rgba(237,239,247,.022)";
+      context.fillStyle = `rgba(${this.palette.band},${row.rank === 0 ? 0.045 : 0.022})`;
       context.beginPath(); context.roundRect(left, top - 21 * view.scale, width, bottom - top + 42 * view.scale, 12); context.fill();
     }
     context.font = `500 11.5px ${FONT}`; context.textAlign = "left";
     for (const row of this.chainRows) {
       const y = view.y - ((row.y + row.top) / 2) * view.scale; if (y < area.top + 8 || y > area.bottom - 8) continue;
-      context.fillStyle = row.rank === 0 ? "rgba(237,239,247,.85)" : "rgba(152,160,184,.6)";
+      context.fillStyle = row.rank === 0 ? `rgba(${this.palette.band},.85)` : `rgba(${this.palette.label},.6)`;
       context.fillText(row.rank === 0 ? "当前" : row.rank < 0 ? `前 ${-row.rank} 层` : `后 ${row.rank} 层`, area.left + MARGIN - 6, y);
     }
     context.restore();
@@ -736,9 +740,9 @@ export class CloudRenderer {
     context.save(); context.globalAlpha = presence; context.textBaseline = "middle";
     const hint = (text: string, y: number) => {
       context.font = `500 12px ${FONT}`; const width = context.measureText(text).width + 24; const x = (area.left + area.right) / 2;
-      context.fillStyle = "rgba(14,17,28,.94)"; context.beginPath(); context.roundRect(x - width / 2, y - 14, width, 28, 14); context.fill();
-      context.strokeStyle = "rgba(130,145,190,.25)"; context.lineWidth = 1; context.stroke();
-      context.fillStyle = MUTED; context.textAlign = "center"; context.fillText(text, x, y);
+      context.fillStyle = this.palette.pill; context.beginPath(); context.roundRect(x - width / 2, y - 14, width, 28, 14); context.fill();
+      context.strokeStyle = this.palette.pillLine; context.lineWidth = 1; context.stroke();
+      context.fillStyle = this.palette.muted; context.textAlign = "center"; context.fillText(text, x, y);
     };
     if (view.y - bounds.minY * view.scale > area.bottom + 4) hint("↓ 向下滚动，查看更早的前置", area.bottom - 22);
     if (view.y - bounds.maxY * view.scale < area.top - 4) hint("↑ 向上滚动，查看更远的后续", area.top + 22);
@@ -758,7 +762,7 @@ export class CloudRenderer {
       const touches = hovering && (edge.source === hover || edge.target === hover);
       const base = edge.up ? 0.55 : 0.45;
       context.globalAlpha = presence * (hovering ? (touches ? 0.95 : base * 0.25) : base);
-      context.strokeStyle = edge.up ? model.nodes[edge.source].color : INK;
+      context.strokeStyle = edge.up ? model.nodes[edge.source].color : this.palette.ink;
       context.lineWidth = touches ? 2.4 : edge.up ? 1.5 : 1.2;
       curve(edge.source, edge.target);
     }
@@ -766,7 +770,7 @@ export class CloudRenderer {
       context.setLineDash([4, 4]); context.lineWidth = 1.6;
       for (const edge of chain.shortcuts) {
         if (edge.source !== hover && edge.target !== hover) continue;
-        context.globalAlpha = presence * 0.75; context.strokeStyle = edge.up ? model.nodes[edge.source].color : INK;
+        context.globalAlpha = presence * 0.75; context.strokeStyle = edge.up ? model.nodes[edge.source].color : this.palette.ink;
         curve(edge.source, edge.target);
       }
     }
@@ -787,8 +791,8 @@ export class CloudRenderer {
       context.font = focus ? `600 ${(14 * scale).toFixed(2)}px ${FONT}` : `500 ${(12.5 * scale).toFixed(2)}px ${FONT}`;
       const x = this.posX[index] + this.posR[index] + LABEL_GAP * scale; const y = this.posY[index];
       context.globalAlpha = presence * Math.min(1, amount) * (hovering && !emphasised ? 0.45 : 1);
-      context.lineWidth = 4; context.strokeStyle = HALO; context.strokeText(this.chainText[index], x, y);
-      context.fillStyle = emphasised ? INK : SOFT; context.fillText(this.chainText[index], x, y);
+      context.lineWidth = 4; context.strokeStyle = this.palette.halo; context.strokeText(this.chainText[index], x, y);
+      context.fillStyle = emphasised ? this.palette.ink : this.palette.soft; context.fillText(this.chainText[index], x, y);
     }
     context.restore();
   }
