@@ -3,7 +3,7 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, T
 import JSZip from "jszip";
 import { richText } from "./answer-studio-rich-text";
 import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, type StudioQuestion, type StudioSource } from "./answer-studio";
-import { studioDiagramVml } from "./answer-studio-diagram";
+import { diagramBounds, studioDiagramVml } from "./answer-studio-diagram";
 import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
 import { splitMathText } from "./answer-studio-math-text";
 import { standaloneRuledArray, standaloneRuledArrayLine as ruledArrayLine } from './math-grid';
@@ -39,9 +39,17 @@ export function studioAnswerParagraphs(text: string) {
   return lines.map((text, index)=>({text, keepNext:index<lines.length-1 && /^(?:(?:证明|解|解答)\s*[：:]|[（(]\d+[)）])$/.test(text)}));
 }
 
+// A4 with 1080-twip margins; the body line is 9746 twips (about 487 pt) wide.
+const PAGE={width:11906,height:16838,margin:1080};
+const LINE_PT=(PAGE.width-2*PAGE.margin)/20;
+// The two ideographic spaces between pictures on one row, in 11 pt body text.
+const FIGURE_GAP_PT=22;
+
 /** A question's source pictures as the original page printed them: pictures on one row share a paragraph, side by
  * side, and each row keeps its side of the question — right, centre or left, by the space left on either side.
- * A picture without a recorded place on the page stays centred. */
+ * A row is as wide as its share of the original line, but at least 40% of a line, the library's rule for standalone
+ * print figures, and no picture is taller than 240 pt. A picture without a recorded place on the page stays centred
+ * at the compact drawing size. */
 function studioFigureRows(q: StudioQuestion) {
   const rows: Array<{ indexes: number[]; source?: StudioSource }> = [];
   q.diagrams.forEach((d, index) => {
@@ -58,7 +66,12 @@ function studioFigureRows(q: StudioQuestion) {
     if (!source || !text) return { indexes, alignment: AlignmentType.CENTER };
     const left = Math.min(text.x, source.box.x), right = Math.max(text.x + text.width, source.box.x + source.box.width);
     const leftGap = source.box.x - left, rightGap = right - source.box.x - source.box.width;
-    return { indexes, alignment: Math.abs(leftGap - rightGap) <= (right - left) * .1 ? AlignmentType.CENTER : leftGap > rightGap ? AlignmentType.RIGHT : AlignmentType.LEFT };
+    const alignment = Math.abs(leftGap - rightGap) <= (right - left) * .1 ? AlignmentType.CENTER : leftGap > rightGap ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    const shares = indexes.map(i => q.diagrams[i].baseSource!.box.width / (right - left)), total = shares.reduce((sum, share) => sum + share, 0);
+    let pt = Math.min(1, Math.max(.4, total)) * (LINE_PT - (indexes.length - 1) * FIGURE_GAP_PT) / total;
+    const tallest = Math.max(...indexes.map((i, k) => { const b = diagramBounds({ ...q.diagrams[i], shapes: [] }); return shares[k] * pt * b.height / b.width; }));
+    if (tallest > 240) pt *= 240 / tallest;
+    return { indexes, alignment, widths: shares.map(share => share * pt) };
   });
 }
 
@@ -97,7 +110,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       addIssue(q,`${field}：${detail}`);
     }
   });
-  const diagrams: Array<{ token: string; question: StudioQuestion; index: number }> = [];
+  const diagrams: Array<{ token: string; question: StudioQuestion; index: number; widthPt?: number }> = [];
   const outputLabel=studioOutputs(draft).find(output=>output.value===mode)?.label||'答案解析';
   const children: Array<Paragraph|Table> = [new Paragraph({ style:"Title", alignment:AlignmentType.CENTER, children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,bold:true,size:32,color:"000000"})],spacing:{after:300} })];
   if(options.reviewCopy)children.push(new Paragraph({children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000'})]}));
@@ -183,8 +196,8 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     // Source pictures remain unchanged and keep their place on the original page; solution overlays accompany the analysis below.
     if (withQuestionFigures) for (const row of studioFigureRows(q)) children.push(new Paragraph({alignment:row.alignment,spacing:figureSpacing,children:row.indexes.flatMap((index,i)=>{
       const token=`STUDIO_DIAGRAM_${diagrams.length}`;
-      diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,j)=>j===index?{...x,shapes:[]}:x)},index});
-      return [...(i?[new TextRun('　　')]:[]),new TextRun(token)];
+      diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,j)=>j===index?{...x,shapes:[]}:x)},index,widthPt:row.widths?.[i]});
+      return [...(i?[new TextRun('\u3000\u3000')]:[]),new TextRun(token)];
     })}));
     if(mode!=='steps')(q.tables||[]).forEach((table,tableIndex)=>{try{children.push(studioTable(table,q,tableIndex));}catch(error){if(!bestEffort)throw new Error(`${q.number} / table ${tableIndex+1}`,{cause:error});addIssue(q,`表格${tableIndex+1}：${error instanceof Error?error.message:'表格排版失败'}`);}});
     if(!withStem)for(const p of q.answerPlacements||[])children.push(new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:p.kind==='choice'?[...safeRichText('（',{color:'C00000'},q,'短答案'),...safeRichText(p.answer,{color:'C00000',italicMath:false,displayMath:false},q,'短答案'),...safeRichText('）',{color:'C00000'},q,'短答案')]:safeRichText(p.answer,{color:'C00000',underline:true,displayMath:false},q,'短答案')}));
@@ -208,7 +221,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     }
   }
   const font={ascii:"Times New Roman",hAnsi:"Times New Roman",eastAsia:"Songti SC",cs:"Times New Roman"};
-  const document = new Document({styles:{default:{document:{run:{font,size:22},paragraph:{spacing:{line:360}}}},paragraphStyles:[{id:"Title",name:"Title",basedOn:"Normal",run:{color:"000000",size:32,bold:true}},{id:"StudioAnswer",name:"Studio Answer",basedOn:"Normal",run:{color:"C00000",font,size:22}},{id:"StudioMathAnswer",name:"Studio Display Math Answer",basedOn:"StudioAnswer",run:{color:"C00000",font,size:WORD_MATH_STYLE.baseSize}},{id:"StudioMathBody",name:"Studio Display Math",basedOn:"Normal",run:{color:"000000",font,size:WORD_MATH_STYLE.baseSize}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1080,right:1080,bottom:1080,left:1080}}},children}]});
+  const document = new Document({styles:{default:{document:{run:{font,size:22},paragraph:{spacing:{line:360}}}},paragraphStyles:[{id:"Title",name:"Title",basedOn:"Normal",run:{color:"000000",size:32,bold:true}},{id:"StudioAnswer",name:"Studio Answer",basedOn:"Normal",run:{color:"C00000",font,size:22}},{id:"StudioMathAnswer",name:"Studio Display Math Answer",basedOn:"StudioAnswer",run:{color:"C00000",font,size:WORD_MATH_STYLE.baseSize}},{id:"StudioMathBody",name:"Studio Display Math",basedOn:"Normal",run:{color:"000000",font,size:WORD_MATH_STYLE.baseSize}}]},sections:[{properties:{page:{size:{width:PAGE.width,height:PAGE.height},margin:{top:PAGE.margin,right:PAGE.margin,bottom:PAGE.margin,left:PAGE.margin}}},children}]});
   const zip = await JSZip.loadAsync(await (await Packer.toBlob(document)).arrayBuffer());
   let xml = await zip.file("word/document.xml")!.async("string");
   let rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
@@ -228,7 +241,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if (!contentTypes.includes(`Extension="${extension}"`)) contentTypes=contentTypes.replace("</Types>",`<Default Extension="${extension}" ContentType="image/${match[1]}"/></Types>`);
     }
     if (!pattern.test(xml)) throw new Error("未找到配图导出位置");
-    xml=xml.replace(pattern,()=>studioDiagramVml(d,relation,`studio${i}`));
+    xml=xml.replace(pattern,()=>studioDiagramVml(d,relation,`studio${i}`,entry.widthPt));
     } catch(error) {
       if(!bestEffort)throw new Error(`${entry.question.number} / diagram ${entry.index+1}: ${error instanceof Error?error.message:String(error)}`,{cause:error});
       addIssue(entry.question,`配图：${error instanceof Error?error.message:'配图排版失败'}，已跳过损坏图形`);
