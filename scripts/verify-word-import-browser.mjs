@@ -58,7 +58,7 @@ try {
     if(r.status()>=400)request.error=await r.json().catch(()=>({}));
   }});
   await page.goto(base+'/');
-  await expect(page.locator('.user-chip')).toContainText('本地');
+  await expect(page.locator('.user-chip')).toContainText('本机管理员');
   await page.locator('button.module-add').click();
   await page.getByLabel('模块名称',{exact:true}).fill('Word 导入回归');
   await page.getByRole('button',{name:'创建模块',exact:true}).click();

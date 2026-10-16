@@ -271,8 +271,9 @@ test("keeps a higher-resolution photo for diagram cropping without increasing OC
 
 test("uses a fast OCR reasoning profile while keeping diagram reasoning independently configurable", async () => {
   const recognitionModel = await readFile(new URL("../lib/server/recognition-model.ts", import.meta.url), "utf8");
-  for (const route of ["recognize", "recognize-batch"]) {
-    const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
+  // Page-by-page 题库 imports are read by the background job, through the same recognition model.
+  for (const file of ["app/api/recognize/route.ts", "lib/server/answer-studio-jobs.ts"]) {
+    const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
     assert.match(source, /callRecognitionModel/);
   }
   assert.match(recognitionModel, /recognitionReasoningEffort/);
@@ -443,8 +444,9 @@ test("routes every AI feature through the unified gateway and native Antigravity
     assert.match(source, /signal: request.signal/);
     assert.doesNotMatch(source, /process\.env\.OPENAI_API_KEY/);
   }
-  for (const route of ["recognize", "recognize-batch"]) {
-    const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
+  // Page-by-page 题库 imports are read by the background job, through the same recognition model.
+  for (const file of ["app/api/recognize/route.ts", "lib/server/answer-studio-jobs.ts"]) {
+    const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
     assert.match(source, /callRecognitionModel/);
   }
   assert.match(recognitionModel, /callStructuredAi/);

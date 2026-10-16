@@ -1,8 +1,6 @@
 import JSZip from "jszip";
 import { docxInferredQuestionType, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
 import { docxMathLatex } from "./docx-web-content";
-import { openPdf } from "./pdfjs";
-import { readScreenshot } from "./screenshot-recognition";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
 import type { QuestionType } from "./types";
 
@@ -253,23 +251,6 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets })) };
 }
 
-async function renderPdf(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
-  const loadingTask = await openPdf(new Uint8Array(await file.arrayBuffer())); const pdf = await loadingTask.promise;
-  if (pdf.numPages > MAX_PAGES) throw new Error(`文件共有 ${pdf.numPages} 页，当前一次最多导入 ${MAX_PAGES} 页`);
-  const pages: ImportPage[] = [];
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber); const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(2.2, MAX_IMAGE_EDGE / Math.max(base.width, base.height)); const viewport = page.getViewport({ scale });
-    const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
-    const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法读取 PDF 页面");
-    context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvas, canvasContext: context, viewport }).promise;
-    pages.push({ pageNumber, image: canvasDataUrl(canvas) }); onProgress(pageNumber, pdf.numPages);
-    page.cleanup();
-  }
-  await loadingTask.destroy(); return pages;
-}
-
 function waitForImages(root: HTMLElement) {
   return Promise.all(Array.from(root.querySelectorAll("img")).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => { image.onload = () => resolve(); image.onerror = () => resolve(); })));
 }
@@ -396,15 +377,11 @@ export function structuredDocxQuestions(pages: ImportPage[]) {
   });
 }
 
+// A Word file: its own structure when it can be read, else page pictures for the AI. PDF and pictures are read
+// page by page by the background import job (readStudioFilesInBatches), the way 文件转录 reads them.
 export async function renderImportFile(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
   const extension = file.name.split(".").pop()?.toLowerCase();
-  if (["png", "jpg", "jpeg", "webp"].includes(extension ?? "") || ["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-    const image = await readScreenshot(file);
-    onProgress(1, 1);
-    return [{ pageNumber: 1, image }];
-  }
-  if (extension === "pdf" || file.type === "application/pdf") return renderPdf(file, onProgress);
   if (extension === "docx" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return renderDocx(file, onProgress);
   if (extension === "doc") throw new Error("暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入");
-  throw new Error("请选择 PDF、.docx 或 PNG / JPEG / WebP 图片");
+  throw new Error("请选择 Word（.docx）文件");
 }

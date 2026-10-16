@@ -171,24 +171,42 @@ async function verifyTemporaryLibrary() {
   await temporary();
   step('archive is opt-in and idempotent after a lost response; later temporary edits leave the formal original intact');
 
-  // One-page real PDF and an existing image traverse the browser renderer; only upstream recognition is substituted.
+  // One-page real PDF and an existing image traverse the browser page reader and the background import job; only the
+  // job service is substituted: it checks what was uploaded and answers as if the AI had read each page.
   const pdfPage = await browser.newPage();
   await pdfPage.setContent('<h1>1. Solve x + 2 = 5.</h1>');
   await pdfPage.pdf({ path: join(out, 'temporary-input.pdf') });
   await pdfPage.close();
   let recognizedFiles = [];
-  await page.route('**/api/recognize-batch', route => {
-    const input = route.request().postDataJSON(); recognizedFiles.push(input.fileName);
-    assert.match(input.image, /^data:image\//);
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: { questions: [{ question_number: '1', type: '填空题', difficulty: '基础', stem: `流程样本 ${input.fileName}：$x+2=5$，则 $x=$____。`, options: [], answer: '3', analysis: '移项。', source: '', tags: ['方程'], diagram_bbox: null, options_bbox: null, diagram_quality: null, confidence: 1, warnings: [], suggested_category_id: null }], answers: [] } }) });
+  const importJobs = new Map();
+  await page.route('**/api/answer-studio/jobs**', async route => {
+    const request = route.request(), url = new URL(request.url()), [id, pages, pageId] = url.pathname.split('/').slice(4);
+    const json = body => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    if (!id) {
+      if (request.method() === 'GET') return json(url.searchParams.get('count') ? { count: 0 } : { jobs: [...importJobs.values()].reverse().map(entry => entry.job) });
+      const input = request.postDataJSON(); assert.equal(input.kind, 'import');
+      const job = { id: `import-${importJobs.size + 1}`, kind: 'import', title: input.title, status: 'uploading', stalled: false, pageCount: 0, processedCount: 0, questionCount: 0, progress: '', error: '', createdAt: Date.now(), updatedAt: Date.now() };
+      importJobs.set(job.id, { job, pages: [], images: {} }); return json({ job });
+    }
+    const entry = importJobs.get(id);
+    if (pages && pageId) { const [, data] = entry.images[pageId].split(','); return route.fulfill({ status: 200, contentType: 'image/jpeg', body: Buffer.from(data, 'base64') }); }
+    if (pages) { const input = request.postDataJSON(); assert.match(input.image, /^data:image\/jpeg;base64,/); assert.match(input.recognizeImage, /^data:image\/jpeg;base64,/); entry.pages.push(input.page); entry.images[input.page.id] = input.image; return json({ job: entry.job }); }
+    if (request.method() === 'POST') { recognizedFiles.push(entry.job.title); Object.assign(entry.job, { status: 'done', pageCount: entry.pages.length, processedCount: entry.pages.length, questionCount: entry.pages.length }); return json({ job: entry.job }); }
+    if (request.method() === 'DELETE') { importJobs.delete(id); return json({ deleted: true }); }
+    const question = { question_number: '1', type: '填空题', difficulty: '基础', stem: `流程样本 ${entry.job.title}：$x+2=5$，则 $x=$____。`, options: [], answer: '3', analysis: '移项。', source: '', tags: ['方程'], diagram_bbox: null, options_bbox: null, diagram_quality: null, confidence: 1, warnings: [], suggested_category_id: null };
+    return json({ job: entry.job, draft: { version: 1, fileName: entry.job.title, categories: [], pages: entry.pages, results: Object.fromEntries(entry.pages.map(page => [page.id, { result: { questions: [question], answers: [] } }])), notes: [], updatedAt: Date.now() } });
   });
   for (const file of [join(out, 'temporary-input.pdf'), join(root, 'tests/fixtures/screenshot-number-line.png')]) {
-    await chooseFile(file);
+    await picker.getByRole('button', { name: '导入文件', exact: true }).first().click();
+    await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
+    await page.getByRole('status').filter({ hasText: '已转入后台' }).waitFor();
+    await page.locator('.file-import-modal .studio-jobs tr').first().getByRole('button', { name: '打开', exact: true }).click();
+    await page.locator('.file-draft').first().waitFor();
     await page.getByRole('button', { name: '保存所选 1 道题', exact: true }).click();
     await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
     await saved();
   }
-  await page.unroute('**/api/recognize-batch');
+  await page.unroute('**/api/answer-studio/jobs**');
   assert.equal(recognizedFiles.length, 2);
   assert.equal(await cards.count(), 4);
   assert.equal((await api('/api/library')).questions.length, 1);
@@ -424,7 +442,7 @@ try {
 
   // ---- 题库 regression: 新建试题 now comes from the shared component ----
   await page.goto(base + '/?scope=mine');
-  await page.locator('.user-chip').filter({ hasText: '本地' }).waitFor();
+  await page.locator('.user-chip').filter({ hasText: '本机管理员' }).waitFor();
   await page.locator('.question-card').first().waitFor();
   await page.getByRole('button', { name: /新建试题/ }).first().click();
   const modal = page.locator('.question-modal');

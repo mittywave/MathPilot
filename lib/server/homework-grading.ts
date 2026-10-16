@@ -130,7 +130,7 @@ async function recordFinalQueueFailure(submissionId: string, error: unknown) {
 export async function processHomeworkQueue(batch: QueueBatch) {
   for (const message of batch.messages) {
     const { kind, submissionId, jobId } = message.body;
-    // Handwritten transcription shares this queue; the job records its own failures.
+    // 文件转录 and 题库 file imports share this queue; the job records its own failures.
     if (kind === "studio_transcription" && jobId) {
       try { await (await import("./answer-studio-jobs")).processStudioJob(jobId); message.ack(); }
       catch { message.retry({ delaySeconds: 30 }); }

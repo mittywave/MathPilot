@@ -11,7 +11,11 @@ function TextField({ value, label, placeholder = "", singleLine = false, onChang
     <NoteEditor plainText singleLine={singleLine} value={value} label={label} placeholder={placeholder} onChange={onChange} />
   </Suspense>;
 }
-import { renderImportFile, structuredDocxQuestions } from "../../lib/file-import";
+import { renderImportFile, structuredDocxQuestions, type ImportPage } from "../../lib/file-import";
+import { jobPageImage, jobsApi, postJson, RecognitionJobTable, uploadJobPage, useRecognitionJobs } from "./RecognitionJobs";
+import { readStudioFilesInBatches } from "../../lib/answer-studio-images";
+import { contentFingerprint } from "../../lib/content-fingerprint.mjs";
+import type { LibraryImportDraft, LibraryImportSource, StudioJob } from "../../lib/server/answer-studio-jobs";
 import { crossPageRepeat, numberedImportTarget, orderedImportTimestamp } from "../../lib/question-order-rules.mjs";
 import { saveQuestionImportBatch } from "../../lib/question-import-save.mjs";
 import { clipboardImage, compressDataUrl, cropExactDataUrl, fileToDataUrl, imageAspectRatio, materializeImageDataUrl, type NormalizedBox } from "../../lib/image-tools";
@@ -40,10 +44,8 @@ type OptimizationResult = {
 };
 type FileImportDraft = Question & { importId: string; selected: boolean; documentNumber: string };
 type FileImportStep = "choose" | "rendering" | "recognizing" | "review";
-
-const FILE_IMPORT_CONCURRENCY = 2;
-const FILE_IMPORT_MAX_ATTEMPTS = 2;
-const RETRYABLE_IMPORT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+// A page the background import job read, or failed to read, with what the review needs from it.
+type RecognizedImportPage = { page: { pageNumber: number; image: string; textHint?: string; documentSection?: "questions" | "answers" } } & ({ result: BatchRecognitionResult } | { error: string });
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
@@ -82,16 +84,12 @@ function normalizeAnswerFields(rawAnswer: string, rawAnalysis: string) {
   return { answer, analysis };
 }
 
-async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length); let nextIndex = 0;
-  async function run() {
-    while (nextIndex < items.length) {
-      const index = nextIndex; nextIndex += 1;
-      results[index] = await worker(items[index], index);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()));
-  return results;
+// What a Word file gives by question number, kept with its import job for the review.
+function wordSource(page: ImportPage | undefined): LibraryImportSource | undefined {
+  if (!page) return undefined;
+  const source: LibraryImportSource = { answers: page.sourceAnswers, analyses: page.sourceAnalyses, analysisXml: page.sourceAnalysisXml, analysisAssets: page.sourceAnalysisAssets, questionImages: page.sourceQuestionImages, options: page.sourceOptions };
+  const present = Object.entries(source).filter(([, value]) => value && Object.keys(value).length);
+  return present.length ? Object.fromEntries(present) as LibraryImportSource : undefined;
 }
 
 export function newQuestionDraft(module: LibraryModule, categoryId: string): Question {
@@ -138,6 +136,8 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   const [fileImportProgress, setFileImportProgress] = useState({ current: 0, total: 0, label: "" });
   const [fileImportDrafts, setFileImportDrafts] = useState<FileImportDraft[]>([]);
   const [fileImportErrors, setFileImportErrors] = useState<string[]>([]);
+  const [fileImportNotice, setFileImportNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [openImportJobId, setOpenImportJobId] = useState("");
   const [isSavingImportedQuestions, setIsSavingImportedQuestions] = useState(false);
   const fileImportSavingRef = useRef(false);
   const questionImageRef = useRef<HTMLInputElement>(null);
@@ -145,6 +145,8 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   const fileImportRef = useRef<HTMLInputElement>(null);
   const cropStageRef = useRef<HTMLDivElement>(null);
   const fileImportAbortRef = useRef<AbortController | null>(null);
+  // PDF, pictures and Word files without a readable structure are read by the AI in background jobs, listed here.
+  const imports = useRecognitionJobs("import", fileImportOpen, (message) => setFileImportNotice(message ? { text: message, error: true } : null), (job) => { if (openImportJobId === job.id) setOpenImportJobId(""); });
 
   const moduleById = (id: string | null | undefined) => modules.find((item) => item.id === id);
   const entryModules = moduleIds.flatMap((id) => moduleById(id) ?? []);
@@ -177,9 +179,14 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   async function handleImportDocument(file: File) {
     if (file.size > 80 * 1024 * 1024) { setFileImportErrors(["文件超过 80MB，请拆分后再导入"]); return; }
-    const controller = new AbortController(); fileImportAbortRef.current = controller; setFileImportName(file.name); setFileImportDrafts([]); setFileImportErrors([]); setFileImportStep("rendering");
+    const docx = /\.docx$/i.test(file.name) || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (/\.doc$/i.test(file.name)) { setFileImportErrors(["暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入"]); return; }
+    if (!docx && !/\.pdf$/i.test(file.name) && !/^image\/(png|jpeg|webp)$/.test(file.type)) { setFileImportErrors(["请选择 PDF、.docx 或 PNG / JPEG / WebP 图片"]); return; }
+    const controller = new AbortController(); fileImportAbortRef.current = controller; setFileImportName(file.name); setFileImportDrafts([]); setFileImportErrors([]); setFileImportNotice(null); setOpenImportJobId(""); setFileImportStep("rendering");
+    let unfinished = "";
     try {
-      const pages = await renderImportFile(file, (current, total) => setFileImportProgress({ current, total, label: `正在读取第 ${current}/${total} 页` }));
+      // A Word file whose structure can be read goes straight to the review; nothing is sent to the AI.
+      const pages = docx ? await renderImportFile(file, (current, total) => setFileImportProgress({ current, total, label: `正在读取第 ${current}/${total} 页` })) : [];
       if (controller.signal.aborted) return;
       const structuredQuestions = structuredDocxQuestions(pages);
       if (structuredQuestions.length) {
@@ -195,123 +202,138 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         }));
         setFileImportDrafts(imported); setFileImportStep("review"); return;
       }
-      setFileImportStep("recognizing"); setFileImportProgress({ current: 0, total: pages.length, label: `准备并发识别 ${pages.length} 页` });
-      let completed = 0;
-      const recognizedPages = await mapWithConcurrency(pages, FILE_IMPORT_CONCURRENCY, async (page) => {
-        let lastError = "本页识别失败";
-        try {
-          if (page.documentSection === "answers" && page.sourceAnalyses) return { page, result: { questions: [], answers: [] } as BatchRecognitionResult };
-          for (let attempt = 1; attempt <= FILE_IMPORT_MAX_ATTEMPTS; attempt += 1) {
-            if (controller.signal.aborted) throw new DOMException("文件录入已取消", "AbortError");
-            try {
-              const response = await fetch("/api/recognize-batch", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ image: page.image, textHint: page.textHint, pageNumber: page.pageNumber, fileName: file.name, categories: recognitionCategories }) });
-              const payload = await response.json() as { result?: BatchRecognitionResult; error?: string; code?: string };
-              if (response.ok && payload.result) return { page, result: payload.result };
-              lastError = payload.code === "MISSING_API_KEY" ? "尚未配置智能识别 API" : payload.error || `识别请求失败（${response.status}）`;
-              if (!RETRYABLE_IMPORT_STATUSES.has(response.status) || attempt === FILE_IMPORT_MAX_ATTEMPTS) break;
-            } catch (error) {
-              if (controller.signal.aborted) throw error;
-              lastError = error instanceof Error ? error.message : "识别失败";
-              if (attempt === FILE_IMPORT_MAX_ATTEMPTS) break;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
-          }
-          return { page, error: lastError };
-        } finally {
-          completed += 1;
-          setFileImportProgress({ current: completed, total: pages.length, label: `已识别 ${completed}/${pages.length} 页（同时处理 ${FILE_IMPORT_CONCURRENCY} 页）` });
-        }
-      });
-      if (controller.signal.aborted) return;
-      const imported: FileImportDraft[] = []; const pageErrors: string[] = pages.flatMap((page) => page.renderNotes ?? []); const seen = new Set<string>(); const importStartedAt = currentTimestamp();
-      // Sections may restart their numbering, so the same number is kept; only a page-break repeat is left unselected.
-      let previous: { pageNumber: number; type: string; number: string } | undefined;
-      for (const recognized of recognizedPages.sort((a, b) => a.page.pageNumber - b.page.pageNumber)) {
-        if ("error" in recognized) { pageErrors.push(`第 ${recognized.page.pageNumber} 页：${recognized.error}`); continue; }
-        if (recognized.page.documentSection === "answers") continue;
-        for (const [index, item] of (recognized.result.questions ?? []).entries()) {
-          const position = { pageNumber: recognized.page.pageNumber, type: item.type, number: item.question_number.trim() };
-          const repeat = crossPageRepeat(previous, position, index === 0); previous = position;
-          const stemKey = item.stem.replace(/\s+/g, "").replace(/[，。；：,.!?！？]/g, "").slice(0, 100);
-          if (!stemKey || seen.has(stemKey)) continue; seen.add(stemKey);
-          const extracted = await extractRecognizedDiagram(recognized.page.image, item); item.warnings = extracted.warnings;
-          let reconstruction: Partial<Question> = extracted.fields;
-          if (shouldReconstructRecognizedDiagram(extracted.diagramImage, item.diagram_quality)) {
-            setFileImportProgress((current) => ({ ...current, label: `正在为第 ${item.question_number || imported.length + 1} 题高清重绘配图` }));
-            try {
-              const rebuilt = await requestVectorDiagramReconstruction(item.stem, extracted.diagramImage!, item.diagram_quality);
-              if (rebuilt.skipped) item.warnings = [...item.warnings, rebuilt.reason];
-              else reconstruction = { ...reconstruction, diagramOriginalImage: reconstruction.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: currentTimestamp() };
-            } catch (error) { item.warnings = [...item.warnings, `高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`]; }
-          }
-          const timestamp = orderedImportTimestamp(importStartedAt, imported.length); const categoryId = item.suggested_category_id && entryCategories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
-          const normalized = normalizeAnswerFields(item.answer, item.analysis);
-          const tagVersions = alevelTagVersions({ tags: item.tags });
-          if (repeat) item.warnings = [...item.warnings, `与上一页最后一题同为第 ${position.number} 题，可能是跨页重复识别，已默认不选；如是另一道题请勾选`];
-          imported.push({ id: uid("q"), importId: uid("import"), selected: !repeat, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, examYear: "", stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: isAlevelImport ? tagVersions.zh : item.tags, ...(isAlevelImport ? { tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: file.name, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
-        }
-      }
-      // The source gives answers and some content by number; fill in only a number that names one question.
-      const numbered = (questionNumber: string) => {
-        const { target, clash } = numberedImportTarget(imported, questionNumber);
-        const warning = `有多道第 ${questionNumber} 题，原件按题号给出的答案、解析等未自动填入，请对照原件核对`;
-        for (const entry of clash) if (!entry.recognitionWarnings?.includes(warning)) entry.recognitionWarnings = [...(entry.recognitionWarnings ?? []), warning];
-        return target;
+      // Everything else is read page by page by the AI in a background job: pages are uploaded in order, then the
+      // teacher may close this window and open the job's result here later.
+      const { job } = await jobsApi<{ job: StudioJob }>("/api/answer-studio/jobs", postJson({ kind: "import", title: file.name, categories: recognitionCategories, notes: pages[0]?.renderNotes ?? [], source: wordSource(pages[0]) }));
+      unfinished = job.id; imports.setJobs((current) => [job, ...current]);
+      let uploaded = 0;
+      const upload = async (page: { id: string; page: number; name: string; hash: string; image: string; textHint?: string; documentSection?: "questions" | "answers" }) => {
+        if (controller.signal.aborted) throw new DOMException("文件录入已取消", "AbortError");
+        setFileImportProgress({ current: uploaded, total: pages.length || uploaded + 1, label: `正在上传第 ${uploaded + 1} 页，上传完成前请勿关闭窗口` });
+        await uploadJobPage(job.id, page); uploaded += 1;
       };
-      for (const recognized of recognizedPages) {
-        if ("error" in recognized) continue;
-        for (const answerItem of recognized.result.answers ?? []) {
-          const target = numbered(answerItem.question_number);
-          if (!target) continue;
-          const normalized = normalizeAnswerFields(answerItem.answer, answerItem.analysis);
-          if (isUsableImportedAnswer(normalized.answer)) target.answer = normalized.answer;
-          if (normalized.analysis.length > target.analysis.length) target.analysis = normalized.analysis;
-          if (!isUsableImportedAnswer(target.answer)) target.answer = explicitChoiceFromAnalysis(target.analysis);
-        }
+      // Answer pages whose analyses the Word file already gives need no AI.
+      if (docx) for (const page of pages) { if (!(page.documentSection === "answers" && page.sourceAnalyses)) await upload({ id: randomClientId(), page: page.pageNumber, name: file.name, hash: await contentFingerprint(page.image), image: page.image, textHint: page.textHint, documentSection: page.documentSection }); }
+      else await readStudioFilesInBatches([file], "question", "", (label) => setFileImportProgress((current) => ({ ...current, label })), async (batch) => { for (const page of batch) await upload({ id: page.id, page: page.page, name: page.name, hash: page.hash, image: page.image }); });
+      if (!uploaded) throw new Error("文件里没有需要识别的页面");
+      await jobsApi(`/api/answer-studio/jobs/${job.id}`, { method: "POST" });
+      unfinished = "";
+      setFileImportNotice({ text: `「${file.name}」已转入后台识别（${uploaded} 页），可以关闭窗口；识别完成后在下面的识别任务里打开校对。`, error: false });
+      setFileImportStep("choose"); void imports.refresh();
+    } catch (error) {
+      // Without the file a half-uploaded job can never start, so it does not stay in the list.
+      if (unfinished) { await jobsApi(`/api/answer-studio/jobs/${unfinished}`, { method: "DELETE" }).catch(() => undefined); imports.setJobs((current) => current.filter((item) => item.id !== unfinished)); }
+      if (!controller.signal.aborted) { setFileImportErrors([error instanceof Error ? error.message : "无法读取这个文件"]); setFileImportStep("choose"); }
+    }
+    finally { if (fileImportAbortRef.current === controller) fileImportAbortRef.current = null; }
+  }
+
+  // A finished (or partly finished) import job: what the AI read on each page, with the page pictures for figures.
+  async function openImportJob(job: StudioJob) {
+    setFileImportName(job.title); setFileImportDrafts([]); setFileImportErrors([]); setFileImportNotice(null); setFileImportStep("rendering");
+    setFileImportProgress({ current: 0, total: job.pageCount, label: "正在读取识别结果…" });
+    try {
+      const { draft } = await jobsApi<{ draft: LibraryImportDraft }>(`/api/answer-studio/jobs/${job.id}`);
+      const recognizedPages: RecognizedImportPage[] = [];
+      for (const [index, page] of draft.pages.entries()) {
+        setFileImportProgress({ current: index, total: draft.pages.length, label: `正在读取第 ${index + 1}/${draft.pages.length} 页原件` });
+        const outcome = draft.results[page.id], at = { pageNumber: page.page, textHint: page.textHint, documentSection: page.documentSection };
+        recognizedPages.push(outcome?.result ? { page: { ...at, image: await jobPageImage(job.id, page.id, `第 ${page.page} 页`) }, result: outcome.result } : { page: { ...at, image: "" }, error: outcome?.error ?? "这一页还没有识别" });
       }
-      for (const recognized of recognizedPages) {
-        if ("error" in recognized || !recognized.page.textHint) continue;
-        for (const [questionNumber, answer] of explicitChoicesFromSourceText(recognized.page.textHint)) {
-          const target = numbered(questionNumber);
-          if (target) target.answer = answer;
+      setOpenImportJobId(job.id);
+      await reviewRecognizedPages(draft.fileName, recognizedPages, draft.notes, draft.source);
+    } catch (error) { setFileImportNotice({ text: error instanceof Error ? error.message : "打开失败", error: true }); setFileImportStep("choose"); }
+  }
+
+  // Questions from the pages, figures cut from them, answers given by number filled in, then the review.
+  async function reviewRecognizedPages(fileName: string, recognizedPages: RecognizedImportPage[], notes: string[], source: LibraryImportSource | undefined) {
+    const imported: FileImportDraft[] = []; const pageErrors: string[] = [...notes]; const seen = new Set<string>(); const importStartedAt = currentTimestamp();
+    // Sections may restart their numbering, so the same number is kept; only a page-break repeat is left unselected.
+    let previous: { pageNumber: number; type: string; number: string } | undefined;
+    for (const recognized of recognizedPages.sort((a, b) => a.page.pageNumber - b.page.pageNumber)) {
+      if ("error" in recognized) { pageErrors.push(`第 ${recognized.page.pageNumber} 页：${recognized.error}`); continue; }
+      if (recognized.page.documentSection === "answers") continue;
+      for (const [index, item] of (recognized.result.questions ?? []).entries()) {
+        const position = { pageNumber: recognized.page.pageNumber, type: item.type, number: item.question_number.trim() };
+        const repeat = crossPageRepeat(previous, position, index === 0); previous = position;
+        const stemKey = item.stem.replace(/\s+/g, "").replace(/[，。；：,.!?！？]/g, "").slice(0, 100);
+        if (!stemKey || seen.has(stemKey)) continue; seen.add(stemKey);
+        const extracted = await extractRecognizedDiagram(recognized.page.image, item); item.warnings = extracted.warnings;
+        let reconstruction: Partial<Question> = extracted.fields;
+        if (shouldReconstructRecognizedDiagram(extracted.diagramImage, item.diagram_quality)) {
+          setFileImportProgress((current) => ({ ...current, label: `正在为第 ${item.question_number || imported.length + 1} 题高清重绘配图` }));
+          try {
+            const rebuilt = await requestVectorDiagramReconstruction(item.stem, extracted.diagramImage!, item.diagram_quality);
+            if (rebuilt.skipped) item.warnings = [...item.warnings, rebuilt.reason];
+            else reconstruction = { ...reconstruction, diagramOriginalImage: reconstruction.diagramImage, diagramImage: rebuilt.image, diagramSource: "svg-ai", diagramQuality: item.diagram_quality ?? undefined, vectorDiagramSvg: rebuilt.svg, vectorDiagramPlan: rebuilt.plan, diagramReconstructionConfidence: rebuilt.plan.confidence, diagramVisualFitScore: rebuilt.visualFitScore, diagramReconstructionWarnings: rebuilt.plan.warnings, diagramReconstructedAt: currentTimestamp() };
+          } catch (error) { item.warnings = [...item.warnings, `高清矢量重绘未完成：${error instanceof Error ? error.message : "未知错误"}`]; }
         }
+        const timestamp = orderedImportTimestamp(importStartedAt, imported.length); const categoryId = item.suggested_category_id && entryCategories.some((entry) => entry.id === item.suggested_category_id) ? item.suggested_category_id : fileImportCategory;
+        const normalized = normalizeAnswerFields(item.answer, item.analysis);
+        const tagVersions = alevelTagVersions({ tags: item.tags });
+        if (repeat) item.warnings = [...item.warnings, `与上一页最后一题同为第 ${position.number} 题，可能是跨页重复识别，已默认不选；如是另一道题请勾选`];
+        imported.push({ id: uid("q"), importId: uid("import"), selected: !repeat, documentNumber: item.question_number, categoryId, type: item.type, difficulty: item.difficulty, examYear: "", stem: item.stem, options: item.options, answer: normalized.answer, analysis: normalized.analysis, source: item.source, tags: isAlevelImport ? tagVersions.zh : item.tags, ...(isAlevelImport ? { tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), diagramBox: item.diagram_bbox ?? undefined, recognitionConfidence: item.confidence, recognitionWarnings: item.warnings, importFileName: fileName, sourcePage: recognized.page.pageNumber, createdAt: timestamp, updatedAt: timestamp, ...reconstruction });
       }
-      const sourceAnswers = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnswers)?.page.sourceAnswers;
-      for (const [questionNumber, answer] of Object.entries(sourceAnswers ?? {})) {
+    }
+    // The source gives answers and some content by number; fill in only a number that names one question.
+    const numbered = (questionNumber: string) => {
+      const { target, clash } = numberedImportTarget(imported, questionNumber);
+      const warning = `有多道第 ${questionNumber} 题，原件按题号给出的答案、解析等未自动填入，请对照原件核对`;
+      for (const entry of clash) if (!entry.recognitionWarnings?.includes(warning)) entry.recognitionWarnings = [...(entry.recognitionWarnings ?? []), warning];
+      return target;
+    };
+    for (const recognized of recognizedPages) {
+      if ("error" in recognized) continue;
+      for (const answerItem of recognized.result.answers ?? []) {
+        const target = numbered(answerItem.question_number);
+        if (!target) continue;
+        const normalized = normalizeAnswerFields(answerItem.answer, answerItem.analysis);
+        if (isUsableImportedAnswer(normalized.answer)) target.answer = normalized.answer;
+        if (normalized.analysis.length > target.analysis.length) target.analysis = normalized.analysis;
+        if (!isUsableImportedAnswer(target.answer)) target.answer = explicitChoiceFromAnalysis(target.analysis);
+      }
+    }
+    for (const recognized of recognizedPages) {
+      if ("error" in recognized || !recognized.page.textHint) continue;
+      for (const [questionNumber, answer] of explicitChoicesFromSourceText(recognized.page.textHint)) {
         const target = numbered(questionNumber);
         if (target) target.answer = answer;
       }
-      const sourceAnalyses = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalyses)?.page.sourceAnalyses;
-      for (const [questionNumber, analysis] of Object.entries(sourceAnalyses ?? {})) {
-        const target = numbered(questionNumber);
-        if (target && analysis.trim()) target.analysis = analysis.trim();
-      }
-      const sourceAnalysisXml = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalysisXml)?.page.sourceAnalysisXml;
-      for (const [questionNumber, analysisDocxXml] of Object.entries(sourceAnalysisXml ?? {})) {
-        const target = numbered(questionNumber);
-        if (target && analysisDocxXml.length) target.analysisDocxXml = analysisDocxXml;
-      }
-      const sourceAnalysisAssets = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceAnalysisAssets)?.page.sourceAnalysisAssets;
-      for (const [questionNumber, analysisDocxAssets] of Object.entries(sourceAnalysisAssets ?? {})) {
-        const target = numbered(questionNumber);
-        if (target && Object.keys(analysisDocxAssets).length) target.analysisDocxAssets = analysisDocxAssets;
-      }
-      const sourceQuestionImages = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceQuestionImages)?.page.sourceQuestionImages;
-      for (const [questionNumber, contentImages] of Object.entries(sourceQuestionImages ?? {})) {
-        const target = numbered(questionNumber);
-        if (target && contentImages.length) { target.contentImages = contentImages; target.diagramImage = undefined; target.diagramBox = undefined; }
-      }
-      const sourceOptions = recognizedPages.find((recognized) => !("error" in recognized) && recognized.page.sourceOptions)?.page.sourceOptions;
-      for (const [questionNumber, options] of Object.entries(sourceOptions ?? {})) {
-        const target = numbered(questionNumber);
-        if (target && options.length >= 2) target.options = options;
-      }
-      for (const target of imported) {
-        if (!isUsableImportedAnswer(target.answer)) target.answer = explicitChoiceFromAnalysis(target.analysis);
-      }
-      setFileImportDrafts(imported); setFileImportErrors(pageErrors); setFileImportStep("review");
-    } catch (error) { if (!controller.signal.aborted) { setFileImportErrors([error instanceof Error ? error.message : "无法读取这个文件"]); setFileImportStep("choose"); } }
-    finally { if (fileImportAbortRef.current === controller) fileImportAbortRef.current = null; }
+    }
+    const sourceAnswers = source?.answers;
+    for (const [questionNumber, answer] of Object.entries(sourceAnswers ?? {})) {
+      const target = numbered(questionNumber);
+      if (target) target.answer = answer;
+    }
+    const sourceAnalyses = source?.analyses;
+    for (const [questionNumber, analysis] of Object.entries(sourceAnalyses ?? {})) {
+      const target = numbered(questionNumber);
+      if (target && analysis.trim()) target.analysis = analysis.trim();
+    }
+    const sourceAnalysisXml = source?.analysisXml;
+    for (const [questionNumber, analysisDocxXml] of Object.entries(sourceAnalysisXml ?? {})) {
+      const target = numbered(questionNumber);
+      if (target && analysisDocxXml.length) target.analysisDocxXml = analysisDocxXml;
+    }
+    const sourceAnalysisAssets = source?.analysisAssets;
+    for (const [questionNumber, analysisDocxAssets] of Object.entries(sourceAnalysisAssets ?? {})) {
+      const target = numbered(questionNumber);
+      if (target && Object.keys(analysisDocxAssets).length) target.analysisDocxAssets = analysisDocxAssets;
+    }
+    const sourceQuestionImages = source?.questionImages;
+    for (const [questionNumber, contentImages] of Object.entries(sourceQuestionImages ?? {})) {
+      const target = numbered(questionNumber);
+      if (target && contentImages.length) { target.contentImages = contentImages; target.diagramImage = undefined; target.diagramBox = undefined; }
+    }
+    const sourceOptions = source?.options;
+    for (const [questionNumber, options] of Object.entries(sourceOptions ?? {})) {
+      const target = numbered(questionNumber);
+      if (target && options.length >= 2) target.options = options;
+    }
+    for (const target of imported) {
+      if (!isUsableImportedAnswer(target.answer)) target.answer = explicitChoiceFromAnalysis(target.analysis);
+    }
+    setFileImportDrafts(imported); setFileImportErrors(pageErrors); setFileImportStep("review");
   }
 
   function updateImportDraft(importId: string, changes: Partial<FileImportDraft>) {
@@ -583,13 +605,16 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "当前讲义 · 临时题库" : "智能录题"}</span><h2>PDF / Word / 图片批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
       {fileImportStep === "choose" && <>
         <div className="entry-mode" role="tablist" aria-label="录题方式"><button onClick={backToScreenshotEntry}><b>AI 截图录入</b><span>识别单道题目截图</span></button><button className="active"><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>
-        <div className="file-import-intro"><div><b>整份文件逐页识别</b><p>自动拆分题目、选项、答案和配图，识别后统一校对再保存。</p></div></div>
-        <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void handleImportDocument(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择、拖入文件或粘贴图片</strong><span>支持 PDF、Word（.docx）、PNG / JPEG / WebP，最多 80 页 / 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
+        <div className="file-import-intro"><div><b>整份文件导入</b><p>能读出结构的 Word 直接进入校对；PDF、图片和读不出结构的 Word 交给 AI 在后台逐页识别，上传完就可以关闭窗口，识别完在下面的识别任务里打开校对。</p></div></div>
+        <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void handleImportDocument(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择、拖入文件或粘贴图片</strong><span>支持 PDF、Word（.docx）、PNG / JPEG / WebP，单个文件最多 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
         <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
         {!!fileImportErrors.length && <div className="recognition-error"><b>文件未能读取</b><span>{fileImportErrors.join("；")}</span></div>}
-        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对后保存到当前讲义的临时题库，不自动进入正式题库；可稍后勾选入库。" : "文件只在当前页面转换；正式题库仅保存你确认过的题目内容。"}</div>
+        {fileImportNotice && <div className={fileImportNotice.error ? "recognition-error" : "recognition-warning"} role="status"><b>{fileImportNotice.error ? "操作未完成" : "已转入后台"}</b><span>{fileImportNotice.text}</span></div>}
+        <RecognitionJobTable kind="import" jobs={imports.jobs} openJobId={openImportJobId} busy={false} cancellingJobId={imports.cancellingJobId} canOpen={(job) => job.status === "done" || job.status === "failed" && job.processedCount > 0}
+          onOpen={(job) => void openImportJob(job)} onResume={(job) => void imports.resume(job)} onCancel={(job) => void imports.cancel(job)} onRemove={(job) => void imports.remove(job)} />
+        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对后保存到当前讲义的临时题库，不自动进入正式题库；可稍后勾选入库。" : "正式题库只保存你确认过的题目内容。"}交给 AI 识别的页面会上传到服务器，删除识别任务时一并删除。</div>
       </>}
-      {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{fileImportStep === "rendering" ? "读取文件" : "AI 拆分题目"}</span></div><h3>{fileImportProgress.label}</h3><div className="progress-track"><i style={{ width: `${fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div><p>{fileImportStep === "rendering" ? "正在把页面还原成清晰图片" : "正在识别题干、选项、答案、分类与配图"}</p><button className="secondary" onClick={closeFileImport}>取消导入</button></div>}
+      {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{fileImportStep === "rendering" ? "读取文件" : "整理题目"}</span></div><h3>{fileImportProgress.label}</h3><div className="progress-track"><i style={{ width: `${fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div><p>{fileImportStep === "rendering" ? "完成后自动进入下一步" : "正在拆分题干、选项、答案和配图"}</p><button className="secondary" onClick={closeFileImport}>取消导入</button></div>}
       {fileImportStep === "review" && <>
         <div className="file-review-summary"><div><strong>{fileImportDrafts.length}</strong><span>道待校对题目</span></div><p>{fileImportName} · 已选择 {fileImportDrafts.filter((item) => item.selected).length} 道</p><button className="secondary" disabled={isSavingImportedQuestions} onClick={() => setFileImportDrafts((current) => current.map((item) => ({ ...item, selected: !current.every((entry) => entry.selected) })))}>{fileImportDrafts.every((item) => item.selected) ? "取消全选" : "全部选择"}</button></div>
         {!!fileImportErrors.length && <div className="recognition-warning"><b>导入提示</b><span>{fileImportErrors.join("；")}</span></div>}
@@ -606,6 +631,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         </article>)}</div>}
         <div className="modal-actions file-import-actions"><button className="secondary" disabled={isSavingImportedQuestions} onClick={() => setFileImportStep("choose")}>重新选择文件</button><button className="primary-button" disabled={isSavingImportedQuestions || !fileImportDrafts.some((item) => item.selected)} onClick={saveImportedQuestions}>{isSavingImportedQuestions ? "正在保存…" : `保存所选 ${fileImportDrafts.filter((item) => item.selected).length} 道题`}</button></div>
       </>}
+      {imports.confirmNode}
     </section></div>}
 
     {cropDialog && questionDraft?.originalImage && <div className="modal-backdrop"><section className="modal crop-modal" role="dialog" aria-modal="true" aria-label="手动裁剪配图">

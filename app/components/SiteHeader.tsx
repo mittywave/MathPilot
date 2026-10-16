@@ -19,7 +19,8 @@ export function BrandWordmark() {
 
 export type SiteSection = "library" | "basket" | "handouts" | "students" | "tools";
 
-// The nav badges are read-only counts: homework being graded beside 学生档案, transcriptions really in progress beside 工具箱.
+// The nav badges are read-only counts: file imports being read beside 题库, homework being graded beside 学生档案,
+// transcriptions really in progress beside 工具箱.
 async function readCount(url: string) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -46,10 +47,10 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   const navigation = useRef<HTMLElement>(null);
   const signOutPhase = useRef<"idle" | "callback" | "logout">("idle");
   const [signOutStatus, setSignOutStatus] = useState<"idle" | "busy" | "error">("idle");
-  const [counts, setCounts] = useState<{ userId: string; grading: number; transcribing: number } | null>(null);
+  const [counts, setCounts] = useState<{ userId: string; importing: number; grading: number; transcribing: number } | null>(null);
   const userId = user?.id;
   const ownCounts = userId && counts?.userId === userId ? counts : null;
-  const gradingCount = ownCounts?.grading ?? 0, transcribingCount = ownCounts?.transcribing ?? 0;
+  const importingCount = ownCounts?.importing ?? 0, gradingCount = ownCounts?.grading ?? 0, transcribingCount = ownCounts?.transcribing ?? 0;
   const sectionTitle = active ? { library: copy.navPublic, basket: copy.navBasket, handouts: copy.navHandouts, students: copy.navStudents, tools: copy.navTools }[active] : copy.navPublic;
   const trailTitle = trail?.length ? [...new Set([trail[trail.length - 1].label, trail[0].label])].join(" · ") : "";
   const browserTitle = `${title?.trim() || trailTitle || sectionTitle} · MathPilot`;
@@ -63,8 +64,8 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
       if (document.hidden || reading) return;
       reading = true;
       try {
-        const [grading, transcribing] = await Promise.all([readCount("/api/submissions?count=grading"), readCount("/api/answer-studio/jobs?count=active")]);
-        if (current) setCounts({ userId, grading, transcribing });
+        const [importing, grading, transcribing] = await Promise.all([readCount("/api/answer-studio/jobs?count=active&kind=import"), readCount("/api/submissions?count=grading"), readCount("/api/answer-studio/jobs?count=active&kind=transcription")]);
+        if (current) setCounts({ userId, importing, grading, transcribing });
       } catch { /* Keep the last confirmed counts until the next refresh. */ }
       finally { reading = false; }
     };
@@ -76,7 +77,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   }, [userId]);
   useEffect(() => {
     navigation.current?.querySelector<HTMLElement>(".active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active, basketCount, gradingCount, transcribingCount, locale, signOutStatus, user?.id]);
+  }, [active, basketCount, importingCount, gradingCount, transcribingCount, locale, signOutStatus, user?.id]);
 
   // The continuation may run after a page's discard confirmation, or immediately on a clean page.
   async function exit() {
@@ -110,7 +111,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
     {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection; the home page switches in place. */}
     <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><BrandWordmark /></a>
     <nav ref={navigation} className="library-entries" aria-label="题库入口">
-      {entry("library", "/", copy.navPublic)}
+      {entry("library", "/", <>{copy.navPublic}{importingCount > 0 && <i title={`${importingCount} 个文件导入正在识别`} aria-label={`${importingCount} 个文件导入正在识别`}>{importingCount}</i>}</>)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
       {entry("students", "/?view=wrong-book", <>{copy.navStudents}{gradingCount > 0 && <i title={`${gradingCount} 份作业正在批改`} aria-label={`${gradingCount} 份作业正在批改`}>{gradingCount}</i>}</>)}
       {user && link("/tools", <>{copy.navTools}{transcribingCount > 0 && <i title={`${transcribingCount} 个文件转录正在进行`} aria-label={`${transcribingCount} 个文件转录正在进行`}>{transcribingCount}</i>}</>, active === "tools")}

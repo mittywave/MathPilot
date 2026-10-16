@@ -15,7 +15,7 @@ async function fixture(t){
   // Seed component state, but render the actual page JSX. No browser storage
   // or AI services are touched by these presentation-only regression cases.
   await build({
-    stdin:{contents:"export {default as Page} from './app/tools/answer-studio/page'; export {seed} from 'studio-test-hooks';",resolveDir:process.cwd()},
+    stdin:{contents:"export {default as Page} from './app/tools/answer-studio/page'; export {RecognitionJobTable} from './app/components/RecognitionJobs'; export {seed} from 'studio-test-hooks';",resolveDir:process.cwd()},
     bundle:true,format:'cjs',platform:'node',jsx:'automatic',outfile:join(dir,'ui.cjs'),loader:{'.css':'empty'},logLevel:'silent',
     plugins:[{name:'page-hook-seeds',setup(build){
       build.onResolve({filter:/^studio-test-hooks$/},()=>({path:'hooks',namespace:'test'}));
@@ -27,11 +27,16 @@ async function fixture(t){
   return require(join(dir,'ui.cjs'));
 }
 const draft={version:1,inputMode:'answers',title:'界面验证',pages:[],answers:[],questions:[{id:'q',stem:'原题',analysis:'解析',answerIds:[],diagrams:[],tables:[],warnings:Array.from({length:102},(_,i)=>`原有提示${i}`)}]};
-function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[],jobs=[],openJobId='',cancellingJobId='',questionFiles=[],answerFiles=[]}={}){
+function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[],openJobId='',questionFiles=[],answerFiles=[]}={}){
   // useState order in AnswerStudioPage: auth, title and files, lifecycle, result,
-  // transcription-warning preference, text concurrency, then server jobs.
-  seed([{id:'local',local:true},true,'界面验证',questionFiles,answerFiles,busy,notice,failed,saved,downloads,'full',true,4,jobs,openJobId,cancellingJobId]);
+  // transcription-warning preference, text concurrency, then the opened job (the job list lives in useRecognitionJobs).
+  seed([{id:'local',local:true},true,'界面验证',questionFiles,answerFiles,busy,notice,failed,saved,downloads,'full',true,4,openJobId]);
   return renderToStaticMarkup(createElement(Page));
+}
+// The job rows are the shared RecognitionJobTable, rendered as the transcription page uses it.
+function renderJobs({RecognitionJobTable},{jobs,openJobId='',busy=false,cancellingJobId=''}){
+  const noop=()=>{};
+  return renderToStaticMarkup(createElement(RecognitionJobTable,{kind:'transcription',jobs,openJobId,busy,cancellingJobId,canOpen:job=>job.status==='done',onOpen:noop,onResume:noop,onCancel:noop,onRemove:noop}));
 }
 test('ready and downloaded results hide issue statistics and backup controls without changing the draft',async t=>{
   const ui=await fixture(t),original=structuredClone(draft);
@@ -54,29 +59,29 @@ test('processing and actionable errors remain visible, while idle upload has no 
   assert.match(failure,/studio-error/);assert.match(failure,/登录状态读取失败/);
   const idle=render(ui,{saved:null});
   assert.match(idle,/开始转录/);assert.doesNotMatch(idle,/role="status"|本地项目备份|个提示/);
-  const job={title:'第一讲',pageCount:3,processedCount:1,questionCount:0,progress:'',error:'',createdAt:0,updatedAt:0};
-  const list=render(ui,{saved:null,jobs:[{...job,id:'a',status:'running'},{...job,id:'b',status:'done',questionCount:5},{...job,id:'c',status:'failed',error:'识别服务异常'},{...job,id:'d',status:'running',stalled:true}]});
+  const job={kind:'transcription',title:'第一讲',pageCount:3,processedCount:1,questionCount:0,progress:'',error:'',createdAt:0,updatedAt:0};
+  const list=renderJobs(ui,{jobs:[{...job,id:'a',status:'running'},{...job,id:'b',status:'done',questionCount:5},{...job,id:'c',status:'failed',error:'识别服务异常'},{...job,id:'d',status:'running',stalled:true}]});
   assert.match(list,/转录任务/);assert.match(list,/转录中 1\/3 页/);assert.match(list,/已完成 · 5 题/);assert.match(list,/识别服务异常/);assert.match(list,/已中断/);assert.match(list,/点继续从断点接着转录/);
   assert.match(list,/>打开</);assert.equal((list.match(/>继续</g)||[]).length,2,'failed and stalled jobs continue');
   assert.equal((list.match(/aria-label="这个转录任务的操作"/g)||[]).length,3,'a live running job cannot be deleted');
 });
 test('queued and running rows end with cancel; cancelled rows retain continue and delete',async t=>{
   const ui=await fixture(t);
-  const base={title:'取消验证',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
+  const base={kind:'transcription',title:'取消验证',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
   const jobs=[{...base,id:'queued',status:'queued'},{...base,id:'running',status:'running'},{...base,id:'cancelled',status:'failed',progress:'已取消'},{...base,id:'done',status:'done'}];
-  const html=render(ui,{saved:null,jobs});
+  const html=renderJobs(ui,{jobs});
   assert.equal((html.match(/>取消转录<\/button><\/td>/g)||[]).length,2,'cancel is the rightmost row action');
   assert.match(html,/class="job-state" title="已取消">已取消/);
   assert.equal((html.match(/>继续<\/button>/g)||[]).length,1);
-  const pending=render(ui,{saved:null,jobs,cancellingJobId:'running'});
+  const pending=renderJobs(ui,{jobs,cancellingJobId:'running'});
   assert.match(pending,/<button type="button" disabled="">取消中…<\/button>/);
   assert.match(pending,/<button type="button" disabled="">取消转录<\/button>/);
 });
 test('queued and running rows show a pulsing dot; stalled, failed and finished rows do not',async t=>{
   const ui=await fixture(t);
-  const base={title:'进行中',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
+  const base={kind:'transcription',title:'进行中',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
   const jobs=[{...base,id:'queued',status:'queued'},{...base,id:'running',status:'running'},{...base,id:'stalled',status:'running',stalled:true},{...base,id:'failed',status:'failed',error:'超时'},{...base,id:'done',status:'done'}];
-  const html=render(ui,{saved:null,jobs});
+  const html=renderJobs(ui,{jobs});
   assert.equal((html.match(/class="job-state live"/g)||[]).length,2);
   assert.match(html,/class="job-state danger-text"[^>]*>已中断/);
 });
