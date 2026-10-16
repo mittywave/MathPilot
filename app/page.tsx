@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, Fragment, lazy, memo, useCallback, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { CategoryTree } from "./components/CategoryTree";
+import { CategoryTree, type TreeLight } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
 import { StudioSolution } from "./components/StudioSolution";
@@ -17,7 +17,7 @@ import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
 import WrongQuestionUpload from "./components/WrongQuestionUpload";
 import { QuestionBody } from "./components/QuestionBody";
 import { BasketOutline } from "./components/BasketOutline";
-import BasketKnowledgeMap from "./components/knowledge-graph/BasketKnowledgeMap";
+import LibraryKnowledgeMap, { type KnowledgeMapFocus } from "./components/knowledge-graph/LibraryKnowledgeMap";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./components/QuestionEntry";
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
@@ -42,7 +42,7 @@ const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 function currentTimestamp() { return Date.now(); }
 
-type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; activate: (id: string) => void; place: (id: string, sectionId: string | null) => void };
+type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; activate: (id: string) => void; hover: (id: string) => void; place: (id: string, sectionId: string | null) => void };
 
 // A click anywhere on a selectable card ticks it, as its check box does. Buttons, links and the grading record keep
 // their own clicks, and dragging across the text to copy it ticks nothing.
@@ -62,7 +62,8 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
   // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
-  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""} ${active ? "active" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : basket ? (event) => selectOnCardClick(event, () => actions.activate(question.id)) : undefined}>
+  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""} ${active ? "active" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => actions.toggleSelected(question.id)) : basket ? (event) => selectOnCardClick(event, () => actions.activate(question.id)) : undefined}
+    onPointerEnter={selectable ? () => actions.hover(question.id) : undefined} onPointerLeave={selectable ? () => actions.hover("") : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => actions.toggleSelected(question.id)}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
@@ -308,6 +309,7 @@ export default function Home() {
     const targetModule = modules.find((item) => item.id === moduleId); if (!targetModule) return;
     setActiveModuleId(targetModule.id);
     setActiveCategory(targetModule.id);
+    setMapQuestionId("");
     if (!selectedIds.length) setPaperTitle(`${targetModule.name}专项练习`);
     setTypeFilter("全部");
     setQuery("");
@@ -340,6 +342,19 @@ export default function Home() {
   // The basket question shown on the knowledge map: the one last clicked in the outline or the list, else the first.
   const [activeBasketId, setActiveBasketId] = useState("");
   const activeBasketQuestion = selectedQuestions.find((question) => question.id === activeBasketId) ?? selectedQuestions[0] ?? null;
+  // 题库 · 右栏知识图谱 shows the question the pointer rested on, else the category picked in the tree, and lights
+  // the tree's categories that hold what it shows.
+  const showKnowledgeMap = Boolean(authUser && activeModule) && !showSelected && !showWrongBook && !isAlevelPage;
+  const [mapQuestionId, setMapQuestionId] = useState("");
+  const [treeLight, setTreeLight] = useState<TreeLight | null>(null);
+  const hoverTimer = useRef(0);
+  const mapQuestion = showKnowledgeMap && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;
+  const knowledgeMapFocus = useMemo<KnowledgeMapFocus | null>(() => {
+    if (!showKnowledgeMap || !activeModule) return null;
+    if (mapQuestion) return { kind: "question", question: mapQuestion, number: filteredQuestions.indexOf(mapQuestion) + 1 };
+    const id = activeCategory ?? activeModule.id;
+    return { kind: "category", id, name: categories.find((item) => item.id === id)?.name ?? activeModule.name };
+  }, [activeCategory, activeModule, categories, filteredQuestions, mapQuestion, showKnowledgeMap]);
   const locateBasketQuestion = (id: string) => {
     const index = selectedIds.indexOf(id);
     if (index < 0) return;
@@ -504,6 +519,8 @@ export default function Home() {
     }),
     drop: (id) => setSelectedIds((ids) => ids.filter((item) => item !== id)),
     activate: setActiveBasketId,
+    // A short rest before switching, so the pointer crossing the list does not spin the graph through every card.
+    hover: (id) => { window.clearTimeout(hoverTimer.current); if (id) hoverTimer.current = window.setTimeout(() => setMapQuestionId(id), 220); },
     place: (id, sectionId) => setBasketStructure((current) => placeBasketQuestion(current, id, sectionId)),
   }), [setSelectedIds]);
 
@@ -714,7 +731,7 @@ export default function Home() {
             <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkInProgress[student.id] && <i title="有尚未完成的布置作业">作业中</i>}</b><small>{student.className || "未填写班级"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} onSelect={(id) => { setActiveCategory(id); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button>}
           </>}
         </aside>}
@@ -761,7 +778,6 @@ export default function Home() {
               <BasketOutline structure={basketStructure} pool={basketPool} disabled={basketBusy} activeId={activeBasketQuestion?.id ?? ""} onChange={setBasketStructure} onLocate={locateBasketQuestion} onGroupByType={() => void classifyBasket()} onNotice={onNotice} />
               <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题<small role="status">{draftStatus}</small></span><button className="primary-button" disabled={basketBusy || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={basketBusy || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={basketBusy || !selectedQuestions.length && !basketStructure.sections.length} onClick={() => setBasketStructure({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu></div>
             </aside>
-            {!!selectedQuestions.length && <BasketKnowledgeMap question={activeBasketQuestion} number={activeBasketQuestion ? selectedQuestions.indexOf(activeBasketQuestion) + 1 : 0} />}
           </> : <>
           <div className="filters">
             <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
@@ -783,7 +799,7 @@ export default function Home() {
                 {section?.heading && index === section.start && <h2 className="basket-section-heading">{section.heading}<small>{section.questions.length} 题</small></h2>}
                 <LibraryQuestionCard question={question} index={index} isFirst={section ? index === section.start : index === 0} isLast={section ? index === section.start + section.questions.length - 1 : index === filteredQuestions.length - 1}
                   sectionId={section?.id} sections={showSelected ? sectionChoices : undefined}
-                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected && question.id === activeBasketQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected ? question.id === activeBasketQuestion?.id : question.id === mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
                   basket={showSelected} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />
               </Fragment>;
             })}
@@ -791,6 +807,7 @@ export default function Home() {
           {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}
           </>}
         </section>
+        {knowledgeMapFocus && activeModule && <LibraryKnowledgeMap focus={knowledgeMapFocus} moduleId={activeModule.id} categories={categories} onLight={setTreeLight} />}
       </section>
 
 {authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
