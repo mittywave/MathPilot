@@ -163,7 +163,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   };
   const aligned=(text:string,red:boolean,q:StudioQuestion,field:string)=>{
     let inPart=false;
-    return studioAnswerParagraphs(text).flatMap(line=>{
+    return studioAnswerParagraphs(text).flatMap((line,lineIndex)=>{
       try {
         const ruled=ruledArrayLine(line.text);
         if(ruled)return [ruledTable(ruled,red,q,field),new Paragraph({spacing:{line:120,after:80},children:[]})];
@@ -175,9 +175,13 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       const match=line.text.match(/^([（(]\d+[)）])\s*([\s\S]*)$/);
       if(match)inPart=true;
       const display=isStudioDisplayMathLine(match?match[2]:line.text);
+      // A question number printed at the very start (“2.”) is one run as well; split into “2” and “.” the library
+      // cannot recognise it and prints the paper's number in front of it (“4．2.”).
+      const number=!match&&!display&&lineIndex===0?line.text.match(/^(\d{1,3}(?:[．、]|\.(?!\d)))\s*([\s\S]*)$/):null;
+      const lead=match??number;
       // The label runs straight into its text, as printed. A tab after it overran the two-character hanging indent
       // when the label was a full-width “（1）”, leaving a gap that every reader drew at a different width.
-      return new Paragraph({style:display?(red?'StudioMathAnswer':'StudioMathBody'):red?'StudioAnswer':'Normal',keepNext:line.keepNext,spacing:{line:360,after:80},indent:inPart?{left:420,...(match?{hanging:420}:{})}:undefined,children:match?[new TextRun({text:match[1],italics:false,color:red?'C00000':'000000'}),...safeRichText(match[2],{color:red?'C00000':'000000'},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
+      return new Paragraph({style:display?(red?'StudioMathAnswer':'StudioMathBody'):red?'StudioAnswer':'Normal',keepNext:line.keepNext,spacing:{line:360,after:80},indent:inPart?{left:420,...(match?{hanging:420}:{})}:undefined,children:lead?[new TextRun({text:lead[1],italics:false,color:red?'C00000':'000000'}),...safeRichText(lead[2],{color:red?'C00000':'000000',...(number?{displayMath:false}:{})},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
     });
   };
   let lesson='';
