@@ -294,9 +294,10 @@
 @container(max-width:620px){.picker-item .docx-web-options,.picker-item .docx-web-options.long-formula{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px;padding-left:0}}
 @container(max-width:280px){.picker-item .docx-web-options,.picker-item .docx-web-options.long-formula{grid-template-columns:minmax(0,1fr)}}
 @container(max-width:340px){.picker-item .question-presentation.layout-right{grid-template-columns:minmax(0,1fr)}.picker-item .question-images{max-width:100%}}
-/* Notion-style handle: six dots at the card's top-left, shown on hover; drop lines mark where it lands. */
+/* Notion-style handle: six dots at the card's top-left, shown on hover; drop lines mark where it lands.
+   It sits on the question number's line: card padding 14px + .stem margin 14px, one 15px × 1.8 line high. */
 .handout-question{position:relative;padding-left:28px}
-.handout-drag{position:absolute;top:14px;left:4px;display:grid;place-items:center;width:20px;height:26px;padding:0;border:0;border-radius:calc(5px*var(--radius-scale));background:transparent;color:var(--muted);cursor:grab;opacity:0}
+.handout-drag{position:absolute;top:28px;left:4px;display:grid;place-items:center;width:20px;height:27px;padding:0;border:0;border-radius:calc(5px*var(--radius-scale));background:transparent;color:var(--muted);cursor:grab;opacity:0}
 .handout-drag svg{width:10px;height:16px;fill:currentColor}
 .handout-question:hover .handout-drag,.handout-drag:focus-visible{opacity:1}
 .handout-drag:hover{background:var(--surface-soft,#eef3f0);color:var(--green,#2f6b53)}

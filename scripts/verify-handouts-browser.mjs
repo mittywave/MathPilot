@@ -672,7 +672,14 @@ try {
   await page.locator('.handout-question').first().waitFor();
   await page.waitForFunction(() => !document.body.innerText.includes('正在读取题目'));
   assert.match(await lane(0, 'practice').locator('.handout-question').first().innerText(), /2x\s*\+\s*1\s*=\s*5|2\s*x\s*\+/, 'drag order persists');
-  step('讲义 drag handle moves a question across lanes and back; order persists across reload');
+  const offsets = await page.locator('.handout-question').evaluateAll(cards => cards.map(card => {
+    const middle = element => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
+    return Math.abs(middle(card.querySelector('.handout-drag')) - middle(card.querySelector('.question-number')));
+  }));
+  assert.ok(offsets.length && offsets.every(offset => offset <= 1), `every handle sits on its question number's line: ${offsets}`);
+  await lane(0, 'practice').locator('.handout-question').first().hover();
+  await lane(0, 'practice').screenshot({ path: join(out, 'drag-handle.png') });
+  step('讲义 drag handle moves a question across lanes and back; order persists across reload; the handle sits on the number line');
 
   const untagged = lane(0, 'practice').locator('.handout-question').first();
   await untagged.getByRole('button', { name: '未标知识点 · 补充', exact: true }).click();
