@@ -72,6 +72,14 @@ test('queued and running rows end with cancel; cancelled rows retain continue an
   assert.match(pending,/<button type="button" disabled="">取消中…<\/button>/);
   assert.match(pending,/<button type="button" disabled="">取消转录<\/button>/);
 });
+test('queued and running rows show a pulsing dot; stalled, failed and finished rows do not',async t=>{
+  const ui=await fixture(t);
+  const base={title:'进行中',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
+  const jobs=[{...base,id:'queued',status:'queued'},{...base,id:'running',status:'running'},{...base,id:'stalled',status:'running',stalled:true},{...base,id:'failed',status:'failed',error:'超时'},{...base,id:'done',status:'done'}];
+  const html=render(ui,{saved:null,jobs});
+  assert.equal((html.match(/class="job-state live"/g)||[]).length,2);
+  assert.match(html,/class="job-state danger-text"[^>]*>已中断/);
+});
 test('the uploaded files decide the mode, and a question paper offers only question versions',async t=>{
   const ui=await fixture(t),file=name=>({name});
   const empty=render(ui,{saved:null});

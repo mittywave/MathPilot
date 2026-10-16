@@ -82,6 +82,12 @@ Text transcription runs on the server so the teacher can leave the page:
    provider requests when revoked. Requests already sent may still have been
    processed by the provider. Cancelling a job that has just finished preserves
    its completed result.
+6. A job really in progress (queued or running, and not 已中断) shows a pulsing
+   green dot before its state, the same dot as homework being graded. The top
+   nav's **工具箱** shows how many such jobs the teacher has, like the 学生档案
+   grading badge. On every page the header reads both counts every 4 seconds
+   (`/api/answer-studio/jobs?count=active` beside `/api/submissions?count=grading`)
+   and hides a badge at 0. A job that stalled is not counted.
 
 Jobs, page images and drafts stay on the server until the teacher deletes the
 job. The task list polls every 3 seconds only while a job is queued or running.

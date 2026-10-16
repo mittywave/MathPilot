@@ -89,6 +89,14 @@ function jobFixture(t, recognize = async () => ({ status: 200, text: JSON.string
   return { api,user,objects,messages,requests,sql,seed };
 }
 
+test('the 工具箱 badge counts only the owner\'s queued and running jobs that are still making progress',async t=>{
+  const f=jobFixture(t);
+  for(const status of ['queued','running','running','failed','done','uploading'])await f.seed(status);
+  const stalled=await f.seed('running');
+  f.sql.prepare('UPDATE studio_jobs SET updated_at = ? WHERE id = ?').run(Date.now()-6*60_000,stalled);
+  assert.equal(await f.api.countActiveStudioJobs(f.user),3);
+  assert.equal(await f.api.countActiveStudioJobs({id:'another-user'}),0);
+});
 test('cancelling a queued job retains its checkpoint, prevents queue delivery, and enforces ownership',async t=>{
   const f=jobFixture(t),id=await f.seed(),key=`studio/${id}/draft.json`,before=f.objects.get(key);
   await assert.rejects(f.api.cancelStudioJob({id:'another-user'},id),error=>error instanceof Response&&error.status===404);

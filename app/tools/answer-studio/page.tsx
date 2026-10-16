@@ -58,6 +58,8 @@ const postJson=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Typ
 async function blobDataUrl(blob:Blob) {
   return new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);});
 }
+// Really in progress: the jobs the 工具箱 badge counts, marked by a pulsing dot.
+const jobLive=(job:StudioJob)=>(job.status==='queued'||job.status==='running')&&!job.stalled;
 function jobState(job:StudioJob) {
   if(job.stalled)return '已中断';
   if(job.status==='uploading')return '上传未完成';
@@ -275,7 +277,7 @@ export default function AnswerStudioPage() {
         <h2 id="studio-jobs-title">转录任务</h2>
         <table><tbody>{jobs.map(job=><tr key={job.id} className={job.id===openJobId?'current':undefined}>
           <td className="job-title">{job.title}</td>
-          <td className={`job-state${job.status==='failed'&&job.error||job.stalled?' danger-text':''}`} title={job.error||job.progress||undefined}>{jobState(job)}{job.stalled?<small>可能因服务重启而中断，点继续从断点接着转录</small>:job.status==='running'&&job.progress?<small>{job.progress}</small>:null}{job.status==='failed'&&job.error?<small>{job.error}</small>:null}</td>
+          <td className={`job-state${job.status==='failed'&&job.error||job.stalled?' danger-text':''}${jobLive(job)?' live':''}`} title={job.error||job.progress||undefined}>{jobState(job)}{job.stalled?<small>可能因服务重启而中断，点继续从断点接着转录</small>:job.status==='running'&&job.progress?<small>{job.progress}</small>:null}{job.status==='failed'&&job.error?<small>{job.error}</small>:null}</td>
           <td className="job-time">{jobTime(job.createdAt)}</td>
           <td className="job-actions">
             {job.status==='done'&&<button type="button" className="text-button" disabled={busy||job.id===openJobId} onClick={()=>void openJob(job)}>{job.id===openJobId?'已打开':'打开'}</button>}
