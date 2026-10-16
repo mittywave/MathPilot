@@ -72,6 +72,16 @@ Text transcription runs on the server so the teacher can leave the page:
 4. **打开** on a finished job downloads the draft and the full page images back
    into the page. Figures and Word are still built in the browser, because the
    drawing pass composites and rasterizes images on a canvas.
+5. Queued and running rows have a **取消转录** button at the far right. It
+   stops the job without deleting originals or saved pages; the row shows
+   **已取消** and retains **继续** and **删除**. Cancellation reuses the existing
+   resumable `failed` state with empty `error` and `progress = '已取消'`, so no
+   schema change is needed. It revokes the worker's `run_id`; queued deliveries
+   cannot claim it, and every recognition attempt and checkpoint checks
+   ownership. An active worker checks ownership once per second and aborts its
+   provider requests when revoked. Requests already sent may still have been
+   processed by the provider. Cancelling a job that has just finished preserves
+   its completed result.
 
 Jobs, page images and drafts stay on the server until the teacher deletes the
 job. The task list polls every 3 seconds only while a job is queued or running.

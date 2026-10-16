@@ -107,6 +107,14 @@ export async function startStudioJob(user: AuthUser, id: string) {
   await dispatch(id);
   return job(await ownedRow(user, id));
 }
+export async function cancelStudioJob(user: AuthUser, id: string) {
+  await ownedRow(user, id);
+  // Reuse the resumable interrupted state; cancellation keeps originals and checkpoints.
+  // Revoking the run also makes queued deliveries and late worker updates harmless.
+  await db().prepare("UPDATE studio_jobs SET status = 'failed', run_id = '', error = '', progress = '已取消', updated_at = ? WHERE id = ? AND owner_user_id = ? AND status IN ('queued', 'running')")
+    .bind(Date.now(), id, user.id).run();
+  return job(await ownedRow(user, id));
+}
 async function dispatch(id: string) {
   const queue = appEnv().HOMEWORK_GRADING_QUEUE;
   if (queue) await queue.send({ kind: "studio_transcription", jobId: id });
@@ -137,13 +145,14 @@ export async function deleteStudioJob(user: AuthUser, id: string) {
 }
 
 /** The request the page used to make per page, now made by the job. */
-async function recognizeStudioPage(image: string, page: StudioPage, draft: StudioDraft, context: string, concurrent: boolean): Promise<StudioRecord[]> {
+async function recognizeStudioPage(image: string, page: StudioPage, draft: StudioDraft, context: string, concurrent: boolean, signal: AbortSignal): Promise<StudioRecord[]> {
   const extra = draft.inputMode === "answers" && page.role === "answer" ? "\n本次只有答案材料，没有干净原题。按材料原顺序识别全部答案条目；没有题干时stem留空，禁止猜测题目或自行解题。只有结果时照录结果并在warnings中说明缺少步骤。利用上页条目判断跨页续解，continuation只在明确续题时为true。解答图和模糊字必须标记待人工确认。" : "";
   const parallelContext = concurrent ? "\n并发识别补充规则：所附上下文来自本批之前已确认页面，不保证是紧邻前一页。优先使用本页可见讲次、栏目与题号；页首明显是续解但归属不明时，仍逐字保留，continuation=true，并在warnings写明‘并发续页归属待确认’，不得套用不相关的旧题号。缺少栏目或讲次且无法从本页确定时也写入warnings，供随后顺序复核。" : "";
   let result;
   try {
-    result = await callRecognitionModel({ image, prompt: studioRecognitionPrompt(page.role, draft.title, context) + extra + parallelContext, schema: studioRecognitionSchema, schemaName: "teacher_answer_transcription" });
+    result = await callRecognitionModel({ image, prompt: studioRecognitionPrompt(page.role, draft.title, context) + extra + parallelContext, schema: studioRecognitionSchema, schemaName: "teacher_answer_transcription", signal });
   } catch (error) {
+    signal.throwIfAborted();
     const network = error instanceof TypeError && /fetch|network|socket|ECONN|timeout/i.test(error.message);
     throw new StudioRequestError(error instanceof Error ? error.message : "识别失败", network ? 502 : 500, 0, network);
   }
@@ -166,13 +175,23 @@ export async function processStudioJob(id: string) {
   const row = await db().prepare("SELECT * FROM studio_jobs WHERE id = ?").bind(id).first<JobRow>();
   if (!row) return;
   const owned = "id = ? AND run_id = ? AND status = 'running'";
+  const controller = new AbortController();
   let lastProgress = "";
   const touch = async (fields: { progress?: string; processed?: number; questions?: number }) => {
     if (fields.progress) lastProgress = fields.progress;
     const result = await db().prepare(`UPDATE studio_jobs SET progress = ?, processed_count = COALESCE(?, processed_count), question_count = COALESCE(?, question_count), updated_at = ? WHERE ${owned}`)
       .bind(lastProgress, fields.processed ?? null, fields.questions ?? null, Date.now(), id, runId).run();
-    if (!result.meta.changes) throw new Error("任务已删除或已重新开始");
+    if (!result.meta.changes) {
+      controller.abort(new Error("任务已取消、删除或已重新开始"));
+      throw controller.signal.reason;
+    }
   };
+  // Cancellation can arrive in another worker while the provider request is in flight.
+  const cancellation = setInterval(() => {
+    void db().prepare(`SELECT id FROM studio_jobs WHERE ${owned}`).bind(id, runId).first()
+      .then((row: { id: string } | null) => { if (!row) controller.abort(new Error("任务已取消、删除或已重新开始")); })
+      .catch(() => undefined);
+  }, 1000);
   try {
     const draft = await readDraft(id);
     const result = await transcribeStudio(draft, {
@@ -182,10 +201,13 @@ export async function processStudioJob(id: string) {
         await writeDraft(id, value);
       },
       recognize: async (page, context, options) => {
+        controller.signal.throwIfAborted();
+        await touch({});
         if (Date.now() - started > RUN_SLICE_MS) throw new StudioRunYield("本轮运行时间已到");
         const object = await bucket().get(imageKey(id, page.id, "recognize"));
         if (!object) throw new Error(`第 ${page.page} 页原件缺失`);
-        return recognizeStudioPage(bytesDataUrl(await object.arrayBuffer()), page, draft, context, !!options?.concurrent);
+        controller.signal.throwIfAborted();
+        return recognizeStudioPage(bytesDataUrl(await object.arrayBuffer()), page, draft, context, !!options?.concurrent, controller.signal);
       },
       crop: async () => { throw new Error("后台转录不处理配图"); },
       drawings: async () => { throw new Error("后台转录不处理配图"); },
@@ -202,5 +224,7 @@ export async function processStudioJob(id: string) {
     }
     const message = error instanceof Error ? error.message.slice(0, 500) : "转录失败";
     await db().prepare(`UPDATE studio_jobs SET status = 'failed', error = ?, progress = '', updated_at = ? WHERE ${owned}`).bind(message, Date.now(), id, runId).run();
+  } finally {
+    clearInterval(cancellation);
   }
 }

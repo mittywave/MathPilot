@@ -27,10 +27,10 @@ async function fixture(t){
   return require(join(dir,'ui.cjs'));
 }
 const draft={version:1,inputMode:'answers',title:'界面验证',pages:[],answers:[],questions:[{id:'q',stem:'原题',analysis:'解析',answerIds:[],diagrams:[],tables:[],warnings:Array.from({length:102},(_,i)=>`原有提示${i}`)}]};
-function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[],jobs=[],openJobId='',questionFiles=[],answerFiles=[]}={}){
+function render({Page,seed},{saved=draft,busy=false,notice='',failed=false,downloads=[],jobs=[],openJobId='',cancellingJobId='',questionFiles=[],answerFiles=[]}={}){
   // useState order in AnswerStudioPage: auth, title and files, lifecycle, result,
   // transcription-warning preference, text concurrency, then server jobs.
-  seed([{id:'local',local:true},true,'界面验证',questionFiles,answerFiles,busy,notice,failed,saved,downloads,'full',true,4,jobs,openJobId]);
+  seed([{id:'local',local:true},true,'界面验证',questionFiles,answerFiles,busy,notice,failed,saved,downloads,'full',true,4,jobs,openJobId,cancellingJobId]);
   return renderToStaticMarkup(createElement(Page));
 }
 test('ready and downloaded results hide issue statistics and backup controls without changing the draft',async t=>{
@@ -59,6 +59,18 @@ test('processing and actionable errors remain visible, while idle upload has no 
   assert.match(list,/转录任务/);assert.match(list,/转录中 1\/3 页/);assert.match(list,/已完成 · 5 题/);assert.match(list,/识别服务异常/);assert.match(list,/已中断/);assert.match(list,/点继续从断点接着转录/);
   assert.match(list,/>打开</);assert.equal((list.match(/>继续</g)||[]).length,2,'failed and stalled jobs continue');
   assert.equal((list.match(/aria-label="这个转录任务的操作"/g)||[]).length,3,'a live running job cannot be deleted');
+});
+test('queued and running rows end with cancel; cancelled rows retain continue and delete',async t=>{
+  const ui=await fixture(t);
+  const base={title:'取消验证',stalled:false,pageCount:3,processedCount:1,questionCount:1,progress:'',error:'',createdAt:0,updatedAt:0};
+  const jobs=[{...base,id:'queued',status:'queued'},{...base,id:'running',status:'running'},{...base,id:'cancelled',status:'failed',progress:'已取消'},{...base,id:'done',status:'done'}];
+  const html=render(ui,{saved:null,jobs});
+  assert.equal((html.match(/>取消转录<\/button><\/td>/g)||[]).length,2,'cancel is the rightmost row action');
+  assert.match(html,/class="job-state" title="已取消">已取消/);
+  assert.equal((html.match(/>继续<\/button>/g)||[]).length,1);
+  const pending=render(ui,{saved:null,jobs,cancellingJobId:'running'});
+  assert.match(pending,/<button type="button" disabled="">取消中…<\/button>/);
+  assert.match(pending,/<button type="button" disabled="">取消转录<\/button>/);
 });
 test('the uploaded files decide the mode, and a question paper offers only question versions',async t=>{
   const ui=await fixture(t),file=name=>({name});

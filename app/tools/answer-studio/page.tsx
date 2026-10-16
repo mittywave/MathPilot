@@ -64,7 +64,7 @@ function jobState(job:StudioJob) {
   if(job.status==='queued')return '排队中';
   if(job.status==='running')return `转录中 ${job.processedCount}/${job.pageCount} 页`;
   if(job.status==='done')return `已完成 · ${job.questionCount} 题`;
-  return '失败';
+  return job.progress||'失败';
 }
 const modeLabels:Record<StudioInputMode,string>={questions:'只有原题，转成可编辑的题目 Word',answers:'只有答案，转录答案和解析',paired:'原题和答案，配对生成题目解析'};
 const jobTime=(value:number)=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -79,6 +79,7 @@ export default function AnswerStudioPage() {
   const [includeTranscriptionWarnings,setIncludeTranscriptionWarnings]=useState(true);
   const [textConcurrency,setTextConcurrency]=useState(STUDIO_TEXT_CONCURRENCY);
   const [jobs,setJobs]=useState<StudioJob[]>([]),[openJobId,setOpenJobId]=useState('');
+  const [cancellingJobId,setCancellingJobId]=useState('');
   const [confirmNode,confirm]=useConfirm();
   const links=useRef(new StudioDownloads()),running=useRef(false);
   const lastEntry=useRef<'question'|'answer'|null>(null);
@@ -185,6 +186,15 @@ export default function AnswerStudioPage() {
     try{await jobsApi(`/api/answer-studio/jobs/${job.id}`,{method:'POST'});setFailed(false);setNotice('');await refreshJobs();}
     catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'继续失败');}
   }
+  async function cancelJob(job:StudioJob){
+    if(cancellingJobId)return;
+    setCancellingJobId(job.id);
+    try{
+      const result=await jobsApi<{job:StudioJob}>(`/api/answer-studio/jobs/${job.id}`,{method:'PATCH'});
+      setJobs(current=>current.map(item=>item.id===job.id?result.job:item));setFailed(false);setNotice('');
+    }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'取消失败');}
+    finally{setCancellingJobId('');}
+  }
   async function deleteJob(job:StudioJob){
     if(!await confirm({title:'删除转录任务',body:`「${job.title}」的原件和转录结果会从服务器删除，无法恢复。`,confirmLabel:'删除',danger:true}))return;
     try{
@@ -265,12 +275,13 @@ export default function AnswerStudioPage() {
         <h2 id="studio-jobs-title">转录任务</h2>
         <table><tbody>{jobs.map(job=><tr key={job.id} className={job.id===openJobId?'current':undefined}>
           <td className="job-title">{job.title}</td>
-          <td className={`job-state${job.status==='failed'||job.stalled?' danger-text':''}`} title={job.error||job.progress||undefined}>{jobState(job)}{job.stalled?<small>可能因服务重启而中断，点继续从断点接着转录</small>:job.status==='running'&&job.progress?<small>{job.progress}</small>:null}{job.status==='failed'&&job.error?<small>{job.error}</small>:null}</td>
+          <td className={`job-state${job.status==='failed'&&job.error||job.stalled?' danger-text':''}`} title={job.error||job.progress||undefined}>{jobState(job)}{job.stalled?<small>可能因服务重启而中断，点继续从断点接着转录</small>:job.status==='running'&&job.progress?<small>{job.progress}</small>:null}{job.status==='failed'&&job.error?<small>{job.error}</small>:null}</td>
           <td className="job-time">{jobTime(job.createdAt)}</td>
           <td className="job-actions">
             {job.status==='done'&&<button type="button" className="text-button" disabled={busy||job.id===openJobId} onClick={()=>void openJob(job)}>{job.id===openJobId?'已打开':'打开'}</button>}
             {(job.status==='failed'||job.stalled)&&<button type="button" className="text-button" disabled={busy} onClick={()=>void resumeJob(job)}>继续</button>}
             {(job.stalled||job.status!=='queued'&&job.status!=='running')&&<PaperMoreMenu label="这个转录任务的操作"><button type="button" className="danger-text" onClick={()=>void deleteJob(job)}>删除…</button></PaperMoreMenu>}
+            {(job.status==='queued'||job.status==='running')&&<button type="button" disabled={busy||!!cancellingJobId} onClick={()=>void cancelJob(job)}>{cancellingJobId===job.id?'取消中…':'取消转录'}</button>}
           </td>
         </tr>)}</tbody></table>
       </section>}

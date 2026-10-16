@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import { DatabaseSync } from 'node:sqlite';
 
 // Execute the actual TS modules and their real pure dependencies, without
 // requiring a web build, API key, esbuild or a paid model request.
@@ -54,6 +55,85 @@ function services(patch = {}) {
     recognize: async p => [record(p)], crop: async image => ({ image, width: 100, height: 100 }),
     drawings: async () => ({ disposition: 'none', diagrams: [], warnings: [] }), ...patch };
 }
+
+function jobFixture(t, recognize = async () => ({ status: 200, text: JSON.stringify({ records: [] }) })) {
+  const sql = new DatabaseSync(':memory:');
+  t.after(() => sql.close());
+  sql.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('owner');");
+  sql.exec(readFileSync(resolve(root,'migrations/0037_studio_jobs.sql'),'utf8'));
+  sql.exec(readFileSync(resolve(root,'migrations/0038_studio_jobs_mode_from_pages.sql'),'utf8'));
+  const user = { id: 'owner' }, objects = new Map(), messages = [], requests = [];
+  const bindings = {
+    DB: { prepare(query) { return { bind(...values) { return {
+      async first() { return sql.prepare(query).get(...values) ?? null; },
+      async all() { return { results: sql.prepare(query).all(...values) }; },
+      async run() { return { meta: { changes: Number(sql.prepare(query).run(...values).changes) } }; },
+    }; } }; } },
+    HOMEWORK_ASSETS: {
+      async get(key) { const value=objects.get(key); return value===undefined?null:{ json:async()=>JSON.parse(value), arrayBuffer:async()=>new Uint8Array([1,2,3]).buffer }; },
+      async put(key,value) { objects.set(key,value); },
+    },
+    HOMEWORK_GRADING_QUEUE: { async send(message) { messages.push(message); } },
+  };
+  const api = loader({ 'cloudflare:workers': { env: bindings }, './recognition-model': {
+    callRecognitionModel: async input => { requests.push(input); return recognize(input,requests.length); },
+    parseRecognitionModelText: JSON.parse,
+  } })('lib/server/answer-studio-jobs.ts');
+  async function seed(status='queued',source=draft(4)) {
+    const job=await api.createStudioJob(user,{title:'取消验证',textConcurrency:4});
+    objects.set(`studio/${job.id}/draft.json`,JSON.stringify(source));
+    for(const page of source.pages)objects.set(`studio/${job.id}/${page.id}.recognize.jpg`,'image');
+    sql.prepare('UPDATE studio_jobs SET status = ?, page_count = ?, processed_count = ? WHERE id = ?').run(status,source.pages.length,source.pages.filter(p=>p.processed).length,job.id);
+    return job.id;
+  }
+  return { api,user,objects,messages,requests,sql,seed };
+}
+
+test('cancelling a queued job retains its checkpoint, prevents queue delivery, and enforces ownership',async t=>{
+  const f=jobFixture(t),id=await f.seed(),key=`studio/${id}/draft.json`,before=f.objects.get(key);
+  await assert.rejects(f.api.cancelStudioJob({id:'another-user'},id),error=>error instanceof Response&&error.status===404);
+  const cancelled=await f.api.cancelStudioJob(f.user,id);
+  assert.equal(cancelled.status,'failed');assert.equal(cancelled.progress,'已取消');assert.equal(cancelled.error,'');
+  await f.api.cancelStudioJob(f.user,id);
+  await f.api.processStudioJob(id);
+  assert.equal(f.requests.length,0);assert.equal(f.messages.length,0);assert.equal(f.objects.get(key),before);
+  const resumed=await f.api.startStudioJob(f.user,id);
+  assert.equal(resumed.status,'queued');assert.equal(f.messages.length,1);
+});
+
+test('cancelling a running job aborts concurrent provider calls and resume uses saved pages',async t=>{
+  let ready;
+  const started=new Promise(resolve=>{ready=resolve;});
+  let blocked=true,aborted=0;
+  const f=jobFixture(t,async(input,count)=>{
+    if(blocked){
+      if(count===3)ready();
+      await new Promise((resolve,reject)=>input.signal.addEventListener('abort',()=>{aborted++;reject(input.signal.reason);},{once:true}));
+    }
+    return {status:200,text:JSON.stringify({records:[{lesson:'Lesson',section:'Examples',number:String(count),stem:'',analysis:'Saved answer',box,warnings:[],diagramBoxes:[]}]})};
+  });
+  const source=draft(4);source.pages[0].processed=true;source.answers=[record(source.pages[0])];
+  const id=await f.seed('queued',source),key=`studio/${id}/draft.json`,before=f.objects.get(key);
+  const running=f.api.processStudioJob(id);
+  await started;
+  const cancelled=await f.api.cancelStudioJob(f.user,id);
+  assert.equal(cancelled.processedCount,1);
+  await running;
+  assert.equal(aborted,3);assert.equal(f.requests.length,3);
+  assert.equal(f.objects.get(key),before,'cancelled requests never overwrite the saved draft');
+  assert.equal((await f.api.listStudioJobs(f.user))[0].progress,'已取消');
+  blocked=false;
+  await f.api.startStudioJob(f.user,id);await f.api.processStudioJob(id);
+  const finished=(await f.api.listStudioJobs(f.user))[0];
+  assert.equal(finished.status,'done');assert.equal(finished.processedCount,4);
+  assert.equal(f.requests.length,6,'resume recognizes only the three unfinished pages');
+});
+
+test('cancellation never replaces a result that finished before the click reached the server',async t=>{
+  const f=jobFixture(t),id=await f.seed('done');
+  const result=await f.api.cancelStudioJob(f.user,id);
+  assert.equal(result.status,'done');assert.equal(result.progress,'');
+});
 
 test('concurrency defaults and limits reject invalid values', () => {
   for (const value of [undefined, null, 0, -2, NaN, 1.5, '6']) assert.equal(studioConcurrency(value), 4);
