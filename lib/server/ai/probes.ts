@@ -20,7 +20,7 @@ export async function discoverModels(id: string, expectedFingerprint: unknown, s
     let status = 0, code = 'OK';
     try {
         const models = await withAiDeadline(async (bounded) => {
-            const response = await aiFetch(endpoint, { headers: authentication(p, key), signal: bounded });
+            const response = await aiFetch(endpoint, { headers: authentication(p, key, p.wireApi === 'anthropic_messages' ? p.wireApi : undefined), signal: bounded });
             status = response.status;
             const raw = await readAiBody(response, 2000000);
             if (status === 401 || status === 403)
