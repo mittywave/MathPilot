@@ -216,6 +216,49 @@ test("a screenshot question places its figure where the original printed it, at 
   assert.equal(sourceFigureWidth(beside), .28, "a figure beside the text keeps its share of the line too");
   // Typed questions without a source screenshot keep the existing rules.
   assert.equal(sourceFigureWidth({ ...under, originalImage: undefined }), null);
+  assert.equal(sourceFigureWidth(beside, true), .4, "print size does not inherit a tiny page crop");
+  assert.equal(sourceFigureWidth(under, true), .46, "larger source figures retain their width");
+  assert.equal(sourceFigureWidth({ ...under, originalImage: undefined }, true), .4, "PDF imports and screenshots use the same print minimum");
+  assert.equal(sourceFigureWidth({ ...under, diagramImage: undefined }, true), null);
+});
+
+test("print copies use the saved vector geometry with stronger ink and preserve ordinary images", async t => {
+  const { questionImageForPrint } = await loadSource("lib/vector-diagram-renderer.ts");
+  const originalImage = globalThis.Image, originalDocument = globalThis.document;
+  const drawn = [];
+  globalThis.Image = class {
+    naturalWidth = 1000; naturalHeight = 600;
+    set src(value) { this.svg = decodeURIComponent(value.split(",").slice(1).join(",")); queueMicrotask(() => this.onload()); }
+  };
+  globalThis.document = { createElement() {
+    const canvas = { width: 0, height: 0, getContext: () => ({ fillRect() {}, drawImage(image) { drawn.push({ svg: image.svg, canvas }); } }), toDataURL: () => "data:image/png;base64,PRINT" };
+    return canvas;
+  } };
+  t.after(() => {
+    if (originalImage === undefined) delete globalThis.Image; else globalThis.Image = originalImage;
+    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
+  });
+  for (const viewWidth of [1000, 650]) {
+    const svg = `<svg viewBox="-20 0 ${viewWidth} 600"><rect fill="#ffffff"/><polyline points="12,25 88,99" stroke="#363636" stroke-width="3.5" stroke-dasharray="12 8"/><ellipse rx="40" ry="20" stroke="#222222" stroke-width="12"/><text x="25" fill="#363636">A</text><path stroke="#c00000"/></svg>`;
+    const question = { diagramSource: "svg-ai", diagramImage: "/api/assets/vector", vectorDiagramSvg: svg };
+    const before = JSON.stringify(question);
+    assert.equal(await questionImageForPrint(question, question.diagramImage), "data:image/png;base64,PRINT");
+    const output = drawn.at(-1);
+    assert.match(output.svg, new RegExp(`stroke-width="${viewWidth * .006}"`));
+    assert.match(output.svg, /stroke-width="12"/);
+    assert.match(output.svg, /points="12,25 88,99"/);
+    assert.match(output.svg, /stroke-dasharray="12 8"/);
+    assert.match(output.svg, /fill="#ffffff"/);
+    assert.match(output.svg, /stroke="#c00000"/, "colors that distinguish curves retain their meaning");
+    assert.match(output.svg, /<text x="25" fill="#000000">A/);
+    assert.doesNotMatch(output.svg, /#363636|#222222/);
+    assert.deepEqual([output.canvas.width, output.canvas.height], [1400, 840]);
+    assert.equal(JSON.stringify(question), before);
+    assert.equal(await questionImageForPrint(question, "/api/assets/photo"), "/api/assets/photo");
+    assert.equal(await questionImageForPrint({ ...question, diagramSource: "extracted" }, question.diagramImage), question.diagramImage);
+    assert.equal(await questionImageForPrint({ ...question, vectorDiagramSvg: undefined }, question.diagramImage), question.diagramImage);
+  }
+  assert.equal(drawn.length, 2, "raster and unrelated supplementary figures are not redrawn");
 });
 
 test("keeps short line-based conclusion choices in a compact source-order flow", () => {

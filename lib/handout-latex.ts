@@ -391,7 +391,7 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   const figures = questionImages(question).filter((image) => !placed.includes(image)).map(figureName).filter((name): name is string => Boolean(name));
   const layout = resolveQuestionImageLayout(question);
   const compactConclusion = isCompactConclusionQuestion(question);
-  const sourceWidth = sourceFigureWidth(question);
+  const sourceWidth = sourceFigureWidth(question, true);
   const choices = questionChoices(question);
   const out = [`\\begin{handoutquestion}{${label}}`];
   if (figures.length === 1 && layout === "right" && !compactConclusion) {

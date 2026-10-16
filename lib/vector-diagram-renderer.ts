@@ -1,4 +1,4 @@
-import type { VectorDiagramPlan } from "./types";
+import type { Question, VectorDiagramPlan } from "./types";
 import { combineDiagramRasterFit, MIN_RASTER_FIT_SCORE, scoreProjectionProfiles, validateVectorDiagramPlan } from "./vector-diagram-reconstruction.mjs";
 
 function escapeXml(value: string) {
@@ -213,14 +213,28 @@ export function svgFromVectorDiagramPlan(plan: VectorDiagramPlan, options: SvgOp
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewport.x.toFixed(3)} ${viewport.y.toFixed(3)} ${viewport.width.toFixed(3)} ${viewport.height.toFixed(3)}" width="${viewport.width.toFixed(3)}" height="${viewport.height.toFixed(3)}" role="img" aria-label="高清矢量数学配图"><rect x="${viewport.x.toFixed(3)}" y="${viewport.y.toFixed(3)}" width="${viewport.width.toFixed(3)}" height="${viewport.height.toFixed(3)}" fill="#ffffff"/>${strokes}${ellipses}${markers}${labels}</svg>`;
 }
 
-async function rasterizeSvg(svg: string, aspectRatio: number) {
+async function rasterizeSvg(svg: string, aspectRatio?: number) {
   const image = await loadImage(svgDataUrl(svg));
-  const width = 1400; const height = Math.max(350, Math.round(width / aspectRatio));
+  const width = 1400; const height = Math.max(aspectRatio === undefined ? 1 : 350, Math.round(width / (aspectRatio ?? image.naturalWidth / image.naturalHeight)));
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
   const context = canvas.getContext("2d"); if (!context) throw new Error("浏览器无法生成高清配图");
   context.fillStyle = "#ffffff"; context.fillRect(0, 0, width, height); context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
   context.drawImage(image, 0, 0, width, height);
   return canvas.toDataURL("image/png");
+}
+
+// Reuse the saved presentation SVG: rebuilding the raw plan would lose any
+// axis/curve corrections. Only the exported copy gets darker, printable strokes.
+export async function questionImageForPrint(question: Question | undefined, source: string) {
+  if (question?.diagramSource !== "svg-ai" || source !== question.diagramImage || !question.vectorDiagramSvg) return source;
+  const svg = question.vectorDiagramSvg;
+  const viewWidth = Number(svg.match(/viewBox="[\d.e+-]+\s+[\d.e+-]+\s+([\d.e+-]+)/i)?.[1]) || 1000;
+  const printable = svg.replace(/stroke-width="([\d.]+)"/g, (_, width: string) => `stroke-width="${Math.max(Number(width), viewWidth * .006)}"`)
+    .replace(/\b(stroke|fill)="(#[\da-f]{6})"/gi, (whole, attribute: string, color: string) => {
+      const channels = color.slice(1).match(/../g)!.map((channel) => Number.parseInt(channel, 16));
+      return color.toLowerCase() !== "#ffffff" && Math.max(...channels) - Math.min(...channels) <= 16 ? `${attribute}="#000000"` : whole;
+    });
+  return rasterizeSvg(printable);
 }
 
 async function sourceInkColor(source: string, aspectRatio: number) {

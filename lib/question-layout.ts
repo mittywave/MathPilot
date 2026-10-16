@@ -28,8 +28,11 @@ function screenshotFigureBox(question: Question) {
   return question.originalImage && question.diagramBox && questionImages(question).length === 1 ? question.diagramBox : null;
 }
 
-export function sourceFigureWidth(question: Question) {
+export function sourceFigureWidth(question: Question, forPrint = false) {
   const box = screenshotFigureBox(question);
+  // A crop's share of a photographed page is not a readable print size. Keep
+  // the web's source proportions, but give standalone print figures 40% of a line.
+  if (forPrint && questionImages(question).length === 1) return Math.min(1, Math.max(.4, (box?.width ?? 0) / 1000));
   return box ? Math.min(1, Math.max(.12, box.width / 1000)) : null;
 }
 

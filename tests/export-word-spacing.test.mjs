@@ -43,3 +43,35 @@ test('homework stems export without their printed number and with unbraced degre
   assert.match(text, /∠B＝90°/);
   assert.doesNotMatch(text, /\\circ|8\. 在/);
 });
+
+test('Word standalone figures have a readable print width for screenshot and PDF imports', async t => {
+  const originalImage = globalThis.Image;
+  globalThis.Image = class {
+    naturalWidth = 1400; naturalHeight = 900;
+    set src(_value) { queueMicrotask(() => this.onload()); }
+  };
+  t.after(() => { if (originalImage === undefined) delete globalThis.Image; else globalThis.Image = originalImage; });
+  const { buildQuestionsWordBlob } = await loadSource('lib/export-word.ts');
+  const base = { id: 'figure', type: '解答题', stem: '如图，求证四边形 ABCD 是矩形。', options: [], answer: '', analysis: '', tags: [], difficulty: '中等',
+    diagramImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', imageLayout: 'right' };
+  const questions = [base, { ...base, originalImage: '/page', diagramBox: { x: 700, y: 200, width: 180, height: 100 } },
+    { ...base, originalImage: '/page', diagramBox: { x: 20, y: 300, width: 620, height: 300 } },
+    { ...base, originalImage: '/page', diagramBox: { x: 500, y: 200, width: 900, height: 300 } }];
+  const blob = await buildQuestionsWordBlob(questions, '配图尺寸回归', false);
+  const xml = await (await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string');
+  const widths = [...xml.matchAll(/<wp:extent cx="(\d+)" cy="(\d+)"/g)].map(match => Number(match[1]));
+  assert.deepEqual(widths, [260, 260, 403, 293].map(pixels => pixels * 9525));
+  const paragraphs = xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? [];
+  paragraphs.forEach((paragraph, index) => {
+    if (paragraph.includes('<w:drawing>')) assert.match(paragraphs[index - 1], /<w:keepNext\/>/, 'a standalone figure stays with the preceding stem');
+  });
+  globalThis.Image = class {
+    naturalWidth = 300; naturalHeight = 1400;
+    set src(_value) { queueMicrotask(() => this.onload()); }
+  };
+  const portrait = await buildQuestionsWordBlob([questions[1]], '竖图回归', false);
+  const portraitXml = await (await JSZip.loadAsync(await portrait.arrayBuffer())).file('word/document.xml').async('string');
+  const extent = portraitXml.match(/<wp:extent cx="(\d+)" cy="(\d+)"/);
+  assert.equal(Number(extent[2]), 320 * 9525, 'a tall figure is capped within the page');
+  assert.ok(Math.abs(Number(extent[1]) / Number(extent[2]) - 300 / 1400) < .003, 'the height cap preserves aspect ratio');
+});

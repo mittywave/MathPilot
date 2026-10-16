@@ -8,6 +8,7 @@ import { isCompactConclusionQuestion, resolveQuestionImageLayout, sourceFigureWi
 import { optionColumnCount } from "./question-presentation-rules.mjs";
 import { resolveWordImageSource } from "./word-image-source.mjs";
 import { standaloneWordQuestionImages } from "./word-question-images.mjs";
+import { questionImageForPrint } from "./vector-diagram-renderer";
 import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
 import { parseHandoutNote, type NoteLine, type NoteSpan } from "./handout-note.mjs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, moduleHeading, questionPoints, type HandoutExportModule } from "./handout-rules.mjs";
@@ -489,7 +490,7 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
       const compactConclusion = isCompactConclusionQuestion(question);
-      const images = standaloneWordQuestionImages(question);
+      const images = await Promise.all(standaloneWordQuestionImages(question).map((source) => questionImageForPrint(question, source)));
       if (question.stemDocxXml?.length) {
         question.stemDocxXml.forEach((xml, rawIndex) => {
           const token = `__ZHITI_RAW_STEM_${rawParagraphs.length}__`;
@@ -499,23 +500,23 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       } else {
         // Hanging indent: wrapped lines of the first paragraph line up with the paragraphs after it, as on the web card.
         // Like the page, drop the number a homework stem was printed with; the paper numbers its questions itself.
-        const stem = new Paragraph({ indent: { left: 420, hanging: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100 }, children: [...textRuns(`${label}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText((stemParagraphs[0] ?? question.stem).replace(/^\s*\d{1,3}[.．、]\s*/, ""))] });
+        const stem = new Paragraph({ keepNext: images.length > 0, indent: { left: 420, hanging: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100 }, children: [...textRuns(`${label}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText((stemParagraphs[0] ?? question.stem).replace(/^\s*\d{1,3}[.．、]\s*/, ""))] });
         children.push(stem);
-        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : 40 }, children: richText(continuation) }));
+        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ keepNext: images.length > 0, indent: { left: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : 40 }, children: richText(continuation) }));
       }
       const imageLayout = resolveQuestionImageLayout(question);
       if (images.length && compactConclusion) {
         for (const image of images) children.push(await imageParagraph(image, 195, 155, 30, AlignmentType.LEFT, 20));
       } else if (images.length && imageLayout === "right") {
-        const figureWidth = sourceFigureWidth(question);
-        children.push(figureWidth ? await imageParagraph(images[0], Math.round(650 * figureWidth), 900, 80, AlignmentType.RIGHT) : await imageParagraph(images[0], 220, 165, 80, AlignmentType.RIGHT));
+        const figureWidth = sourceFigureWidth(question, true);
+        children.push(figureWidth ? await imageParagraph(images[0], Math.round(650 * Math.min(.45, figureWidth)), 320, 80, AlignmentType.RIGHT) : await imageParagraph(images[0], 220, 165, 80, AlignmentType.RIGHT));
         for (const image of images.slice(1)) children.push(await imageParagraph(image, 280, 195));
       } else if (images.length && imageLayout === "below-right") {
         for (const image of images) children.push(await imageParagraph(image, 300, 210, 140, AlignmentType.RIGHT));
       } else {
-        // A screenshot figure keeps its share of the line width (9746 twips ≈ 650 px); others use the standard size.
-        const figureWidth = imageLayout === "below" ? sourceFigureWidth(question) : null;
-        for (const image of images) children.push(figureWidth ? await imageParagraph(image, Math.round(650 * figureWidth), 900, 140, AlignmentType.LEFT) : await imageParagraph(image, 300, 210));
+        // Standalone print figures get a readable minimum within the 9746-twip (≈ 650 px) body.
+        const figureWidth = imageLayout === "below" ? sourceFigureWidth(question, true) : null;
+        for (const image of images) children.push(figureWidth ? await imageParagraph(image, Math.round(650 * figureWidth), 320, 140, AlignmentType.LEFT) : await imageParagraph(image, 300, 210));
       }
       if (question.optionsImage) children.push(await imageParagraph(question.optionsImage, 650, 320, 120, AlignmentType.LEFT));
       if (question.optionsDocxXml?.length) {

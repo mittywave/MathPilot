@@ -75,7 +75,7 @@ test("every module runs 知识点 → 例题 → 练习 → 变式 with per-band
   assert.doesNotMatch(student, /handoutlinepitch/, "a 讲义 keeps the class's line pitch");
   assert.match(student, /\\handoutpoints\{一元一次方程、移项\}/);
   assert.match(student, /\\handoutsource\{2024 期中\}方程/);
-  assert.match(student, /\\begin\{handoutsidefigure\}\{figures\/fig-1\.png\}/);
+  assert.match(student, /\\begin\{handoutsidefigure\}\[0\.40\]\{figures\/fig-1\.png\}/);
   assert.doesNotMatch(student, /handoutanswer|handoutkey/);
 
   const key = build("end");
@@ -145,7 +145,7 @@ test("Word-imported pictures stay where the document put them, at its size", () 
   const student = buildFigures("none");
   assert.match(student, /\\begin\{handoutquestion\}\{1\}\n【建立模型】\\par\n如图1，求证：\$AB=CD\$。\\par\n\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{128\.3mm\}\{figures\/row\.png\}\}\\par\n【模型应用】如图2/);
   assert.equal((student.match(/figures\/row\.png/g) ?? []).length, 1, "a picture placed in the stem is not repeated beside or under it");
-  assert.match(student, /\\begin\{handoutsidefigure\}\[0\.18\]\{figures\/beside\.png\}/, "a screenshot figure on the right keeps its share of the line");
+  assert.match(student, /\\begin\{handoutsidefigure\}\[0\.40\]\{figures\/beside\.png\}/, "a small screenshot figure gets a readable print size");
   assert.match(student, /\\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{0\.62\\linewidth\}\{figures\/under\.png\}\}/, "a screenshot figure under the text keeps its share of the line");
   assert.doesNotMatch(student, /figures\/work\.png/, "学生版 prints no analysis");
   assert.match(buildFigures("end"), /\\handoutanalysis\{解答\}\{解：如图：\\par \\handoutfigureline\{l\}\{\\handoutfigure\[\.45\\textheight\]\{43\.4mm\}\{figures\/work\.png\}\}\\par 故 C\(6,2\)。\}/, "analysis pictures keep their place too");

@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import handoutClass from "../latex/mitty-handout.cls?raw";
 import { buildHandoutLatex, type HandoutLatexInput } from "./handout-latex";
 import { questionImages } from "./question-layout";
+import { questionImageForPrint } from "./vector-diagram-renderer";
 import { noteImageSources } from "./handout-note.mjs";
 import { HANDOUT_BANDS } from "./handout-rules.mjs";
 import type { Question } from "./types";
@@ -36,12 +37,14 @@ export async function buildHandoutLatexProject(input: HandoutLatexInput): Promis
   const names = new Map<string, string>();
   // Word-imported pictures print where the document had them, so the stem's and (with answers) the analysis's are fetched too.
   const questionFigures = (question: Question) => [...questionImages(question), ...Object.values(question.stemDocxAssets ?? {}), ...(input.answers === "none" ? [] : Object.values(question.analysisDocxAssets ?? {}))];
+  const figureQuestions = new Map(("questions" in input ? input.questions : input.modules.flatMap((module) => HANDOUT_BANDS.flatMap((band) => module.bands[band])))
+    .filter((question) => question.diagramImage).map((question) => [question.diagramImage!, question]));
   const sources = [...new Set("questions" in input ? input.questions.flatMap(questionFigures)
     : input.modules.flatMap((module) => [...noteImageSources(module.note), ...HANDOUT_BANDS.flatMap((band) => module.bands[band].flatMap(questionFigures))]))];
   let missingFigures = 0;
   for (const [index, source] of sources.entries()) {
     try {
-      const figure = await figureBytes(source);
+      const figure = await figureBytes(await questionImageForPrint(figureQuestions.get(source), source));
       const name = `figures/fig-${index + 1}.${figure.extension}`;
       files[name] = figure.bytes; names.set(source, name);
     } catch { missingFigures += 1; }
