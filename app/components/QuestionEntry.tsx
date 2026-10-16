@@ -185,11 +185,12 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       if (structuredQuestions.length) {
         setFileImportStep("recognizing"); setFileImportProgress({ current: structuredQuestions.length, total: structuredQuestions.length, label: `已按 Word 原始结构整理 ${structuredQuestions.length} 道题` });
         const timestamp = currentTimestamp();
-        const imported = structuredQuestions.map<FileImportDraft>(({ questionNumber, ...item }, index) => ({
-          ...item, id: uid("q"), importId: uid("import"), selected: true, documentNumber: questionNumber,
+        // A 文件转录 answers-only export has headings and solutions but no stems; such a question cannot be saved.
+        const imported = structuredQuestions.map<FileImportDraft>(({ questionNumber, warnings, ...item }, index) => ({
+          ...item, id: uid("q"), importId: uid("import"), selected: Boolean(item.stem.trim()), documentNumber: questionNumber,
           categoryId: fileImportCategory, difficulty: item.type === "解答题" ? "提高" : "中等",
           examYear: "", source: "", tags: [], ...(isAlevelImport ? { tagsZh: [], tagsEn: [] } : {}), recognitionConfidence: 1,
-          recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取"], importFileName: file.name,
+          recognitionWarnings: ["题干、配图和解析均从 Word 原始结构读取", ...warnings, ...(item.stem.trim() ? [] : ["原件这道题只有解析，没有题干，不能保存为题目"])], importFileName: file.name,
           createdAt: orderedImportTimestamp(timestamp, index), updatedAt: orderedImportTimestamp(timestamp, index),
         }));
         setFileImportDrafts(imported); setFileImportStep("review"); return;

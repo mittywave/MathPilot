@@ -596,7 +596,16 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
         return body.slice(properties.length).split(/(<m:oMathPara\b[^>]*>[\s\S]*?<\/m:oMathPara>|<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>)/g)
           .map((part) => !part.trim() ? "" : /^<m:oMath(?:Para)?\b/.test(part) ? part : `${open}${properties}${part}</w:r>`).join("");
       });
-      if (replacement.questionNumber != null) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}[.．、]/, `$1${replacement.questionNumber}．`);
+      if (replacement.questionNumber != null) {
+        // The paper numbers its questions: a stem printed with a number gets the paper's; one imported from under a
+        // 讲义 heading (“例题精练 1”) starts without a number and gets it put in front, in its first run's format.
+        const first = safeParagraphXml.match(/<(w|m):t\b[^>]*>([^<]*)<\/\1:t>/);
+        if (first?.[1] === "w" && /^\s*\d{1,3}(?:[．、]|\.(?!\d))/.test(first[2])) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}(?:[．、]|\.(?!\d))/, `$1${replacement.questionNumber}．`);
+        else {
+          const format = safeParagraphXml.match(/<w:r\b[^>]*>\s*(<w:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:rPr>))/)?.[1] ?? "";
+          safeParagraphXml = safeParagraphXml.replace(/^(<w:p\b[^>]*>(?:\s*<w:pPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:pPr>))?)/, `$1<w:r>${format}<w:t xml:space="preserve">${replacement.questionNumber}．</w:t></w:r>`);
+        }
+      }
       for (const oldId of new Set(Array.from(safeParagraphXml.matchAll(/r:(?:embed|id)="([^"]+)"/g), (match) => match[1]))) {
         const source = replacement.assets?.[oldId]; if (!source) continue;
         embeddedImageIndex += 1;
