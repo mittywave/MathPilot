@@ -133,8 +133,7 @@ try {
 
   await library(); await choose(questions[6].code); await basket();
   assert.match(await headings().last().innerText(), /其他题目/);
-  await outline.getByRole('button', { name: '大标题 1 操作', exact: true }).click();
-  await outline.getByRole('button', { name: '删除标题，题目移回未分组', exact: true }).click();
+  await outline.getByRole('button', { name: '删除标题，题目移回未分组', exact: true }).first().click();
   assert.equal(await page.locator('.basket-outline-question').count(), 7);
   await outline.getByRole('button', { name: '按题型分类', exact: true }).click();
   await page.getByRole('button', { name: '取消', exact: true }).click();

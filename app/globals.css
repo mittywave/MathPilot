@@ -923,7 +923,8 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-outline-section header>small{font-size:12px;color:var(--muted);white-space:nowrap}
 .basket-outline-numeral{flex:none;color:var(--muted);font-size:12px;margin-right:-4px}
 .basket-workspace .basket-drag,.basket-workspace .basket-fold{display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;min-width:16px;min-height:24px;padding:0;border:0;background:transparent;color:var(--muted);font-size:14px}
-.basket-outline-section>header .more-toggle.icon-button{width:24px;min-width:24px;height:24px;min-height:24px}
+.basket-workspace .basket-delete{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;min-width:24px;height:24px;min-height:24px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--danger-strong);cursor:pointer}
+.basket-workspace .basket-delete:hover:not(:disabled){background:var(--danger-soft)}
 .basket-workspace .basket-drag{cursor:grab;touch-action:none}
 .basket-workspace .basket-drag:active{cursor:grabbing}
 .basket-outline-questions{display:flex;flex-wrap:wrap;gap:4px;padding:2px 4px 6px}
@@ -937,8 +938,6 @@ html[data-theme="dark"] .grading-card.compact.incorrect>summary b { background:v
 .basket-outline-question.insert-after::after{right:-3px}
 .basket-outline-question.is-dragging{opacity:.4}
 .basket-workspace .basket-outline-question.is-moved>.basket-outline-locate{background:var(--success-soft);border-color:var(--green);color:var(--green);box-shadow:0 0 0 2px var(--success-soft)}
-.basket-outline .more-panel{max-height:260px;overflow:auto;min-width:150px;max-width:270px}
-.basket-outline .more-panel button{white-space:normal;line-height:1.5;overflow-wrap:anywhere}
 .basket-toolbar small{font-size:12px;color:var(--muted)}
 .basket-section-heading{display:flex;align-items:center;gap:12px;margin:12px 0 0;padding:8px 0;font-size:18px;color:var(--ink);overflow-wrap:anywhere}
 .basket-section-heading small{flex:none;font-size:12px;font-weight:400;color:var(--muted)}

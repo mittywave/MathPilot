@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState, type Dispatch, type DragEvent, type SetStateAction } from "react";
-import { basketSections, moveBasketQuestion, placeBasketQuestion, removeBasketSection, type BasketStructure } from "../../lib/paper-basket";
+import { basketSections, placeBasketQuestion, removeBasketSection, type BasketStructure } from "../../lib/paper-basket";
 import { randomClientId } from "../../lib/client-random-id.mjs";
 import { moduleHeading } from "../../lib/handout-rules.mjs";
 import type { Question } from "../../lib/types";
-import { PaperMoreMenu } from "./PaperMoreMenu";
 
 // CategoryTree edits the library's taxonomy. This outline instead places the
 // selected questions in one paper, without changing their library categories.
@@ -75,11 +74,6 @@ export function BasketOutline({ structure, pool, disabled, onChange, onLocate, o
     }
     end();
   };
-  const moveSection = (id: string, direction: -1 | 1) => onChange((current) => {
-    const ids = moveBasketQuestion(current.sections.map((section) => section.id), id, direction);
-    return { ...current, sections: ids.map((item) => current.sections.find((section) => section.id === item)!) };
-  });
-
   return <div className="basket-outline" aria-label="试卷结构" onDragEnd={end} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}>
     <div className="basket-outline-tools"><b>试卷结构</b><button type="button" disabled={disabled} onClick={() => {
       const id = `section-${randomClientId()}`;
@@ -99,11 +93,10 @@ export function BasketOutline({ structure, pool, disabled, onChange, onLocate, o
               onChange={(event) => { const title = event.target.value; onChange((current) => ({ ...current, sections: current.sections.map((item) => item.id === section.id ? { ...item, title } : item) })); }}
               onBlur={() => onChange((current) => ({ ...current, sections: current.sections.map((item) => item.id === section.id ? { ...item, title: moduleHeading(item.title, 0).title || "新分组" } : item) }))} /> : <b>未分组</b>}
             <small>{section.questions.length} 题</small>
-            {section.id && <PaperMoreMenu label={`大标题 ${sectionIndex + 1} 操作`}>
-              <button disabled={disabled || sectionIndex === 0} onClick={() => moveSection(section.id!, -1)}>上移大标题</button>
-              <button disabled={disabled || sectionIndex === structure.sections.length - 1} onClick={() => moveSection(section.id!, 1)}>下移大标题</button>
-              <button disabled={disabled} onClick={() => onChange((current) => removeBasketSection(current, section.id!))}>删除标题，题目移回未分组</button>
-            </PaperMoreMenu>}
+            {section.id && <button type="button" className="basket-delete" disabled={disabled} title="删除标题，题目移回未分组" aria-label="删除标题，题目移回未分组"
+              onClick={() => onChange((current) => removeBasketSection(current, section.id!))}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg>
+            </button>}
           </header>
           {!closed && !!section.questions.length && <div className="basket-outline-questions">
             {section.questions.map((question, index) => <div key={question.id} className={`basket-outline-question${over?.anchorId === question.id ? ` insert-${over.side}` : ""}${dragged?.kind === "question" && dragged.id === question.id ? " is-dragging" : ""}${moved === question.id ? " is-moved" : ""}`}>
