@@ -63,7 +63,8 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
     const entry=pending[page.id];
     return entry&&entry.hash===page.hash&&typeof entry.context==='string'&&Array.isArray(entry.records)?entry:undefined;
   };
-  const pageFailure=(page:StudioPage,error:unknown)=>new Error(`第 ${page.page} 页（${page.name}）转录失败：${error instanceof Error?error.message:'识别服务异常'}。已保存完成页及本批成功结果，可点击“继续”重试。`,{cause:error});
+  const retried=(error:unknown)=>error instanceof StudioRequestError&&error.retryable&&error.retryAfterMs<=60_000;
+  const pageFailure=(page:StudioPage,error:unknown)=>new Error(`第 ${page.page} 页（${page.name}）转录失败：${error instanceof Error?error.message:'识别服务异常'}${retried(error)?'，自动重试 2 次仍未成功':''}。已保存完成页及本批成功结果，可点击“继续”重试。`,{cause:error});
   // Establish originals before answers. Never mix both roles in one window.
   for(const role of ['question','answer'] as const) {
     const remaining=pages.filter(p=>p.role===role&&!p.processed);
