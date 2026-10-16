@@ -600,6 +600,7 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-days small { color:var(--muted); font-size:12px; }
 .homework-days li.done small { color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
 .homework-days li.partial small { color:var(--warn-strong); }
+.homework-days li small.error { color:var(--danger); }
 .homework-days button { grid-column:3; padding:4px 10px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; white-space:nowrap; cursor:pointer; }
 .homework-days button:hover:not(:disabled) { border-color:var(--green); }
 .homework-days button:disabled { opacity:.5; cursor:default; }
@@ -1153,8 +1154,9 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-day li.correct>*,.assigned-day li.corrected>*,.assigned-day li.incorrect>* { background:var(--tone)!important; color:var(--surface); }
 .assigned-day li.pending>* { border-color:var(--line)!important; border-style:dashed!important; background:var(--surface-soft)!important; color:var(--muted); }
 .assigned-day li>button:hover,.assigned-day li>a:hover { border-color:currentColor!important; }
-.assigned-correct { flex:none; margin-left:auto; min-height:30px; padding:0 14px; color:var(--green); font-size:12px; }
-.assigned-correct:disabled { color:var(--muted); background:var(--surface-soft); opacity:.6; cursor:default; }
+.assigned-correct,.assigned-upload { flex:none; margin-left:auto; min-height:30px; padding:0 14px; color:var(--green); font-size:12px; }
+.assigned-upload + .assigned-correct { margin-left:0; }
+.assigned-correct:disabled,.assigned-upload:disabled { color:var(--muted); background:var(--surface-soft); opacity:.6; cursor:default; }
 .assigned-correct.incorrect { border-color:color-mix(in srgb,var(--danger) 30%,var(--line)); background:color-mix(in srgb,var(--danger) 12%,var(--danger-soft)); color:var(--danger); font-weight:600; }
 .assigned-correct.correct { border-color:color-mix(in srgb,var(--success) 30%,var(--line)); background:color-mix(in srgb,var(--success) 12%,var(--success-soft)); color:color-mix(in srgb,var(--success) 70%,var(--ink)); opacity:1; font-weight:600; }
 .assigned-correction-note { margin:12px 0 0; color:var(--muted); font-size:12px; }

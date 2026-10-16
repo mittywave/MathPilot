@@ -256,7 +256,7 @@ async function submitPages(base, cookie, submissionId, pages) {
   assert.equal((await jsonRequest(base, `/api/submissions/${submissionId}`, { cookie, method: "PUT", body: { action: "submit" } })).response.status, 200);
 }
 
-test("completed homework is graded, archives only incorrect work, preserves pending items and correction history, isolates accounts, and retries failures", { timeout: 180_000 }, async () => {
+test("completed homework is graded, archives only incorrect work, preserves pending items and correction history, isolates accounts, and retries failures", { timeout: 300_000 }, async () => {
   const [port, modelPort] = await Promise.all([freePort(), freePort()]); const stateDir = await mkdtemp(join(tmpdir(), "zhiti-homework-e2e-"));
   command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
   const mock = await startMockModel(modelPort); const worker = startWorker(port, stateDir, {
@@ -924,6 +924,56 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
+
+    // 打卡 days are uploaded one at a time. Pages without the sheet's questions fail at once, and a failed upload gives way to the next.
+    const dailyBody={studentIds:[studentTwoId],title:"按天上传回归",groups:[{title:"第 1 天",size:1},{title:"第 2 天",size:1}],questions:[sheetQuestion("daily-1","计算 $6+6$","12"),sheetQuestion("daily-2","计算 $7+7$","14")]};
+    const dailyFirst=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:dailyBody})).payload.assigned[0].id;
+    const dailyUrl=`/api/submissions/${dailyFirst}`;
+    const dailyIds=(await jsonRequest(base,dailyUrl,{cookie:teacherOne})).payload.submission.assigned.questions.map(q=>q.id);
+    for(const uploadDay of [-1,2,0.5,"1"])assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay}})).response.status,400);
+    const dayTwoDraft=(await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:1}})).payload.submission;
+    assert.deepEqual([dayTwoDraft.id,dayTwoDraft.questionScope],[dailyFirst,[dailyIds[1]]],"the first upload, still 待上传, takes the chosen day");
+    const failWrongPages=async()=>{
+      await submitPages(base,teacherOne,dailyFirst,[await uploadPage(base,teacherOne,dailyFirst,bytes)]);
+      const deadline=Date.now()+30_000;let current,retryNote="";
+      while(Date.now()<deadline){
+        current=(await jsonRequest(base,dailyUrl,{cookie:teacherOne})).payload.submission;
+        if(/正在自动重试/.test(current.failureReason))retryNote=current.failureReason;
+        if(current.status==="failed")break;
+        await new Promise((resolveWait)=>setTimeout(resolveWait,100));
+      }
+      assert.equal(current.status,"failed");assert.equal(retryNote,"","the same pages give the same answer, so they are not retried");
+      assert.match(current.failureReason,/上传的页面里没有找到这份作业的题目/);assert.equal(current.pageCoverage.pages[0].kind,"blank");
+      return current;
+    };
+    let wrongPages=await failWrongPages();
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"cancel"}})).payload.submission.status,"draft");
+    let reset=(await jsonRequest(base,dailyUrl,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([reset.status,reset.submittedAt,reset.pages.length,reset.gradingItems.length,reset.failureReason,reset.questionScope],["draft",null,0,0,"",[dailyIds[1]]],"重新上传 keeps the day and drops the wrong pages");
+    assert.equal((await fetch(`${base}${wrongPages.pages[0].processedUrl}`,{headers:{Cookie:teacherOne}})).status,404);
+    wrongPages=await failWrongPages();
+    reset=(await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:0}})).payload.submission;
+    assert.deepEqual([reset.id,reset.status,reset.pages.length,reset.questionScope],[dailyFirst,"draft",0,[dailyIds[0]]],"a failed upload gives way to the day chosen next");
+    assert.equal((await fetch(`${base}${wrongPages.pages[0].processedUrl}`,{headers:{Cookie:teacherOne}})).status,404);
+    mock.state.assignedPage=[{question_number:"D1-1",student_answer:"12"}];mock.state.assignedAnswers={"D1-1":"12"};mock.state.assignedVerdicts={"D1-1":"correct"};mock.state.gradedNumbers=[];
+    await submitPages(base,teacherOne,dailyFirst,[await uploadPage(base,teacherOne,dailyFirst,bytes)]);
+    const dayOne=await waitForSubmission(base,teacherOne,dailyFirst,["published"],worker);
+    assert.deepEqual([mock.state.gradedNumbers,dayOne.assigned.days.map(d=>d.done)],[["D1-1"],[1,0]]);
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"cancel"}})).response.status,409,"a published upload is not emptied");
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:0}})).response.status,409,"a day handed in is not uploaded again");
+    const dailyHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:dayOne,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{},onUpload:()=>{}}));
+    assert.match(dailyHtml,/<button type="button" class="assigned-upload" aria-label="第 2 天上传这天"[^>]*>上传这天<\/button>/);
+    assert.equal((dailyHtml.match(/class="assigned-correct(?: [^"]*)?"/g)??[]).length,1,"a day not handed in has no correction button");
+    const dayTwo=(await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:1}})).payload.submission;
+    assert.deepEqual([dayTwo.version,dayTwo.status,dayTwo.questionScope],[2,"draft",[dailyIds[1]]]);
+    const setDayTwo=(sql)=>command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE homework_submissions SET ${sql} WHERE id='${dayTwo.id}'`]);
+    setDayTwo("status='processing'");
+    const waiting=await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:1}});
+    assert.deepEqual([waiting.response.status,waiting.payload.error],[409,"第 2 次上传还在批改，完成或停止批改后再上传"]);
+    setDayTwo(`status='failed',published_at=${Date.now()}`);
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:1}})).response.status,409,"an upload with published results is never given up");
+    assert.equal((await jsonRequest(base,`/api/submissions/${dayTwo.id}`,{cookie:teacherOne,method:"PUT",body:{action:"cancel"}})).response.status,409);
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     mock.state.failAll=true;

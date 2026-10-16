@@ -7,7 +7,7 @@ import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
-import { dayNote, dayState, type DayState } from "./AssignedHomeworkSheet";
+import { confirmGivingUp, dayNote, dayState, uploadWait, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
 export const homeworkInProgress = (item: Homework) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total);
@@ -94,12 +94,15 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
   const assigned = useCallback(() => { setAssigning(false); setReads((count) => count + 1); }, []);
   const [handedOut, setHandedOut] = useState<string[]>([]);
   const [opening, setOpening] = useState("");
-  const [dayError, setDayError] = useState("");
+  // Why opening a day's upload failed, shown on that day.
+  const [dayError, setDayError] = useState({ key: "", text: "" });
   // One 打卡 day is uploaded and graded on its own: a new upload scoped to that day's questions not handed in yet.
   async function uploadDay(item: Homework, index: number) {
-    setOpening(`${item.assignmentId}:${index}`); setDayError("");
+    const key = `${item.assignmentId}:${index}`;
+    if (!confirmGivingUp(item.latest, `上传第 ${index + 1} 天的作业`)) return;
+    setOpening(key); setDayError({ key: "", text: "" });
     try { window.location.assign(`/tools/homework/submissions/${encodeURIComponent((await homeworkApi.updateSubmission(item.latest.id, { action: "new-version", uploadDay: index })).submission.id)}`); }
-    catch (reason) { setDayError(reason instanceof Error ? reason.message : "打开上传失败"); setOpening(""); }
+    catch (reason) { setDayError({ key, text: reason instanceof Error ? reason.message : "打开上传失败" }); setOpening(""); }
   }
 
   const rows = homework?.map((item) => ({ item, states: item.days?.map(dayState) ?? [] })) ?? [];
@@ -111,7 +114,6 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
         <button type="button" className="primary-button" disabled={!homework} onClick={() => { setHandedOut(homework?.flatMap((item) => item.recordId ?? []) ?? []); setAssigning(true); }}>布置作业</button>
       </div>
     </header>
-    {dayError && <p className="inline-error" role="alert">{dayError}</p>}
     {assigning && <AssignPlan student={student} handedOut={handedOut} onClose={closeAssign} onAssigned={assigned} />}
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !homework ? <div className="wrong-book-loading"><i></i><span>正在读取作业…</span></div>
       : !homework.length ? <div className="student-panel-empty"><b>还没有作业</b><p>点“布置作业”把给这位学生组好的卷布置下去，Word 练习在快速排版里点“布置给学生”；题目和答案会存进这里，学生做完后上传学生拍好的照片或 PDF 批改。学校发的作业，在“布置作业”里点“上传作业”直接批改。</p></div>
@@ -131,11 +133,15 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
             </span>}
             {item.assigned && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
-          {days.length > 1 && <ol className="homework-days" aria-label="打卡日">{days.map((entry, index) => <li key={index} className={states[index]}>
-            <b>第 {index + 1} 天{entry.title ? ` · ${entry.title.replace(/^第\s*\d+\s*天\s*[·・:：]?\s*/, "")}` : ""}</b><small>{dayNote(entry)}</small>
-            {states[index] !== "done" && <button type="button" disabled={busy(item) || Boolean(opening)} onClick={() => void uploadDay(item, index)}
-              title={busy(item) ? "这份作业正在批改，完成或停止后再上传" : `上传第 ${index + 1} 天的作业照片或 PDF，只批改这一天还没交的题`}>{opening === `${item.assignmentId}:${index}` ? "正在打开…" : "上传这天"}</button>}
-          </li>)}</ol>}
+          {days.length > 1 && <ol className="homework-days" aria-label="打卡日">{days.map((entry, index) => {
+            const key = `${item.assignmentId}:${index}`, wait = uploadWait(item.latest);
+            return <li key={index} className={states[index]}>
+              <b>第 {index + 1} 天{entry.title ? ` · ${entry.title.replace(/^第\s*\d+\s*天\s*[·・:：]?\s*/, "")}` : ""}</b>
+              {dayError.key === key ? <small className="error" role="alert">{dayError.text}</small> : <small>{dayNote(entry)}</small>}
+              {states[index] !== "done" && <button type="button" disabled={Boolean(wait) || Boolean(opening)} onClick={() => void uploadDay(item, index)}
+                title={wait || `上传第 ${index + 1} 天的作业照片或 PDF，只批改这一天还没交的题`}>{opening === key ? "正在打开…" : "上传这天"}</button>}
+            </li>;
+          })}</ol>}
         </li>;
       })}</ol>}
   </section>;

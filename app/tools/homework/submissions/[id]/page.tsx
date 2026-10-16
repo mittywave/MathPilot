@@ -4,7 +4,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { SiteHeader } from "../../../../components/SiteHeader";
 import { PaperMoreMenu } from "../../../../components/PaperMoreMenu";
 import { fetchMe } from "../../../../../lib/api-client";
-import { AssignedHomeworkSheet, resultState, VerdictTally } from "../../../../components/AssignedHomeworkSheet";
+import { AssignedHomeworkSheet, confirmGivingUp, resultState, VerdictTally } from "../../../../components/AssignedHomeworkSheet";
 import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../../../../components/HomeworkPagePicker";
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
@@ -24,14 +24,17 @@ function verdictLabel(item: GradingItem, international: boolean) {
 type Coverage = NonNullable<HomeworkSubmission["pageCoverage"]>;
 type PageInfo = Coverage["pages"][number];
 const PAGE_LABEL: Record<string, string> = { read: "已读取", blank: "空白页", unreadable: "待补图", waiting: "待读取", retrying: "重试中", error: "未完成" };
+// An assigned sheet's pages are searched for its own questions: a page without them may be blank, scratch work or another homework.
+const pageLabel = (state: string, assigned: boolean) => state === "blank" && assigned ? "无本作业题目" : PAGE_LABEL[state];
 function pageState(info: PageInfo | undefined, live: boolean) {
   if (info?.valid) return info.kind === "blank" ? "blank" : info.kind === "unreadable" ? "unreadable" : "read";
   return info?.reason ? live ? "retrying" : "error" : "waiting";
 }
 // Failed pages usually share one cause; one line per cause reads better than one line per page.
-function pageFailures(coverage: Coverage) {
+// When the run failed, also say why each read page held no questions: it is usually the wrong file.
+function pageFailures(coverage: Coverage, failed = false) {
   const causes = new Map<string, number[]>();
-  for (const page of coverage.pages) if (!page.valid && page.reason) causes.set(page.reason, [...causes.get(page.reason) ?? [], page.pageNumber]);
+  for (const page of coverage.pages) if ((!page.valid || (failed && page.kind === "blank")) && page.reason) causes.set(page.reason, [...causes.get(page.reason) ?? [], page.pageNumber]);
   return [...causes].map(([reason, pages]) => `第 ${pages.join("、")} 页：${reason}`);
 }
 
@@ -48,9 +51,14 @@ function LiveBoard({ submission, international, busy, onRetry, onCancel }: { sub
   const current = read < total ? 0 : !identified ? 1 : referenceChecked < identified ? 2 : 3;
   const stages: Array<[number, number | null]> = [[read, total], [identified, null], [referenceChecked, identified], [graded, identified]];
   const recent = [...fresh].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
-  const failures = coverage ? pageFailures(coverage) : [];
+  const failures = coverage ? pageFailures(coverage, failed) : [];
+  // Every page was read and none holds a question of this homework: grading it again gives the same answer, only new pages help.
+  const wrongPages = failed && total > 0 && read >= total && !identified;
+  // An upload that was published before keeps its results; only a first run can be emptied and uploaded again.
+  const reupload = submission.publishedAt == null && <button className={wrongPages ? "primary" : undefined} onClick={onCancel} disabled={busy}
+    title={failed ? "放弃这次上传，回到待上传，重新选页面" : "传错了页面时停止这次批改，回到待上传，重新选页面"}>{failed ? "重新上传" : "停止批改，重新上传"}</button>;
   return <section className={`live-board${failed ? " failed" : retrying ? " retrying" : ""}`} aria-label="批改进度">
-    <header><div><h2>{failed ? "自动批改遇到问题" : current === 2 && graded > 0 ? "正在准备参考答案并批改" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div><div className="live-actions"><button onClick={onCancel} disabled={busy} title="传错了页面时停止这次批改，回到待上传，重新选页面">停止批改，重新上传</button>{failed && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</div></header>
+    <header><div><h2>{failed ? "自动批改遇到问题" : current === 2 && graded > 0 ? "正在准备参考答案并批改" : `正在${STAGES[current]}`}</h2><p role="status">{failed ? submission.failureReason || "已完成的部分已保存，可以重新批改。" : retrying ? `${submission.failureReason}。已完成的部分会保留，无需操作。` : "可以离开本页，结果完成后会自动保存。"}</p></div><div className="live-actions">{reupload}{failed && !wrongPages && <button className="primary" onClick={onRetry} disabled={busy}>{read < total ? "补全页面并重新批改" : "重新批改"}</button>}</div></header>
     <ol className="live-stages">{STAGES.map((label, index) => {
       const [value, max] = stages[index], state = index < current ? "done" : index > current && !(index === 3 && graded > 0) ? "waiting" : failed ? "stalled" : "active";
       const fill = max ? Math.min(1, value / max) : index < current ? 1 : 0;
@@ -62,7 +70,7 @@ function LiveBoard({ submission, international, busy, onRetry, onCancel }: { sub
         const marks = fresh.filter((item) => item.pageId === page.id), wrong = marks.filter((item) => resultState(item, international) === "incorrect").length;
         return <figure key={page.id} className={`page-tile ${state}`} title={info?.reason || undefined}>
           <div><img src={page.processedUrl} alt={`第 ${page.pageOrder + 1} 页`} loading="lazy" />{marks.filter((item) => item.bbox).map((item) => <i key={item.id} className={`tile-mark ${resultState(item, international)}`} style={{ left: `${(item.bbox!.x + item.bbox!.width / 2) / 10}%`, top: `${(item.bbox!.y + item.bbox!.height / 2) / 10}%` }} />)}</div>
-          <figcaption><span>{page.pageOrder + 1}</span><small>{marks.length ? `${marks.length} 题${wrong ? ` · ${wrong} 错` : ""}` : PAGE_LABEL[state]}</small></figcaption>
+          <figcaption><span>{page.pageOrder + 1}</span><small>{marks.length ? `${marks.length} 题${wrong ? ` · ${wrong} 错` : ""}` : pageLabel(state, Boolean(submission.assigned))}</small></figcaption>
         </figure>;
       })}</div>
       <aside className="live-results">
@@ -139,9 +147,11 @@ export default function TeacherSubmissionPage() {
     if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
     try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
   }
-  async function newVersion(correctionDay?: number) {
-    if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version",correctionDay});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建重交版本失败", tone: "error" });setBusy(false);}
+  // A new upload: the whole sheet, one day not handed in yet, or one day's mistakes. A failed latest upload gives way once the teacher agrees.
+  async function newVersion(scope: { correctionDay?: number; uploadDay?: number }, next: string) {
+    if (!submission || !confirmGivingUp(submission.assigned?.uploads.at(-1), next)) return;
+    setBusy(true);
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version",...scope});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建上传失败", tone: "error" });setBusy(false);}
   }
   async function changeProfile(profile: boolean) {
     if (!submission || busy || submission.assigned) return;
@@ -288,12 +298,13 @@ export default function TeacherSubmissionPage() {
   }
 
   async function cancelGrading() {
-    if (!submission || !confirm("停止这次批改并回到待上传？这次上传已有的批改结果会清除，之后重新选页面提交。")) return;
+    if (!submission || !confirm(submission.status === "failed" ? "放弃这次上传，回到待上传？传过的页面会清除，之后重新选页面提交。"
+      : "停止这次批改，回到待上传？已经批改的结果和传过的页面都会清除，之后重新选页面提交。")) return;
     setBusy(true);
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "cancel" });
       setSubmission(result.submission); setItems(result.submission.gradingItems);
-      setMessage({ text: "已停止批改，请重新上传页面", tone: "success" });
+      setMessage({ text: "已回到待上传，请重新选页面提交", tone: "success" });
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "停止批改失败", tone: "error" });
     } finally { setBusy(false); }
@@ -348,7 +359,7 @@ export default function TeacherSubmissionPage() {
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
   return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
     trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
-    trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={() => newVersion()}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
+    trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={() => void newVersion({}, "上传新版本")}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
     {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
     <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)}</h1><p>{[submission.studentName, assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
@@ -359,7 +370,9 @@ export default function TeacherSubmissionPage() {
         {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
       </div></section>
 
-    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={newVersion} onCorrect={newVersion}
+    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} onContinue={() => void newVersion({}, "继续上传这份作业")}
+      onCorrect={(day) => void newVersion({ correctionDay: day }, assigned.days.length > 1 ? `订正第 ${day + 1} 天的错题` : "订正错题")}
+      onUpload={(day) => void newVersion({ uploadDay: day }, `上传第 ${day + 1} 天的作业`)}
       onFocus={(questionId) => { const item = items.find((entry) => entry.assignmentQuestionId === questionId); if (item) focusEvidence(item, true); }} />}
     {live && <LiveBoard submission={submission} international={international} busy={busy} onRetry={incomplete ? repairCoverage : retry} onCancel={cancelGrading} />}
     {!live && coverage && (incomplete || coverage.unreadable > 0) && <section className="review-callout" aria-label="作业页面完整性"><div><b>{incomplete ? `${coverage.missing.length} 页未读取，当前结果不能代表整份作业` : `${coverage.unreadable} 页需要补图核实`}</b>{pageFailures(coverage).map((line) => <p key={line}>{line}</p>)}<ol className="page-chips" aria-label="逐页状态">{coverage.pages.map((page) => { const state = pageState(page, false); return <li key={page.pageNumber} className={state} title={`第 ${page.pageNumber} 页 · ${PAGE_LABEL[state]}`}>{page.pageNumber}</li>; })}</ol></div>{incomplete && ["published", "ready"].includes(submission.status) && <button className="primary" onClick={repairCoverage} disabled={busy}>补全页面并重新批改</button>}</section>}

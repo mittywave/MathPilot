@@ -379,8 +379,11 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
   }));
 }
 
-/** A new version of a graded homework keeps the earlier version and its results untouched. */
-/** A new upload of an assigned homework: the whole sheet, one day's questions not yet handed in, or one day's mistakes to correct. */
+/**
+ * A new upload keeps the earlier ones and their results untouched. For an assigned homework it covers the whole sheet,
+ * one day's questions not handed in yet, or one day's mistakes to correct. One upload is graded at a time: the latest
+ * takes the new scope while it is still 待上传, or when its grading failed (the teacher agreed to give it up first).
+ */
 export async function createSubmissionVersion(submissionId: string, user: AuthUser, correctionDay?: unknown, uploadDay?: unknown) {
   const current = await teacherSubmissionRow(submissionId, user);
   const dayIndex = uploadDay ?? correctionDay;
@@ -394,16 +397,17 @@ export async function createSubmissionVersion(submissionId: string, user: AuthUs
       : dayQuestions.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict))).map((question) => question.id);
     if (!questionIds.length) throw responseError(uploadDay !== undefined ? "这一天的题目都已交过" : "这一天没有需要订正的错题", 409);
   }
-  const latest = await appEnv().DB.prepare("SELECT id, version, status FROM homework_submissions WHERE assignment_id = ? AND student_id = ? ORDER BY version DESC LIMIT 1")
-    .bind(current.assignment_id, current.student_id).first<{ id: string; version: number; status: SubmissionStatus }>();
-  if (latest && latest.status === "draft") {
-    const draft = await readTeacherSubmission(latest.id, user);
-    if (dayIndex === undefined || JSON.stringify(draft.questionScope) === JSON.stringify(questionIds)) return draft;
-    // A draft has not been graded yet, so it takes the day chosen now; its pages are replaced on upload.
-    await appEnv().DB.prepare("UPDATE homework_submissions SET reprocess_question_ids_json = ?, updated_at = ? WHERE id = ?").bind(JSON.stringify(questionIds), Date.now(), latest.id).run();
+  const latest = await appEnv().DB.prepare("SELECT id, version, status, reprocess_question_ids_json, published_at FROM homework_submissions WHERE assignment_id = ? AND student_id = ? ORDER BY version DESC LIMIT 1")
+    .bind(current.assignment_id, current.student_id).first<{ id: string; version: number; status: SubmissionStatus; reprocess_question_ids_json: string; published_at: number | null }>();
+  // An upload published before keeps its results even when grading it again failed.
+  if (latest?.status === "failed" && latest.published_at != null) throw responseError(`第 ${latest.version} 次上传重新批改失败，先打开它点“重新批改”，完成后再上传`, 409);
+  if (latest && (latest.status === "draft" || latest.status === "failed")) {
+    if (latest.status === "failed") await resetUpload(latest.id, user.id);
+    if (latest.reprocess_question_ids_json !== JSON.stringify(questionIds)) await appEnv().DB.prepare("UPDATE homework_submissions SET reprocess_question_ids_json = ?, updated_at = ? WHERE id = ?")
+      .bind(JSON.stringify(questionIds), Date.now(), latest.id).run();
     return readTeacherSubmission(latest.id, user);
   }
-  if (latest && latest.status !== "published") throw responseError("请等待当前上传批改完成后再上传", 409);
+  if (latest && latest.status !== "published") throw responseError(`第 ${latest.version} 次上传还在批改，完成或停止批改后再上传`, 409);
   const id = crypto.randomUUID(); const now = Date.now();
   await appEnv().DB.prepare(`INSERT INTO homework_submissions
     (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, reprocess_question_ids_json, created_at, updated_at)
@@ -413,17 +417,29 @@ export async function createSubmissionVersion(submissionId: string, user: AuthUs
 }
 
 /**
- * Stops an upload's grading and returns it to 待上传, so wrong pages can be replaced.
- * Its results so far are dropped; a run still in flight stops writing once it sees the upload is no longer in progress.
+ * Returns an upload whose grading is stopped or failed to 待上传: its results so far, its pages and its original PDFs
+ * go, since they were the wrong files or are uploaded again. A run still in flight stops writing once it sees this.
  */
+async function resetUpload(id: string, ownerUserId: string) {
+  const db = appEnv().DB;
+  const assets = await db.prepare(`SELECT id, r2_key FROM homework_assets WHERE owner_user_id = ? AND (id IN
+      (SELECT original_asset_id FROM submission_pages WHERE submission_id = ? UNION SELECT processed_asset_id FROM submission_pages WHERE submission_id = ?)
+      OR (upload_submission_id = ? AND role = 'submission_original' AND content_type = 'application/pdf'))`)
+    .bind(ownerUserId, id, id, id).all<{ id: string; r2_key: string }>();
+  await db.batch([
+    db.prepare("UPDATE homework_submissions SET status = 'draft', submitted_at = NULL, failure_reason = '', updated_at = ? WHERE id = ?").bind(Date.now(), id),
+    db.prepare("DELETE FROM grading_items WHERE submission_id = ?").bind(id),
+    db.prepare("DELETE FROM submission_pages WHERE submission_id = ?").bind(id),
+  ]);
+  await deleteHomeworkAssetRows(assets.results, ownerUserId);
+}
+
+/** 停止批改，重新上传: the upload goes back to 待上传 with the same scope (one day, or one day's mistakes). */
 export async function cancelSubmissionGrading(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
-  if (!["submitted", "processing", "failed"].includes(String(row.status))) throw responseError("只有批改中的上传可以停止", 409);
-  const now = Date.now();
-  await appEnv().DB.batch([
-    appEnv().DB.prepare("UPDATE homework_submissions SET status = 'draft', submitted_at = NULL, failure_reason = '', updated_at = ? WHERE id = ?").bind(now, id),
-    appEnv().DB.prepare("DELETE FROM grading_items WHERE submission_id = ?").bind(id),
-  ]);
+  if (!["submitted", "processing", "failed"].includes(String(row.status))) throw responseError("只有批改中或处理失败的上传可以重新上传", 409);
+  if (row.published_at != null) throw responseError("这次上传已经出过结果，不能清空重传；重新批改完成后再上传新的", 409);
+  await resetUpload(id, user.id);
   return readTeacherSubmission(id, user);
 }
 

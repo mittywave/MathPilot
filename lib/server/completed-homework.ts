@@ -101,11 +101,12 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   // Old rows remain as history, but a successful reread must not resurrect
   // questions absent from its inventory (including misattributed neighbour pages).
   questions.sort((a,b)=>a.page_numbers[0]-b.page_numbers[0]||a.question_number.localeCompare(b.question_number,undefined,{numeric:true}));
-  if(!questions.length)throw new Error(sheet?'上传的页面里没有找到这份作业的题目，请核对是不是这份作业':'全部页面已检查，但没有可识别的题目，请核对原件');
-  if(!sheet&&questions.length>200)throw new Error('每份作业最多200道题，当前未标记完成，请分份上传');
+  // Every page has been read, and what the pages hold does not change between attempts: these fail at once, not after retries.
+  if(!questions.length)invalid(new Error(sheet?'上传的页面里没有找到这份作业的题目，请核对是不是这份作业':'全部页面已检查，但没有可识别的题目，请核对原件'));
+  if(!sheet&&questions.length>200)invalid(new Error('每份作业最多200道题，当前未标记完成，请分份上传'));
   const pendingPages=pendingIds.filter((id:string)=>id.startsWith('page:')).map((id:string)=>Number(id.slice(5)));
   if(pendingIds.length)questions=questions.filter(q=>pendingIds.includes(recordId(q.question_number)??'')||q.page_numbers.some(p=>pendingPages.includes(p)));
-  if(!questions.length)throw new Error('上传的页面里没有找到本次需要处理的题目，请核对题号和原件');
+  if(!questions.length)invalid(new Error('上传的页面里没有找到本次需要处理的题目，请核对题号和原件'));
   const ids=new Map(questions.map(q=>[q.question_number,recordId(q.question_number)??crypto.randomUUID()]));
   if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
   const now=Date.now();
