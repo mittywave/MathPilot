@@ -1,7 +1,7 @@
 import { loadSource } from './load-source.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
-const { docxFigureLine, docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } = await loadSource("lib/docx-web-content.ts");
+const { docxFigureLine, docxMathLatex, docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } = await loadSource("lib/docx-web-content.ts");
 const { plainTextWebLines, toLatexMath } = await loadSource("lib/math-text.ts");
 
 const paragraph = (body) => `<w:p xmlns:w="word" xmlns:m="math"><w:pPr><w:jc w:val="left"/></w:pPr>${body}</w:p>`;
@@ -120,4 +120,13 @@ test("a line of inline formulas stays in the running text; a fraction in it is p
   const { renderKatex } = await loadSource("lib/math-render.ts");
   assert.match(renderKatex("-\\frac{1}{3}").html, /\\displaystyle -\\frac\{1\}\{3\}/);
   assert.doesNotMatch(renderKatex("x^{2}").html, /\\displaystyle/);
+});
+
+test("lists every Word equation of a document part in order, inside paragraphs, display blocks and tables", () => {
+  const fraction = "<m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r></m:den></m:f>";
+  const body = `<w:body xmlns:w="word" xmlns:m="math">${paragraph(`${textRun("已知")}${mathRun("<m:r><m:t>x</m:t></m:r>")}${textRun("，")}${mathRun(fraction)}`)}`
+    + `<w:p><m:oMathPara><m:oMath><m:r><m:t>a</m:t></m:r></m:oMath><m:oMath><m:rad><m:deg/><m:e><m:r><m:t>3</m:t></m:r></m:e></m:rad></m:oMath></m:oMathPara></w:p>`
+    + `<w:tbl><w:tr><w:tc>${paragraph(mathRun("<m:r><m:t>y</m:t></m:r>"))}</w:tc></w:tr></w:tbl></w:body>`;
+  assert.deepEqual(docxMathLatex(body), ["x", "\\frac{1}{2}", "a", "\\sqrt{3}", "y"]);
+  assert.deepEqual(docxMathLatex("<w:body><w:p>"), []);
 });

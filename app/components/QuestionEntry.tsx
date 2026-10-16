@@ -223,7 +223,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         }
       });
       if (controller.signal.aborted) return;
-      const imported: FileImportDraft[] = []; const pageErrors: string[] = []; const seen = new Set<string>(); const importStartedAt = currentTimestamp();
+      const imported: FileImportDraft[] = []; const pageErrors: string[] = pages.flatMap((page) => page.renderNotes ?? []); const seen = new Set<string>(); const importStartedAt = currentTimestamp();
       // Sections may restart their numbering, so the same number is kept; only a page-break repeat is left unselected.
       let previous: { pageNumber: number; type: string; number: string } | undefined;
       for (const recognized of recognizedPages.sort((a, b) => a.page.pageNumber - b.page.pageNumber)) {

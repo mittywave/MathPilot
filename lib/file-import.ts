@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { docxInferredQuestionType, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
+import { docxMathLatex } from "./docx-web-content";
 import { openPdf } from "./pdfjs";
 import { readScreenshot } from "./screenshot-recognition";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
@@ -37,6 +38,8 @@ export type ImportPage = {
   sourceQuestionImages?: Record<string, string[]>;
   sourceOptions?: Record<string, string[]>;
   sourceQuestions?: StructuredDocxQuestion[];
+  // What the page renderer could not carry from the Word file into the page images.
+  renderNotes?: string[];
 };
 
 const MAX_PAGES = 80;
@@ -271,6 +274,30 @@ function waitForImages(root: HTMLElement) {
   return Promise.all(Array.from(root.querySelectorAll("img")).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => { image.onload = () => resolve(); image.onerror = () => resolve(); })));
 }
 
+// The browser draws a rendered Word page itself through an SVG foreignObject: text, Word equations (MathML) and
+// pictures exactly as it shows them, with the page's own style sheets. html2canvas, the fallback, cannot paint
+// equations and sets Chinese text lower than the browser does. Throws when the browser will not draw it.
+async function drawPage(page: HTMLElement, scale: number) {
+  const box = page.getBoundingClientRect(), inherited = getComputedStyle(page.parentElement ?? page);
+  const styles = Array.from(document.styleSheets).flatMap((sheet) => { try { return Array.from(sheet.cssRules, (rule) => rule.cssText); } catch { return []; } }).join("\n");
+  const width = Math.ceil(box.width * scale), height = Math.ceil(box.height * scale);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" class="docx-wrapper" style="padding:0;margin:0;background:#fff;display:block;width:${box.width}px;transform:scale(${scale});transform-origin:0 0;font-family:${inherited.fontFamily.replace(/"/g, "'")};font-size:${inherited.fontSize};line-height:${inherited.lineHeight};color:${inherited.color}"><style>${styles.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</style>${new XMLSerializer().serializeToString(page)}</div></foreignObject></svg>`;
+  const picture = new Image(); picture.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; await picture.decode();
+  const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+  const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法绘制 Word 页面");
+  context.fillStyle = "#fff"; context.fillRect(0, 0, width, height); context.drawImage(picture, 0, 0);
+  context.getImageData(0, 0, 1, 1); // a browser that taints such drawings refuses here, before any slicing
+  return canvas;
+}
+
+// A paragraph's text for the AI, with each equation given as its $LaTeX$ rather than its glyphs.
+function hintText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  const latex = node instanceof Element ? node.getAttribute("data-latex") : null;
+  if (latex !== null) return `$${latex}$`;
+  return Array.from(node.childNodes).map(hintText).join("");
+}
+
 async function renderDocx(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {
   const buffer = await file.arrayBuffer();
   const sourceDocument = await extractDocxParagraphs(buffer);
@@ -282,18 +309,35 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
   }
   const [{ renderAsync }, html2canvasModule] = await Promise.all([import("docx-preview"), import("html2canvas")]);
   const html2canvas = html2canvasModule.default;
+  // docx-preview does not show VML pictures, so they become inline DrawingML first. Pages are drawn by the browser
+  // (drawPage), equations included, each keeping its LaTeX for the AI; whatever is still missing is reported.
+  const archive = await JSZip.loadAsync(buffer);
+  const pictures = docxVmlPicturesToDrawing(await archive.file("word/document.xml")?.async("text") ?? "", 10000);
+  archive.file("word/document.xml", pictures.xml);
+  const body = pictures.xml.match(/<w:body\b[\s\S]*<\/w:body>/)?.[0] ?? "";
+  const formulas = docxMathLatex(body); const expectedPictures = (body.match(/<a:blip\b[^>]*\br:embed="/g) ?? []).length;
+  const renderNotes: string[] = [];
   const host = document.createElement("div"); host.className = "file-import-render-host";
   Object.assign(host.style, { position: "fixed", left: "-12000px", top: "0", width: "900px", background: "white", zIndex: "-1" });
   document.body.appendChild(host);
   try {
-    await renderAsync(buffer, host, undefined, { className: "docx", inWrapper: true, breakPages: true, ignoreWidth: false, ignoreHeight: false, renderHeaders: true, renderFooters: true, useBase64URL: true });
-    await waitForImages(host); await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await renderAsync(await archive.generateAsync({ type: "arraybuffer" }), host, undefined, { className: "docx", inWrapper: true, breakPages: true, ignoreWidth: false, ignoreHeight: false, renderHeaders: true, renderFooters: true, useBase64URL: true });
+    await waitForImages(host); await document.fonts.ready;
+    // LaTeX goes with an equation only when the page shows exactly the document's equations, in order.
+    const equations = Array.from(host.querySelectorAll("article math"));
+    if (equations.length === formulas.length) equations.forEach((equation, index) => equation.setAttribute("data-latex", formulas[index]));
+    else if (formulas.length) renderNotes.push(`Word 中有 ${formulas.length} 个公式，页面转换只找到 ${equations.length} 个，识别结果可能缺少公式，请对照原件核对`);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const drawn = Array.from(host.querySelectorAll<HTMLImageElement>("article img")).filter((image) => image.naturalWidth > 0).length;
+    if (drawn < expectedPictures) renderNotes.push(`Word 中有 ${expectedPictures} 张图片，页面转换只画出 ${drawn} 张，识别结果可能缺少配图，请对照原件核对`);
     const renderedPages = Array.from(host.querySelectorAll<HTMLElement>("section.docx"));
     const targets = renderedPages.length ? renderedPages : [host];
     const renderedCanvases: Array<{ canvas: HTMLCanvasElement; target: HTMLElement }> = [];
-    for (let index = 0; index < targets.length; index += 1) {
-      const canvas = await html2canvas(targets[index], { backgroundColor: "#ffffff", scale: 1.7, logging: false, useCORS: true });
-      renderedCanvases.push({ canvas, target: targets[index] });
+    try { for (const target of targets) renderedCanvases.push({ canvas: await drawPage(target, 1.7), target }); }
+    catch {
+      renderedCanvases.length = 0;
+      for (const target of targets) renderedCanvases.push({ canvas: await html2canvas(target, { backgroundColor: "#ffffff", scale: 1.7, logging: false, useCORS: true }), target });
+      if (equations.length) renderNotes.push(`这个浏览器不能把 Word 公式画进页面图片，${equations.length} 个公式只以文字提示交给 AI，识别结果可能缺少公式；建议改用 Chrome 或 Edge 导入`);
     }
     let answerSectionSeen = false;
     const pageSlices = renderedCanvases.flatMap(({ canvas, target }) => {
@@ -302,7 +346,7 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
       const targetRect = target.getBoundingClientRect(); const scale = canvas.width / Math.max(1, targetRect.width);
       const paragraphs = Array.from(target.querySelectorAll<HTMLElement>("article p"));
       for (const paragraph of paragraphs) {
-        const hint = paragraph.textContent?.trim() ?? "";
+        const hint = hintText(paragraph).trim();
         if (!hint) continue;
         const top = Math.max(0, (paragraph.getBoundingClientRect().top - targetRect.top) * scale);
         const sliceIndex = Math.min(sliceCount - 1, Math.floor(top / a4Height)); hints[sliceIndex].push(hint);
@@ -324,7 +368,7 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
     if (pageSlices.length > MAX_PAGES) throw new Error(`文件共有约 ${pageSlices.length} 页，当前一次最多导入 ${MAX_PAGES} 页`);
     const pages: ImportPage[] = [];
     for (let index = 0; index < pageSlices.length; index += 1) {
-      pages.push({ pageNumber: index + 1, image: canvasDataUrl(pageSlices[index].canvas), textHint: pageSlices[index].textHint, documentSection: pageSlices[index].documentSection, sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }); onProgress(index + 1, pageSlices.length);
+      pages.push({ pageNumber: index + 1, image: canvasDataUrl(pageSlices[index].canvas), textHint: pageSlices[index].textHint, documentSection: pageSlices[index].documentSection, ...(index === 0 && renderNotes.length ? { renderNotes } : {}), sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }); onProgress(index + 1, pageSlices.length);
     }
     return pages;
   } finally { host.remove(); }
