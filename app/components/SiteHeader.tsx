@@ -4,7 +4,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppearancePicker } from "./AppearancePicker";
 import { ALEVEL_PAGE_COPY, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
 import { logout } from "../../lib/api-client";
-import { homeworkApi } from "../../lib/homework-api-client";
 import type { AuthUser } from "../../lib/types";
 
 // MathPilot wordmark, the "01 editorial" design: "Math" upright in the ink colour, "Pilot" italic in a soft accent,
@@ -19,6 +18,13 @@ export function BrandWordmark() {
 }
 
 export type SiteSection = "library" | "basket" | "handouts" | "students" | "tools";
+
+// The nav badges are read-only counts: homework being graded beside 学生档案, transcriptions really in progress beside 工具箱.
+async function readCount(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return Number((await response.json() as { count?: number }).count ?? 0);
+}
 
 // The one top bar shared by the home page and top-level pages such as the toolbox. Its entries read
 // 题库 · 组卷篮 · 讲义编撰 · 知识图谱 · 学生档案 · 工具箱; the smaller tools sit inside the toolbox.
@@ -40,9 +46,10 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   const navigation = useRef<HTMLElement>(null);
   const signOutPhase = useRef<"idle" | "callback" | "logout">("idle");
   const [signOutStatus, setSignOutStatus] = useState<"idle" | "busy" | "error">("idle");
-  const [grading, setGrading] = useState<{ userId: string; count: number } | null>(null);
+  const [counts, setCounts] = useState<{ userId: string; grading: number; transcribing: number } | null>(null);
   const userId = user?.id;
-  const gradingCount = userId && grading?.userId === userId ? grading.count : 0;
+  const ownCounts = userId && counts?.userId === userId ? counts : null;
+  const gradingCount = ownCounts?.grading ?? 0, transcribingCount = ownCounts?.transcribing ?? 0;
   const sectionTitle = active ? { library: copy.navPublic, basket: copy.navBasket, handouts: copy.navHandouts, students: copy.navStudents, tools: copy.navTools }[active] : copy.navPublic;
   const trailTitle = trail?.length ? [...new Set([trail[trail.length - 1].label, trail[0].label])].join(" · ") : "";
   const browserTitle = `${title?.trim() || trailTitle || sectionTitle} · MathPilot`;
@@ -56,9 +63,9 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
       if (document.hidden || reading) return;
       reading = true;
       try {
-        const result = await homeworkApi.gradingCount();
-        if (current) setGrading({ userId, count: result.count });
-      } catch { /* Keep the last confirmed count until the next refresh. */ }
+        const [grading, transcribing] = await Promise.all([readCount("/api/submissions?count=grading"), readCount("/api/answer-studio/jobs?count=active")]);
+        if (current) setCounts({ userId, grading, transcribing });
+      } catch { /* Keep the last confirmed counts until the next refresh. */ }
       finally { reading = false; }
     };
     void refresh();
@@ -69,7 +76,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   }, [userId]);
   useEffect(() => {
     navigation.current?.querySelector<HTMLElement>(".active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active, basketCount, gradingCount, locale, signOutStatus, user?.id]);
+  }, [active, basketCount, gradingCount, transcribingCount, locale, signOutStatus, user?.id]);
 
   // The continuation may run after a page's discard confirmation, or immediately on a clean page.
   async function exit() {
@@ -98,7 +105,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
     const className = `nav-item ${active === section ? "active" : ""}`;
     return onSelect ? <button className={className} aria-current={active === section ? "page" : undefined} onClick={() => onSelect(section)}>{label}</button> : <a className={className} href={href} aria-current={active === section ? "page" : undefined}>{label}</a>;
   };
-  const link = (href: string, label: string, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
+  const link = (href: string, label: ReactNode, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
   return <><header className="topbar">
     {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection; the home page switches in place. */}
     <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><BrandWordmark /></a>
@@ -106,7 +113,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
       {entry("library", "/", copy.navPublic)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
       {entry("students", "/?view=wrong-book", <>{copy.navStudents}{gradingCount > 0 && <i title={`${gradingCount} 份作业正在批改`} aria-label={`${gradingCount} 份作业正在批改`}>{gradingCount}</i>}</>)}
-      {user && link("/tools", copy.navTools, active === "tools")}
+      {user && link("/tools", <>{copy.navTools}{transcribingCount > 0 && <i title={`${transcribingCount} 个文件转录正在进行`} aria-label={`${transcribingCount} 个文件转录正在进行`}>{transcribingCount}</i>}</>, active === "tools")}
     </nav>
     <div className="account-area">
       {!loading && actions && <div className="header-actions">{actions}</div>}

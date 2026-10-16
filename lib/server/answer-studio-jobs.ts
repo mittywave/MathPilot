@@ -66,6 +66,12 @@ export async function listStudioJobs(user: AuthUser) {
   const rows = await db().prepare("SELECT * FROM studio_jobs WHERE owner_user_id = ? ORDER BY created_at DESC LIMIT 50").bind(user.id).all<JobRow>();
   return rows.results.map(job);
 }
+/** The 工具箱 badge: jobs really in progress, i.e. queued or running and not stalled. */
+export async function countActiveStudioJobs(user: AuthUser) {
+  const row = await db().prepare("SELECT COUNT(*) AS count FROM studio_jobs WHERE owner_user_id = ? AND status IN ('queued', 'running') AND updated_at >= ?")
+    .bind(user.id, Date.now() - STALE_MS).first<{ count: number }>();
+  return Number(row?.count ?? 0);
+}
 
 export async function createStudioJob(user: AuthUser, input: { title?: unknown; textConcurrency?: unknown }) {
   const title = typeof input.title === "string" ? input.title.trim() : "";
