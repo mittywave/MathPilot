@@ -349,21 +349,27 @@ export default function Home() {
   const [mapQuestionId, setMapQuestionId] = useState("");
   // Folded or open is remembered per browser; the panel is only drawn in the browser, so reading it here is safe.
   const [mapOpen, setMapOpen] = useState(() => { try { return window.localStorage.getItem(KNOWLEDGE_MAP_KEY) !== "closed"; } catch { return true; } });
+  // Folding slides the panel out before it leaves, so it stays mounted (frozen on what it showed) until the column has narrowed.
+  const [mapMounted, setMapMounted] = useState(mapOpen);
+  const mapFoldTimer = useRef(0);
   const chooseMapOpen = useCallback((open: boolean) => {
     setMapOpen(open);
+    window.clearTimeout(mapFoldTimer.current);
+    if (open) setMapMounted(true);
+    else mapFoldTimer.current = window.setTimeout(() => setMapMounted(false), 520);
     try { window.localStorage.setItem(KNOWLEDGE_MAP_KEY, open ? "open" : "closed"); } catch { /* 本地存储不可用时仍保留本次切换 */ }
   }, []);
   const collapseMap = useCallback(() => chooseMapOpen(false), [chooseMapOpen]);
   const expandMap = useCallback(() => chooseMapOpen(true), [chooseMapOpen]);
   const [treeLight, setTreeLight] = useState<TreeLight | null>(null);
   const hoverTimer = useRef(0);
-  const mapQuestion = showKnowledgeMap && mapOpen && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;
+  const mapQuestion = showKnowledgeMap && mapMounted && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;
   const knowledgeMapFocus = useMemo<KnowledgeMapFocus | null>(() => {
-    if (!showKnowledgeMap || !mapOpen || !activeModule) return null;
+    if (!showKnowledgeMap || !mapMounted || !activeModule) return null;
     if (mapQuestion) return { kind: "question", question: mapQuestion, number: filteredQuestions.indexOf(mapQuestion) + 1 };
     const id = activeCategory ?? activeModule.id;
     return { kind: "category", id, name: categories.find((item) => item.id === id)?.name ?? activeModule.name };
-  }, [activeCategory, activeModule, categories, filteredQuestions, mapOpen, mapQuestion, showKnowledgeMap]);
+  }, [activeCategory, activeModule, categories, filteredQuestions, mapMounted, mapQuestion, showKnowledgeMap]);
   const locateBasketQuestion = (id: string) => {
     const index = selectedIds.indexOf(id);
     if (index < 0) return;
@@ -808,7 +814,7 @@ export default function Home() {
                 {section?.heading && index === section.start && <h2 className="basket-section-heading">{section.heading}<small>{section.questions.length} 题</small></h2>}
                 <LibraryQuestionCard question={question} index={index} isFirst={section ? index === section.start : index === 0} isLast={section ? index === section.start + section.questions.length - 1 : index === filteredQuestions.length - 1}
                   sectionId={section?.id} sections={showSelected ? sectionChoices : undefined}
-                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected ? question.id === activeBasketQuestion?.id : question.id === mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
+                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected ? question.id === activeBasketQuestion?.id : mapOpen && question.id === mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
                   basket={showSelected} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />
               </Fragment>;
             })}
@@ -816,8 +822,10 @@ export default function Home() {
           {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}
           </>}
         </section>
-        {knowledgeMapFocus && activeModule && <LibraryKnowledgeMap focus={knowledgeMapFocus} moduleId={activeModule.id} categories={categories} onLight={setTreeLight} onCollapse={collapseMap} />}
-        {showKnowledgeMap && !mapOpen && <KnowledgeMapRail onExpand={expandMap} />}
+        {showKnowledgeMap && <div className={`kgl-dock ${mapOpen ? "open" : ""}`}>
+          {knowledgeMapFocus && activeModule && <LibraryKnowledgeMap focus={knowledgeMapFocus} moduleId={activeModule.id} categories={categories} onLight={setTreeLight} onCollapse={collapseMap} />}
+          <KnowledgeMapRail open={mapOpen} onExpand={expandMap} />
+        </div>}
       </section>
 
 {authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}

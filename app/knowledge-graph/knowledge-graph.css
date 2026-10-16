@@ -476,8 +476,13 @@
 
 /* 题库 · 右栏: the point cloud docked beside the questions. It is drawn in the site's own colours, so it follows
    the appearance (浅色/深色, 风格) instead of this page's fixed dark canvas. */
-.kgl-shell,.kgl-rail { position:sticky; top:var(--topbar-h); height:calc(100dvh - var(--topbar-h)); border-left:1px solid var(--line); background:var(--surface); color:var(--ink); }
-.kgl-shell { --stroke:var(--line); --stroke-strong:color-mix(in srgb,var(--ink) 16%,var(--line)); --mut:var(--muted); --faint:color-mix(in srgb,var(--muted) 72%,var(--surface));
+/* The dock is the grid column: it glides between the 44px rail and the panel width. The panel keeps its full width
+   the whole time, pinned to the right edge, so it slides in like a drawer and the canvas never re-lays out mid-motion. */
+.kgl-dock { position:sticky; top:var(--topbar-h); width:44px; height:calc(100dvh - var(--topbar-h)); overflow:hidden; border-left:1px solid var(--line); background:var(--surface); color:var(--ink);
+  transition:width var(--kgl-ms) var(--kgl-ease); }
+.kgl-dock.open { width:var(--kgl-full); }
+.kgl-shell,.kgl-rail { position:absolute; top:0; height:100%; }
+.kgl-shell { right:0; width:var(--kgl-full); animation:kgl-drawer-in var(--kgl-ms) var(--kgl-ease) both; --stroke:var(--line); --stroke-strong:color-mix(in srgb,var(--ink) 16%,var(--line)); --mut:var(--muted); --faint:color-mix(in srgb,var(--muted) 72%,var(--surface));
   --raise:color-mix(in srgb,var(--ink) 4%,transparent); --raise-strong:color-mix(in srgb,var(--ink) 8%,transparent);
   overflow:hidden; isolation:isolate; font-size:13px; line-height:1.5; }
 .kgl-shell :where(button) { font:inherit; color:inherit; cursor:pointer; }
@@ -520,10 +525,14 @@
 .kgl-relation button small,.kgl-relation p,.kgl-more { color:var(--faint); font-size:12px; }
 .kgl-relation p { margin:2px 6px; }
 .kgl-more { padding:2px 6px; }
-.kgl-rail { display:flex; justify-content:center; padding-top:10px; }
+.kgl-dock:not(.open)>.kgl-shell { pointer-events:none; animation:kgl-drawer-out calc(var(--kgl-ms)*.8) var(--kgl-ease) both; }
+.kgl-rail { left:0; width:44px; display:flex; justify-content:center; padding-top:10px; opacity:0; visibility:hidden; transition:opacity .15s,visibility 0s .15s; }
+.kgl-dock:not(.open)>.kgl-rail { opacity:1; visibility:visible; transition:opacity .25s calc(var(--kgl-ms)*.6); }
 .kgl-rail button { align-content:start; gap:10px; width:32px; padding:8px 0; }
 .kgl-rail span { writing-mode:vertical-rl; letter-spacing:.24em; font-size:12px; }
+@keyframes kgl-drawer-in { from { opacity:0; transform:translateX(32px); } 40% { opacity:1; } to { opacity:1; transform:none; } }
+@keyframes kgl-drawer-out { from { opacity:1; transform:none; } to { opacity:0; transform:translateX(32px); } }
 @keyframes kgl-rise { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
 @keyframes kgl-pop { from { opacity:0; transform:scale(.7); } to { opacity:1; transform:none; } }
 @keyframes kgl-pulse { 50% { transform:scale(1.35); } }
-@media (prefers-reduced-motion:reduce) { .kgl-tags button,.kgl-card,.kgl-eyebrow b,.kgl-tags button.active i { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .kgl-dock,.kgl-rail,.kgl-dock:not(.open)>.kgl-rail { transition-duration:0s; transition-delay:0s; } .kgl-dock>.kgl-shell,.kgl-dock:not(.open)>.kgl-shell { animation-duration:0s; } .kgl-tags button,.kgl-card,.kgl-eyebrow b,.kgl-tags button.active i { animation:none; } }
