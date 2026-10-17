@@ -57,15 +57,16 @@ export function uploadWait(latest: LatestUpload) {
 export function confirmGivingUp(latest: LatestUpload, next: string) {
   return latest?.status !== "failed" || window.confirm(`第 ${latest.version} 次上传处理失败。放弃这次上传，改为${next}？`);
 }
-const uploadNote = (upload: AssignedHomework["uploads"][number]) => [upload.submittedAt == null ? "待上传" : `${day(upload.submittedAt)} 提交`,
+export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [upload.submittedAt == null ? "待上传" : `${day(upload.submittedAt)} 提交`,
   upload.status === "failed" ? "处理失败" : GRADING.includes(upload.status) ? "批改中" : "", upload.pageCount ? `${upload.pageCount} 页` : ""].filter(Boolean).join(" · ");
 
 /**
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, onCorrect, onUpload }: {
+export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload }: {
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
+  selectedDay: number | null; onDay: (day: number) => void;
 }) {
   const { assigned } = submission;
   const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
@@ -92,13 +93,14 @@ export function AssignedHomeworkSheet({ submission, busy, onFocus, onContinue, o
       const correctionLabel = mistakes ? "去订正" : allCorrect ? group.items.some(({ result }) => result?.wasIncorrect) ? "已订正" : "无错题" : "订正";
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
       return <div className={`assigned-day ${group.state}`} key={index}>
-        {several && <div className="assigned-day-head"><b title={group.title}>{group.title}</b><small>{note}</small></div>}
+        {several && <div className="assigned-day-head"><button type="button" onClick={() => onDay(index)} aria-pressed={selectedDay === index}
+          aria-controls="day-results" title={`查看${group.title || dayName}的提交与批改情况`}>{group.title || dayName}</button><small>{note}</small></div>}
         <ol>{group.items.map((item) => {
           const state = resultState(item.result); const here = item.result?.submissionId === submission.id;
           const label = `${homeworkQuestionLabel(item.number)} · ${STATE[state]}`;
           const number = item.number.replace(/^D\d+-/, "");
           return <li key={item.id} className={state} title={`${label}\n${plain(item.question.stem ?? "")}`}>
-            {here ? <button type="button" aria-label={label} onClick={() => onFocus(item.id)}>{number}</button>
+            {here || (selectedDay === index && item.result) ? <button type="button" aria-label={label} onClick={() => onFocus(item.id)}>{number}</button>
               : item.result ? <a aria-label={`${label}（在第 ${assigned.uploads.find((upload) => upload.id === item.result!.submissionId)?.version ?? "?"} 次上传里）`} href={`/tools/homework/submissions/${encodeURIComponent(item.result.submissionId)}`}>{number}</a>
               : <span aria-label={label}>{number}</span>}
           </li>;
