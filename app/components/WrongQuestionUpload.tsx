@@ -19,7 +19,7 @@ export default function WrongQuestionUpload({ student, onClose, onGraded }: { st
   const [pages, setPages] = useState<HomeworkPage[]>([]), [documents, setDocuments] = useState<File[]>([]), [references, setReferences] = useState<File[]>([]);
   const [title, setTitle] = useState(() => datedTitle("screenshot")), [pickerBusy, setPickerBusy] = useState(false), [captureError, setCaptureError] = useState("");
   const [submitted, setSubmitted] = useState<HomeworkSubmission | null>(null);
-  const upload = useHomeworkUpload(), { curriculum, busy, draft, referencesSaved } = upload;
+  const upload = useHomeworkUpload(), { curriculum, busy, draft } = upload;
   const captureRef = useRef<HTMLInputElement>(null);
   const grading = !!submitted && GRADING_STATUSES.includes(submitted.status), failed = submitted?.status === "failed";
 
@@ -59,7 +59,7 @@ export default function WrongQuestionUpload({ student, onClose, onGraded }: { st
   const details = submitted && <a href={`/tools/homework/submissions/${submitted.id}`}>查看批改详情</a>;
   const fields = !submitted && mode === "file" && !!pages.length && <div className="wrong-entry-fields">
     <div className="form-grid two"><label>作业名称<input value={title} disabled={busy || !!draft} onChange={(event) => setTitle(event.target.value)} placeholder={international ? "例如：9709 P1 Week 3 Quiz" : "例如：一元一次方程练习"} /></label><label>课程<select aria-label="课程" value={curriculum} disabled={busy || !!draft} onChange={(event) => upload.chooseCurriculum(event.target.value as HomeworkCurriculum)}>{CURRICULA.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-    <details className="completed-reference" open={international || undefined}><summary>{international ? "Mark Scheme（建议上传）" : "参考答案（选填）"}</summary><p>{international ? "有 mark scheme 时逐个得分点对照；未提供时按考试局惯例拟定得分点并校验。" : "有答案时优先使用；未提供时独立解题并校验。"}</p><input type="file" aria-label="上传参考答案" accept="image/*,application/pdf" multiple disabled={busy || referencesSaved} onChange={(event) => setReferences([...(event.target.files ?? [])])} />{references.map((file, index) => <p key={index}>{file.name}</p>)}</details>
+    <details className="completed-reference" open={international || undefined}><summary>{international ? "Mark Scheme（建议上传）" : "参考答案（选填）"}</summary><p>{international ? "有 mark scheme 时逐个得分点对照；未提供时按考试局惯例拟定得分点并校验。" : "有答案时优先使用；未提供时独立解题并校验。"}</p><input type="file" aria-label="上传参考答案" accept="image/*,application/pdf" multiple disabled={busy || !!draft} onChange={(event) => setReferences([...(event.target.files ?? [])])} />{references.map((file, index) => <p key={index}>{file.name}</p>)}</details>
   </div>;
 
   return <div className="modal-backdrop"><section className="modal wrong-entry" role="dialog" aria-modal="true" aria-label={`给${student.name}新建错题`} aria-busy={busy && !submitted}>

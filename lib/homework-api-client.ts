@@ -18,7 +18,7 @@ export const homeworkApi = {
   studentHomework: (studentId: string) => request<{ homework: StudentHomework[] }>(`/api/students/${encodeURIComponent(studentId)}/homework`),
 };
 
-/** Reference answers attach to the homework (assignmentId); pages and the source PDF attach to one submission. */
+/** Question originals and reference answers attach to the homework; student pages attach to one submission. */
 export async function uploadHomeworkAsset(input: { blob: Blob; fileName: string; role: HomeworkAsset["role"]; assignmentId?: string; submissionId?: string }) {
   const query = new URLSearchParams({ role: input.role });
   if (input.assignmentId) query.set("assignmentId", input.assignmentId); if (input.submissionId) query.set("submissionId", input.submissionId);

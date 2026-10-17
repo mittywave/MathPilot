@@ -2,8 +2,8 @@ import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
 import { assertTeacherUploadContext, attachAssignmentAsset, requireHomeworkEnabled, storeHomeworkAsset } from "../../../lib/server/homework-assets";
 import type { HomeworkAssetRole } from "../../../lib/types";
 
-// Reference answers belong to the homework; pages and the uploaded PDF belong to one submission.
-const ROLES: HomeworkAssetRole[] = ["answer", "submission_original", "submission_document"];
+// Question originals and reference answers belong to the homework; student pages belong to one submission.
+const ROLES: HomeworkAssetRole[] = ["question", "answer", "submission_original", "submission_document"];
 
 function decodedFileName(request: Request) {
   const value = request.headers.get("X-File-Name") ?? "homework-page.jpg";
@@ -17,16 +17,17 @@ export async function POST(request: Request) {
     const url = new URL(request.url); const assignmentId = url.searchParams.get("assignmentId") ?? "";
     const submissionId = url.searchParams.get("submissionId") ?? "";
     const role = url.searchParams.get("role") as HomeworkAssetRole;
-    if (!ROLES.includes(role) || (role === "answer") !== Boolean(assignmentId) || (role !== "answer") !== Boolean(submissionId)) {
+    const assignmentAsset = role === "question" || role === "answer";
+    if (!ROLES.includes(role) || assignmentAsset !== Boolean(assignmentId) || !assignmentAsset !== Boolean(submissionId)) {
       return Response.json({ error: "图片类型与上传上下文不匹配" }, { status: 400 });
     }
-    await assertTeacherUploadContext(user, { assignmentId: assignmentId || undefined, submissionId: submissionId || undefined });
+    await assertTeacherUploadContext(user, { assignmentId: assignmentId || undefined, submissionId: submissionId || undefined, role });
     const contentType = request.headers.get("Content-Type")?.split(";", 1)[0] ?? "";
     const asset = await storeHomeworkAsset({
       ownerUserId: user.id, bytes: await request.arrayBuffer(), contentType, originalName: decodedFileName(request), role,
       assignmentId: assignmentId || undefined, submissionId: submissionId || undefined,
     });
-    if (role === "answer") await attachAssignmentAsset(assignmentId, asset, user);
+    if (assignmentAsset) await attachAssignmentAsset(assignmentId, asset, user);
     return Response.json({ asset }, { status: 201 });
   } catch (error) {
     if (error instanceof Response) return error;

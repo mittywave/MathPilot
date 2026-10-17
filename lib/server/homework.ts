@@ -106,7 +106,7 @@ function gradingItem(row: Record<string, unknown>, assigned = false): GradingIte
 
 async function submissionDetails(row: Record<string, unknown>): Promise<HomeworkSubmission> {
   const id = String(row.id);
-  const [pages, grading, report, revisions, documents] = await Promise.all([
+  const [pages, grading, report, revisions, documents, questionOriginals] = await Promise.all([
     appEnv().DB.prepare("SELECT * FROM submission_pages WHERE submission_id = ? ORDER BY page_order").bind(id).all<Record<string, unknown>>(),
     appEnv().DB.prepare(`SELECT grading_items.*, assignment_questions.question_number, assignment_questions.type AS question_type,
         assignment_questions.stem, assignment_questions.input_evidence_json AS question_evidence_json, assignment_questions.answer AS standard_answer, assignment_questions.analysis AS standard_analysis, assignment_questions.reference_source, assignment_questions.reference_verified, assignment_questions.reference_evidence
@@ -115,6 +115,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
     import("./homework-reports").then(({ readSubmissionReport }) => readSubmissionReport(id)),
     appEnv().DB.prepare("SELECT * FROM submission_page_revisions WHERE submission_id=? ORDER BY created_at").bind(id).all<Record<string,unknown>>(),
     appEnv().DB.prepare("SELECT id,original_name FROM homework_assets WHERE upload_submission_id=? AND role='submission_original' AND content_type='application/pdf'").bind(id).all<{id:string;original_name:string}>(),
+    appEnv().DB.prepare("SELECT a.id,a.original_name FROM assignment_assets aa JOIN homework_assets a ON a.id=aa.asset_id WHERE aa.assignment_id=? AND aa.role='question' ORDER BY aa.page_order").bind(row.assignment_id).all<{id:string;original_name:string}>(),
   ]);
   const pageCoverage = await (await import("./homework-page-coverage")).readPageCoverage(id);
   const recognized=await (await import("./homework-page-coverage")).readRecognizedQuestionNumbers(id);
@@ -144,6 +145,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
     submittedAt: row.submitted_at == null ? null : Number(row.submitted_at), publishedAt: row.published_at == null ? null : Number(row.published_at),
     failureReason: String(row.failure_reason ?? ""),
     originalDocuments: documents.results.map(d=>({name:d.original_name,url:`/api/homework-assets/${d.id}`})),
+    questionOriginals: (questionOriginals.results as Array<{id:string;original_name:string}>).map(d=>({name:d.original_name,url:`/api/homework-assets/${d.id}`})),
     pageRevisions: revisions.results.map(r=>({pageId:String(r.page_id),originalUrl:`/api/homework-assets/${r.original_asset_id}`,processedUrl:`/api/homework-assets/${r.processed_asset_id}`,createdAt:Number(r.created_at)})),
     pages: pages.results.map(submissionPage), gradingItems, report, assigned,
     questionScope: parseJson<string[]>(row.reprocess_question_ids_json, []),

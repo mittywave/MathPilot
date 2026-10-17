@@ -39,14 +39,14 @@ function safeName(value: string) {
   return value.trim().replace(/[\p{Cc}/\\]/gu, "_").slice(0, 180) || "homework-page.jpg";
 }
 
-export async function assertTeacherUploadContext(user: AuthUser, input: { assignmentId?: string; submissionId?: string }) {
+export async function assertTeacherUploadContext(user: AuthUser, input: { assignmentId?: string; submissionId?: string; role: HomeworkAssetRole }) {
   if (input.assignmentId) {
     const row = await appEnv().DB.prepare(`SELECT id FROM homework_assignments a WHERE id = ? AND owner_user_id = ? AND input_mode='completed_homework' AND
       EXISTS(SELECT 1 FROM homework_submissions s WHERE s.assignment_id=a.id AND
-        (s.status='draft' OR (s.status='published' AND (EXISTS(SELECT 1 FROM grading_items g WHERE g.submission_id=s.id AND g.requires_review=1)
+        (s.status='draft' OR (?<>'question' AND s.status='published' AND (EXISTS(SELECT 1 FROM grading_items g WHERE g.submission_id=s.id AND g.requires_review=1)
           OR EXISTS(SELECT 1 FROM submission_page_extractions e WHERE e.submission_id=s.id AND e.status='complete' AND json_extract(e.result_json,'$.kind')='unreadable')))))`)
-      .bind(input.assignmentId, user.id).first();
-    if (!row) throw new Response(JSON.stringify({ error: "作业不存在或当前不可补充参考答案" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      .bind(input.assignmentId, user.id, input.role).first();
+    if (!row) throw new Response(JSON.stringify({ error: "作业不存在或当前不可补充材料" }), { status: 404, headers: { "Content-Type": "application/json" } });
     return;
   }
   if (input.submissionId) {
@@ -97,12 +97,13 @@ export async function storeHomeworkAsset(input: {
   } satisfies HomeworkAsset;
 }
 
-/** Reference answer pages keep the order they were uploaded in, after any pages added earlier. */
+/** Question originals and reference answers each keep their own upload order. */
 export async function attachAssignmentAsset(assignmentId: string, asset: HomeworkAsset, user: AuthUser) {
+  if (asset.role !== "question" && asset.role !== "answer") throw new Error("只能附加题目原件或参考答案");
   await appEnv().DB.batch([
     appEnv().DB.prepare(`INSERT INTO assignment_assets (assignment_id, asset_id, role, page_order)
-      VALUES (?, ?, 'answer', (SELECT COUNT(*) FROM assignment_assets WHERE assignment_id = ? AND role = 'answer'))`)
-      .bind(assignmentId, asset.id, assignmentId),
+      VALUES (?, ?, ?, (SELECT COUNT(*) FROM assignment_assets WHERE assignment_id = ? AND role = ?))`)
+      .bind(assignmentId, asset.id, asset.role, assignmentId, asset.role),
     appEnv().DB.prepare("UPDATE homework_assignments SET template_confirmed = 0, updated_at = ? WHERE id = ? AND owner_user_id = ?")
       .bind(Date.now(), assignmentId, user.id),
   ]);
