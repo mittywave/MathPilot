@@ -655,3 +655,9 @@ export type HomeworkSubmission = {
   createdAt: number;
   updatedAt: number;
 };
+
+/** The badge beside a student in 学生档案: 批改中 (grading) or 作业中 (assigned). */
+export type HomeworkProgress = "grading" | "assigned";
+
+/** One upload as 作业批改's list shows it; the pages, questions and evidence load on its own page. */
+export type HomeworkSubmissionListItem = Pick<HomeworkSubmission, "id" | "assignmentId" | "assignmentTitle" | "studentName" | "status" | "createdAt" | "gradingSummary">;

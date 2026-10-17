@@ -1,4 +1,4 @@
-import type { AuthUser, GradingItem, HomeworkAsset, HomeworkCurriculum, HomeworkOutputs, HomeworkSheetGroup, HomeworkSubmission, Question, StudentHomework, StudentSummary } from "./types";
+import type { AuthUser, GradingItem, HomeworkAsset, HomeworkCurriculum, HomeworkOutputs, HomeworkProgress, HomeworkSheetGroup, HomeworkSubmission, HomeworkSubmissionListItem, Question, StudentHomework, StudentSummary } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -9,7 +9,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const homeworkApi = {
   me: () => request<{ user: AuthUser | null }>("/api/auth/me"),
   students: () => request<{ students: StudentSummary[] }>("/api/students"),
-  submissions: () => request<{ submissions: HomeworkSubmission[] }>("/api/submissions"),
+  submissions: () => request<{ submissions: HomeworkSubmissionListItem[] }>("/api/submissions"),
+  /** Every student's 批改中 / 作业中 badge; a student without either is not listed. */
+  studentProgress: () => request<{ progress: Record<string, HomeworkProgress> }>("/api/submissions?progress=students"),
   createSubmission: (studentId: string, title: string, outputs: HomeworkOutputs, curriculum: HomeworkCurriculum) => request<{ submission: HomeworkSubmission }>("/api/submissions", { method: "POST", body: JSON.stringify({ studentId, title, outputs, curriculum }) }),
   submission: (id: string) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`),
   updateSubmission: (id: string, body: { action: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: number; uploadDay?: number }) => request<{ submission: HomeworkSubmission }>(`/api/submissions/${id}`, { method: "PUT", body: JSON.stringify(body) }),

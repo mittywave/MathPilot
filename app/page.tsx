@@ -10,7 +10,7 @@ import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { useConfirm } from "./components/ConfirmDialog";
 import { useToast } from "./components/Toast";
 import { SiteHeader } from "./components/SiteHeader";
-import { AssignPlan, StudentHomework, homeworkProgress } from "./components/StudentHomework";
+import { AssignPlan, StudentHomework } from "./components/StudentHomework";
 import { homeworkApi } from "../lib/homework-api-client";
 import { StudentProfile } from "./components/StudentProfile";
 import { StudentReports } from "./components/StudentReports";
@@ -26,7 +26,7 @@ import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../li
 import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../lib/client-random-id.mjs";
-import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionEntry } from "../lib/types";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionEntry } from "../lib/types";
 
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
@@ -141,7 +141,7 @@ export default function Home() {
   const [classBusy, setClassBusy] = useState(false);
   const [classError, setClassError] = useState("");
   const [classAssigning, setClassAssigning] = useState(false);
-  const [studentHomeworkProgress, setStudentHomeworkProgress] = useState<Record<string, ReturnType<typeof homeworkProgress>>>({});
+  const [studentHomeworkProgress, setStudentHomeworkProgress] = useState<Record<string, HomeworkProgress | null>>({});
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
   const [wrongBookLoading, setWrongBookLoading] = useState(initialView === "wrong-book");
@@ -166,25 +166,23 @@ export default function Home() {
   // Until the first reads come back, the lists say they are loading rather than offering to create the first item.
   const studentsLoading = wrongBookLoading && !students.length;
   const libraryLoading = authLoading && (showSelected || !questions.length);
-  const updateHomeworkProgress = useCallback((studentId: string, progress: ReturnType<typeof homeworkProgress>) => {
+  const updateHomeworkProgress = useCallback((studentId: string, progress: HomeworkProgress | null) => {
     setStudentHomeworkProgress((current) => current[studentId] === progress ? current : { ...current, [studentId]: progress });
   }, []);
 
   useEffect(() => {
-    if (!showWrongBook || !authUser) return;
+    if (!showWrongBook || !authUser || !students.length) return;
     let current = true, reading = false;
-    // Reuse the homework summaries; keep grading badges current even when another student or tab is selected.
+    // One read brings every student's badge, kept current even when another student or tab is selected; a changed student
+    // list (a student added, homework assigned to a class) reads it again at once.
     const refresh = async () => {
       if (document.hidden || reading) return;
       reading = true;
       try {
-        const results = await Promise.allSettled(students.map((student) => homeworkApi.studentHomework(student.id)));
-        if (!current) return;
-        setStudentHomeworkProgress((previous) => Object.fromEntries(students.map((student, index) => {
-          const result = results[index];
-          return [student.id, result.status === "fulfilled" ? homeworkProgress(result.value.homework) : previous[student.id] ?? null];
-        })));
-      } finally { reading = false; }
+        const { progress } = await homeworkApi.studentProgress();
+        if (current) setStudentHomeworkProgress(progress);
+      } catch { /* Keep the last badges until the next refresh. */ }
+      finally { reading = false; }
     };
     void refresh();
     const timer = window.setInterval(() => void refresh(), 4000);

@@ -3,15 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchLibrary, fetchTypesetRecords, fetchTypesetSource } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
-import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
+import { homeworkProgress, isHomeworkGrading as busy, titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
 import { dayState, type DayState } from "./AssignedHomeworkSheet";
 import { useConfirm } from "./ConfirmDialog";
-
-const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
-export const homeworkProgress = (items: Homework[]) => items.some(busy) ? "grading" : items.some((item) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total)) ? "assigned" : null;
 
 // An assigned homework goes by task completion; an uploaded one goes by its grading.
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
