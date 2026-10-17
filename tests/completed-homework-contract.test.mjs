@@ -4,6 +4,19 @@ import { loadSource } from './load-source.mjs';
 import { finalizeHomeworkVerdict } from '../lib/homework-grading-rules.mjs';
 const {normalizeCompletedQuestions,completedReferencePrompt,completedVerificationPrompt,normalizeCompletedReferences,normalizeCompletedVerification}=await loadSource('lib/completed-homework-contract.ts');
 const base={question_number:'1',page_numbers:[1,2],type:'解答题',stem:'题目跨页',options:[],student_answer:'PRIVATE STUDENT ANSWER',answer_state:'readable',question_complete:true,bbox:{x:20,y:30,width:400,height:300},knowledge_tags:[],capability_keys:[]};
+test('mistake coordinates preserve the whole answer box and reject uncertain, duplicate and out-of-box marks',async()=>{
+ const {normalizeHomeworkGrading}=await loadSource('lib/homework-grading-contract.ts');
+ const outer={x:100,y:200,width:700,height:500};
+ const right={x:500,y:250,width:220,height:45},bottom={x:180,y:600,width:150,height:50};
+ const errors=[right,bottom,right,{x:0,y:0,width:50,height:50},{x:790,y:250,width:60,height:40},{...right,width:0},{...right,x:'500'},{...right,y:NaN},null];
+ const item={question_number:'19',verdict:'incorrect',bbox:{...outer,errors}};
+ const normalize=patch=>normalizeHomeworkGrading({results:[{...item,...patch}]})[0];
+ assert.deepEqual(normalize({}).bbox,{...outer,errors:[right,bottom]});
+ for(const verdict of ['correct','unreadable','review_required'])assert.deepEqual(normalize({verdict}).bbox,outer);
+ assert.deepEqual(normalize({bbox:outer}).bbox,outer,'older results need no local marks');
+ assert.deepEqual(normalize({bbox:{...outer,errors:[{...right,x:-1}]}}).bbox,outer,'invalid local coordinates never move the outer frame');
+ assert.equal(normalize({bbox:null}).bbox,null);
+});
 test('cross-page transcription retains page attribution and rejects duplicate question numbers or invalid pages',()=>{
  const questions=normalizeCompletedQuestions({questions:[base]},2);assert.deepEqual(questions[0].page_numbers,[1,2]);
  assert.throws(()=>normalizeCompletedQuestions({questions:[base,base]},2),/重复/);

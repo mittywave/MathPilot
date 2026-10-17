@@ -167,6 +167,17 @@ export default function TeacherSubmissionPage() {
     if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
     try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
   }
+  async function locateErrors() {
+    if (!submission) return;
+    setBusy(true); setMessage({ text: "正在对照原答定位错处，请稍候…", tone: "success" });
+    try {
+      const { submission: next } = await homeworkApi.updateSubmission(submission.id, { action: "locate-errors" });
+      setSubmission(next); setItems(next.gradingItems);
+      const located = next.gradingItems.filter(item => ["incorrect", "partial"].includes(item.verdict) && item.bbox?.errors?.length).length;
+      setMessage({ text: located ? `已标出 ${located} 道题的具体错处；未能可靠定位的题保留整题标记。` : "暂未找到能够可靠定位的具体错处，已保留整题标记。", tone: "success" });
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "错处定位失败，请重试", tone: "error" }); }
+    finally { setBusy(false); }
+  }
   // A new upload: the whole sheet, one day not handed in yet, or one day's mistakes. A failed latest upload gives way once the teacher agrees.
   async function newVersion(scope: { correctionDay?: number; uploadDay?: number }, next: string) {
     if (!submission || !confirmGivingUp(submission.assigned?.uploads.at(-1), next)) return;
@@ -462,7 +473,23 @@ export default function TeacherSubmissionPage() {
       </section>}
 
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
-      {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}><div className="review-pages" id="review-originals" role="region" aria-label="原卷标记，独立滚动" tabIndex={0}><h2>原卷标记</h2>{evidencePages.map((page) => <figure id={`page-${page.id}`} key={page.id}><div className="graded-page"><img src={page.processedUrl} alt={`${submission.studentName}答卷${dayTask ? `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`} />{evidenceItems.filter((item) => item.pageId === page.id && item.bbox).map((item) => <button id={`marker-${item.id}`} key={item.id} className={`grade-marker ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}`} aria-pressed={activeItemId === item.id} style={{ left: `${item.bbox!.x / 10}%`, top: `${item.bbox!.y / 10}%`, width: `${item.bbox!.width / 10}%`, height: `${item.bbox!.height / 10}%` }} onClick={() => focusEvidence(item, true)} aria-label={`查看${homeworkQuestionLabel(item.questionNumber)}`}>{item.verdict === "correct" ? "✓" : item.verdict === "partial" ? international ? "△" : "×" : item.verdict === "incorrect" ? "×" : "?"}</button>)}</div><figcaption>{dayTask && `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · `}第 {page.pageOrder + 1} 页</figcaption></figure>)}</div>
+      {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}><div className="review-pages" id="review-originals" role="region" aria-label="原卷标记，独立滚动" tabIndex={0}>
+        <div className="review-pages-heading"><h2>原卷标记</h2>{!dayTask && evidenceItems.some(item => ["incorrect", "partial"].includes(item.verdict) && !item.requiresReview && item.referenceVerified && item.standardAnswer && item.bbox && item.pageId) && <button type="button" onClick={locateErrors} disabled={busy} title="对照原答标出具体错误位置，保留已有批改结论">定位错处</button>}</div>
+        {evidencePages.map((page) => <figure id={`page-${page.id}`} key={page.id}><div className="graded-page">
+          <img src={page.processedUrl} alt={`${submission.studentName}答卷${dayTask ? `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`} />
+          {evidenceItems.filter((item) => item.pageId === page.id && item.bbox).map((item) => {
+            const box = item.bbox!;
+            const errors = !item.requiresReview && ["incorrect", "partial"].includes(item.verdict) ? box.errors ?? [] : [];
+            const wrong = ["incorrect", "partial"].includes(item.verdict);
+            const label = `查看${homeworkQuestionLabel(item.questionNumber)}${errors.length ? `，已标出 ${errors.length} 处错处` : wrong ? "，整题有错，具体位置待确认" : ""}`;
+            return <button id={`marker-${item.id}`} key={item.id} className={`grade-marker ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${errors.length ? " has-errors" : ""}`} aria-pressed={activeItemId === item.id}
+              style={{ left: `${box.x / 10}%`, top: `${box.y / 10}%`, width: `${box.width / 10}%`, height: `${box.height / 10}%` }} onClick={() => focusEvidence(item, true)} aria-label={label} title={label}>
+              {errors.length ? errors.map((error, index) => <span key={index} className="grade-error" aria-hidden="true" style={{ left: `${(error.x - box.x) / box.width * 100}%`, top: `${(error.y - box.y) / box.height * 100}%`, width: `${error.width / box.width * 100}%`, height: `${error.height / box.height * 100}%` }} />)
+                : wrong ? <span className="grade-unlocated" aria-hidden="true">{item.verdict === "partial" && international ? "△" : "×"}</span> : item.verdict === "correct" ? "✓" : "?"}
+            </button>;
+          })}
+        </div><figcaption>{dayTask && `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · `}第 {page.pageOrder + 1} 页</figcaption></figure>)}
+      </div>
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- A focusable ARIA window splitter supports pointer and keyboard resizing. */}
         <div className="review-splitter" role="separator" aria-label="调整原卷与详情宽度" aria-orientation="vertical" aria-valuemin={30} aria-valuemax={70} aria-valuenow={split} aria-controls="review-originals review-details" tabIndex={0}
           onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}

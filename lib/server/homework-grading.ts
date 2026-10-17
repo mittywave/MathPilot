@@ -37,6 +37,9 @@ export async function upsertResult(input: {
     input = { ...input, verdict: input.verdict === "correct" && !input.requiresReview ? "correct" : "incorrect", requiresReview: false,
       score: null, feedback: "", errorType: "", stepAnalysis: [], evidenceSummary: "" };
   }
+  if (input.bbox && typeof input.bbox === "object" && (!["incorrect", "partial"].includes(input.verdict) || input.requiresReview)) {
+    const bbox = { ...input.bbox } as Record<string, unknown>; delete bbox.errors; input = { ...input, bbox };
+  }
   const existing = await homeworkDb().prepare("SELECT id, created_at FROM grading_items WHERE submission_id = ? AND assignment_question_id = ?")
     .bind(input.submissionId, input.question.id).first<{ id: string; created_at: number }>();
   const id = existing?.id ?? crypto.randomUUID(); const now = Date.now();

@@ -430,7 +430,9 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .upload-submit { width:100%; min-height:46px; margin-top:16px; }
 
 .review-pages,.grading-list { min-width:0; display:grid; gap:12px; }
-.review-pages>h2,.grading-heading h2 { margin:0; font:700 18px "Songti SC",serif; }
+.grading-heading h2,.review-pages-heading h2 { margin:0; font:700 18px "Songti SC",serif; }
+.review-pages-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.review-pages-heading button { padding:6px 10px; font-size:12px; }
 .review-pages figure { margin:0; overflow:hidden; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); }
 .review-pages figcaption { padding:8px 10px; color:var(--muted); font-size:12px; }
 .graded-page { position:relative; overflow:hidden; background:#fff; }
@@ -836,6 +838,11 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .review-splitter::after { content:""; position:absolute; left:6px; top:0; bottom:0; width:2px; border-radius:2px; background:var(--line); }
 .review-splitter:hover::after,.review-splitter:focus-visible::after { background:var(--green); }
 .grade-marker[aria-pressed="true"] { outline:3px solid var(--green); outline-offset:3px; background:color-mix(in srgb,var(--green) 15%,transparent)!important; }
+.grade-marker.has-errors { background:transparent!important; }
+.grade-error { position:absolute; box-sizing:border-box; border:2px solid #c43b32; border-radius:50%; pointer-events:none; }
+.grade-error::after,.grade-unlocated { position:absolute; right:-9px; top:-12px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:#fff; color:#b83229; font-size:22px; line-height:1; text-shadow:none; }
+.grade-error::after { content:"×"; }
+.grade-unlocated { top:-9px; color:inherit; }
 .grading-card.selected { border-color:var(--green); box-shadow:inset 3px 0 0 var(--green); }
 .grading-card.compact { display:block; padding:0; overflow:hidden; }
 .grading-card.compact>summary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-height:55px; padding:10px 14px; cursor:pointer; }
