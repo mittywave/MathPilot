@@ -578,9 +578,9 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .student-panel-empty b { color:var(--ink); font-size:14px; }
 .student-panel-empty p { max-width:520px; margin:8px auto 0; line-height:1.7; }
 .homework-rows { margin:0; padding:0; list-style:none; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); overflow:hidden; }
-.homework-rows li + li { border-top:1px solid var(--line); }
-.homework-rows a { display:grid; grid-template-columns:100px minmax(0,1fr) minmax(150px,230px) 84px; align-items:center; gap:14px; padding:11px 16px; color:inherit; text-decoration:none; }
-.homework-rows a:hover { background:color-mix(in srgb, var(--green-soft) 50%, var(--surface)); }
+.homework-rows>li + li { border-top:1px solid var(--line); }
+.homework-rows>li>a { display:grid; grid-template-columns:100px minmax(0,1fr) minmax(150px,230px) 84px; align-items:center; gap:14px; padding:11px 16px; color:inherit; text-decoration:none; }
+.homework-rows>li>a:hover { background:color-mix(in srgb, var(--green-soft) 50%, var(--surface)); }
 .homework-state { justify-self:start; padding:3px 9px; border-radius:999px; background:var(--surface-soft); color:var(--muted); font-size:12px; font-weight:600; white-space:nowrap; }
 .homework-rows li.waiting .homework-state { background:var(--warn-soft); color:var(--warn-strong); }
 .homework-rows li.busy .homework-state { background:var(--info-soft); color:color-mix(in srgb,var(--info) 70%,var(--ink)); }
@@ -592,10 +592,9 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-title small,.homework-tally small { color:var(--muted); font-size:12px; }
 .homework-tally { grid-column:3; display:grid; gap:7px; }
 .homework-bar { display:grid; gap:5px; }
-/* One cell per task group: handed in, partially handed in, or unsubmitted. */
+/* Each task keeps its date and first-attempt marks beside the shared question-result squares. */
 .homework-days { margin:0; padding:0 16px 10px 130px; list-style:none; display:grid; gap:2px; }
-.homework-days li { display:grid; grid-template-columns:minmax(0,320px) minmax(0,1fr) auto; align-items:center; gap:14px; min-height:34px; border-top:1px dashed var(--line); }
-.homework-rows .homework-days li + li { border-top:1px dashed var(--line); }
+.homework-days>li { display:grid; grid-template-columns:minmax(0,280px) minmax(0,1fr) auto; align-items:center; gap:14px; min-height:52px; border-top:1px dashed var(--line); }
 .homework-days b { overflow:hidden; font-size:12.5px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .homework-days small { color:var(--muted); font-size:12px; }
 .homework-days li.done small { color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
@@ -604,6 +603,7 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .homework-days button { grid-column:3; padding:4px 10px; border:1px solid color-mix(in srgb, var(--green) 30%, var(--line)); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--green); font-size:12px; font-weight:600; white-space:nowrap; cursor:pointer; }
 .homework-days button:hover:not(:disabled) { border-color:var(--green); }
 .homework-days button:disabled { opacity:.5; cursor:default; }
+.homework-rows .assigned-correction-note { margin:0; padding:0 16px 12px 130px; }
 .homework-tally .bar { display:flex; height:6px; border-radius:999px; background:var(--surface-soft); overflow:hidden; }
 .homework-tally em { display:block; height:100%; }
 .homework-tally em.correct { background:var(--success); }

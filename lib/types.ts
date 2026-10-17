@@ -408,6 +408,8 @@ export type StudentHomework = {
   latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
   /** An assigned homework's days, and the 快速排版 record it was assigned from; null for an uploaded one. */
   days: HomeworkDay[] | null; recordId: string | null;
+  /** Assigned question numbers and latest results for the archive preview; no question content is sent. */
+  questions: Array<Pick<AssignedHomework["questions"][number], "id" | "number" | "result">> | null;
 };
 
 export type SubmissionPage = {

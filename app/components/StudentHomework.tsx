@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchLibrary, fetchTypesetRecords } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
-import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
+import { homeworkQuestionLabel, titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
 import type { StudentHomework as Homework, HomeworkSheetGroup, Question, StudentSummary, TypesetRecord } from "../../lib/types";
 import { AssignHomework } from "./AssignHomework";
-import { confirmGivingUp, dayNote, dayState, uploadWait, type DayState } from "./AssignedHomeworkSheet";
+import { confirmGivingUp, dayNote, dayState, resultState, STATE, uploadWait, type DayState } from "./AssignedHomeworkSheet";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
 export const homeworkInProgress = (item: Homework) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total);
@@ -133,15 +133,23 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
             </span>}
             {item.assigned && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
-          {days.length > 1 && <ol className="homework-days" aria-label="打卡日">{days.map((entry, index) => {
+          {days.length > 0 && <><ol className="homework-days" aria-label={days.length > 1 ? "打卡日" : "逐题批改预览"}>{days.map((entry, index) => {
             const key = `${item.assignmentId}:${index}`, wait = uploadWait(item.latest);
-            return <li key={index} className={states[index]}>
-              <b>第 {index + 1} 天{entry.title ? ` · ${entry.title.replace(/^第\s*\d+\s*天\s*[·・:：]?\s*/, "")}` : ""}</b>
-              {dayError.key === key ? <small className="error" role="alert">{dayError.text}</small> : <small>{dayNote(entry)}</small>}
-              {states[index] !== "done" && <button type="button" disabled={Boolean(wait) || Boolean(opening)} onClick={() => void uploadDay(item, index)}
+            const from = days.slice(0, index).reduce((sum, task) => sum + task.size, 0);
+            return <li key={index} className={`assigned-day ${states[index]}`}>
+              <div className="homework-title"><b title={entry.title || "本次作业"}>{days.length > 1 ? `第 ${index + 1} 天${entry.title ? ` · ${entry.title.replace(/^第\s*\d+\s*天\s*[·・:：]?\s*/, "")}` : ""}` : entry.title || "本次作业"}</b>
+                {dayError.key === key ? <small className="error" role="alert">{dayError.text}</small> : <small>{dayNote(entry)}</small>}</div>
+              <ol aria-label={`${entry.title || "本次作业"}逐题批改结果`}>{item.questions?.slice(from, from + entry.size).map((question) => {
+                const state = resultState(question.result), label = `${homeworkQuestionLabel(question.number)} · ${STATE[state]}`;
+                return <li key={question.id} className={state} title={label}>
+                  {question.result ? <a href={`/tools/homework/submissions/${encodeURIComponent(question.result.submissionId)}`} aria-label={label}>{question.number.replace(/^D\d+-/, "")}</a>
+                    : <span aria-label={label}>{question.number.replace(/^D\d+-/, "")}</span>}
+                </li>;
+              })}</ol>
+              {days.length > 1 && states[index] !== "done" && <button type="button" disabled={Boolean(wait) || Boolean(opening)} onClick={() => void uploadDay(item, index)}
                 title={wait || `上传第 ${index + 1} 天的作业照片或 PDF，只批改这一天还没交的题`}>{opening === key ? "正在打开…" : "上传这天"}</button>}
             </li>;
-          })}</ol>}
+          })}</ol><p className="assigned-correction-note">绿色：原本正确 · 蓝色：已订正正确 · 红色：仍需订正 · 灰色：未交或待处理</p></>}
         </li>;
       })}</ol>}
   </section>;
