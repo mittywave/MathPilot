@@ -39,12 +39,14 @@ test("current mistake export follows the whole sheet's latest results, including
   };
   const props = { submission: { id: "original-upload", assigned }, busy: false, onExport: () => {} };
   const html = renderToStaticMarkup(createElement(AssignedHomeworkSheet, props));
-  assert.match(html, /<button type="button" title="导出当前仍需订正的 2 道题为 Word，不含答案">导出当前错题<\/button>/);
   const busy = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { ...props, busy: true }));
-  assert.match(busy, /<button type="button" disabled="" title="导出当前仍需订正的 2 道题为 Word，不含答案">导出当前错题<\/button>/);
   const corrected = { ...assigned, questions: assigned.questions.map((question) => question.result && !question.result.requiresReview ? { ...question, result: { ...question.result, verdict: "correct", wasIncorrect: true } } : question) };
   const completed = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { ...props, submission: { ...props.submission, assigned: corrected } }));
-  assert.match(completed, /<button type="button" disabled="" title="当前没有需要订正的错题">导出当前错题<\/button>/);
+  for (const format of ["Word", "PDF"]) {
+    assert.match(html, new RegExp(`<button type="button" title="导出当前仍需订正的 2 道题为 ${format}，不含答案">导出错题 ${format}</button>`));
+    assert.match(busy, new RegExp(`<button type="button" disabled="" title="导出当前仍需订正的 2 道题为 ${format}，不含答案">导出错题 ${format}</button>`));
+    assert.match(completed, new RegExp(`<button type="button" disabled="" title="当前没有需要订正的错题">导出错题 ${format}</button>`));
+  }
 });
 
 test("pending counts separate unsettled answers from the teacher's existing judgement", () => {

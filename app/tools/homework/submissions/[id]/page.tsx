@@ -348,14 +348,26 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
-  async function exportMistakes(questions: Question[]) {
+  async function exportMistakes(questions: Question[], kind: "word" | "pdf") {
     if (!submission || busy || !questions.length) return;
-    setBusy(true); setMessage({ text: "正在导出当前错题…", tone: "success" });
+    const format = kind === "word" ? "Word" : "PDF";
+    setBusy(true); setMessage({ text: `正在导出当前错题 ${format}…`, tone: "success" });
     try {
-      const { buildQuestionsWordBlob, downloadWordBlob } = await import("../../../../../lib/export-word");
       const title = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-当前错题`;
-      downloadWordBlob(await buildQuestionsWordBlob(questions, title, false, "basket"), `${title}.docx`);
-      setMessage({ text: `已导出 ${questions.length} 道当前错题（Word，不含答案）`, tone: "success" });
+      let issues = 0;
+      if (kind === "word") {
+        const { buildQuestionsWordBlob, downloadWordBlob } = await import("../../../../../lib/export-word");
+        downloadWordBlob(await buildQuestionsWordBlob(questions, title, false, "basket"), `${title}.docx`);
+      } else {
+        const { buildHandoutLatexProject, compileLatexPdf, latexCompilerStatus } = await import("../../../../../lib/handout-latex-files");
+        if (!(await latexCompilerStatus()).available) throw new Error("当前服务无法生成 PDF，请使用本地 MathPilot 导出。");
+        const project = await buildHandoutLatexProject({ title, sheet: "错题练习", questions, answers: "none" });
+        if (project.missingFigures) throw new Error(`${project.missingFigures} 张配图读取失败，请重试导出`);
+        const result = await compileLatexPdf(project);
+        issues = result.issues;
+        saveBlob(result.pdf, `${title}.pdf`);
+      }
+      setMessage({ text: `已导出 ${questions.length} 道当前错题（${format}，不含答案）${issues ? `，${issues} 处公式需要检查` : ""}`, tone: issues ? "error" : "success" });
     } catch (error) { setMessage({ text: error instanceof Error ? error.message : "错题导出失败，请重试", tone: "error" }); }
     finally { setBusy(false); }
   }
@@ -412,7 +424,7 @@ export default function TeacherSubmissionPage() {
         {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
       </div></section>
 
-    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} onExport={(questions) => void exportMistakes(questions)}
+    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} onExport={(questions, kind) => void exportMistakes(questions, kind)}
       onDay={(day) => { setSelectedDay(day); setEditingId(""); setActiveItemId(""); requestAnimationFrame(() => document.getElementById("day-results")?.scrollIntoView({ block: "start", behavior: "instant" })); }}
       onContinue={() => void newVersion({}, "继续上传这份作业")}
       onCorrect={(day) => void newVersion({ correctionDay: day }, assigned.days.length > 1 ? `订正第 ${day + 1} 天的错题` : "订正错题")}
