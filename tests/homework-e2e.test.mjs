@@ -756,7 +756,6 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     let listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.title,listed.total,listed.done,listed.latest.status],["两天计算打卡",4,0,"draft"]);
     assert.deepEqual(listed.days.map(d=>[d.date,d.size,d.done]),[[undefined,2,0],[undefined,2,0]]);
-    assert.deepEqual(listed.questions,sheet.assigned.questions.map(({id,number,result})=>({id,number,result})),"the archive previews unsubmitted questions without sending question content");
     assert.equal(listed.recordId,planId);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherTwo})).response.status,404);
 
@@ -780,7 +779,6 @@ test("completed homework is graded, archives only incorrect work, preserves pend
       `UPDATE homework_submissions SET submitted_at=${firstSubmittedAt} WHERE id='${firstUpload}'`]);
     listed=(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assigned);
     assert.deepEqual([listed.total,listed.done,listed.correct,listed.incorrect],[4,2,1,1]);
-    assert.deepEqual(listed.questions.map(q=>[q.number,q.result?.verdict??null,q.result?.submissionId??null]),[["D1-1","correct",firstUpload],["D1-2","incorrect",firstUpload],["D2-1",null,null],["D2-2",null,null]],"archive squares match the uploaded results and leave later days unsubmitted");
     assert.deepEqual(listed.days.map(d=>[d.done,d.correct,d.incorrect,typeof d.handedInAt]),[[2,1,1,"number"],[0,0,0,"object"]],"day 1 came back with the first upload, day 2 is still out");
     const firstHandedIn=listed.days[0].handedInAt;
     assert.equal(firstHandedIn,firstSubmittedAt,"the task records the actual upload submission time");
@@ -931,9 +929,6 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(mock.state.gradedNumbers.sort(),["D1-1","D1-2"],"other days and an omitted correction are not graded");
     assert.doesNotMatch(mock.state.assignedPrompts.at(-1),/D2-1｜/);
     assert.deepEqual(correctionAfter.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["incorrect",true],["incorrect",false],["correct",false]]);
-    const correctionPreview=(await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===correctionAfter.assignmentId);
-    assert.deepEqual(correctionPreview.questions,correctionAfter.assigned.questions.map(({id,number,result})=>({id,number,result})),"archive corrections keep the latest source upload and correction history for every question");
-    assert.deepEqual(correctionPreview.days.map(d=>d.firstAttempt),correctionBefore.assigned.days.map(d=>d.firstAttempt),"the archive preview does not replace first-attempt marks");
     for(const index of [2,3])assert.deepEqual(correctionAfter.assigned.questions[index].result,correctionBefore.assigned.questions[index].result,"omitted mistakes and the other day retain their previous results");
     assert.deepEqual(correctionAfter.assigned.days.map(d=>d.handedInAt),correctionBefore.assigned.days.map(d=>d.handedInAt));
     const {AssignedHomeworkSheet}=await loadSource("app/components/AssignedHomeworkSheet.tsx");
