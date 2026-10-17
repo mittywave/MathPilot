@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, Fragment, lazy, memo, useCallback, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { CategoryTree, type TreeLight } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
 import { MathText } from "./components/MathText";
@@ -77,6 +78,8 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
 });
 
 export default function Home() {
+  // The section a link opens (学生档案, 组卷篮) is drawn from the first paint; the server renders the same address.
+  const initialView = useSearchParams().get("view");
   const [alevelPageLocale, setAlevelPageLocale] = useState<AlevelPageLocale>("zh");
   const [modules, setModules] = useState<LibraryModule[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -97,7 +100,7 @@ export default function Home() {
   const [wrongUploadOpen, setWrongUploadOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"全部" | QuestionType>("全部");
-  const [showSelected, setShowSelected] = useState(false);
+  const [showSelected, setShowSelected] = useState(initialView === "selected");
   const [expandedAnswers, setExpandedAnswers] = useState<string[]>([]);
   const [entryDraft, setEntryDraft] = useState<Question | null>(null);
   const [categoryDialog, setCategoryDialog] = useState<"new" | "manage" | "trash" | null>(null);
@@ -128,7 +131,7 @@ export default function Home() {
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLDivElement>(null);
-  const [showWrongBook, setShowWrongBook] = useState(false);
+  const [showWrongBook, setShowWrongBook] = useState(initialView === "wrong-book");
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentClasses, setStudentClasses] = useState<string[]>([]);
   const [activeClassName, setActiveClassName] = useState<string | null>(null);
@@ -139,7 +142,7 @@ export default function Home() {
   const [studentHomeworkProgress, setStudentHomeworkProgress] = useState<Record<string, ReturnType<typeof homeworkProgress>>>({});
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
-  const [wrongBookLoading, setWrongBookLoading] = useState(false);
+  const [wrongBookLoading, setWrongBookLoading] = useState(initialView === "wrong-book");
   const [archiveTab, setArchiveTab] = useState<ArchiveTab>("homework");
   const [studentDialog, setStudentDialog] = useState(false);
   const [studentDraft, setStudentDraft] = useState<Student | null>(null);
@@ -158,6 +161,9 @@ export default function Home() {
   const canDelete = authUser?.role === "admin";
   const activeStudent = students.find((item) => item.id === activeStudentId) ?? null;
   const classStudents = activeClassName === null ? [] : students.filter((student) => student.className === activeClassName);
+  // Until the first reads come back, the lists say they are loading rather than offering to create the first item.
+  const studentsLoading = wrongBookLoading && !students.length;
+  const libraryLoading = authLoading && (showSelected || !questions.length);
   const updateHomeworkProgress = useCallback((studentId: string, progress: ReturnType<typeof homeworkProgress>) => {
     setStudentHomeworkProgress((current) => current[studentId] === progress ? current : { ...current, [studentId]: progress });
   }, []);
@@ -249,13 +255,15 @@ export default function Home() {
       await saveQueue.current;
       const raw = await basketStorage(user.id, "read");
       if (activeDraftOwner.current !== user.id) return;
+      // 学生档案 reads the library after its students, so the open student's wrong questions may be in the pool already;
+      // the draft's own snapshots join them rather than replace them.
       if (raw) {
         const { draft, missing } = restoreBasketDraft(raw, library);
         setBasketStructure(draft.structure); setPaperTitle(draft.title); setIncludeAnswers(draft.includeAnswers);
-        setBasketWrongQuestions(draft.snapshots); setTypesetKept(draft.typeset);
+        setBasketWrongQuestions((current) => [...draft.snapshots, ...current.filter((question) => !draft.snapshots.some((item) => item.id === question.id))]); setTypesetKept(draft.typeset);
         if (missing) show({ text: `草稿中 ${missing} 道已失效的题目已移除`, tone: "success" });
       } else {
-        setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null);
+        setBasketStructure({ sections: [], unassignedIds: [] }); setTypesetKept(null);
       }
       setDraftCanSave(true); setDraftStatus("已保存在本机");
     } catch (error) {
@@ -287,17 +295,25 @@ export default function Home() {
 
   useEffect(() => {
     void (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const view = params.get("view");
+      // 题库 and 组卷篮 need the whole library, read alongside the account. 学生档案 shows its students first and reads
+      // the library (several megabytes, for the basket and a later switch to 题库) only after them.
+      const library = view === "wrong-book" ? null : fetchLibrary();
+      library?.catch(() => {});
       try {
         const auth = await fetchMe();
-        const params = new URLSearchParams(window.location.search);
-        const data = await fetchLibrary();
-        setAuthUser(auth.user); applyLibrary(data, false);
+        setAuthUser(auth.user);
+        if (!auth.user) { setShowWrongBook(false); setShowSelected(false); setWrongBookLoading(false); }
+        else if (view === "wrong-book") {
+          try { await loadStudents(params.get("studentId") ?? "", params.get("class")); }
+          catch (error) { show({ text: error instanceof Error ? error.message : "学生档案读取失败", tone: "error" }); }
+          finally { setWrongBookLoading(false); }
+        }
+        const data = await (library ?? fetchLibrary());
+        applyLibrary(data, false);
         if (auth.user) await restoreLocalBasket(auth.user, data.questions);
-        if (auth.user && params.get("view") === "wrong-book") {
-          setShowWrongBook(true); setWrongBookLoading(true);
-          try { await loadStudents(params.get("studentId") ?? "", params.get("class")); } finally { setWrongBookLoading(false); }
-        } else if (auth.user && params.get("view") === "selected") setShowSelected(true);
-      } catch { show({ text: "云端题库读取失败，请刷新页面重试", tone: "error" }); }
+      } catch { setWrongBookLoading(false); show({ text: "云端题库读取失败，请刷新页面重试", tone: "error" }); }
       finally { setAuthLoading(false); }
     })();
   // The initial URL view is intentionally read once; later switches are handled by page actions.
@@ -775,7 +791,7 @@ export default function Home() {
 
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
-      <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading} locale={pageLocale} basketCount={selectedIds.length}
+      <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading && !authUser} locale={pageLocale} basketCount={selectedIds.length}
         title={showWrongBook && (activeClassName || activeStudent) ? `${activeClassName ?? activeStudent?.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
         actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button>} />
@@ -783,10 +799,10 @@ export default function Home() {
       <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : ""}`}>
         {(!showSelected || showWrongBook) && <aside className="sidebar">
           {showWrongBook ? <>
-            <div className="sidebar-heading"><span className="eyebrow">班级 · {studentClasses.length}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
+            <div className="sidebar-heading"><span className="eyebrow">班级{studentsLoading ? "" : ` · ${studentClasses.length}`}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
             <div className="class-list" aria-label="班级">{studentClasses.map((name) => <button key={name} className={`class-card${activeClassName === name ? " active" : ""}`} onClick={() => setActiveClassName(name)}><span>▦</span><b>{name}</b><small>{students.filter((student) => student.className === name).length} 人</small></button>)}</div>
-            <div className="sidebar-heading"><span className="eyebrow">学生 · {students.length}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
-            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
+            <div className="sidebar-heading"><span className="eyebrow">学生{studentsLoading ? "" : ` · ${students.length}`}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
+            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : !studentsLoading && <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
@@ -833,7 +849,7 @@ export default function Home() {
               </div>
               {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>删除、部分正确及已修正的记录保留在此，不计入当前错题统计；删除的错题可以恢复。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small>{entry.archiveReason === WRONG_QUESTION_DELETED && <button className="secondary" onClick={() => restoreWrongEntries([entry])}>恢复</button>}<WrongQuestionEvidence entry={entry} /></article>)}</details>}
               </>}
-            </> : <div className="empty-state wrong-book-empty"><div>人</div><h3>{wrongBookLoading ? "正在读取学生档案" : "为第一位学生建立档案"}</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
+            </> : wrongBookLoading ? <div className="wrong-book-loading"><i></i><span>正在读取学生档案…</span></div> : <div className="empty-state wrong-book-empty"><div>人</div><h3>为第一位学生建立档案</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
           </> : <>
           {showSelected ? <>
             <aside className="basket-settings">
@@ -852,10 +868,10 @@ export default function Home() {
             {authUser && <button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!filteredQuestions.length} onClick={toggleAllFiltered}>{allFilteredSelected ? pageCopy.clearSelection : pageCopy.selectResults}</button>}
             {isAlevelPage && <div className="page-language-switch" role="group" aria-label={pageCopy.language}><button lang="zh-CN" className={alevelPageLocale === "zh" ? "active" : ""} aria-pressed={alevelPageLocale === "zh"} onClick={() => chooseAlevelPageLocale("zh")}>中文</button><button lang="en" className={alevelPageLocale === "en" ? "active" : ""} aria-pressed={alevelPageLocale === "en"} onClick={() => chooseAlevelPageLocale("en")}>English</button></div>}
           </div>
-          <div className="library-position">{byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeName.split(" / ").join(" › ")} · {alevelQuestionCount(filteredQuestions.length, pageLocale)}</div>
+          {!libraryLoading && <div className="library-position">{byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeName.split(" / ").join(" › ")} · {alevelQuestionCount(filteredQuestions.length, pageLocale)}</div>}
           </>}
           <div className="question-list">
-            {!filteredQuestions.length && <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>}
+            {!filteredQuestions.length && (libraryLoading ? <div className="wrong-book-loading"><i></i><span>{showSelected ? "正在读取组卷篮…" : "正在读取题库…"}</span></div> : <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>)}
             {filteredQuestions.slice(0, visibleCount).map((question, index) => {
               const path = pathOf(question.categoryId);
               const section = showSelected ? paperSections.find((item) => index >= item.start && index < item.start + item.questions.length) : undefined;
