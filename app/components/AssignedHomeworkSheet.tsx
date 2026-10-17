@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
-import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, SubmissionStatus } from "../../lib/types";
+import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, Question, SubmissionStatus } from "../../lib/types";
 import { QuestionBody } from "./QuestionBody";
 
 type Result = GradingItem | AssignedHomework["questions"][number]["result"];
@@ -66,12 +66,13 @@ export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [uplo
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload }: {
+export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport }: {
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
-  selectedDay: number | null; onDay: (day: number) => void;
+  selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[]) => void;
 }) {
   const { assigned } = submission;
   const [showOriginals, setShowOriginals] = useState(false);
+  const mistakes = assigned.questions.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict));
   const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
     pending: all.pending + day.firstAttempt.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
   const handedIn = assigned.questions.length - counts.missing;
@@ -88,6 +89,8 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       </div>
       <div className="assigned-sheet-actions">
         <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
+        <button type="button" disabled={busy || !mistakes.length} onClick={() => onExport(mistakes.map((item) => item.question))}
+          title={mistakes.length ? `导出当前仍需订正的 ${mistakes.length} 道题为 Word，不含答案` : "当前没有需要订正的错题"}>导出当前错题</button>
         {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
           : latest?.status === "published" ? <button className={counts.missing ? "primary" : ""} disabled={busy} onClick={onContinue} title={counts.missing ? "上传学生后来交的部分" : "学生订正或重做后再批改一次"}>{counts.missing ? "继续上传" : "再上传一次"}</button> : null}
       </div>

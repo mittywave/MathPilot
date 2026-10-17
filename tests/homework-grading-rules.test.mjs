@@ -24,6 +24,29 @@ test("school distribution shares whole-question states with the sheet and keeps 
   assert.equal((exam.match(/<dt>/g) ?? []).length, 4);
 });
 
+test("current mistake export follows the whole sheet's latest results, including partial answers", async () => {
+  const { AssignedHomeworkSheet } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
+  const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true, wasIncorrect: false, submissionId: "new-upload" };
+  const results = [
+    { ...settled, submissionId: "original-upload" }, { ...settled, verdict: "partial" },
+    { ...settled, verdict: "correct", wasIncorrect: true }, { ...settled, verdict: "correct" },
+    { ...settled, requiresReview: true }, { ...settled, referenceVerified: false }, null,
+  ];
+  const assigned = {
+    days: [{ title: "第 1 天", size: 4, done: 4, correct: 2, firstAttempt: { correct: 1, incorrect: 3, pending: 0 } }, { title: "第 2 天", size: 3, done: 2, correct: 0, firstAttempt: { correct: 0, incorrect: 0, pending: 2 } }],
+    questions: results.map((result, index) => ({ id: `q${index}`, number: String(index + 1), question: { stem: "原题" }, result })),
+    uploads: [{ id: "original-upload", status: "published", version: 1 }, { id: "new-upload", status: "published", version: 2 }],
+  };
+  const props = { submission: { id: "original-upload", assigned }, busy: false, onExport: () => {} };
+  const html = renderToStaticMarkup(createElement(AssignedHomeworkSheet, props));
+  assert.match(html, /<button type="button" title="导出当前仍需订正的 2 道题为 Word，不含答案">导出当前错题<\/button>/);
+  const busy = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { ...props, busy: true }));
+  assert.match(busy, /<button type="button" disabled="" title="导出当前仍需订正的 2 道题为 Word，不含答案">导出当前错题<\/button>/);
+  const corrected = { ...assigned, questions: assigned.questions.map((question) => question.result && !question.result.requiresReview ? { ...question, result: { ...question.result, verdict: "correct", wasIncorrect: true } } : question) };
+  const completed = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { ...props, submission: { ...props.submission, assigned: corrected } }));
+  assert.match(completed, /<button type="button" disabled="" title="当前没有需要订正的错题">导出当前错题<\/button>/);
+});
+
 test("pending counts separate unsettled answers from the teacher's existing judgement", () => {
   const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true };
   for (const [patch, expected] of [

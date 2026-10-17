@@ -9,7 +9,7 @@ import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
 import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore, titleWithoutStudent } from "../../../../../lib/homework-grading-rules.mjs";
-import type { AuthUser, GradingItem, HomeworkSubmission, InternationalReport } from "../../../../../lib/types";
+import type { AuthUser, GradingItem, HomeworkSubmission, InternationalReport, Question } from "../../../../../lib/types";
 
 const STATUS: Record<string, string> = {
   draft: "待上传", submitted: "已提交", processing: "自动批改中", review_required: "旧版待复核",
@@ -348,6 +348,18 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
+  async function exportMistakes(questions: Question[]) {
+    if (!submission || busy || !questions.length) return;
+    setBusy(true); setMessage({ text: "正在导出当前错题…", tone: "success" });
+    try {
+      const { buildQuestionsWordBlob, downloadWordBlob } = await import("../../../../../lib/export-word");
+      const title = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-当前错题`;
+      downloadWordBlob(await buildQuestionsWordBlob(questions, title, false, "basket"), `${title}.docx`);
+      setMessage({ text: `已导出 ${questions.length} 道当前错题（Word，不含答案）`, tone: "success" });
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "错题导出失败，请重试", tone: "error" }); }
+    finally { setBusy(false); }
+  }
+
   async function refresh() {
     setBusy(true);
     try { await load(); setMessage({ text: "状态已刷新", tone: "success" }); }
@@ -400,7 +412,7 @@ export default function TeacherSubmissionPage() {
         {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
       </div></section>
 
-    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay}
+    {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} onExport={(questions) => void exportMistakes(questions)}
       onDay={(day) => { setSelectedDay(day); setEditingId(""); setActiveItemId(""); requestAnimationFrame(() => document.getElementById("day-results")?.scrollIntoView({ block: "start", behavior: "instant" })); }}
       onContinue={() => void newVersion({}, "继续上传这份作业")}
       onCorrect={(day) => void newVersion({ correctionDay: day }, assigned.days.length > 1 ? `订正第 ${day + 1} 天的错题` : "订正错题")}
