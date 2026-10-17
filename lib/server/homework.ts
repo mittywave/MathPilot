@@ -526,7 +526,7 @@ export async function reviewSubmission(id: string, items: Array<Partial<GradingI
     if (!VERDICTS.includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
     const resolved = ["correct", "partial", "incorrect", "unreadable"].includes(String(patch.verdict));
     await appEnv().DB.prepare(`UPDATE grading_items SET verdict = ?, student_answer = ?, feedback = ?, error_type = ?, confidence = ?,
-      requires_review = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND submission_id = ?`)
+      requires_review = ?, reviewed_by = ?, reviewed_at = ?, bbox_json = json_remove(bbox_json, '$.errors'), updated_at = ? WHERE id = ? AND submission_id = ?`)
       .bind(patch.verdict, text(patch.studentAnswer, 100_000), text(patch.feedback, 4_000), text(patch.errorType, 120),
         Math.max(0, Math.min(1, Number(patch.confidence) || 0)), resolved ? 0 : 1, resolved ? user.id : null, resolved ? now : null, now, patch.id, id).run();
   }
@@ -569,7 +569,7 @@ export async function correctPublishedSubmission(id: string, items: Array<Partia
         VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(crypto.randomUUID(), patch.id, id, user.id, JSON.stringify(existing), JSON.stringify(next), now),
       appEnv().DB.prepare(`UPDATE grading_items SET verdict = ?, score = ?, student_answer = ?, feedback = ?, error_type = ?, step_analysis_json = ?,
         evidence_summary = ?, capability_keys_json = ?, confidence = ?, requires_review = ?, reviewed_by = ?, reviewed_at = ?, corrected_at = ?,
-        wrong_book_applied_at = NULL, updated_at = ? WHERE id = ? AND submission_id = ?`)
+        wrong_book_applied_at = NULL, bbox_json = json_remove(bbox_json, '$.errors'), updated_at = ? WHERE id = ? AND submission_id = ?`)
         .bind(next.verdict, next.score, next.studentAnswer, next.feedback, next.errorType, JSON.stringify(next.stepAnalysis), next.evidenceSummary,
           JSON.stringify(next.capabilityKeys), next.confidence, ["unreadable","review_required"].includes(String(next.verdict)) ? 1 : 0, user.id, now, now, now, patch.id, id),
     ]);
@@ -620,6 +620,7 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
     if(!page)throw responseError("补图对应的原页面不存在",400);
     changes.push(appEnv().DB.prepare('INSERT INTO submission_page_revisions(id,submission_id,page_id,original_asset_id,processed_asset_id,created_at) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),id,page.id,page.original_asset_id,page.processed_asset_id,now));
     changes.push(appEnv().DB.prepare("UPDATE submission_pages SET original_asset_id=?,processed_asset_id=?,quality_json='{}' WHERE id=? AND submission_id=?").bind(replacement.assetId,replacement.assetId,page.id,id));
+    changes.push(appEnv().DB.prepare("UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors') WHERE page_id=? AND submission_id=?").bind(page.id,id));
   }
   // Reuse pending-item recovery for historical mistakes whose reference answer was never generated or verified.
   changes.push(appEnv().DB.prepare(`UPDATE assignment_questions SET reference_fingerprint='' WHERE id IN
@@ -688,6 +689,11 @@ export async function updateSubmission(id: string, body: { action?: string; page
   if (body.action === "cancel") return cancelSubmissionGrading(id, user);
   if (body.action === "rebuild-coverage") return rebuildSubmissionCoverage(id, user);
   if (body.action === "attach-figures") { await (await import("./homework-figures")).attachMissingFigures(id, user); return readTeacherSubmission(id, user); }
+  if (body.action === "locate-errors") {
+    if (!["published", "ready"].includes(String(row.status))) throw responseError("请等待本次批改完成后再定位错处", 409);
+    await (await import("./completed-homework-grading")).locateHomeworkErrors(await submissionDetails(row));
+    return readTeacherSubmission(id, user);
+  }
   if (body.action === "reprocess-pending") return reprocessPendingSubmission(id, body.pages ?? [], user);
   if (body.action === "review") return reviewSubmission(id, body.items ?? [], user);
   if (body.action === "correct") return correctPublishedSubmission(id, body.items ?? [], user);

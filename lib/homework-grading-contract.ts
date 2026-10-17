@@ -6,13 +6,24 @@ export type HomeworkBox = { x: number; y: number; width: number; height: number 
 export type ExtractedGradingItem = {
   question_number: string; page_number: number; student_answer: string; verdict: GradingVerdict; score: number | null;
   feedback: string; error_type: string; step_analysis: string[]; evidence_summary: string; capability_keys: string[];
-  confidence: number; bbox: HomeworkBox | null; warnings: string[];
+  confidence: number; bbox: GradingItem["bbox"]; warnings: string[];
 };
 
 const VERDICTS: GradingVerdict[] = ["correct", "partial", "incorrect", "unreadable", "review_required"];
-const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: {
+const coordinates = {
   x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" },
-}, required: ["x", "y", "width", "height"] }] };
+};
+const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, properties: {
+  ...coordinates, errors: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, properties: coordinates, required: ["x", "y", "width", "height"] } },
+}, required: ["x", "y", "width", "height", "errors"] }] };
+
+export const homeworkErrorLocationSchema: Record<string, unknown> = {
+  type: "object", additionalProperties: false, properties: {
+    results: { type: "array", items: { type: "object", additionalProperties: false, properties: {
+      question_number: { type: "string" }, bbox: box,
+    }, required: ["question_number", "bbox"] } },
+  }, required: ["results"],
+};
 
 export const homeworkGradingSchema: Record<string, unknown> = {
   type: "object", additionalProperties: false, properties: {
@@ -57,12 +68,31 @@ export function normalizeHomeworkGrading(value: unknown): ExtractedGradingItem[]
   const raw = record(value); const results = Array.isArray(raw.results) ? raw.results : [];
   return results.map((item) => {
     const result = record(item); const verdict = VERDICTS.includes(result.verdict as GradingVerdict) ? result.verdict as GradingVerdict : "review_required";
+    const bbox: GradingItem["bbox"] = normalizedBox(result.bbox);
+    if (bbox && ["incorrect", "partial"].includes(verdict)) {
+      const errors = (result.bbox as Record<string, unknown>).errors;
+      if (Array.isArray(errors)) {
+        // Reject bad coordinates instead of moving an uncertain mark onto unrelated working.
+        const seen = new Set<string>();
+        const valid = errors.flatMap((error) => {
+          if (!error || typeof error !== "object" || Array.isArray(error)) return [];
+          const b = error as Record<string, unknown>;
+          const values = [b.x, b.y, b.width, b.height];
+          if (!values.every((v) => typeof v === "number" && Number.isFinite(v))) return [];
+          const { x, y, width, height } = b as HomeworkBox;
+          if (width <= 0 || height <= 0 || x < bbox.x || y < bbox.y || x + width > bbox.x + bbox.width || y + height > bbox.y + bbox.height) return [];
+          const key = values.join(","); if (seen.has(key)) return []; seen.add(key);
+          return [{ x, y, width, height }];
+        }).slice(0, 8);
+        if (valid.length) bbox.errors = valid;
+      }
+    }
     return {
       question_number: text(result.question_number, 80), page_number: Math.max(1, Math.floor(clamp(result.page_number, 1, 200, 1))),
       student_answer: text(result.student_answer), verdict,
       score: result.score == null || !Number.isFinite(Number(result.score)) ? null : Number(result.score), feedback: text(result.feedback, 4_000), error_type: text(result.error_type, 120),
       step_analysis: list(result.step_analysis, 12), evidence_summary: text(result.evidence_summary, 1_000), capability_keys: list(result.capability_keys, 5),
-      confidence: clamp(result.confidence, 0, 1), bbox: normalizedBox(result.bbox), warnings: list(result.warnings),
+      confidence: clamp(result.confidence, 0, 1), bbox, warnings: list(result.warnings),
     };
   }).filter((item) => item.question_number);
 }
@@ -77,7 +107,7 @@ export function buildHomeworkGradingPrompt(pageNumber: number, questions: Array<
 只批改下列题目：
 ${reference}
 
-逐题转录学生作答，bbox 框学生实际作答区域并使用学生答卷的 0—1000 归一化坐标。选择、判断和简单填空依据标准答案判断；解答题必须逐步对照标准解析，step_analysis 简洁列出正确步骤、错误步骤或缺失步骤，evidence_summary 说明判定所依据的学生原文。正常可读的结论只能为 correct、partial、incorrect；字迹不清、漏页或页面不匹配时必须返回 unreadable，禁止猜测。
+逐题转录学生作答，bbox 框学生实际作答区域并使用学生答卷的 0—1000 归一化坐标。bbox.errors 只框本页作答中能够确认的具体错处，沿用整页坐标，必须位于 bbox 内；多小问分别检查，正确的小问和正确步骤不圈错。每条错误推导优先框首次出错的那一行、算式或符号，不把同一错误沿用的后续各行重复圈出；不同小问或独立错误可以各框一处，最多8处。不要把整片混合对错的作答区域当作局部错处，也不要框老师已有的叉号。正确、字迹不清、错误在其他页或不能可靠定位时 errors 返回空数组，不能为了判错而猜坐标。选择、判断和简单填空依据标准答案判断；解答题必须逐步对照标准解析，step_analysis 简洁列出正确步骤、错误步骤或缺失步骤，evidence_summary 说明判定所依据的学生原文。正常可读的结论只能为 correct、partial、incorrect；字迹不清、漏页或页面不匹配时必须返回 unreadable，禁止猜测。
 
 评分原则：接受数学等价的表达和有效的替代解法，不因未照抄标准路线、符号写法或排版不同而判错；标准解析写得过窄时，独立核验学生方法的数学有效性。区分“应扣分”和“建议更规范”，后者不扣分、不降低结论。精度、单位和过程要求按题目实际要求判定。
 score：有满分的题按步骤给分，0 到满分，可用 0.5 分；方法正确但计算或结论有误时保留方法分；前一步出错后，后续步骤方法正确的照常给分，同一错误不重复扣分；没有满分的题 score 返回 null。score 等于满分时结论为 correct，为 0 时为 incorrect，介于两者之间为 partial。

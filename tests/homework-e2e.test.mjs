@@ -170,6 +170,14 @@ function startMockModel(port) {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const prompt = String(payload.input?.[0]?.content?.find((item) => item.type === "input_text")?.text ?? "");
+    if (prompt.startsWith("你是数学作业错处定位助手")) {
+      const references = JSON.parse(prompt.split("\n")[1]);
+      const results = references.map(item => ({ question_number:item.question_number,bbox:{...item.bbox,errors:[
+        {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2},
+        {x:0,y:0,width:30,height:30},
+      ]} }));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({results})}));return;
+    }
     if (state.concurrency) {
       const stage = prompt.includes("只识别学生已完成的数学作业") ? "pages"
         : prompt.includes("建立独立参考解答") ? "reference"
@@ -318,7 +326,8 @@ function startMockModel(port) {
       verdict: state.assignedVerdicts[number] ?? (number === "D2" ? "partial" : "incorrect"), score: number === "D2" ? 2.5 : 0, feedback: number === "D2" ? "推导未完成" : "结果与参考答案不同",
       error_type: number === "D2" ? "步骤" : "计算", confidence: .98,
       step_analysis: number === "D2" ? ["正确写出了部分移项过程", "缺少最终验算"] : [], evidence_summary: "学生作答与参考答案不同",
-      capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190 }, warnings: [],
+      capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190,
+        errors:[{x:600,y:140+index*280,width:140,height:45}] }, warnings: [],
     }));
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ output_text: JSON.stringify({ results }) }));
   });
@@ -438,9 +447,19 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     // Rows stay in the teacher's own namespace, so a re-sync of older homework updates them instead of adding copies.
     assert.ok(d1Rows(stateDir,"SELECT w.source_library_id AS library, s.owner_user_id AS owner FROM student_wrong_questions w JOIN students s ON s.id=w.student_id WHERE w.assignment_id=?",[directAssignmentId]).every(row=>row.library===`personal:${row.owner}`));
     const d1=directResult.gradingItems.find(i=>i.questionNumber==="D1");
+    assert.equal(d1.bbox.errors.length,1,"automatic grading persists a precise mark alongside the answer box");
+    const beforeLocations=d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]);
+    const beforeOccurrences=d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"locate-errors"}})).response.status,404);
+    const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"locate-errors"}});
+    assert.equal(located.response.status,200,JSON.stringify(located.payload));
+    assert.equal(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors.length,1,"out-of-box candidate marks are rejected");
+    assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
+    assert.deepEqual(d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
     const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
     assert.equal(correctedDirect.response.status,200,JSON.stringify(correctedDirect.payload));
     assert.equal(correctedDirect.payload.submission.gradingSummary.archived,1);
+    assert.equal(correctedDirect.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors,undefined,"a correction clears stale local marks");
     assert.equal(d1Rows(stateDir,"SELECT COUNT(*) AS count FROM grading_item_revisions WHERE submission_id=?",[directId])[0].count,1);
     const d2=directResult.gradingItems.find(i=>i.questionNumber==="D2");
     const rescored=(await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d2.id,verdict:"partial",score:4}]}})).payload.submission.gradingItems.find(i=>i.id===d2.id);
@@ -454,6 +473,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const oldPage=directResult.pages[0];
     const supplemental=await uploadPage(base,teacherOne,directId,bytes);
     mock.state.supplementalReadable=true;
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"locate-errors"}})).response.status,200);
     const beforeKnown=d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND requires_review=0 ORDER BY id",[directId]);
     const supplementalResult=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"reprocess-pending",pages:[{...supplemental,replacePageId:oldPage.id}]}});
     assert.equal(supplementalResult.response.status,200,JSON.stringify(supplementalResult.payload));
@@ -463,6 +483,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(reprocessed.pageRevisions.length,1);
     assert.equal(reprocessed.pageRevisions[0].originalUrl,oldPage.originalUrl);
     assert.deepEqual(d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND id IN ("+beforeKnown.map(()=>"?").join(",")+") ORDER BY id",[directId,...beforeKnown.map(i=>i.id)]),beforeKnown);
+    assert.ok(reprocessed.gradingItems.filter(i=>beforeKnown.some(old=>old.id===i.id)).every(i=>!i.bbox?.errors),"replacing the original page clears old local coordinates without regrading settled work");
 
     const withOriginal=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"学校作业原件验证",outputs:{wrongBook:false,report:false,profile:false}}});
     const originalId=withOriginal.payload.submission.id,originalAssignment=withOriginal.payload.submission.assignmentId;
