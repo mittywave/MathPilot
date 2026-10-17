@@ -38,6 +38,8 @@ const KNOWLEDGE_MAP_KEY = "library-knowledge-map";
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
 // (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
 const LIBRARY_PAGE = 40;
+// A new list paints its first few cards on their own, so the page shows sooner; the rest of the first 40 follow below.
+const LIBRARY_FIRST = 8;
 // 组卷篮 opens 快速排版 in place; the typesetter loads only then.
 const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 
@@ -363,11 +365,18 @@ export default function Home() {
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode]);
-  // A new filter starts again from the first 40; the end marker loads the next 40 while it is still well below the screen.
+  // A new filter starts again from the top (8 cards, then 40); the end marker loads the next 40 while it is still well below the screen.
   const listKey = `${activeModuleId}|${activeCategory}|${typeFilter}|${query}|${showSelected}`;
   const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
   const [locatingQuestion, setLocatingQuestion] = useState<string | null>(null);
-  const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_PAGE;
+  const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_FIRST;
+  useEffect(() => {
+    if (listPaging.key === listKey) return;
+    // After the frame that shows the first cards, not in the same one.
+    let timer = 0;
+    const frame = requestAnimationFrame(() => { timer = window.setTimeout(() => setListPaging((current) => current.key === listKey ? current : { key: listKey, count: LIBRARY_PAGE })); });
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [listKey, listPaging.key]);
   // The basket question shown on the knowledge map: the one last clicked in the outline or the list, else the first.
   const [activeBasketId, setActiveBasketId] = useState("");
   const activeBasketQuestion = selectedQuestions.find((question) => question.id === activeBasketId) ?? selectedQuestions[0] ?? null;
