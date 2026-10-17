@@ -11,7 +11,7 @@ import { dayState, type DayState } from "./AssignedHomeworkSheet";
 import { useConfirm } from "./ConfirmDialog";
 
 const busy = (item: Homework) => item.latest.status === "submitted" || item.latest.status === "processing";
-export const homeworkInProgress = (item: Homework) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total);
+export const homeworkProgress = (items: Homework[]) => items.some(busy) ? "grading" : items.some((item) => item.assigned && (item.latest.status !== "published" || item.pending > 0 || item.done < item.total)) ? "assigned" : null;
 
 // An assigned homework goes by task completion; an uploaded one goes by its grading.
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
@@ -87,7 +87,7 @@ export function AssignPlan({ student, className, handedOut, onClose, onAssigned 
 }
 
 /** 学生档案 · 作业: the student's assigned and uploaded homework, newest first; each row opens its grading page. */
-export function StudentHomework({ student, onProgressChange }: { student: StudentSummary; onProgressChange?: (studentId: string, inProgress: boolean) => void }) {
+export function StudentHomework({ student, onProgressChange }: { student: StudentSummary; onProgressChange?: (studentId: string, progress: ReturnType<typeof homeworkProgress>) => void }) {
   const [confirmNode, confirm] = useConfirm();
   const [cancelling, setCancelling] = useState("");
   // What was read, and for whom: switching students shows the loading state until that student's list arrives.
@@ -97,7 +97,7 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
   const [assigning, setAssigning] = useState(false);
   useEffect(() => {
     let current = true;
-    homeworkApi.studentHomework(student.id).then((result) => { if (current) { setLoaded({ studentId: student.id, homework: result.homework, error: "" }); onProgressChange?.(student.id, result.homework.some(homeworkInProgress)); } })
+    homeworkApi.studentHomework(student.id).then((result) => { if (current) { setLoaded({ studentId: student.id, homework: result.homework, error: "" }); onProgressChange?.(student.id, homeworkProgress(result.homework)); } })
       .catch((reason) => { if (current) setLoaded({ studentId: student.id, homework: null, error: reason instanceof Error ? reason.message : "作业记录读取失败" }); });
     return () => { current = false; };
   }, [student.id, reads, onProgressChange]);
@@ -117,7 +117,7 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
       await homeworkApi.updateSubmission(item.latest.id, { action: "cancel-homework" });
       const remaining = homework?.filter((entry) => entry.assignmentId !== item.assignmentId) ?? [];
       setLoaded((current) => current?.studentId === student.id ? { ...current, homework: remaining, error: "" } : current);
-      onProgressChange?.(student.id, remaining.some(homeworkInProgress));
+      onProgressChange?.(student.id, homeworkProgress(remaining));
       setReads((count) => count + 1);
     } catch (reason) {
       setLoaded((current) => current?.studentId === student.id ? { ...current, error: reason instanceof Error ? reason.message : "取消作业失败" } : current);

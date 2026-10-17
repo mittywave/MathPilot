@@ -9,7 +9,7 @@ import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { useConfirm } from "./components/ConfirmDialog";
 import { useToast } from "./components/Toast";
 import { SiteHeader } from "./components/SiteHeader";
-import { AssignPlan, StudentHomework, homeworkInProgress } from "./components/StudentHomework";
+import { AssignPlan, StudentHomework, homeworkProgress } from "./components/StudentHomework";
 import { homeworkApi } from "../lib/homework-api-client";
 import { StudentProfile } from "./components/StudentProfile";
 import { StudentReports } from "./components/StudentReports";
@@ -136,7 +136,7 @@ export default function Home() {
   const [classBusy, setClassBusy] = useState(false);
   const [classError, setClassError] = useState("");
   const [classAssigning, setClassAssigning] = useState(false);
-  const [studentHomeworkInProgress, setStudentHomeworkInProgress] = useState<Record<string, boolean>>({});
+  const [studentHomeworkProgress, setStudentHomeworkProgress] = useState<Record<string, ReturnType<typeof homeworkProgress>>>({});
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
   const [wrongBookLoading, setWrongBookLoading] = useState(false);
@@ -158,27 +158,31 @@ export default function Home() {
   const canDelete = authUser?.role === "admin";
   const activeStudent = students.find((item) => item.id === activeStudentId) ?? null;
   const classStudents = activeClassName === null ? [] : students.filter((student) => student.className === activeClassName);
-  const updateHomeworkProgress = useCallback((studentId: string, inProgress: boolean) => {
-    setStudentHomeworkInProgress((current) => current[studentId] === inProgress ? current : { ...current, [studentId]: inProgress });
+  const updateHomeworkProgress = useCallback((studentId: string, progress: ReturnType<typeof homeworkProgress>) => {
+    setStudentHomeworkProgress((current) => current[studentId] === progress ? current : { ...current, [studentId]: progress });
   }, []);
 
   useEffect(() => {
     if (!showWrongBook || !authUser) return;
-    let current = true, latest = 0;
-    // Read the existing homework summaries only while the archive is open; returning to the window refreshes them.
-    const refresh = () => {
-      const request = ++latest;
-      void Promise.allSettled(students.map((student) => homeworkApi.studentHomework(student.id))).then((results) => {
-        if (!current || request !== latest) return;
-        setStudentHomeworkInProgress((previous) => Object.fromEntries(students.map((student, index) => {
+    let current = true, reading = false;
+    // Reuse the homework summaries; keep grading badges current even when another student or tab is selected.
+    const refresh = async () => {
+      if (document.hidden || reading) return;
+      reading = true;
+      try {
+        const results = await Promise.allSettled(students.map((student) => homeworkApi.studentHomework(student.id)));
+        if (!current) return;
+        setStudentHomeworkProgress((previous) => Object.fromEntries(students.map((student, index) => {
           const result = results[index];
-          return [student.id, result.status === "fulfilled" ? result.value.homework.some(homeworkInProgress) : previous[student.id] ?? false];
+          return [student.id, result.status === "fulfilled" ? homeworkProgress(result.value.homework) : previous[student.id] ?? null];
         })));
-      });
+      } finally { reading = false; }
     };
-    refresh();
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 4000);
     window.addEventListener("focus", refresh);
-    return () => { current = false; window.removeEventListener("focus", refresh); };
+    document.addEventListener("visibilitychange", refresh);
+    return () => { current = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [showWrongBook, authUser, students]);
 
 
@@ -782,7 +786,7 @@ export default function Home() {
             <div className="sidebar-heading"><span className="eyebrow">班级 · {studentClasses.length}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
             <div className="class-list" aria-label="班级">{studentClasses.map((name) => <button key={name} className={`class-card${activeClassName === name ? " active" : ""}`} onClick={() => setActiveClassName(name)}><span>▦</span><b>{name}</b><small>{students.filter((student) => student.className === name).length} 人</small></button>)}</div>
             <div className="sidebar-heading"><span className="eyebrow">学生 · {students.length}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
-            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkInProgress[student.id] && <i title="有尚未完成的布置作业">作业中</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
+            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
@@ -796,7 +800,7 @@ export default function Home() {
             {activeClassName !== null ? <section className="class-profile" aria-label={`${activeClassName}的班级`}>
               <div className="wrong-book-hero"><div className="student-avatar">▦</div><div><h1>{activeClassName}</h1><p className="subtext">{classStudents.length} 位学生 · 每位学生独立记录作业、批改和错题</p></div><div className="wrong-book-stats"><button className="secondary" disabled={classBusy} onClick={() => openClassDialog(activeClassName)}>管理班级</button><button className="homework-cancel" disabled={classBusy} title="删除班级，保留全部学生档案" aria-label={`删除班级：${activeClassName}`} onClick={() => void removeClass(activeClassName)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg></button></div></div>
               <header className="student-panel-head"><p>班级学生</p><div className="student-panel-actions"><button className="secondary" onClick={() => openStudentDialog()}>新建学生</button><button className="secondary" onClick={() => openClassDialog(activeClassName)}>添加学生</button><button className="primary-button" disabled={!classStudents.length} title={classStudents.length ? "选择练习并布置给全班" : "请先添加学生"} onClick={() => setClassAssigning(true)}>布置作业</button></div></header>
-              {classStudents.length ? <div className="class-members">{classStudents.map((student) => <button className="student-card" key={student.id} onClick={() => void selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}{studentHomeworkInProgress[student.id] && <i>作业中</i>}</b><small>{student.notes || "查看学生档案"}</small></div><em>错题 {student.wrongCount} · →</em></button>)}</div>
+              {classStudents.length ? <div className="class-members">{classStudents.map((student) => <button className="student-card" key={student.id} onClick={() => void selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.notes || "查看学生档案"}</small></div><em>错题 {student.wrongCount} · →</em></button>)}</div>
                 : <div className="student-panel-empty"><b>班级里还没有学生</b><p>可以添加已有学生，或在这个班级下新建学生。</p></div>}
               {classAssigning && <AssignPlan className={activeClassName} handedOut={[]} onClose={() => setClassAssigning(false)} onAssigned={() => { setClassAssigning(false); void loadStudents().catch((error) => show({ text: error instanceof Error ? error.message : "学生读取失败", tone: "error" })); show({ text: "作业已布置，可在每位学生的作业中查看", tone: "success" }); }} />}
             </section> : activeStudent ? <>

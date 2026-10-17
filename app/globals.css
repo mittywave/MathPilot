@@ -562,6 +562,7 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 .student-card b { display:flex; align-items:center; gap:5px; min-width:0; color:var(--ink); font-size:14px; font-weight:600; white-space:nowrap; }
 .student-card b>span { overflow:hidden; text-overflow:ellipsis; }
 .student-card b>i { flex:none; padding:2px 5px; border-radius:calc(5px*var(--radius-scale)); background:var(--warn-soft); color:var(--warn-strong); font-size:10px; font-style:normal; font-weight:600; }
+.student-card b>i.busy { background:var(--info-soft); color:color-mix(in srgb,var(--info) 70%,var(--ink)); }
 .student-card small { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:12px; white-space:nowrap; }
 .student-card em { color:var(--muted); font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .student-list-empty { min-height:220px; display:grid; place-content:center; justify-items:center; padding:20px; text-align:center; }
