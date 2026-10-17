@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
 import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, SubmissionStatus } from "../../lib/types";
+import { DocxContent } from "./DocxContent";
+import { MathText } from "./MathText";
 import { QuestionBody } from "./QuestionBody";
+import { StudioSolution } from "./StudioSolution";
 
 type Result = GradingItem | AssignedHomework["questions"][number]["result"];
 type Bucket = "correct" | "corrected" | "partial" | "incorrect" | "pending" | "missing";
@@ -72,6 +75,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
 }) {
   const { assigned } = submission;
   const [showOriginals, setShowOriginals] = useState(false);
+  const [expandedAnalyses, setExpandedAnalyses] = useState<string[]>([]);
   const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
     pending: all.pending + day.firstAttempt.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
   const handedIn = assigned.questions.length - counts.missing;
@@ -126,9 +130,22 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       <h3>作业原题</h3>
       {days.map((group, index) => <div key={index}>
         {several && <h4>{group.title || `第 ${index + 1} 天`}</h4>}
-        <div className="question-list">{group.items.map((item) => <article className="question-card" key={item.id} aria-label={homeworkQuestionLabel(item.number)}>
-          <div className="question-main"><QuestionBody question={item.question} number={item.number.replace(/^D\d+-/, "")} /></div>
-        </article>)}</div>
+        <div className="question-list">{group.items.map((item) => {
+          const question = item.question;
+          const hasAnalysis = Boolean(question.analysis.trim() || question.analysisDocxXml?.length || question.studioSource?.diagrams.length);
+          const analysisOpen = hasAnalysis && expandedAnalyses.includes(item.id);
+          return <article className="question-card" key={item.id} aria-label={homeworkQuestionLabel(item.number)}>
+            <div className="question-main">
+              <QuestionBody question={question} number={item.number.replace(/^D\d+-/, "")} />
+              {analysisOpen && <div className="answer-box" id={`assigned-analysis-${item.id}`}>
+                {question.answer.trim() && <><b>答案</b><p><MathText text={question.answer} /></p></>}
+                <b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{ ...question.studioSource, analysis: question.analysis }} /> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div>
+              </div>}
+              {hasAnalysis && <div className="question-actions"><button type="button" aria-expanded={analysisOpen} aria-controls={`assigned-analysis-${item.id}`}
+                onClick={() => setExpandedAnalyses((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}>{analysisOpen ? "收起解析" : "查看解析"}</button></div>}
+            </div>
+          </article>;
+        })}</div>
       </div>)}
     </section>}
   </section>;
