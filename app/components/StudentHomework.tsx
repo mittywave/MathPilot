@@ -142,7 +142,7 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
-            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{days.length > 1 ? `打卡任务 · ${days.length} 天 · ${item.total} 道题`
+            <span className="homework-title"><b>{titleWithoutStudent(item.title, student.name)}</b><small>{item.assigned && `${new Date(item.createdAt).toLocaleDateString("zh-CN")} 布置 · `}{days.length > 1 ? `打卡任务 · ${days.length} 天 · ${item.total} 道题`
               : days.length ? `${item.total} 道题${days[0].handedInAt == null ? "" : ` · ${day(days[0].handedInAt)} 提交`}` : `${day(item.createdAt)} 上传批改${graded ? ` · ${graded} 道题` : ""}`}</small></span>
             {graded > 0 && <span className="homework-tally">
               {graded > 0 && <span className="homework-bar" aria-label={`对 ${item.correct} 道，错 ${item.incorrect} 道，待处理 ${item.pending} 道`}>
