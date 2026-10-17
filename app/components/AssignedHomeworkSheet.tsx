@@ -93,10 +93,17 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       </div>
       <div className="assigned-sheet-actions">
         <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
-        {(["word", "pdf"] as const).map((kind) => <button key={kind} type="button" disabled={busy || !mistakes.length} onClick={() => onExport(mistakes.map((item) => item.question), kind)}
-          title={mistakes.length ? `导出当前仍需订正的 ${mistakes.length} 道题为 ${kind === "word" ? "Word" : "PDF"}，不含答案` : "当前没有需要订正的错题"}>导出错题 {kind === "word" ? "Word" : "PDF"}</button>)}
+        <select className="secondary" aria-label="导出错题" defaultValue="" disabled={busy || !mistakes.length}
+          title={mistakes.length ? `导出当前仍需订正的 ${mistakes.length} 道题，不含答案` : "当前没有需要订正的错题"}
+          onChange={(event) => {
+            const kind = event.currentTarget.value;
+            event.currentTarget.value = "";
+            if (kind === "pdf" || kind === "word") onExport(mistakes.map((item) => item.question), kind);
+          }}>
+          <option value="" disabled>导出错题</option><option value="pdf">PDF</option><option value="word">Word</option>
+        </select>
         {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
-          : latest?.status === "published" ? <button className={counts.missing ? "primary" : ""} disabled={busy} onClick={onContinue} title={counts.missing ? "上传学生后来交的部分" : "学生订正或重做后再批改一次"}>{counts.missing ? "继续上传" : "再上传一次"}</button> : null}
+          : latest?.status === "published" && counts.missing > 0 ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null}
       </div>
     </header>
     {days.map((group, index) => {

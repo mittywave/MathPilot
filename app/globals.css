@@ -1154,7 +1154,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-sheet>header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
 .assigned-sheet h2 { margin:0; font:700 17px "Songti SC",serif; }
 .assigned-sheet header p { margin:3px 0 0; color:var(--muted); font-size:13px; }
-.assigned-sheet header .primary,.assigned-sheet header button { display:inline-flex; align-items:center; min-height:38px; padding:0 16px; font-size:13px; text-decoration:none; white-space:nowrap; }
+.assigned-sheet header .primary,.assigned-sheet header button,.assigned-sheet header select { display:inline-flex; align-items:center; min-height:38px; padding:0 16px; font-size:13px; text-decoration:none; white-space:nowrap; }
 .assigned-sheet header a.primary { border-radius:calc(9px*var(--radius-scale)); background:var(--accent-strong); color:var(--on-accent); font-weight:700; }
 .assigned-sheet-actions { display:flex; align-items:center; gap:8px; }
 .assigned-originals { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
