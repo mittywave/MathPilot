@@ -55,6 +55,52 @@ export async function readStudents(user: AuthUser): Promise<StudentSummary[]> {
   }));
 }
 
+export async function readStudentClasses(user: AuthUser): Promise<string[]> {
+  const rows = await appEnv().DB.prepare("SELECT name FROM student_classes WHERE owner_user_id = ? ORDER BY name")
+    .bind(user.id).all<{ name: string }>();
+  return rows.results.map((row: { name: string }) => row.name);
+}
+
+/** One class per student, using the existing class_name. Updating a class never changes a student's work. */
+export async function saveStudentClass(raw: { name?: unknown; studentIds?: unknown }, user: AuthUser, previousName?: string) {
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name || name.length > 80) throw responseError("请填写 1–80 字的班级名称", 400);
+  if (!Array.isArray(raw.studentIds) || raw.studentIds.length > 200 || raw.studentIds.some((id) => typeof id !== "string" || !id)) {
+    throw responseError("请选择班级学生", 400);
+  }
+  const ids = [...new Set(raw.studentIds as string[])];
+  const db = appEnv().DB;
+  if (previousName !== undefined && !(await db.prepare("SELECT name FROM student_classes WHERE owner_user_id = ? AND name = ?").bind(user.id, previousName).first())) {
+    throw responseError("班级不存在", 404);
+  }
+  const conflict = await db.prepare("SELECT name FROM student_classes WHERE owner_user_id = ? AND name = ?").bind(user.id, name).first();
+  if (conflict && previousName !== name) throw responseError("已有同名班级，请使用其他名称", 409);
+  // Validate every recipient before changing membership, including students coming from another class.
+  const students = await readStudents(user);
+  if (ids.some((id) => !students.some((student) => student.id === id))) throw responseError("有学生档案不存在，请刷新后重试", 404);
+  const statements = [previousName === undefined
+    ? db.prepare("INSERT INTO student_classes (owner_user_id, name) VALUES (?, ?)").bind(user.id, name)
+    : db.prepare("UPDATE student_classes SET name = ? WHERE owner_user_id = ? AND name = ?").bind(name, user.id, previousName)];
+  const members = new Set(ids), now = Date.now();
+  for (const student of students) {
+    const nextClass = members.has(student.id) ? name : previousName !== undefined && student.className === previousName ? "" : student.className;
+    if (nextClass !== student.className) statements.push(db.prepare("UPDATE students SET class_name = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?")
+      .bind(nextClass, now, student.id, user.id));
+  }
+  // D1 batch is a transaction: renaming and moving members either all succeed or all roll back.
+  await db.batch(statements);
+  return name;
+}
+
+export async function deleteStudentClass(name: string, user: AuthUser) {
+  const db = appEnv().DB;
+  if (!(await db.prepare("SELECT name FROM student_classes WHERE owner_user_id = ? AND name = ?").bind(user.id, name).first())) throw responseError("班级不存在", 404);
+  await db.batch([
+    db.prepare("UPDATE students SET class_name = '', updated_at = ? WHERE owner_user_id = ? AND class_name = ?").bind(Date.now(), user.id, name),
+    db.prepare("DELETE FROM student_classes WHERE owner_user_id = ? AND name = ?").bind(user.id, name),
+  ]);
+}
+
 export async function createStudent(raw: Partial<Student>, user: AuthUser) {
   const count = await appEnv().DB.prepare("SELECT COUNT(*) AS count FROM students WHERE owner_user_id = ?")
     .bind(user.id).first<{ count: number }>();
@@ -62,9 +108,11 @@ export async function createStudent(raw: Partial<Student>, user: AuthUser) {
   const input = cleanStudentInput(raw);
   const now = Date.now();
   const student: Student = { id: crypto.randomUUID(), ...input, createdAt: now, updatedAt: now };
-  await appEnv().DB.prepare(`INSERT INTO students
+  const statements = [appEnv().DB.prepare(`INSERT INTO students
     (id, owner_user_id, name, class_name, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(student.id, user.id, student.name, student.className, student.notes, now, now).run();
+    .bind(student.id, user.id, student.name, student.className, student.notes, now, now)];
+  if (input.className) statements.push(appEnv().DB.prepare("INSERT OR IGNORE INTO student_classes (owner_user_id, name) VALUES (?, ?)").bind(user.id, input.className));
+  await appEnv().DB.batch(statements);
   return student;
 }
 
@@ -72,8 +120,10 @@ export async function updateStudent(id: string, raw: Partial<Student>, user: Aut
   const existing = await ownedStudent(id, user);
   const input = cleanStudentInput(raw);
   const updatedAt = Date.now();
-  await appEnv().DB.prepare(`UPDATE students SET name = ?, class_name = ?, notes = ?, updated_at = ?
-    WHERE id = ? AND owner_user_id = ?`).bind(input.name, input.className, input.notes, updatedAt, id, user.id).run();
+  const statements = [appEnv().DB.prepare(`UPDATE students SET name = ?, class_name = ?, notes = ?, updated_at = ?
+    WHERE id = ? AND owner_user_id = ?`).bind(input.name, input.className, input.notes, updatedAt, id, user.id)];
+  if (input.className) statements.push(appEnv().DB.prepare("INSERT OR IGNORE INTO student_classes (owner_user_id, name) VALUES (?, ?)").bind(user.id, input.className));
+  await appEnv().DB.batch(statements);
   return { id, ...input, createdAt: Number(existing.created_at), updatedAt } satisfies Student;
 }
 

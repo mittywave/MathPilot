@@ -51,7 +51,9 @@ export async function fetchTypesetSource(record: Pick<TypesetRecord, "id" | "fil
   return new File([await response.blob()], record.fileName, { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 }
 export function uploadHandoutImage(image: string) { return request<{ url: string }>("/api/handout-images", { method: "POST", body: JSON.stringify({ image }) }); }
-export function fetchStudents() { return request<{ students: StudentSummary[] }>("/api/students"); }
+export function fetchStudents() { return request<{ students: StudentSummary[]; classes: string[] }>("/api/students"); }
+export function saveStudentClass(name: string, studentIds: string[], previousName?: string) { return request<{ name: string }>("/api/student-classes", { method: previousName === undefined ? "POST" : "PUT", body: JSON.stringify({ name, studentIds, previousName }) }); }
+export function deleteStudentClass(name: string) { return request<{ ok: boolean }>("/api/student-classes", { method: "DELETE", body: JSON.stringify({ name }) }); }
 export function createStudent(student: Pick<Student, "name" | "className" | "notes">) { return request<{ student: Student }>("/api/students", { method: "POST", body: JSON.stringify({ student }) }); }
 export function updateStudent(student: Student) { return request<{ student: Student }>(`/api/students/${encodeURIComponent(student.id)}`, { method: "PUT", body: JSON.stringify({ student }) }); }
 export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQuestionCount: number }>(`/api/students/${encodeURIComponent(id)}`, { method: "DELETE" }); }

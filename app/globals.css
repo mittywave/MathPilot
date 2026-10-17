@@ -539,6 +539,20 @@ html[data-theme="dark"] .module-manage-list button { background:var(--surface); 
 /* Student-specific wrong-question books */
 
 .student-list { display:grid; align-content:start; flex:1; min-height:0; gap:4px; overflow:auto; padding:0 3px 12px; }
+.class-list { display:grid; flex-shrink:0; gap:4px; max-height:35%; overflow:auto; margin:0 3px 20px; }
+.class-list:empty { margin-bottom:4px; }
+.class-card { display:flex; align-items:center; gap:10px; min-height:44px; padding:8px 10px; border:0; border-radius:calc(10px*var(--radius-scale)); background:transparent; text-align:left; }
+.class-card:hover { background:var(--surface-soft); }
+.class-card.active { background:var(--green-soft); color:var(--green); }
+.class-card>span { color:var(--green); font-size:20px; }
+.class-card b { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; font-size:14px; }
+.class-card small { flex:none; color:var(--muted); font-size:12px; }
+.class-members { display:grid; gap:1px; overflow:hidden; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--line); }
+.class-members .student-card { min-height:68px; padding:12px 18px; border-radius:0; background:var(--surface); }
+.class-members .student-card:hover { background:var(--surface-soft); }
+.student-class-link { padding:0; border:0; background:transparent; color:var(--green); font:inherit; }
+.student-class-link:hover { text-decoration:underline; }
+.class-students { max-height:40vh; overflow:auto; }
 .student-card { width:100%; min-height:52px; display:grid; grid-template-columns:32px minmax(0,1fr) auto; align-items:center; gap:10px; padding:8px; border:0; border-radius:calc(10px*var(--radius-scale)); background:transparent; text-align:left; }
 .student-card:hover { background:var(--surface-soft); }
 .student-card.active { background:var(--green-soft); }
