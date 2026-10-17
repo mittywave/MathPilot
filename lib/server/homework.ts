@@ -381,7 +381,6 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
       latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
       days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
-      questions: assigned?.questions.map(({ id, number, result }) => ({ id, number, result })) ?? null,
     };
   }));
 }
