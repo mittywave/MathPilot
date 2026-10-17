@@ -1,11 +1,12 @@
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
-import { createStudent, readStudents } from "../../../lib/server/student-wrong-book";
+import { createStudent, readStudents, readStudentClasses } from "../../../lib/server/student-wrong-book";
 import type { Student } from "../../../lib/types";
 
 export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
-    return Response.json({ students: await readStudents(user) }, { headers: { "Cache-Control": "private, no-store" } });
+    const [students, classes] = await Promise.all([readStudents(user), readStudentClasses(user)]);
+    return Response.json({ students, classes }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "学生档案读取失败" }, { status: 500 });

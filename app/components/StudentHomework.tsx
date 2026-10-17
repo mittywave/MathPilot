@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchLibrary, fetchTypesetRecords } from "../../lib/api-client";
+import { fetchLibrary, fetchTypesetRecords, fetchTypesetSource } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
 import { titleWithoutStudent } from "../../lib/homework-grading-rules.mjs";
 import { planDays } from "../../lib/smart-paper-contract";
@@ -30,23 +30,33 @@ const day = (time: number) => new Date(time).toLocaleDateString("zh-CN", { month
 /**
  * 布置作业 in the archive: the plans 智能组卷 made for this student that are not handed out yet. Picking one takes its
  * questions from the library day by day and opens the same 布置给学生 dialog as 快速排版, with the student chosen.
+ * A class reuses this picker for all saved Word exercises and plans, then preselects its current members.
  */
-function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: StudentSummary; handedOut: string[]; onClose: () => void; onAssigned: () => void }) {
+export function AssignPlan({ student, className, handedOut, onClose, onAssigned }: { student?: StudentSummary; className?: string; handedOut: string[]; onClose: () => void; onAssigned: () => void }) {
+  const recipient = student?.name ?? className ?? "全班";
   const [plans, setPlans] = useState<TypesetRecord[] | null>(null);
   const [opening, setOpening] = useState("");
   const [error, setError] = useState("");
-  const [material, setMaterial] = useState<{ record: TypesetRecord; questions: Question[]; groups: HomeworkSheetGroup[] } | null>(null);
+  const [material, setMaterial] = useState<{ record: TypesetRecord; questions: Question[]; groups?: HomeworkSheetGroup[] } | null>(null);
   useEffect(() => {
     let current = true;
-    fetchTypesetRecords().then(({ records }) => { if (current) setPlans(records.filter((record) => record.plan && record.studentId === student.id && !handedOut.includes(record.id))); })
+    fetchTypesetRecords().then(({ records }) => { if (current) setPlans(records.filter((record) => className ? true : record.plan && record.studentId === student?.id && !handedOut.includes(record.id))); })
       .catch((reason) => { if (current) { setPlans([]); setError(reason instanceof Error ? reason.message : "组卷记录读取失败"); } });
     return () => { current = false; };
-  }, [student.id, handedOut]);
+  }, [student?.id, className, handedOut]);
 
   async function open(record: TypesetRecord) {
-    if (!record.plan) return;
     setOpening(record.id); setError("");
     try {
+      if (record.sourceKind === "word") {
+        const { renderImportFile, structuredDocxQuestions } = await import("../../lib/file-import");
+        const items = structuredDocxQuestions(await renderImportFile(await fetchTypesetSource(record), () => {}));
+        if (!items.length) throw new Error("没有从这份 Word 里读出题目，请在快速排版中检查原件");
+        const questions: Question[] = items.map((item, index) => ({ ...item, id: `typeset-${index + 1}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 }));
+        setMaterial({ record, questions });
+        return;
+      }
+      if (!record.plan) throw new Error("这条记录的题目清单已无法读取");
       const days = planDays(record.plan, new Map((await fetchLibrary()).questions.map((question) => [question.id, question])));
       if (!days.length) throw new Error("这份卷里的题都已不在题库中");
       setMaterial({ record, questions: days.flatMap((entry) => entry.questions), groups: days.map((entry) => ({ title: entry.title, size: entry.questions.length })) });
@@ -54,23 +64,23 @@ function AssignPlan({ student, handedOut, onClose, onAssigned }: { student: Stud
     finally { setOpening(""); }
   }
 
-  if (material) return <AssignHomework title={material.record.title} questions={material.questions} groups={material.groups} studentId={student.id}
-    recordId={material.record.id} origin="智能组卷" onClose={onClose} onAssigned={onAssigned} />;
+  if (material) return <AssignHomework title={material.record.title} questions={material.questions} groups={material.groups} studentId={student?.id} className={className}
+    recordId={material.record.id} origin={material.record.sourceKind === "word" ? "快速排版" : "智能组卷"} onClose={onClose} onAssigned={onAssigned} />;
   return <div className="modal-backdrop">
-    <section className="modal assign-modal" role="dialog" aria-modal="true" aria-label={`给${student.name}布置作业`} aria-busy={Boolean(opening)}>
-      <div className="modal-head"><div><span className="eyebrow">学生档案</span><h2>给{student.name}布置作业</h2></div><button className="close" aria-label="关闭" disabled={Boolean(opening)} onClick={onClose}>×</button></div>
-      {plans === null ? <p className="assign-hint">正在读取给{student.name}组的卷…</p>
+    <section className="modal assign-modal" role="dialog" aria-modal="true" aria-label={`给${recipient}布置作业`} aria-busy={Boolean(opening)}>
+      <div className="modal-head"><div><span className="eyebrow">{className ? "班级作业" : "学生档案"}</span><h2>给{recipient}布置作业</h2></div><button className="close" aria-label="关闭" disabled={Boolean(opening)} onClick={onClose}>×</button></div>
+      {plans === null ? <p className="assign-hint">正在读取练习…</p>
         : plans.length ? <ul className="assign-plans" aria-label="组好还没布置的卷">{plans.map((plan) => <li key={plan.id}>
           <button type="button" disabled={Boolean(opening)} onClick={() => void open(plan)}>
-            <b>{plan.title}</b><small>{day(plan.createdAt)} 智能组卷 · {plan.plan!.groups.length > 1 ? `${plan.plan!.groups.length} 天 · ` : ""}{plan.questionCount} 道题</small>
+            <b>{plan.title}</b><small>{day(plan.createdAt)} {plan.sourceKind === "word" ? "Word 练习" : "智能组卷"} · {(plan.plan?.groups.length ?? 0) > 1 ? `${plan.plan!.groups.length} 天 · ` : ""}{plan.questionCount} 道题</small>
             <span>{opening === plan.id ? "正在取题…" : "布置"}</span>
           </button>
         </li>)}</ul>
-        : <p className="assign-empty">没有给{student.name}组好、还没布置的卷。</p>}
-      <p className="assign-hint">要新组一份，点 <a href={`/tools/smart-paper?student=${encodeURIComponent(student.id)}`}>智能组卷</a>，排好后点“布置给学生”。Word 练习在快速排版里打开后点“布置给学生”。</p>
-      <ul className="assign-plans" aria-label="学校发的作业"><li>
+        : <p className="assign-empty">{className ? "还没有保存的练习。" : `没有给${recipient}组好、还没布置的卷。`}</p>}
+      <p className="assign-hint">要新组一份，点 <a href={`/tools/smart-paper${student ? `?student=${encodeURIComponent(student.id)}` : ""}`}>智能组卷</a>，排好后点“布置给学生”。Word 练习可在 <a href="/tools/typeset">快速排版</a> 中打开，再选择班级或学生布置。</p>
+      {student && <ul className="assign-plans" aria-label="学校发的作业"><li>
         <a href={`/tools/homework/upload?studentId=${encodeURIComponent(student.id)}`}><b>学校发的作业</b><small>学生做完后，上传学生拍好的照片或 PDF 直接批改</small><span>上传作业</span></a>
-      </li></ul>
+      </li></ul>}
       {error && <p className="assign-error" role="alert">{error}</p>}
     </section>
   </div>;

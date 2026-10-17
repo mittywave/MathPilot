@@ -309,7 +309,7 @@ function hasReference(question: Pick<Question, "answer" | "analysis">) {
 export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; recordId?: unknown }, user: AuthUser) {
   requireHomeworkEnabled();
   const studentIds = [...new Set(Array.isArray(input.studentIds) ? input.studentIds.map((id) => String(id)) : [])];
-  if (!studentIds.length || studentIds.length > 50) throw responseError("请选择要布置的学生", 400);
+  if (!studentIds.length || studentIds.length > 200) throw responseError("请选择 1–200 位要布置的学生", 400);
   const students = await Promise.all(studentIds.map((id) => ownedStudent(id, user.id)));
   const title = text(input.title, 120); if (!title) throw responseError("请填写作业名称", 400);
   const raw = Array.isArray(input.questions) ? input.questions.filter((item): item is Question => Boolean(item) && typeof item === "object") : [];

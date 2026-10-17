@@ -9,7 +9,7 @@ import { PaperMoreMenu } from "./components/PaperMoreMenu";
 import { useConfirm } from "./components/ConfirmDialog";
 import { useToast } from "./components/Toast";
 import { SiteHeader } from "./components/SiteHeader";
-import { StudentHomework, homeworkInProgress } from "./components/StudentHomework";
+import { AssignPlan, StudentHomework, homeworkInProgress } from "./components/StudentHomework";
 import { homeworkApi } from "../lib/homework-api-client";
 import { StudentProfile } from "./components/StudentProfile";
 import { StudentReports } from "./components/StudentReports";
@@ -22,7 +22,7 @@ import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./compon
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../lib/library-tree";
-import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
+import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../lib/client-random-id.mjs";
 import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionEntry } from "../lib/types";
@@ -130,6 +130,12 @@ export default function Home() {
   const moduleManager = useRef<HTMLDivElement>(null);
   const [showWrongBook, setShowWrongBook] = useState(false);
   const [students, setStudents] = useState<StudentSummary[]>([]);
+  const [studentClasses, setStudentClasses] = useState<string[]>([]);
+  const [activeClassName, setActiveClassName] = useState<string | null>(null);
+  const [classDialog, setClassDialog] = useState<{ previousName?: string; name: string; studentIds: string[] } | null>(null);
+  const [classBusy, setClassBusy] = useState(false);
+  const [classError, setClassError] = useState("");
+  const [classAssigning, setClassAssigning] = useState(false);
   const [studentHomeworkInProgress, setStudentHomeworkInProgress] = useState<Record<string, boolean>>({});
   const [activeStudentId, setActiveStudentId] = useState("");
   const [wrongEntries, setWrongEntries] = useState<WrongQuestionEntry[]>([]);
@@ -151,6 +157,7 @@ export default function Home() {
   const canManageLibrary = Boolean(authUser);
   const canDelete = authUser?.role === "admin";
   const activeStudent = students.find((item) => item.id === activeStudentId) ?? null;
+  const classStudents = activeClassName === null ? [] : students.filter((student) => student.className === activeClassName);
   const updateHomeworkProgress = useCallback((studentId: string, inProgress: boolean) => {
     setStudentHomeworkInProgress((current) => current[studentId] === inProgress ? current : { ...current, [studentId]: inProgress });
   }, []);
@@ -192,15 +199,16 @@ export default function Home() {
     const url = new URL(window.location.href);
     if (showWrongBook) {
       url.searchParams.set("view", "wrong-book");
-      if (activeStudentId) url.searchParams.set("studentId", activeStudentId); else url.searchParams.delete("studentId");
+      if (activeClassName !== null) { url.searchParams.set("class", activeClassName); url.searchParams.delete("studentId"); }
+      else { url.searchParams.delete("class"); if (activeStudentId) url.searchParams.set("studentId", activeStudentId); else url.searchParams.delete("studentId"); }
       url.searchParams.set("tab", archiveTab);
     } else {
       if (showSelected) url.searchParams.set("view", "selected");
       else if (["selected", "wrong-book"].includes(url.searchParams.get("view") ?? "")) url.searchParams.delete("view");
-      url.searchParams.delete("studentId"); url.searchParams.delete("tab");
+      url.searchParams.delete("studentId"); url.searchParams.delete("tab"); url.searchParams.delete("class");
     }
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [authLoading, showWrongBook, activeStudentId, archiveTab, showSelected]);
+  }, [authLoading, showWrongBook, activeStudentId, activeClassName, archiveTab, showSelected]);
 
   function chooseAlevelPageLocale(locale: AlevelPageLocale) {
     setAlevelPageLocale(locale);
@@ -283,7 +291,7 @@ export default function Home() {
         if (auth.user) await restoreLocalBasket(auth.user, data.questions);
         if (auth.user && params.get("view") === "wrong-book") {
           setShowWrongBook(true); setWrongBookLoading(true);
-          try { await loadStudents(params.get("studentId") ?? ""); } finally { setWrongBookLoading(false); }
+          try { await loadStudents(params.get("studentId") ?? "", params.get("class")); } finally { setWrongBookLoading(false); }
         } else if (auth.user && params.get("view") === "selected") setShowSelected(true);
       } catch { show({ text: "云端题库读取失败，请刷新页面重试", tone: "error" }); }
       finally { setAuthLoading(false); }
@@ -427,9 +435,11 @@ export default function Home() {
     setShowSelected(false); setShowWrongBook(false);
   }
 
-  async function loadStudents(preferredStudentId = activeStudentId) {
+  async function loadStudents(preferredStudentId = activeStudentId, preferredClassName?: string | null) {
     const result = await fetchStudents();
     setStudents(result.students);
+    setStudentClasses(result.classes);
+    setActiveClassName((current) => { const name = preferredClassName ?? current; return name !== null && result.classes.includes(name) ? name : null; });
     const nextId = result.students.some((item) => item.id === preferredStudentId) ? preferredStudentId : result.students[0]?.id ?? "";
     setActiveStudentId(nextId);
     if (nextId) {
@@ -448,6 +458,7 @@ export default function Home() {
   }
 
   async function selectStudent(id: string) {
+    setActiveClassName(null);
     setActiveStudentId(id); setWrongBookLoading(true); setQuery(""); setWrongMonth("全部");
     try { showWrongEntries((await fetchWrongQuestions(id)).entries); }
     catch (error) { show({ text: error instanceof Error ? error.message : "错题记录读取失败", tone: "error" }); }
@@ -455,7 +466,7 @@ export default function Home() {
   }
 
   function openStudentDialog(student?: Student) {
-    setStudentDraft(student ?? null); setStudentName(student?.name ?? ""); setStudentClassName(student?.className ?? ""); setStudentNotes(student?.notes ?? ""); setStudentDialog(true);
+    setStudentDraft(student ?? null); setStudentName(student?.name ?? ""); setStudentClassName(student?.className ?? activeClassName ?? ""); setStudentNotes(student?.notes ?? ""); setStudentDialog(true);
   }
 
   async function saveStudent() {
@@ -465,9 +476,35 @@ export default function Home() {
       const result = studentDraft
         ? await updateStudentProfile({ ...studentDraft, ...payload })
         : await createStudentProfile(payload);
-      setStudentDialog(false); await loadStudents(result.student.id);
+      setStudentDialog(false); await loadStudents(result.student.id); setActiveClassName(null);
       show({ text: studentDraft ? "学生档案已更新" : `已创建学生档案：${result.student.name}`, tone: "success" });
     } catch (error) { show({ text: error instanceof Error ? error.message : "学生档案保存失败", tone: "error" }); }
+  }
+
+  function openClassDialog(name?: string) {
+    setClassError("");
+    setClassDialog({ previousName: name, name: name ?? "", studentIds: name ? students.filter((student) => student.className === name).map((student) => student.id) : [] });
+  }
+
+  async function saveClass() {
+    if (!classDialog || classBusy) return;
+    setClassBusy(true); setClassError("");
+    try {
+      const result = await saveStudentClass(classDialog.name, classDialog.studentIds, classDialog.previousName);
+      await loadStudents(); setActiveClassName(result.name); setClassDialog(null);
+      show({ text: classDialog.previousName === undefined ? `已创建班级：${result.name}` : "班级已保存", tone: "success" });
+    } catch (error) { setClassError(error instanceof Error ? error.message : "班级保存失败"); }
+    finally { setClassBusy(false); }
+  }
+
+  async function removeClass(name: string) {
+    if (classBusy || !await confirm({ title: `删除班级「${name}」`, body: "仅删除班级分组。学生会保留为独立个体，作业、批改和错题记录全部保留。", confirmLabel: "删除班级", danger: true })) return;
+    setClassBusy(true);
+    try {
+      await deleteStudentClass(name); await loadStudents(); setActiveClassName(null);
+      show({ text: "班级已删除，学生档案和作业已保留", tone: "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "班级删除失败", tone: "error" }); }
+    finally { setClassBusy(false); }
   }
 
   async function removeStudent(student: StudentSummary) {
@@ -506,7 +543,7 @@ export default function Home() {
   }
 
   async function signOut() {
-    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setIncludeAnswers(true); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
+    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setIncludeAnswers(true); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
     catch (error) { show({ text: error instanceof Error ? error.message : "退出失败", tone: "error" }); }
   }
 
@@ -735,15 +772,17 @@ export default function Home() {
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading} locale={pageLocale} basketCount={selectedIds.length}
-        title={showWrongBook && activeStudent ? `${activeStudent.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
+        title={showWrongBook && (activeClassName || activeStudent) ? `${activeClassName ?? activeStudent?.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
         actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button>} />
 
       <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : ""}`}>
         {(!showSelected || showWrongBook) && <aside className="sidebar">
           {showWrongBook ? <>
+            <div className="sidebar-heading"><span className="eyebrow">班级 · {studentClasses.length}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
+            <div className="class-list" aria-label="班级">{studentClasses.map((name) => <button key={name} className={`class-card${activeClassName === name ? " active" : ""}`} onClick={() => setActiveClassName(name)}><span>▦</span><b>{name}</b><small>{students.filter((student) => student.className === name).length} 人</small></button>)}</div>
             <div className="sidebar-heading"><span className="eyebrow">学生 · {students.length}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
-            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkInProgress[student.id] && <i title="有尚未完成的布置作业">作业中</i>}</b><small>{student.className || "未填写班级"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
+            <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkInProgress[student.id] && <i title="有尚未完成的布置作业">作业中</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
@@ -754,8 +793,14 @@ export default function Home() {
         <section className={`content${!showWrongBook && !showSelected ? " library-content" : ""}`}>
           {showWrongBook ? <>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => { if (event.target.value === NEW_STUDENT_OPTION) openStudentDialog(); else selectStudent(event.target.value); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}<option value={NEW_STUDENT_OPTION}>＋ 新建学生</option></select></label>}
-            {activeStudent ? <>
-              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><h1>{activeStudent.name}</h1><p className="subtext"><span>{activeStudent.className || "未填写班级"}</span><span>错题 <b>{activeStudent.wrongCount}</b></span>{activeStudent.notes && <span title={activeStudent.notes}>{activeStudent.notes.split(/[。！？\n]|[.!?]\s/, 1)[0]}</span>}</p></div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} title="按这位学生的档案从题库挑题、按天排好">智能组卷</a><PaperMoreMenu label={`${activeStudent.name}的档案操作`}><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><hr /><button className="danger-text" onClick={() => void removeStudent(activeStudent)}>删除档案…</button></PaperMoreMenu></div></div>
+            {activeClassName !== null ? <section className="class-profile" aria-label={`${activeClassName}的班级`}>
+              <div className="wrong-book-hero"><div className="student-avatar">▦</div><div><h1>{activeClassName}</h1><p className="subtext">{classStudents.length} 位学生 · 每位学生独立记录作业、批改和错题</p></div><div className="wrong-book-stats"><button className="secondary" disabled={classBusy} onClick={() => openClassDialog(activeClassName)}>管理班级</button><button className="homework-cancel" disabled={classBusy} title="删除班级，保留全部学生档案" aria-label={`删除班级：${activeClassName}`} onClick={() => void removeClass(activeClassName)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg></button></div></div>
+              <header className="student-panel-head"><p>班级学生</p><div className="student-panel-actions"><button className="secondary" onClick={() => openStudentDialog()}>新建学生</button><button className="secondary" onClick={() => openClassDialog(activeClassName)}>添加学生</button><button className="primary-button" disabled={!classStudents.length} title={classStudents.length ? "选择练习并布置给全班" : "请先添加学生"} onClick={() => setClassAssigning(true)}>布置作业</button></div></header>
+              {classStudents.length ? <div className="class-members">{classStudents.map((student) => <button className="student-card" key={student.id} onClick={() => void selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b>{student.name}{studentHomeworkInProgress[student.id] && <i>作业中</i>}</b><small>{student.notes || "查看学生档案"}</small></div><em>错题 {student.wrongCount} · →</em></button>)}</div>
+                : <div className="student-panel-empty"><b>班级里还没有学生</b><p>可以添加已有学生，或在这个班级下新建学生。</p></div>}
+              {classAssigning && <AssignPlan className={activeClassName} handedOut={[]} onClose={() => setClassAssigning(false)} onAssigned={() => { setClassAssigning(false); void loadStudents().catch((error) => show({ text: error instanceof Error ? error.message : "学生读取失败", tone: "error" })); show({ text: "作业已布置，可在每位学生的作业中查看", tone: "success" }); }} />}
+            </section> : activeStudent ? <>
+              <div className="wrong-book-hero"><div className="student-avatar">{activeStudent.name.slice(0, 1)}</div><div><h1>{activeStudent.name}</h1><p className="subtext">{activeStudent.className ? <button className="student-class-link" onClick={() => setActiveClassName(activeStudent.className)}>{activeStudent.className}</button> : <span>独立学生</span>}<span>错题 <b>{activeStudent.wrongCount}</b></span>{activeStudent.notes && <span title={activeStudent.notes}>{activeStudent.notes.split(/[。！？\n]|[.!?]\s/, 1)[0]}</span>}</p></div><div className="wrong-book-stats"><a className="wrong-book-smart" href={`/tools/smart-paper?student=${encodeURIComponent(activeStudent.id)}`} title="按这位学生的档案从题库挑题、按天排好">智能组卷</a><PaperMoreMenu label={`${activeStudent.name}的档案操作`}><button onClick={() => openStudentDialog(activeStudent)}>编辑档案</button><hr /><button className="danger-text" onClick={() => void removeStudent(activeStudent)}>删除档案…</button></PaperMoreMenu></div></div>
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
               {archiveTab === "homework" ? <StudentHomework student={activeStudent} onProgressChange={updateHomeworkProgress} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
               {!!activeWrongEntries.length && <div className="wrong-book-head"><button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button></div>}
@@ -866,9 +911,20 @@ export default function Home() {
       {studentDialog && <div className="modal-backdrop"><section className="modal student-modal" role="dialog" aria-modal="true" aria-label={studentDraft ? "编辑学生档案" : "新建学生档案"}>
         <div className="modal-head"><div><span className="eyebrow">学生专属空间</span><h2>{studentDraft ? "编辑学生档案" : "新建学生档案"}</h2></div><button className="close" onClick={() => setStudentDialog(false)}>×</button></div>
         <label className="field">学生姓名或昵称<input value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="例如：小宇" /></label>
-        <label className="field">班级 / 年级（选填）<input value={studentClassName} onChange={(event) => setStudentClassName(event.target.value)} placeholder="例如：初三（2）班" /></label>
+        <label className="field">班级（选填，留空为独立学生）<input list="student-class-names" maxLength={80} value={studentClassName} onChange={(event) => setStudentClassName(event.target.value)} placeholder="选择已有班级，或输入新班级名称" /><datalist id="student-class-names">{studentClasses.map((name) => <option key={name} value={name} />)}</datalist></label>
         <label className="field">学习备注（选填）<textarea rows={4} value={studentNotes} onChange={(event) => setStudentNotes(event.target.value)} placeholder="例如：几何基础较好，函数综合题需要加强" /></label>
         <div className="modal-actions"><button className="secondary" onClick={() => setStudentDialog(false)}>取消</button><button className="primary-button" onClick={saveStudent}>{studentDraft ? "保存档案" : "创建学生"}</button></div>
+      </section></div>}
+
+      {classDialog && <div className="modal-backdrop"><section className="modal assign-modal" role="dialog" aria-modal="true" aria-label={classDialog.previousName === undefined ? "新建班级" : "管理班级"} aria-busy={classBusy}>
+        <div className="modal-head"><div><span className="eyebrow">学生分组</span><h2>{classDialog.previousName === undefined ? "新建班级" : "管理班级"}</h2></div><button className="close" aria-label="关闭" disabled={classBusy} onClick={() => setClassDialog(null)}>×</button></div>
+        <label className="field">班级名称<input maxLength={80} disabled={classBusy} value={classDialog.name} onChange={(event) => setClassDialog({ ...classDialog, name: event.target.value })} placeholder="例如：初一（1）班" /></label>
+        <fieldset className="assign-students class-students" disabled={classBusy}><legend>班级学生 · 已选 {classDialog.studentIds.length} 人</legend>
+          {students.length ? students.map((student) => <label key={student.id} className={classDialog.studentIds.includes(student.id) ? "on" : ""}><input type="checkbox" checked={classDialog.studentIds.includes(student.id)} onChange={() => setClassDialog((current) => current && ({ ...current, studentIds: current.studentIds.includes(student.id) ? current.studentIds.filter((id) => id !== student.id) : [...current.studentIds, student.id] }))} /><b>{student.name}</b><small>{student.className && student.className !== classDialog.previousName ? `从${student.className}移入` : student.className || "独立学生"}</small></label>) : <p>可以先创建班级，再在班级下新建学生。</p>}
+        </fieldset>
+        <p className="assign-hint">每位学生可以加入一个班级。取消勾选后成为独立学生；转班、移出或删除班级都会保留学生已有的作业、批改和错题。</p>
+        {classError && <p className="assign-error" role="alert">{classError}</p>}
+        <div className="modal-actions"><button className="secondary" disabled={classBusy} onClick={() => setClassDialog(null)}>取消</button><button className="primary-button" disabled={classBusy || !classDialog.name.trim()} onClick={() => void saveClass()}>{classBusy ? "正在保存…" : classDialog.previousName === undefined ? "创建班级" : "保存班级"}</button></div>
       </section></div>}
 
       {wrongUploadOpen && activeStudent && <WrongQuestionUpload student={activeStudent} onClose={() => setWrongUploadOpen(false)} onGraded={(submission) => { void loadStudents(submission.studentId); if (submission.status !== "published") return; const archived = submission.gradingSummary?.archived ?? 0; setWrongUploadOpen(false); show({ text: archived ? `已收录 ${archived} 道错题` : "批改完成，没有需要收录的错题", tone: "success" }); }} />}

@@ -3,7 +3,8 @@ import { loadSource } from "./load-source.mjs";
 import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -18,6 +19,77 @@ const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
 const CONFIG = join(ROOT, "dist", "server", "wrangler.json");
 const INVITE = "homework-e2e-invite";
+
+test("student classes preserve legacy membership, isolate teachers, and assign independently to a whole class", { timeout: 120_000 }, async () => {
+  // Existing names become classes without touching student ids or adding a second membership field.
+  const legacy = new DatabaseSync(":memory:");
+  try {
+    legacy.exec("CREATE TABLE users(id TEXT PRIMARY KEY); CREATE TABLE students(id TEXT, owner_user_id TEXT, class_name TEXT); INSERT INTO users VALUES ('one'), ('two'); INSERT INTO students VALUES ('a','one','旧班级'),('b','one','旧班级'),('c','two','旧班级'),('d','one','');");
+    legacy.exec(await readFile(join(ROOT, "migrations/0040_student_classes.sql"), "utf8"));
+    assert.equal(legacy.prepare("SELECT COUNT(*) AS n FROM student_classes").get().n, 2);
+    assert.equal(legacy.prepare("SELECT COUNT(*) AS n FROM students WHERE class_name='旧班级'").get().n, 3);
+  } finally { legacy.close(); }
+  const port = await freePort(), stateDir = await mkdtemp(join(tmpdir(), "zhiti-classes-e2e-"));
+  command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
+  const worker = startWorker(port, stateDir, { LOCAL_ADMIN_MODE: "false", REGISTRATION_INVITE_CODE: INVITE, OPENAI_API_KEY: "" });
+  const base = `http://localhost:${port}`;
+  try {
+    await waitForServer(`${base}/api/auth/me`, worker);
+    const register = async (email) => sessionCookie((await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email, password: "password123", inviteCode: INVITE } })).response);
+    const one = await register("one@classes.test"), two = await register("two@classes.test");
+    const create = async (name, className = "", cookie = one) => {
+      const result = await jsonRequest(base, "/api/students", { cookie, method: "POST", body: { student: { name, className, notes: "保留这条学习备注" } } });
+      assert.equal(result.response.status, 201, JSON.stringify(result.payload));
+      return result.payload.student;
+    };
+    const a = await create("甲", "旧班级"), b = await create("乙"), independent = await create("独立学生"), foreign = await create("其他老师的学生", "", two);
+    assert.deepEqual((await jsonRequest(base, "/api/students", { cookie: one })).payload.classes, ["旧班级"]);
+    assert.deepEqual((await jsonRequest(base, "/api/students", { cookie: two })).payload.classes, []);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { method: "POST", body: { name: "空班级", studentIds: [] } })).response.status, 401);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "POST", body: { name: "  空班级  ", studentIds: [] } })).response.status, 201);
+    assert.ok((await jsonRequest(base, "/api/students", { cookie: one })).payload.classes.includes("空班级"), "empty classes persist across requests");
+    for (const name of ["", " ", "名".repeat(81)]) assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "POST", body: { name, studentIds: [] } })).response.status, 400);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "POST", body: { name: "空班级", studentIds: [] } })).response.status, 409);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: two, method: "PUT", body: { previousName: "空班级", name: "越权", studentIds: [] } })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: two, method: "DELETE", body: { name: "空班级" } })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "PUT", body: { previousName: "空班级", name: "空班级", studentIds: [a.id, foreign.id] } })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/students", { cookie: one })).payload.students.find((s) => s.id === a.id).className, "旧班级", "failed membership changes cannot partially move students");
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: two, method: "POST", body: { name: "空班级", studentIds: [foreign.id] } })).response.status, 201, "different teachers may use the same class name");
+    // A cross-origin request must fail before any class or membership changes.
+    assert.equal((await fetch(`${base}/api/student-classes`, { method: "PUT", headers: { Cookie: one, Origin: "https://other.invalid", "Content-Type": "application/json" }, body: JSON.stringify({ previousName: "空班级", name: "空班级", studentIds: [] }) })).status, 403);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "PUT", body: { previousName: "空班级", name: "提高班", studentIds: [a.id, b.id, b.id] } })).response.status, 200);
+    let students = (await jsonRequest(base, "/api/students", { cookie: one })).payload.students;
+    const memberIds = students.filter((s) => s.className === "提高班").map((s) => s.id);
+    assert.deepEqual(memberIds.sort(), [a.id, b.id].sort());
+    const question = { id: "class-question", type: "填空题", difficulty: "基础", categoryId: "", stem: "计算 $1+1$", options: [], answer: "2", analysis: "", source: "", createdAt: 0, updatedAt: 0 };
+    const assigned = await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentIds: [...memberIds, b.id], title: "全班计算练习", questions: [question] } });
+    assert.equal(assigned.response.status, 201, JSON.stringify(assigned.payload));
+    assert.equal(assigned.payload.assigned.length, 2, "class plus individual choices never duplicate a recipient");
+    assert.equal(new Set(assigned.payload.assigned.map((s) => s.id)).size, 2);
+    assert.equal((await jsonRequest(base, `/api/students/${independent.id}/homework`, { cookie: one })).payload.homework.length, 0);
+    for (const id of memberIds) {
+      const homework = (await jsonRequest(base, `/api/students/${id}/homework`, { cookie: one })).payload.homework;
+      assert.equal(homework.length, 1); assert.equal(homework[0].done, 0); assert.equal(homework[0].total, 1);
+    }
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "PUT", body: { previousName: "提高班", name: "旧班级", studentIds: memberIds } })).response.status, 409, "rename cannot merge into an existing class");
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "PUT", body: { previousName: "提高班", name: "改名班级", studentIds: [a.id] } })).response.status, 200);
+    students = (await jsonRequest(base, "/api/students", { cookie: one })).payload.students;
+    assert.equal(students.find((s) => s.id === b.id).className, "");
+    assert.equal(students.find((s) => s.id === a.id).notes, a.notes);
+    assert.equal((await jsonRequest(base, "/api/student-classes", { cookie: one, method: "DELETE", body: { name: "改名班级" } })).response.status, 200);
+    students = (await jsonRequest(base, "/api/students", { cookie: one })).payload.students;
+    assert.equal(students.find((s) => s.id === a.id).className, "");
+    for (const id of memberIds) assert.equal((await jsonRequest(base, `/api/students/${id}/homework`, { cookie: one })).payload.homework.length, 1, "removal and class deletion preserve homework");
+    assert.equal((await jsonRequest(base, "/api/students", { cookie: two })).payload.students[0].className, "空班级");
+    // A normal class can exceed the old 50-recipient picker limit.
+    const large = [];
+    for (let i = 0; i < 51; i++) large.push((await create(`全班学生${i + 1}`, "大班")).id);
+    const largeAssigned = await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentIds: large, title: "大班练习", questions: [question] } });
+    assert.equal(largeAssigned.response.status, 201, JSON.stringify(largeAssigned.payload));
+    assert.equal(largeAssigned.payload.assigned.length, 51);
+  } catch (error) { console.error(worker.output()); throw error; }
+  finally { await stopWorker(worker); }
+});
 
 function command(args) {
   const result = spawnSync(WRANGLER, args, { cwd: ROOT, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });

@@ -9,8 +9,8 @@ type Assigned = Array<{ id: string; studentId: string; studentName: string }>;
 // in 快速排版, or a plan picked in the student's archive. What the student hands in is uploaded later from the
 // student's archive, in one go or task by task, without preset dates. The 快速排版 record it came from is remembered,
 // so the archive knows it is out.
-export function AssignHomework({ title, questions, groups, studentId, recordId, origin = "快速排版", onClose, onAssigned }: {
-  title: string; questions: Question[]; groups?: HomeworkSheetGroup[]; studentId?: string | null; recordId?: string | null; origin?: string;
+export function AssignHomework({ title, questions, groups, studentId, className, recordId, origin = "快速排版", onClose, onAssigned }: {
+  title: string; questions: Question[]; groups?: HomeworkSheetGroup[]; studentId?: string | null; className?: string; recordId?: string | null; origin?: string;
   onClose: () => void;
   /** Called instead of showing the confirmation, when the caller shows the new homework itself. */
   onAssigned?: () => void;
@@ -23,12 +23,19 @@ export function AssignHomework({ title, questions, groups, studentId, recordId, 
   const [assigned, setAssigned] = useState<Assigned | null>(null);
 
   useEffect(() => {
-    void homeworkApi.students().then((result) => setStudents(result.students)).catch((reason) => setError(reason instanceof Error ? reason.message : "学生档案读取失败"));
-  }, []);
+    let current = true;
+    void homeworkApi.students().then((result) => {
+      if (!current) return;
+      setStudents(result.students);
+      if (className) setChosen(result.students.filter((student) => student.className === className).map((student) => student.id));
+    }).catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "学生档案读取失败"); });
+    return () => { current = false; };
+  }, [className]);
 
   const answered = questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length;
   const days = groups?.length ?? 0;
   const toggle = (id: string) => setChosen((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const classes = [...new Set(students?.map((student) => student.className).filter(Boolean) ?? [])];
 
   async function assign() {
     if (!chosen.length || !name.trim() || busy) return;
@@ -50,8 +57,16 @@ export function AssignHomework({ title, questions, groups, studentId, recordId, 
         <div className="modal-actions"><button className="primary-button" onClick={onClose}>完成</button></div>
       </> : <>
         <label className="field">作业名称<input value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+        {!!classes.length && <fieldset className="assign-students" disabled={busy}>
+          <legend>按班级选择</legend>
+          {classes.map((name) => {
+            const ids = students!.filter((student) => student.className === name).map((student) => student.id);
+            const all = ids.every((id) => chosen.includes(id));
+            return <label key={name} className={all ? "on" : ""}><input type="checkbox" checked={all} onChange={() => setChosen((current) => all ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])])} /><b>{name}</b><small>{ids.length} 人</small></label>;
+          })}
+        </fieldset>}
         <fieldset className="assign-students" disabled={busy}>
-          <legend>布置给</legend>
+          <legend>学生（可单独调整）</legend>
           {students === null ? <p>正在读取学生档案…</p> : students.length ? students.map((student) => <label key={student.id} className={chosen.includes(student.id) ? "on" : ""}>
             <input type="checkbox" checked={chosen.includes(student.id)} onChange={() => toggle(student.id)} />
             <b>{student.name}</b>{student.className && <small>{student.className}</small>}
