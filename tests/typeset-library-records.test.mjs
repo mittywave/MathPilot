@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { loadSource } from "./load-source.mjs";
 
 // 快速排版的历史记录除了 Word，也存智能组卷按天挑好的题库题目清单。
@@ -103,4 +105,53 @@ test("智能组卷 records: own students only, questions once each, used questio
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM question_assets WHERE id = 'a1'").get().n, 1, "deleting a question list leaves Word files alone");
   sqlite.exec("DELETE FROM students WHERE id = 's1'");
   assert.equal(sqlite.prepare("SELECT student_id FROM typeset_records WHERE id = ?").get(created.id).student_id, null, "the record outlives the student");
+});
+
+test("history recipients come from active homework, deduplicate uploads and assignments, and follow current student names/classes", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  try {
+    sqlite.exec("PRAGMA foreign_keys=ON;");
+    await migrate(sqlite);
+    sqlite.exec(seed);
+    sqlite.exec(`INSERT INTO students (id, owner_user_id, name, class_name, created_at, updated_at) VALUES
+      ('s1', 'u1', '甲', '一班', 0, 0), ('s2', 'u1', '乙', '一班', 0, 0), ('s3', 'u1', '独立学生', '', 0, 0),
+      ('s4', 'u1', '已取消学生', '二班', 0, 0), ('foreign', 'u2', '其他老师的学生', '一班', 0, 0);
+      INSERT INTO typeset_records (id, owner_user_id, title, file_name, source_asset_id, created_at, updated_at)
+        VALUES ('w1', 'u1', '计算练习', '计算练习.docx', 'a1', 1, 2);`);
+    const records = await loadSource("lib/server/typeset-records.ts", { DB: d1(sqlite) });
+    const teacher = { id: "u1" }, other = { id: "u2" };
+    const plan = await records.createTypesetRecord(teacher, { plan: { studentId: "s1", groups: [{ items: [{ id: "q1" }] }] } });
+    assert.deepEqual(plan.assignedTo, [], "preparing a plan for a student is not assigning it");
+    const insertAssignment = sqlite.prepare("INSERT INTO homework_assignments (id,owner_user_id,title,status,sheet_json,created_at,updated_at) VALUES (?,?,'计算练习',?,?,0,0)");
+    const insertSubmission = sqlite.prepare("INSERT INTO homework_submissions (id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES (?,?,?,?,'draft','teacher',?,0,0)");
+    const assign = (id, student, sheet = { recordId: "w1" }, owner = "u1", status = "published") => {
+      insertAssignment.run(id, owner, status, typeof sheet === "string" ? sheet : JSON.stringify(sheet));
+      insertSubmission.run(`${id}-1`, id, student, 1, owner);
+    };
+    assign("a1", "s1"); assign("a2", "s2"); assign("a3", "s3"); assign("cancelled", "s4", { recordId: "w1" }, "u1", "archived");
+    assign("repeat", "s1"); insertSubmission.run("a1-2", "a1", "s1", 2, "u1");
+    assign("foreign-owner", "foreign", { recordId: "w1" }, "u2"); assign("foreign-student", "foreign");
+    assign("legacy", "s4", { groups: [] }); assign("malformed", "s4", "invalid json"); assign("uploaded", "s4", "");
+    assign("plan", "s2", { recordId: plan.id });
+    // Half-written homework without a submission is not an actual handout.
+    insertAssignment.run("unfinished", "u1", "published", JSON.stringify({ recordId: "w1" }));
+
+    let listed = await records.listTypesetRecords(teacher);
+    const word = listed.find((record) => record.id === "w1");
+    assert.deepEqual(word.assignedTo, [{ id: "s3", name: "独立学生", className: "" }, { id: "s2", name: "乙", className: "一班" }, { id: "s1", name: "甲", className: "一班" }]);
+    assert.deepEqual(listed.find((record) => record.id === plan.id).assignedTo.map((student) => student.id), ["s2"]);
+    assert.deepEqual(await records.listTypesetRecords(other), [], "recipients never grant access to another teacher's record");
+    const { TypesetHistory } = await loadSource("app/tools/typeset/TypesetHistory.tsx");
+    const html = renderToStaticMarkup(createElement(TypesetHistory, { records: [word], current: null, now: 0, busy: false, onOpen() {}, onDelete() {} }));
+    assert.match(html, /已布置给：独立学生、一班（乙、甲）/);
+    assert.doesNotMatch(html, /已取消学生|其他老师的学生/);
+
+    sqlite.exec("UPDATE students SET name = '改名甲', class_name = '新班' WHERE id = 's1'; UPDATE homework_assignments SET status = 'archived' WHERE id = 'a1';");
+    const updated = await records.updateTypesetRecord(teacher, "w1", { settings: { answers: "end" } });
+    assert.ok(updated.assignedTo.some((student) => student.name === "改名甲" && student.className === "新班"), "one cancelled copy does not erase a still-active assignment, including after autosave");
+    sqlite.exec("UPDATE homework_assignments SET status = 'archived' WHERE id = 'repeat'; DELETE FROM students WHERE id = 's2';");
+    listed = await records.listTypesetRecords(teacher);
+    assert.deepEqual(listed.find((record) => record.id === "w1").assignedTo.map((student) => student.id), ["s3"]);
+    assert.deepEqual(listed.find((record) => record.id === plan.id).assignedTo, []);
+  } finally { sqlite.close(); }
 });
