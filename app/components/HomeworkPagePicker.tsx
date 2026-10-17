@@ -61,14 +61,18 @@ export default function HomeworkPagePicker({ pages, onChange, disabled = false, 
   useEffect(() => { readRef.current = readFiles; });
   const addFiles = (files: File[]) => { if (files.length) queue.current = queue.current.then(() => readRef.current(files)); };
 
-  // ⌘V anywhere on the page adds the pasted screenshot or copied files, as long as this entry is on screen (one inside a
-  // closed panel is not) and the clipboard holds files; pasted text still goes where it is typed.
+  // Paste into the focused upload area; outside one, the first visible picker is the default.
+  // One paste must never add a page to both the student's work and the blank question paper.
   useEffect(() => {
     if (disabled) return;
     const paste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
       const files = [...(event.clipboardData?.files ?? [])].filter(isPageFile);
       const entry = entryRef.current;
       if (!files.length || !entry || entry.closest("details:not([open])") || !entry.getClientRects().length) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const focused = target?.closest(".homework-pages") ?? target?.closest("details[open]")?.querySelector(".homework-pages");
+      if (focused && focused !== entry.closest(".homework-pages")) return;
       event.preventDefault();
       queue.current = queue.current.then(() => readRef.current(files));
     };
@@ -84,7 +88,7 @@ export default function HomeworkPagePicker({ pages, onChange, disabled = false, 
   const carriesFiles = (event: DragEvent) => [...event.dataTransfer.types].includes("Files");
   const full = pages.length >= limit;
 
-  return <section className="homework-pages" aria-label="作业页面"
+  return <section className="homework-pages" aria-label={label}
     onDragOver={(event) => { if (!carriesFiles(event)) return; event.preventDefault(); if (!disabled && !full) setDragging(true); }}
     onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
     onDrop={(event) => { event.preventDefault(); setDragging(false); if (!disabled) addFiles([...event.dataTransfer.files]); }}>
