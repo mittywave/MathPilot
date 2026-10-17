@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
 import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, SubmissionStatus } from "../../lib/types";
+import { QuestionBody } from "./QuestionBody";
 
 type Result = GradingItem | AssignedHomework["questions"][number]["result"];
 type Bucket = "correct" | "corrected" | "partial" | "incorrect" | "pending" | "missing";
@@ -69,6 +71,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
   selectedDay: number | null; onDay: (day: number) => void;
 }) {
   const { assigned } = submission;
+  const [showOriginals, setShowOriginals] = useState(false);
   const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
     pending: all.pending + day.firstAttempt.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
   const handedIn = assigned.questions.length - counts.missing;
@@ -83,8 +86,11 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       <div><h2>整份作业</h2><p>{several ? `${days.length} 天任务 · ` : ""}{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 首交对 ${counts.correct} · 错 ${counts.incorrect}` : ""}{counts.pending ? ` · 首交待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
         {!several && first?.handedInAt != null && <p>提交日期：{day(first.handedInAt)}</p>}
       </div>
-      {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
-        : latest?.status === "published" ? <button className={counts.missing ? "primary" : ""} disabled={busy} onClick={onContinue} title={counts.missing ? "上传学生后来交的部分" : "学生订正或重做后再批改一次"}>{counts.missing ? "继续上传" : "再上传一次"}</button> : null}
+      <div className="assigned-sheet-actions">
+        <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
+        {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
+          : latest?.status === "published" ? <button className={counts.missing ? "primary" : ""} disabled={busy} onClick={onContinue} title={counts.missing ? "上传学生后来交的部分" : "学生订正或重做后再批改一次"}>{counts.missing ? "继续上传" : "再上传一次"}</button> : null}
+      </div>
     </header>
     {days.map((group, index) => {
       const note = dayNote(group);
@@ -116,5 +122,14 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id
       ? <b key={upload.id}>第 {upload.version} 次上传 · {uploadNote(upload)}</b>
       : <a key={upload.id} href={`/tools/homework/submissions/${encodeURIComponent(upload.id)}`}>第 {upload.version} 次上传 · {uploadNote(upload)}</a>)}</nav>}
+    {showOriginals && <section className="assigned-originals" id="assigned-originals" aria-label="作业原题">
+      <h3>作业原题</h3>
+      {days.map((group, index) => <div key={index}>
+        {several && <h4>{group.title || `第 ${index + 1} 天`}</h4>}
+        <div className="question-list">{group.items.map((item) => <article className="question-card" key={item.id} aria-label={homeworkQuestionLabel(item.number)}>
+          <div className="question-main"><QuestionBody question={item.question} number={item.number.replace(/^D\d+-/, "")} /></div>
+        </article>)}</div>
+      </div>)}
+    </section>}
   </section>;
 }
