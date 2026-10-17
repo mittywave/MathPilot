@@ -59,7 +59,7 @@ export async function readStudioFilesInBatches(files:File[],role:StudioPage["rol
     const add=async(image:string,page:number,target:StudioPage[])=> {
       target.push({id:randomClientId(),role,name:file.name,page,image,hash:await contentFingerprint(image),selected:true});
     };
-    if (/\.pdf$/i.test(file.name)) {
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
       const task=await openPdf(new Uint8Array(await file.arrayBuffer()));
       try {
         const pdf=await task.promise,selected=parseStudioPages(range,pdf.numPages),batchCount=Math.max(1,Math.ceil(selected.length/batchSize));

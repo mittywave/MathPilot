@@ -193,9 +193,9 @@ export default function TeacherSubmissionPage() {
   // Reference answer pages are appended to the homework in the order they are chosen.
   async function uploadReferences() {
     if (!submission || !referenceFiles.length) return;
-    const {renderImportFile}=await import("../../../../../lib/file-import");
+    const {readStudioFiles}=await import("../../../../../lib/answer-studio-images");
     for(const file of referenceFiles){
-      const blobs=file.type.startsWith("image/")?[file]:await Promise.all((await renderImportFile(file,()=>{})).map(async page=>(await fetch(page.image)).blob()));
+      const blobs=file.type.startsWith("image/")?[file]:await Promise.all((await readStudioFiles([file],"answer","",()=>{})).map(async page=>(await fetch(page.image)).blob()));
       for(const blob of blobs)await uploadHomeworkAsset({blob,fileName:file.name,role:"answer",assignmentId:submission.assignmentId});
     }
     setReferenceFiles([]);

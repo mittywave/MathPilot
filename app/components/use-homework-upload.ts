@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { HomeworkPage } from "./HomeworkPagePicker";
 import { homeworkApi, uploadHomeworkAsset } from "../../lib/homework-api-client";
-import { renderImportFile } from "../../lib/file-import";
+import { readStudioFiles } from "../../lib/answer-studio-images";
 import type { HomeworkCurriculum, HomeworkOutputs, HomeworkSubmission } from "../../lib/types";
 
 export const CURRICULA: Array<[HomeworkCurriculum, string]> = [["school", "校内数学"], ["international", "IGCSE / A Level"]];
@@ -31,7 +31,7 @@ export function useHomeworkUpload() {
         saved.push({ assetId: asset.id }); setMessage(`正在上传作业 ${index + 1}/${input.pages.length} 页…`);
       }
       if (!referencesSaved) {
-        const images = (await Promise.all(input.references.map(async (file) => file.type.startsWith("image/") ? [file] : Promise.all((await renderImportFile(file, () => {})).map(async (page) => (await fetch(page.image)).blob()))))).flat();
+        const images = (await Promise.all(input.references.map(async (file) => file.type.startsWith("image/") ? [file] : Promise.all((await readStudioFiles([file], "answer", "", () => {})).map(async (page) => (await fetch(page.image)).blob()))))).flat();
         if (images.length > 30) throw new Error("参考答案最多30页");
         for (const [index, blob] of images.entries()) await uploadHomeworkAsset({ blob, fileName: `参考答案第${index + 1}页`, role: "answer", assignmentId: submission.assignmentId });
         setReferencesSaved(true);

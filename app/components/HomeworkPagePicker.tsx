@@ -49,8 +49,8 @@ export default function HomeworkPagePicker({ pages, onChange, disabled = false, 
       for (const file of files) {
         if (file.type.startsWith("image/")) await add(file);
         else if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-          const { renderImportFile } = await import("../../lib/file-import");
-          for (const page of await renderImportFile(file, () => {})) await add(await (await fetch(page.image)).blob());
+          const { readStudioFiles } = await import("../../lib/answer-studio-images");
+          for (const page of await readStudioFiles([file], "question", "", () => {})) await add(await (await fetch(page.image)).blob());
           onSourceFile?.(file);
         } else throw new Error("请选择图片或 PDF 文件");
       }
