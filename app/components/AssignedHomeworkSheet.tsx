@@ -71,7 +71,7 @@ export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [uplo
  */
 export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport }: {
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
-  selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[], kind: "word" | "pdf") => void;
+  selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[], kind: "word" | "pdf", includeAnalysis?: boolean) => void;
 }) {
   const { assigned } = submission;
   const [showOriginals, setShowOriginals] = useState(false);
@@ -93,15 +93,21 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       </div>
       <div className="assigned-sheet-actions">
         <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
-        <select className="secondary" aria-label="导出错题" defaultValue="" disabled={busy || !mistakes.length}
-          title={mistakes.length ? `导出当前仍需订正的 ${mistakes.length} 道题，不含答案` : "当前没有需要订正的错题"}
-          onChange={(event) => {
-            const kind = event.currentTarget.value;
-            event.currentTarget.value = "";
-            if (kind === "pdf" || kind === "word") onExport(mistakes.map((item) => item.question), kind);
-          }}>
-          <option value="" disabled>导出错题</option><option value="pdf">PDF</option><option value="word">Word</option>
-        </select>
+        {[false, true].map((includeAnalysis) => {
+          const label = includeAnalysis ? "导出解析" : "导出错题";
+          const questions = (includeAnalysis ? assigned.questions : mistakes).map((item) => item.question);
+          const available = includeAnalysis ? questions.some((question) => question.answer?.trim() || question.analysis?.trim() || question.analysisDocxXml?.length || question.studioSource?.diagrams.length) : questions.length > 0;
+          const title = includeAnalysis ? available ? `导出整份作业 ${questions.length} 道题的原题、答案与解析` : "当前作业暂无答案或解析"
+            : available ? `导出当前仍需订正的 ${questions.length} 道题，不含答案` : "当前没有需要订正的错题";
+          return <select key={label} className="secondary" aria-label={label} defaultValue="" disabled={busy || !available} title={title}
+            onChange={(event) => {
+              const kind = event.currentTarget.value;
+              event.currentTarget.value = "";
+              if (kind === "pdf" || kind === "word") onExport(questions, kind, includeAnalysis);
+            }}>
+            <option value="" disabled>{label}</option><option value="pdf">PDF</option><option value="word">Word</option>
+          </select>;
+        })}
         {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
           : latest?.status === "published" && counts.missing > 0 ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null}
       </div>

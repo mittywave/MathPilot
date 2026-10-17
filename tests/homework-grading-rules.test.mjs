@@ -24,7 +24,7 @@ test("school distribution shares whole-question states with the sheet and keeps 
   assert.equal((exam.match(/<dt>/g) ?? []).length, 4);
 });
 
-test("current mistake export follows the whole sheet's latest results, including partial answers", async () => {
+test("homework exports filter current mistakes while keeping full-sheet analysis available", async () => {
   const { AssignedHomeworkSheet } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
   const settled = { verdict: "incorrect", requiresReview: false, teacherMark: null, standardAnswer: "5", referenceVerified: true, wasIncorrect: false, submissionId: "new-upload" };
   const results = [
@@ -34,7 +34,7 @@ test("current mistake export follows the whole sheet's latest results, including
   ];
   const assigned = {
     days: [{ title: "第 1 天", size: 4, done: 4, correct: 2, firstAttempt: { correct: 1, incorrect: 3, pending: 0 } }, { title: "第 2 天", size: 3, done: 2, correct: 0, firstAttempt: { correct: 0, incorrect: 0, pending: 2 } }],
-    questions: results.map((result, index) => ({ id: `q${index}`, number: String(index + 1), question: { stem: "原题" }, result })),
+    questions: results.map((result, index) => ({ id: `q${index}`, number: String(index + 1), question: { stem: "原题", answer: "5", analysis: "移项后求解。" }, result })),
     uploads: [{ id: "original-upload", status: "published", version: 1 }, { id: "new-upload", status: "published", version: 2 }],
   };
   const props = { submission: { id: "original-upload", assigned }, busy: false, onExport: () => {} };
@@ -46,6 +46,12 @@ test("current mistake export follows the whole sheet's latest results, including
   assert.match(busy, /<select class="secondary" aria-label="导出错题" disabled="" title="导出当前仍需订正的 2 道题，不含答案">/);
   assert.match(completed, /<select class="secondary" aria-label="导出错题" disabled="" title="当前没有需要订正的错题">/);
   assert.match(html, /<option value="pdf">PDF<\/option><option value="word">Word<\/option>/);
+  assert.match(html, /<select class="secondary" aria-label="导出解析" title="导出整份作业 7 道题的原题、答案与解析">/);
+  assert.match(busy, /<select class="secondary" aria-label="导出解析" disabled=""/);
+  assert.match(completed, /<select class="secondary" aria-label="导出解析" title="导出整份作业 7 道题的原题、答案与解析">/);
+  const withoutAnalysis = { ...assigned, questions: assigned.questions.map((question) => ({ ...question, question: { stem: "只有原题", answer: "", analysis: "" } })) };
+  const unavailable = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { ...props, submission: { ...props.submission, assigned: withoutAnalysis } }));
+  assert.match(unavailable, /<select class="secondary" aria-label="导出解析" disabled="" title="当前作业暂无答案或解析">/);
 });
 
 test("pending counts separate unsettled answers from the teacher's existing judgement", () => {
