@@ -83,7 +83,10 @@ function teacherMark(evidenceJson: unknown): GradingItem["teacherMark"] {
   return TEACHER_MARKS.find((value) => value === mark) ?? null;
 }
 
-function gradingItem(row: Record<string, unknown>): GradingItem {
+function gradingItem(row: Record<string, unknown>, assigned = false): GradingItem {
+  // Apply the current assigned-school rule to historical results without rewriting their stored evidence.
+  if (assigned && ["partial", "unreadable", "review_required"].includes(String(row.verdict))) row = { ...row, verdict: "incorrect", requires_review: 0,
+    score: null, feedback: "", error_type: "", step_analysis_json: "[]", evidence_summary: "" };
   return {
     id: String(row.id), submissionId: String(row.submission_id), assignmentQuestionId: String(row.assignment_question_id),
     pageId: row.page_id == null ? null : String(row.page_id), questionNumber: String(row.question_number), questionType: row.question_type as QuestionType,
@@ -127,7 +130,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   // Questions read before figures were located; their figures can be filled in from the submission page.
   const figuresPending = Number((await appEnv().DB.prepare(`SELECT COUNT(*) AS count FROM assignment_questions
     WHERE assignment_id=? AND (? IS NULL OR question_number IN (SELECT value FROM json_each(?))) AND json_type(input_evidence_json,'$.page_numbers')='array' AND json_type(input_evidence_json,'$.figures') IS NULL`).bind(row.assignment_id,inventory,inventory).first<{count:number}>())?.count ?? 0);
-  const gradingItems = grading.results.map(gradingItem);
+  const gradingItems = grading.results.map((item) => gradingItem(item, Boolean(assigned) && homeworkCurriculum(row.curriculum) === "school"));
   const settledItems = gradingItems.filter((item) => !isPendingGradingItem(item));
   return {
     outputs: normalizeHomeworkOutputs(parseJson(row.outputs_json, {})),
@@ -152,7 +155,7 @@ type UploadRow = { id: string; version: number; status: SubmissionStatus; create
 type ResultRow = { assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; reference_verified: number; question_evidence_json: string };
 
 // The published results of one upload, without questions a later reading of its pages no longer finds.
-async function uploadResults(submissionId: string) {
+async function uploadResults(submissionId: string, assigned = false) {
   const [rows, recognized] = await Promise.all([
     appEnv().DB.prepare(`SELECT g.assignment_question_id, q.question_number, g.verdict, g.requires_review,
         q.answer AS standard_answer, q.reference_verified, q.input_evidence_json AS question_evidence_json FROM grading_items g
@@ -161,6 +164,7 @@ async function uploadResults(submissionId: string) {
   ]);
   return (rows.results as ResultRow[])
     .filter((row) => !recognized || recognized.has(row.question_number) || [...recognized].some((number) => row.question_number.startsWith(`${number}(`)))
+    .map((row) => assigned && ["partial", "unreadable", "review_required"].includes(row.verdict) ? { ...row, verdict: "incorrect" as const, requires_review: 0 } : row)
     .map((row) => ({ assignmentQuestionId: row.assignment_question_id,
       verdict: VERDICTS.includes(row.verdict) ? row.verdict : "review_required" as GradingVerdict,
       requiresReview: Number(row.requires_review) === 1, teacherMark: teacherMark(row.question_evidence_json),
@@ -198,7 +202,7 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
   const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
   const firstHandedIn = new Map<string, { at: number; result: NonNullable<AssignedHomework["questions"][number]["result"]> }>();
   for (const upload of handedIn.filter((item) => item.status === "published")) {
-    for (const result of await uploadResults(upload.id)) {
+    for (const result of await uploadResults(upload.id, homeworkCurriculum(row.curriculum) === "school")) {
       const { assignmentQuestionId, ...grading } = result;
       const previous = results.get(assignmentQuestionId);
       const wasIncorrect = previous?.wasIncorrect || Boolean(previous && !isPendingGradingItem(previous) && ["incorrect", "partial"].includes(previous.verdict));
@@ -531,11 +535,13 @@ export async function reviewSubmission(id: string, items: Array<Partial<GradingI
 
 export async function correctPublishedSubmission(id: string, items: Array<Partial<GradingItem> & { id: string }>, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
+  const binary = Boolean(row.sheet_json) && homeworkCurriculum(row.curriculum) === "school";
   if (row.status !== "published") throw responseError("只有已发布结果可以修正", 409);
   if (!items.length || items.length > 200) throw responseError("请选择需要修正的题目", 400);
   const now = Date.now();
   for (const patch of items) {
     if (!(["correct", "partial", "incorrect", "unreadable", "review_required"] as GradingVerdict[]).includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
+    if (binary && !["correct", "incorrect"].includes(String(patch.verdict))) throw responseError("这份作业只判正确或错误", 400);
     const existing = await appEnv().DB.prepare(`SELECT g.*,q.answer AS standard_answer,q.analysis AS standard_analysis,q.reference_verified,q.stem,q.input_evidence_json FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.id = ? AND g.submission_id = ?`).bind(patch.id, id).first<Record<string, unknown>>();
     if (!existing) throw responseError("批改项不存在", 404);
     if (patch.standardAnswer?.trim() && (patch.standardAnswer !== existing.standard_answer || patch.standardAnalysis !== existing.standard_analysis || (patch.referenceVerified === true && !Number(existing.reference_verified)))) await appEnv().DB.prepare("UPDATE assignment_questions SET answer=?,analysis=?,reference_source='provided',reference_verified=1,reference_evidence='教师补充并确认参考解答' WHERE id=? AND assignment_id=?")
@@ -543,7 +549,7 @@ export async function correctPublishedSubmission(id: string, items: Array<Partia
     if(patch.stem?.trim() && patch.stem !== existing.stem) await appEnv().DB.prepare("UPDATE assignment_questions SET stem=? WHERE id=? AND assignment_id=?").bind(text(patch.stem,100_000),existing.assignment_question_id,row.assignment_id).run();
     // The teacher may supply the marks a paper prints but recognition missed; they belong to the question, not this attempt.
     const evidenceMax = normalizeMaxScore(parseJson<{ max_score?: unknown }>(existing.input_evidence_json, {}).max_score);
-    const maxScore = patch.maxScore === undefined ? evidenceMax : normalizeMaxScore(patch.maxScore);
+    const maxScore = binary ? null : patch.maxScore === undefined ? evidenceMax : normalizeMaxScore(patch.maxScore);
     if (maxScore !== evidenceMax) await appEnv().DB.prepare("UPDATE assignment_questions SET input_evidence_json=json_set(input_evidence_json,'$.max_score',?) WHERE id=? AND assignment_id=?")
       .bind(maxScore, existing.assignment_question_id, row.assignment_id).run();
     const marked = reconcileHomeworkScore(patch.verdict as GradingVerdict, patch.score !== undefined ? patch.score : patch.verdict === existing.verdict ? existing.score : null, maxScore, homeworkCurriculum(row.curriculum));
@@ -597,6 +603,7 @@ export async function autoPublishSubmission(id: string) {
 export async function reprocessPendingSubmission(id:string, replacements:Array<{replacePageId?:string;assetId:string}>,user:AuthUser) {
   const row=await teacherSubmissionRow(id,user);
   if(row.status!=="published") throw responseError("请等待本次批改完成后再补充",409);
+  if(row.sheet_json && homeworkCurriculum(row.curriculum)==="school")throw responseError("这份作业只判正确或错误，请上传错题订正",409);
   const pending=await appEnv().DB.prepare(`SELECT g.assignment_question_id FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id
     WHERE g.submission_id=? AND (g.requires_review=1 OR g.verdict IN ('unreadable','review_required') OR (g.verdict IN ('incorrect','partial') AND (q.answer='' OR q.reference_verified=0)))`).bind(id).all<{assignment_question_id:string}>();
   const coverage=await (await import("./homework-page-coverage")).readPageCoverage(id);

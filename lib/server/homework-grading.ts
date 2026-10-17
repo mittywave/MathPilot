@@ -28,8 +28,15 @@ export async function upsertResult(input: {
   confidence: number; bbox: unknown; requiresReview: boolean;
 }) {
   // A run the teacher stopped (back to 待上传) may still be finishing a batch; it no longer writes results.
-  const live = await homeworkDb().prepare("SELECT 1 AS live FROM homework_submissions WHERE id = ? AND status IN ('submitted', 'processing', 'failed')").bind(input.submissionId).first();
+  const live = await homeworkDb().prepare(`SELECT a.sheet_json,a.curriculum FROM homework_submissions s
+    JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=? AND s.status IN ('submitted','processing','failed')`)
+    .bind(input.submissionId).first<{sheet_json:string;curriculum:string}>();
   if (!live) return;
+  // Assigned school homework has two settled outcomes, including crossed-out or unreadable answers.
+  if (live.sheet_json && live.curriculum !== "international") {
+    input = { ...input, verdict: input.verdict === "correct" && !input.requiresReview ? "correct" : "incorrect", requiresReview: false,
+      score: null, feedback: "", errorType: "", stepAnalysis: [], evidenceSummary: "" };
+  }
   const existing = await homeworkDb().prepare("SELECT id, created_at FROM grading_items WHERE submission_id = ? AND assignment_question_id = ?")
     .bind(input.submissionId, input.question.id).first<{ id: string; created_at: number }>();
   const id = existing?.id ?? crypto.randomUUID(); const now = Date.now();

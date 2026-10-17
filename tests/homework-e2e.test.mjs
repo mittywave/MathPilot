@@ -894,7 +894,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const correctionAfter=await waitForSubmission(base,teacherOne,correctionDraft.id,["published"],worker);
     assert.deepEqual(mock.state.gradedNumbers.sort(),["D1-1","D1-2"],"other days and an omitted correction are not graded");
     assert.doesNotMatch(mock.state.assignedPrompts.at(-1),/D2-1｜/);
-    assert.deepEqual(correctionAfter.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["partial",true],["incorrect",false],["correct",false]]);
+    assert.deepEqual(correctionAfter.assigned.questions.map(q=>[q.result.verdict,q.result.wasIncorrect]),[["correct",true],["incorrect",true],["incorrect",false],["correct",false]]);
     for(const index of [2,3])assert.deepEqual(correctionAfter.assigned.questions[index].result,correctionBefore.assigned.questions[index].result,"omitted mistakes and the other day retain their previous results");
     assert.deepEqual(correctionAfter.assigned.days.map(d=>d.handedInAt),correctionBefore.assigned.days.map(d=>d.handedInAt));
     const {AssignedHomeworkSheet}=await loadSource("app/components/AssignedHomeworkSheet.tsx");
@@ -924,6 +924,35 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
+
+    // Assigned school homework has two results, including crossed-out/blank answers and a model that still returns old states.
+    const binaryBody={studentIds:[studentTwoId],title:"只判对错回归",groups:[{title:"第 1 天",size:7}],questions:Array.from({length:7},(_,i)=>sheetQuestion(`binary-${i+1}`,`计算 $${i+1}+1$`,String(i+2),{type:"解答题"}))};
+    const binaryId=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:binaryBody})).payload.assigned[0].id;
+    mock.state.assignedPage=Array.from({length:7},(_,i)=>({question_number:`D1-${i+1}`,student_answer:i===1||i===2?"":"学生原答",answer_state:i===1?"unreadable":i===2?"blank":"readable",teacher_mark:i===5?"partial":"none"}));
+    mock.state.assignedAnswers={"D1-1":"2","D1-4":"无法辨认","D1-5":"只算了一步","D1-7":"无法确认"};
+    mock.state.assignedVerdicts={"D1-1":"correct","D1-4":"unreadable","D1-5":"partial","D1-7":"review_required"};
+    await submitPages(base,teacherOne,binaryId,[await uploadPage(base,teacherOne,binaryId,bytes)]);
+    const binaryResult=await waitForSubmission(base,teacherOne,binaryId,["published"],worker);
+    assert.deepEqual(binaryResult.gradingItems.map(i=>[i.verdict,i.requiresReview]),[["correct",false],...Array.from({length:6},()=>["incorrect",false])]);
+    assert.deepEqual([binaryResult.gradingSummary.correct,binaryResult.gradingSummary.partial,binaryResult.gradingSummary.incorrect,binaryResult.gradingSummary.unresolved,binaryResult.gradingSummary.archived],[1,0,6,0,6]);
+    assert.deepEqual(binaryResult.assigned.days[0].firstAttempt,{correct:1,incorrect:6,pending:0});
+    assert.ok(d1Rows(stateDir,"SELECT verdict,requires_review FROM grading_items WHERE submission_id=?",[binaryId]).every(i=>["correct","incorrect"].includes(i.verdict)&&i.requires_review===0),"binary verdicts are persisted, not just relabelled in the browser");
+    const binaryWrong=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(i=>i.assignmentId===binaryResult.assignmentId);
+    assert.equal(binaryWrong.length,6,"blank and unreadable answers enter the wrong book and correction scope");
+    const binaryError=binaryResult.gradingItems[1];
+    for(const verdict of ["partial","unreadable","review_required"])assert.equal((await jsonRequest(base,`/api/submissions/${binaryId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:binaryError.id,verdict}]}})).response.status,400);
+    assert.equal((await jsonRequest(base,`/api/submissions/${binaryId}`,{cookie:teacherOne,method:"PUT",body:{action:"reprocess-pending"}})).response.status,409,"assigned homework uses corrections rather than page supplementation");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE grading_items SET verdict='unreadable',requires_review=1 WHERE id='${binaryError.id}'`]);
+    const historicalBinary=(await jsonRequest(base,`/api/submissions/${binaryId}`,{cookie:teacherOne})).payload.submission;
+    assert.deepEqual([historicalBinary.gradingItems[1].verdict,historicalBinary.gradingItems[1].requiresReview,historicalBinary.gradingSummary.incorrect,historicalBinary.gradingSummary.unresolved],["incorrect",false,6,0]);
+    assert.deepEqual(historicalBinary.assigned.days[0].firstAttempt,{correct:1,incorrect:6,pending:0},"historical pending-image results follow the same first-attempt tally");
+    const historicalList=(await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework.find(h=>h.assignmentId===binaryResult.assignmentId);
+    assert.deepEqual([historicalList.correct,historicalList.incorrect,historicalList.pending],[1,6,0]);
+    assert.equal(d1Rows(stateDir,"SELECT verdict FROM grading_items WHERE id=?",[binaryError.id])[0].verdict,"unreadable","reading the historical result keeps its original evidence");
+    const binaryCorrection=(await jsonRequest(base,`/api/submissions/${binaryId}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
+    assert.deepEqual(binaryCorrection.questionScope,binaryResult.assigned.questions.slice(1).map(q=>q.id));
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     // 打卡 days are uploaded one at a time. Pages without the sheet's questions fail at once, and a failed upload gives way to the next.

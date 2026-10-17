@@ -15,11 +15,11 @@ const TEACHER_MARK_EVIDENCE={correct:'老师已打勾',partial:'老师判为半�
 type Row={id:string;question_number:string;page_number:number;type:QuestionType;stem:string;answer:string;analysis:string;reference_verified:number;input_evidence_json:string};
 export async function gradeCompletedQuestions(submissionId:string,questions:Row[],upperAttempt:number,concurrency=HOMEWORK_AI_CONCURRENCY){
   const batches=homeworkQuestionBatches(questions,upperAttempt,concurrency);
-  const assignment=await homeworkDb().prepare('SELECT a.curriculum FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=?').bind(submissionId).first<{curriculum:string}>();
+  const assignment=await homeworkDb().prepare('SELECT a.curriculum,a.sheet_json FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=?').bind(submissionId).first<{curriculum:string;sheet_json:string}>();
   const curriculum=homeworkCurriculum(assignment?.curriculum);
-  await boundedMap(batches,concurrency,batch=>gradeBatch(submissionId,batch,upperAttempt,curriculum),true);
+  await boundedMap(batches,concurrency,batch=>gradeBatch(submissionId,batch,upperAttempt,curriculum,curriculum==='school'&&Boolean(assignment?.sheet_json)),true);
 }
-async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:number,curriculum:HomeworkCurriculum){
+async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:number,curriculum:HomeworkCurriculum,assigned:boolean){
   if(!questions.length)return;
   const pages=await homeworkDb().prepare('SELECT id,processed_asset_id,quality_json FROM submission_pages WHERE submission_id=? ORDER BY page_order').bind(submissionId).all<{id:string;processed_asset_id:string;quality_json:string}>();
   const gradeable:Row[]=[];
@@ -34,10 +34,12 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
       continue;
     }
     let verdict:GradingVerdict|null=null,feedback='';
-    if(!q.reference_verified||!evidence.question_complete){verdict='review_required';feedback='题意或参考解答尚未通过校验，请补充题目或参考答案';}
+    if(assigned&&(!q.reference_verified||!evidence.question_complete))throw new Error(`第 ${q.question_number} 题的题目或参考答案尚未就绪，无法完成批改`);
+    if(assigned&&(evidence.answer_state!=='readable'||badPage)){verdict='incorrect';feedback=evidence.answer_state==='blank'?'本题未作答，按错误处理':'本题作答被涂抹或无法辨认，按错误处理';}
+    else if(!q.reference_verified||!evidence.question_complete){verdict='review_required';feedback='题意或参考解答尚未通过校验，请补充题目或参考答案';}
     else if(evidence.answer_state==='unreadable'||badPage){verdict='unreadable';feedback=curriculum==='international'?'本题作答看不清，按 0 分计；补交清晰照片后可重新批改':'本题作答无法可靠辨认，请补充清晰页面';}
     else if(evidence.answer_state==='blank'){verdict='incorrect';feedback='本题作答区域清晰完整但为空白，属于漏答';}
-    if(verdict)await upsertResult({submissionId,question:q,pageId:page?.id??null,verdict,score:reconcileHomeworkScore(verdict,0,evidence.max_score,curriculum).score,studentAnswer:evidence.student_answer,feedback,errorType:verdict==='incorrect'?'漏答':'待处理',evidenceSummary:feedback,confidence:verdict==='incorrect'?1:0,bbox:evidence.bbox,requiresReview:verdict!=='incorrect'});
+    if(verdict)await upsertResult({submissionId,question:q,pageId:page?.id??null,verdict,score:reconcileHomeworkScore(verdict,0,evidence.max_score,curriculum).score,studentAnswer:evidence.student_answer,feedback,errorType:verdict==='incorrect'?evidence.answer_state==='blank'?'漏答':'字迹不清':'待处理',evidenceSummary:feedback,confidence:verdict==='incorrect'?1:0,bbox:evidence.bbox,requiresReview:verdict!=='incorrect'});
     else gradeable.push(q);
   }
   if(!gradeable.length)return;
@@ -46,7 +48,7 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
   const images=await Promise.all(pageNumbers.map(n=>homeworkAssetDataUrl(pages.results[n-1].processed_asset_id)));
   // The stem is the printed text; what the extraction read from the figure travels beside it.
   const figureNotes=(q:Row)=>(JSON.parse(q.input_evidence_json) as CompletedQuestion).figure_notes;
-  const prompt=buildHomeworkGradingPrompt(questions[0].page_number,gradeable.map(q=>({questionNumber:q.question_number,type:q.type,stem:figureNotes(q)?`${q.stem}\n（配图条件：${figureNotes(q)}）`:q.stem,answer:q.answer,analysis:q.analysis,maxScore:normalizeMaxScore((JSON.parse(q.input_evidence_json) as CompletedQuestion).max_score)})))+(curriculum==='international'?`\n${INTERNATIONAL_GRADING_RULES}`:`\n${VERDICT_ONLY_RULES}`)+`\n本次是已完成作业直接批改，没有空白模板图片。输入图片为学生答卷，实际页码依次为 ${pageNumbers.join('、')}。跨页题应结合所有页批改。只比较参考解答与学生原答；不能从学生答案倒推标准答案。无法确定则返回 review_required。`;
+  const prompt=buildHomeworkGradingPrompt(questions[0].page_number,gradeable.map(q=>({questionNumber:q.question_number,type:q.type,stem:figureNotes(q)?`${q.stem}\n（配图条件：${figureNotes(q)}）`:q.stem,answer:q.answer,analysis:q.analysis,maxScore:normalizeMaxScore((JSON.parse(q.input_evidence_json) as CompletedQuestion).max_score)})))+(curriculum==='international'?`\n${INTERNATIONAL_GRADING_RULES}`:`\n${VERDICT_ONLY_RULES}`)+`\n本次是已完成作业直接批改，没有空白模板图片。输入图片为学生答卷，实际页码依次为 ${pageNumbers.join('、')}。跨页题应结合所有页批改。只比较参考解答与学生原答；不能从学生答案倒推标准答案。${assigned?'本次为已布置的校内作业，最终只有正确和错误：仅完整正确的作答返回 correct，其余返回 incorrect；空白、涂掉、无法辨认或无法确认正确的作答均按错误处理，不返回 partial、unreadable 或 review_required，不要求补图。':'无法确定则返回 review_required。'}`;
   const result=await callHomeworkModel({images,prompt,schema:homeworkGradingSchema,schemaName:'completed_homework_grading',upperAttempt});
   if(!result.text)throw new AiQueueFailure(result);
   let results;try{results=normalizeHomeworkGrading(parseHomeworkModelText(result.text));requireExactQuestionNumbers(gradeable.map(q=>q.question_number),results.map(r=>r.question_number),'批改结果');}catch{throw new AiQueueFailure({code:'OUTPUT_INVALID',status:422,error:'逐题批改返回内容未通过校验'});}
@@ -54,7 +56,7 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
     const evidence=JSON.parse(q.input_evidence_json) as CompletedQuestion;const item=results.find(r=>r.question_number===q.question_number);const page=pages.results[evidence.page_numbers[0]-1];
     if(!item){await upsertResult({submissionId,question:q,pageId:page.id,verdict:'review_required',studentAnswer:evidence.student_answer,feedback:'本题未返回可确认的批改结果',errorType:'待处理',confidence:0,bbox:evidence.bbox,requiresReview:true});continue;}
     if(isSimpleObjectiveAnswer(q.type,q.answer) && normalizeHomeworkAnswer(evidence.student_answer)!==normalizeHomeworkAnswer(item.student_answer)) {
-      await upsertResult({submissionId,question:q,pageId:page.id,verdict:'review_required',studentAnswer:evidence.student_answer,feedback:'识别阶段与批改阶段的学生作答转录不一致，请查看原卷或补图确认',errorType:'转录不一致',confidence:0,bbox:evidence.bbox,requiresReview:true});continue;
+      await upsertResult({submissionId,question:q,pageId:page.id,verdict:'review_required',studentAnswer:evidence.student_answer,feedback:assigned?'识别阶段与批改阶段的学生作答不一致，未能确认正确，按错误处理':'识别阶段与批改阶段的学生作答转录不一致，请查看原卷或补图确认',errorType:'转录不一致',confidence:0,bbox:evidence.bbox,requiresReview:true});continue;
     }
     const final=finalizeHomeworkVerdict({type:q.type,standardAnswer:q.answer,studentAnswer:item.student_answer,modelVerdict:item.verdict,confidence:item.confidence,maxScore:evidence.max_score,modelScore:item.score,curriculum});
     const analysis=curriculum==='international'?{feedback:item.feedback,errorType:item.error_type,stepAnalysis:item.step_analysis,evidenceSummary:item.evidence_summary}:{feedback:'',errorType:'',stepAnalysis:[],evidenceSummary:''};
