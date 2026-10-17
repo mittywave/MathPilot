@@ -64,11 +64,15 @@ function TypesetIcon({ name }: { name: "upload" | "history" | "list" }) {
 function Stepper({ value, unit, label, disabled, onChange, min = 0, max = ROOM[unit].max, step = ROOM[unit].step }: {
   value: number; unit: Unit; label: string; disabled?: boolean; onChange: (value: number) => void; min?: number; max?: number; step?: number;
 }) {
+  // Keep an unfinished edit local, so clearing a value or typing 12 is not interrupted by clamping.
+  const [draft, setDraft] = useState<string | null>(null);
   const set = (next: number) => { if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, Math.round(next)))); };
   return <span className="typeset-stepper">
     <button type="button" aria-label={`${label}减少`} disabled={disabled || value <= min} onClick={() => set(value - step)}>−</button>
-    <input type="number" inputMode="numeric" min={min} max={max} step={1} value={value} aria-label={label} disabled={disabled}
-      onChange={(event) => { if (event.target.value !== "") set(Number(event.target.value)); }} />
+    <input type="number" inputMode="numeric" min={min} max={max} step={1} value={draft ?? String(value)} aria-label={label} disabled={disabled}
+      onChange={(event) => { setDraft(event.target.value); if (event.target.value !== "") set(Number(event.target.value)); }}
+      onBlur={() => setDraft(null)}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
     <button type="button" aria-label={`${label}增加`} disabled={disabled || value >= max} onClick={() => set(value + step)}>+</button>
     <em>{unit}</em>
   </span>;
