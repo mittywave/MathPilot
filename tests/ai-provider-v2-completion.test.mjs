@@ -8,6 +8,31 @@ import { loadSource } from './load-source.mjs';
 import { sqliteD1 } from './helpers/ai-v2-sqlite.mjs';
 import { localD1Rows } from './helpers/local-d1-observer.mjs';
 
+test('official presets save and discover with the correct native address and authentication',async t=>{
+  for(const [preset,url,header,payload] of [
+    ['anthropic','https://api.anthropic.com/v1/models','x-api-key',{data:[{id:'claude-test'}]}],
+    ['gemini','https://generativelanguage.googleapis.com/v1beta/models','x-goog-api-key',{models:[{name:'models/gemini-test'}]}],
+    ['openrouter','https://openrouter.ai/api/v1/models','Authorization',{data:[{id:'vendor/model-test'}]}],
+  ]){
+    const db=sqliteD1(),env={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:'synthetic-preset-encryption'};
+    const repo=await loadSource('lib/server/ai/provider-repository.ts',env),presets=await loadSource('lib/ai-provider-presets.ts');
+    const provider=await repo.saveProvider(null,{...presets.newProvider(preset),enabled:true,credential:{action:'replace',value:'synthetic-preset-credential'}});
+    const fetch=t.mock.method(globalThis,'fetch',async(endpoint,init)=>{
+      assert.equal(String(endpoint),url);
+      assert.equal(init.headers[header],header==='Authorization'?'Bearer synthetic-preset-credential':'synthetic-preset-credential');
+      if(preset==='anthropic')assert.equal(init.headers['anthropic-version'],'2023-06-01');
+      assert.equal(init.redirect,'manual');
+      return Response.json(payload);
+    });
+    const probes=await loadSource('lib/server/ai/probes.ts',env);
+    const result=await probes.discoverModels(provider.id,provider.fingerprint,new AbortController().signal);
+    assert.equal(result.count,1);assert.equal(fetch.mock.callCount(),1);
+    assert.equal((await repo.readCenter()).providers[0].models.length,1);
+    assert.ok(!JSON.stringify(await repo.readCenter()).includes('synthetic-preset-credential'));
+    fetch.mock.restore();db.sqlite.close();
+  }
+});
+
 for (const [mode, protocol, suffix] of [
   ['openai', 'auto', '/v1'],
   ['antigravity_gemini', 'gemini_generate_content', '/antigravity/v1beta'],

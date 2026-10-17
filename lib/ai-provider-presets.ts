@@ -1,13 +1,24 @@
 import type { EndpointProfile, ProviderKind, ProviderWrite, WireProtocol } from './ai-provider-types';
 export const KIND_LABELS: Record<ProviderKind, string> = { openai_compatible: 'OpenAI 兼容', deepseek: 'DeepSeek 官方', sub2api: 'Sub2API', custom: '自定义' };
 export const PROTOCOL_LABELS: Record<WireProtocol, string> = { auto: '自动 · 仅 OpenAI 两种格式', responses: 'Responses', chat_completions: 'Chat Completions', gemini_generate_content: 'Gemini generateContent', anthropic_messages: 'Claude / Anthropic Messages' };
+// Preset endpoints adapted from yetone/magpie internal/provider/presets.go (MIT).
+// Keep them as form defaults: saved connections still use their exact URL and protocol.
+export const PROVIDER_PRESETS = {
+    openai_compatible: { name: 'OpenAI', kind: 'openai_compatible', baseUrl: 'https://api.openai.com/v1', wireApi: 'auto', auth: 'bearer' },
+    deepseek: { name: 'DeepSeek', kind: 'deepseek', baseUrl: 'https://api.deepseek.com', wireApi: 'chat_completions', auth: 'bearer' },
+    sub2api: { name: 'Sub2API / 中转网关', kind: 'sub2api', baseUrl: '', wireApi: 'auto', auth: 'bearer' },
+    anthropic: { name: 'Claude / Anthropic', kind: 'custom', baseUrl: 'https://api.anthropic.com/v1', wireApi: 'anthropic_messages', auth: 'x-api-key' },
+    gemini: { name: 'Google Gemini', kind: 'custom', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireApi: 'gemini_generate_content', auth: 'x-goog-api-key' },
+    openrouter: { name: 'OpenRouter', kind: 'openai_compatible', baseUrl: 'https://openrouter.ai/api/v1', wireApi: 'chat_completions', auth: 'bearer' },
+    custom: { name: '其他兼容接口', kind: 'custom', baseUrl: '', wireApi: 'auto', auth: 'bearer' },
+} as const;
 export function defaultEndpoints(protocol: WireProtocol = 'auto'): EndpointProfile {
     return { models: protocol === 'anthropic_messages' ? null : 'models', responses: 'responses', chat: 'chat/completions', gemini: 'models/{model}:generateContent', messages: 'messages', auth: 'bearer' };
 }
-export function newProvider(kind: ProviderKind = 'openai_compatible'): ProviderWrite {
-    return { expectedRevision: 0, name: KIND_LABELS[kind], kind,
-        baseUrl: kind === 'deepseek' ? 'https://api.deepseek.com' : kind === 'openai_compatible' ? 'https://api.openai.com/v1' : '',
-        wireApi: kind === 'deepseek' ? 'chat_completions' : 'auto', endpoints: defaultEndpoints(), enabled: false,
+export function newProvider(preset: keyof typeof PROVIDER_PRESETS = 'openai_compatible'): ProviderWrite {
+    const p = PROVIDER_PRESETS[preset];
+    return { expectedRevision: 0, name: p.name, kind: p.kind, baseUrl: p.baseUrl,
+        wireApi: p.wireApi, endpoints: { ...defaultEndpoints(p.wireApi), models: 'models', auth: p.auth }, enabled: false,
         timeoutMs: 180000, catalogTimeoutMs: 15000, outputStrategy: 'auto', reasoningEffort: '', credential: { action: 'keep' } };
 }
 /** V2 NEVER adds a version or gateway prefix. A Base URL means exactly that base. */

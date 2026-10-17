@@ -1,4 +1,45 @@
-# AI Provider Center V2 重构任务书
+# AI 配置中心
+
+## 当前桌面交互规则
+
+- 默认进入“任务分配”。通用文本 / 图片默认模型与识题转录、解析文字、几何图、作业批改四项用途放在同一页；选择器可搜索服务商、展示名和模型 ID，支持方向键、Enter、Escape。能力信息保持参考性质，不限制选择。
+- “提供方”负责连接与模型。新增连接选择服务商预设后，直接填写名称、API 地址、API Key；默认启用。保存后获取目录并进入模型列表，接着可直接跳到任务分配。目录失败不撤销已保存的连接，允许手动添加模型；手动模型直接出现在列表中。
+- 常用预设为 OpenAI、DeepSeek、Sub2API、中转 / 自定义、Claude、Gemini、OpenRouter。预设只填表单初值，已有连接的完整 URL、协议和相对路径保持原样。
+- 已保存 Key 不返回浏览器；空输入保留原值，输入新值替换。换地址或认证范围后仍须重新提供对应 Key。复制连接不复制 Key，缺少 Key 的副本保持停用。
+- 协议、超时、接口路径、能力证据与备用模型按需展开。备用仍需单独启用并同意发送材料；保存连接不自动改变任何任务分配。未保存提醒、修订冲突与取消行为沿用原机制。
+- 本轮仅调整现有页面、预设和目录鉴权，不引入数据库迁移、网关进程或新依赖。Claude 原生目录请求随配置发送 `anthropic-version`。
+
+### Magpie 参考与复用
+
+参考 [Magpie](https://github.com/yetone/magpie) 的“选预设、填 Key、获取模型”和统一搜索选择器；常用预设地址从其 [presets.go](https://github.com/yetone/magpie/blob/main/internal/provider/presets.go) 适配到现有 `lib/ai-provider-presets.ts`。Gemini 使用题库已有的原生 generateContent 适配器。其 Go 网关与独立 DOM 界面不能直接作为本项目的 React 组件使用；本项目复用已有加密存储、协议适配、主备和诊断路径。
+
+预设资料适配遵循 Magpie 的 MIT 许可，保留原许可：
+
+```text
+MIT License
+
+Copyright (c) 2026 yetone
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## V2 原始重构任务书（历史背景）
+
+下文保留 2026-09-26 的原始设计和验收背景；与上方现行交互规则冲突时，以上方为准。实施与提交流程以项目当前 AGENTS.md 为准。
 
 版本：1.0 · 编制日期：2026-09-26  
 目标仓库：`mittywave/zhiti-local-question-bank`  
