@@ -414,6 +414,9 @@ test("completed homework is graded, archives only incorrect work, preserves pend
       assert.equal(count.response.headers.get("cache-control"), "private, no-store");
       assert.deepEqual(count.payload, { count: ["submitted", "processing"].includes(status) ? 1 : 0 }, `${status} grading count without submission details`);
       assert.deepEqual((await jsonRequest(base, "/api/submissions?count=grading", { cookie: teacherTwo })).payload, { count: 0 }, "other teachers' homework is excluded");
+      const progress = await jsonRequest(base, "/api/submissions?progress=students", { cookie: teacherOne });
+      assert.equal(progress.payload.progress[studentOneId], ["submitted", "processing"].includes(status) ? "grading" : undefined, `${status} badge beside the student; an uploaded homework never shows 作业中`);
+      assert.equal((await jsonRequest(base, "/api/submissions?progress=students", { cookie: teacherTwo })).payload.progress[studentOneId], undefined, "other teachers' students have no badge");
     }
     assert.equal((await upload(base,`/api/homework-assets?submissionId=${directId}&role=submission_processed`,teacherOne,bytes)).response.status,400);
     const directPage=await uploadPage(base,teacherOne,directId,bytes);
@@ -859,6 +862,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual([listed.title,listed.total,listed.done,listed.latest.status],["两天计算打卡",4,0,"draft"]);
     assert.deepEqual(listed.days.map(d=>[d.date,d.size,d.done]),[[undefined,2,0],[undefined,2,0]]);
     assert.equal(listed.recordId,planId);
+    assert.equal((await jsonRequest(base,"/api/submissions?progress=students",{cookie:teacherOne})).payload.progress[studentOneId],"assigned","an assigned homework not handed in shows 作业中");
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherTwo})).response.status,404);
 
     // The first upload brings day 1 back; the page also shows a stray question that is not on the sheet.

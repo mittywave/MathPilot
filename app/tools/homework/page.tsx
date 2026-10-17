@@ -7,7 +7,7 @@ import { useToast } from "../../components/Toast";
 import { SiteHeader } from "../../components/SiteHeader";
 import { homeworkApi } from "../../../lib/homework-api-client";
 import { titleWithoutStudent } from "../../../lib/homework-grading-rules.mjs";
-import type { AuthUser, HomeworkSubmission } from "../../../lib/types";
+import type { AuthUser, HomeworkSubmissionListItem } from "../../../lib/types";
 
 const SUBMISSION_STATUS: Record<string, string> = {
   draft: "待上传", submitted: "已提交", processing: "批改中", review_required: "旧版待复核",
@@ -16,7 +16,7 @@ const SUBMISSION_STATUS: Record<string, string> = {
 
 export default function HomeworkTeacherPage() {
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
-  const [records, setRecords] = useState<HomeworkSubmission[]>([]);
+  const [records, setRecords] = useState<HomeworkSubmissionListItem[]>([]);
   const [toastNode, show] = useToast();
   const [loading, setLoading] = useState(true);
 

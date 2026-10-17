@@ -159,11 +159,20 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.equal(sharedQuestion.canEdit, true);
     assert.equal(sharedQuestion.createdByEmail, "one@shared.test");
     assert.equal((await jsonRequest(base, "/api/library?scope=mine", { cookie: two })).payload.questions.length, seenByTwo.payload.questions.length, "the legacy scope parameter reads the same library");
+    // A browser revalidates its copy of the library: the same copy is answered 304, a changed one in full.
+    const libraryTag = seenByTwo.response.headers.get("etag");
+    assert.match(libraryTag ?? "", /^"[0-9a-f]{64}"$/);
+    assert.equal(seenByTwo.response.headers.get("cache-control"), "private, no-cache");
+    assert.equal((await fetch(`${base}/api/library`, { headers: { Cookie: two, "If-None-Match": libraryTag } })).status, 304, "an unchanged library is not sent again");
     assert.equal((await fetch(`${base}${asset}`, { headers: { Cookie: two } })).status, 200);
     assert.equal((await jsonRequest(base, "/api/download", { cookie: two, method: "POST", body: { questionIds: ["shared-question"] } })).response.status, 200);
     const edited = await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "PUT", body: { question: { ...sharedQuestion, code: "9999", stem: "第二位老师修改后的题干" } } });
     assert.equal(edited.response.status, 200);
     assert.equal(edited.payload.question.code, firstCode, "client cannot reassign a code");
+    const revalidated = await fetch(`${base}/api/library`, { headers: { Cookie: two, "If-None-Match": libraryTag } });
+    assert.equal(revalidated.status, 200, "an edited library is sent again in full");
+    assert.notEqual(revalidated.headers.get("etag"), libraryTag);
+    assert.equal((await revalidated.json()).questions.find((item) => item.id === "shared-question").stem, "第二位老师修改后的题干");
     assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find((item) => item.id === "shared-question").stem, "第二位老师修改后的题干");
     const second = await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { module: { name: "待删模块", subtitle: "" } } });
     const tempId = second.payload.module.id;

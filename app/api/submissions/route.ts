@@ -1,9 +1,10 @@
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
-import { countGradingHomework, createAssignedHomework, createCompletedSubmission, readTeacherSubmissions } from "../../../lib/server/homework";
+import { countGradingHomework, createAssignedHomework, createCompletedSubmission, readHomeworkProgress, readTeacherSubmissions } from "../../../lib/server/homework";
+// Besides the list: ?count=grading for the 学生档案 nav badge, ?progress=students for the badges beside each student.
 export async function GET(request: Request) {
-  try { const user = await requireUser(request);
-    const result = new URL(request.url).searchParams.get("count") === "grading"
-      ? { count: await countGradingHomework(user) } : { submissions: await readTeacherSubmissions(user) };
+  try { const user = await requireUser(request); const query = new URL(request.url).searchParams;
+    const result = query.get("count") === "grading" ? { count: await countGradingHomework(user) }
+      : query.get("progress") === "students" ? { progress: await readHomeworkProgress(user) } : { submissions: await readTeacherSubmissions(user) };
     return Response.json(result, { headers: { "Cache-Control": "private, no-store" } }); }
   catch (error) { if (error instanceof Response) return error; return Response.json({ error: error instanceof Error ? error.message : "提交记录读取失败" }, { status: 500 }); }
 }
