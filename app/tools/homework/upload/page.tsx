@@ -14,15 +14,16 @@ const OUTPUT_OPTIONS:Array<[keyof HomeworkOutputs,string,string]>=[
 export default function CompletedHomeworkUpload(){
   const [students,setStudents]=useState<StudentSummary[]>([]),[studentId,setStudentId]=useState(''),[title,setTitle]=useState(''),[pages,setPages]=useState<HomeworkPage[]>([]),[references,setReferences]=useState<File[]>([]),[documents,setDocuments]=useState<File[]>([]);
   const [pickerBusy,setPickerBusy]=useState(false);
+  const [originals,setOriginals]=useState<File[]>([]);
   const [user,setUser]=useState<AuthUser|null|undefined>(undefined),[fromStudent,setFromStudent]=useState(false);
   const [outputs,setOutputs]=useState<HomeworkOutputs>({wrongBook:true,report:true,profile:true});
-  const upload=useHomeworkUpload(),{curriculum,busy,draft,referencesSaved}=upload;
+  const upload=useHomeworkUpload(),{curriculum,busy,draft}=upload;
   const international=curriculum==='international';
   const [loading,setLoading]=useState(true),[loadError,setLoadError]=useState('');
   useEffect(()=>{void homeworkApi.me().then(async me=>{setUser(me.user);if(!me.user)return;const r=await homeworkApi.students();setStudents(r.students);const requested=new URLSearchParams(location.search).get('studentId');const selected=r.students.find(s=>s.id===requested);setFromStudent(Boolean(selected));setStudentId(selected?.id??r.students[0]?.id??'');}).catch(e=>{setUser(current=>current??null);setLoadError(e.message);}).finally(()=>setLoading(false));},[]);
   async function start(){
     if(!studentId||!title.trim()||!pages.length||busy||pickerBusy)return;
-    const submission=await upload.start({studentId,title,outputs,pages,documents,references});
+    const submission=await upload.start({studentId,title,outputs,pages,documents,references,originals});
     if(submission)location.href=`/tools/homework/submissions/${submission.id}`;
   }
   const message=upload.message||loadError;
@@ -40,6 +41,11 @@ export default function CompletedHomeworkUpload(){
         <button className="primary upload-submit" aria-describedby={!busy&&!pickerBusy&&missing.length?'homework-upload-missing':undefined} disabled={busy||pickerBusy||!studentId||!title.trim()||!pages.length} onClick={start}>{busy?'正在提交…':'开始自动批改'}</button>
         {!busy&&!pickerBusy&&missing.length>0&&<p className="missing-reason" id="homework-upload-missing">还差：{missing.map((field,index)=><span key={field.label}>{index>0?'、':''}<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLElement>(field.target);control?.focus({preventScroll:true});control?.scrollIntoView({block:'nearest'});}}>{field.label}</button></span>)}</p>}
       </aside>
-      <section className="completed-upload-materials"><h2>学生已完成的作业</h2><p>看不清的题目单独待处理，其余正常批改。</p><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onBusyChange={setPickerBusy} onSourceFile={file=>setDocuments(current=>[...current,file])}/><details className="completed-reference" open={international||undefined}><summary>{international?'Mark Scheme（建议上传）':'参考答案（选填）'}</summary><p>{international?'有 mark scheme 时逐个得分点对照；未提供时按考试局惯例拟定得分点并校验。':'有答案时优先使用；未提供时独立解题并校验。'}</p><input type="file" aria-label="上传参考答案" accept="image/*,application/pdf" multiple disabled={busy||referencesSaved} onChange={e=>setReferences([...(e.target.files??[])])}/>{references.map((f,index)=><p key={index}>{f.name}</p>)}</details></section>
+      <section className="completed-upload-materials">
+        <h2>学生已完成的作业</h2><p>看不清的题目单独待处理，其余正常批改。</p>
+        <HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onBusyChange={setPickerBusy} onSourceFile={file=>setDocuments(current=>[...current,file])}/>
+        <details className="completed-reference"><summary>学校作业原件（选填）</summary><p>上传学校发的空白试题或练习原件，支持图片和 PDF，最多 30 页，用于核对题干与配图。未上传也可以正常批改。</p><input type="file" aria-label="上传学校作业原件" accept="image/*,application/pdf" multiple disabled={busy||!!draft} onChange={e=>{setOriginals([...(e.target.files??[])]);e.target.value='';}}/>{originals.map((file,index)=><p key={index}>{file.name} <button type="button" className="text-button" aria-label={`移除学校作业原件 ${file.name}`} disabled={busy||!!draft} onClick={()=>setOriginals(current=>current.filter((_,i)=>i!==index))}>移除</button></p>)}</details>
+        <details className="completed-reference" open={international||undefined}><summary>{international?'Mark Scheme（建议上传）':'参考答案（选填）'}</summary><p>{international?'有 mark scheme 时逐个得分点对照；未提供时按考试局惯例拟定得分点并校验。':'有答案时优先使用；未提供时独立解题并校验。'}</p><input type="file" aria-label="上传参考答案" accept="image/*,application/pdf" multiple disabled={busy||!!draft} onChange={e=>setReferences([...(e.target.files??[])])}/>{references.map((f,index)=><p key={index}>{f.name}</p>)}</details>
+      </section>
     </main>}</>;
 }

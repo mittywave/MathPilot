@@ -83,7 +83,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
+  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     state.requests += 1;
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -144,6 +144,14 @@ function startMockModel(port) {
       ].map(q=>({...q,bbox:{x:90,y:100,width:700,height:100},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none"}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
+    if (prompt.includes("当前任务只补全已独立识别") && prompt.includes("学校作业原件")) {
+      state.originalContextCalls++;
+      assert.equal(payload.input[0].content.filter(item=>item.type==='input_image').length,3,"the student's page and two originals remain distinct");
+      assert.match(prompt,/不能把原件中的空白当作学生漏答[\s\S]*不能加入只在原件出现的题/);
+      const targets=JSON.parse(prompt.split('page.question_numbers只列下列题号：\n')[1].split('\n')[0]);
+      const questions=targets.map(q=>({...q,stem:q.question_number==='D5'?'计算 5+5':q.stem,question_complete:true,student_answer:'原件的空白不得覆盖学生答案',answer_state:'blank',teacher_mark:'correct',bbox:{x:10,y:10,width:100,height:100},figures:[]}));
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
+    }
     if (prompt.includes("只识别学生已完成的数学作业")) {
       const primary=Number(prompt.match(/本次仅处理 PDF 第 (\d+) 页/)?.[1]??1);
       const context=prompt.includes('当前任务只补全已独立识别');
@@ -176,6 +184,7 @@ function startMockModel(port) {
     if(prompt.includes("作业配图定位助手")) {state.locatorCalls+=1;const numbers=[...prompt.matchAll(/^([^\n：]+)：/gm)].map(m=>m[1]).filter(n=>/^D\d$/.test(n));response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions:numbers.map(question_number=>({question_number,figures:question_number==='D1'?[{kind:'stem',bbox:{x:660,y:240,width:180,height:50},hasHandwriting:true}]:[],added_texts:[]}))})}));return;}
     if(prompt.includes("建立独立参考解答")) {
       assert.doesNotMatch(prompt,/student_answer/);
+      state.referenceImageCounts.push(payload.input[0].content.filter(item=>item.type==='input_image').length);
       const numbers=[...new Set([...prompt.matchAll(/"question_number":"([^"]+)"/g)].map(m=>m[1]))];state.referenceNumbers.push(...numbers);
       if(numbers.includes("1-3(2)"))assert.match(prompt,/本题引用的第\(1\)问条件[\s\S]*3. 计算：\(1\) 1\+1/);
       const answers=numbers.map(n=>({question_number:n,answer:({D1:"5",D2:"x=2",D3:"6",D4:"8"}[n]??"5"),analysis:"独立验算推导",source:prompt.includes("提供的 0 张")?"agent":"provided"}));
@@ -374,6 +383,31 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(reprocessed.pageRevisions[0].originalUrl,oldPage.originalUrl);
     assert.deepEqual(d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND id IN ("+beforeKnown.map(()=>"?").join(",")+") ORDER BY id",[directId,...beforeKnown.map(i=>i.id)]),beforeKnown);
 
+    const withOriginal=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"学校作业原件验证",outputs:{wrongBook:false,report:false,profile:false}}});
+    const originalId=withOriginal.payload.submission.id,originalAssignment=withOriginal.payload.submission.assignmentId;
+    assert.equal((await upload(base,`/api/homework-assets?assignmentId=${directAssignmentId}&role=question`,teacherOne,bytes)).response.status,404,"question originals cannot rewrite an already published reading");
+    assert.equal((await upload(base,`/api/homework-assets?submissionId=${originalId}&role=question`,teacherOne,bytes)).response.status,400);
+    assert.equal((await upload(base,`/api/homework-assets?assignmentId=${originalAssignment}&submissionId=${originalId}&role=question`,teacherOne,bytes)).response.status,400);
+    assert.equal((await upload(base,`/api/homework-assets?assignmentId=${originalAssignment}&role=question`,teacherTwo,bytes)).response.status,404);
+    for(let page=0;page<2;page++)assert.equal((await upload(base,`/api/homework-assets?assignmentId=${originalAssignment}&role=question`,teacherOne,bytes,`学校原件-${page+1}.jpg`)).response.status,201);
+    const originalReferencesStart=mock.state.referenceImageCounts.length;
+    await submitPages(base,teacherOne,originalId,[await uploadPage(base,teacherOne,originalId,bytes)]);
+    const originalResult=await waitForSubmission(base,teacherOne,originalId,["published"],worker);
+    assert.equal(mock.state.originalContextCalls,1);
+    assert.equal(originalResult.pages.length,1,"question originals never become student submission pages");
+    assert.deepEqual(originalResult.questionOriginals.map(page=>page.name),['学校原件-1.jpg','学校原件-2.jpg']);
+    assert.equal((await fetch(base+originalResult.questionOriginals[0].url,{headers:{Cookie:teacherOne}})).status,200);
+    assert.equal((await fetch(base+originalResult.questionOriginals[0].url,{headers:{Cookie:teacherTwo}})).status,404);
+    assert.equal(originalResult.gradingItems.length,5,"only questions read from the student page are graded");
+    assert.equal(originalResult.gradingItems.find(q=>q.questionNumber==='D1').studentAnswer,'6');
+    assert.equal(originalResult.gradingItems.find(q=>q.questionNumber==='D1').verdict,'incorrect',"the original cannot overwrite teacher marks");
+    assert.equal(originalResult.gradingItems.find(q=>q.questionNumber==='D5').stem,'计算 5+5');
+    const originalEvidence=JSON.parse(d1Rows(stateDir,"SELECT input_evidence_json FROM assignment_questions WHERE assignment_id=? AND question_number='D1'",[originalAssignment])[0].input_evidence_json);
+    assert.deepEqual(originalEvidence.bbox,{x:90,y:100,width:700,height:100});assert.equal(originalEvidence.teacher_mark,'none');
+    assert.equal(originalEvidence.figures.length,1,"original coordinates cannot replace the student's figure crop");
+    assert.ok(originalResult.gradingItems.every(q=>q.referenceSource==='agent'),"question originals are never treated as provided answers");
+    assert.ok(mock.state.referenceImageCounts.slice(originalReferencesStart).every(count=>count===0));
+
     const withReference=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"直接批改参考答案验证",outputs:{wrongBook:false,report:false,profile:true}}});
     const providedId=withReference.payload.submission.id;
     const providedAssignment=withReference.payload.submission.assignmentId;
@@ -434,7 +468,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(deletedEntry.archiveReason,"老师删除");
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions/${d3entry.id}`,{cookie:teacherOne,method:"PATCH"})).response.status,200);
     assert.equal((await wrongIds()).includes(d3entry.id),true);
-    assert.deepEqual((await jsonRequest(base,"/api/submissions",{cookie:teacherOne})).payload.submissions.map(item=>item.id).sort(),[directId,providedId,secondId].sort());
+    assert.deepEqual((await jsonRequest(base,"/api/submissions",{cookie:teacherOne})).payload.submissions.map(item=>item.id).sort(),[directId,originalId,providedId,secondId].sort());
 
     mock.state.multiPage=true;mock.state.invalidPage=4;mock.state.pageExtractionCalls={};
     const international=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"9709 P1 Quiz",curriculum:"international"}});

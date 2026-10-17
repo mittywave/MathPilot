@@ -340,7 +340,7 @@ export type HomeworkOutputs = { wrongBook: boolean; report: boolean; profile: bo
 /** school: 校内数学, graded per printed question; international: IGCSE / A Level, graded per sub-part against a mark scheme. */
 export type HomeworkCurriculum = "school" | "international";
 export type GradingVerdict = "correct" | "partial" | "incorrect" | "unreadable" | "review_required";
-export type HomeworkAssetRole = "answer" | "submission_original" | "submission_document" | "answer_crop";
+export type HomeworkAssetRole = "question" | "answer" | "submission_original" | "submission_document" | "answer_crop";
 /** A printed figure cut from the homework page; options figures hold every option graph with its letter. */
 export type HomeworkQuestionFigure = { url: string; kind: "stem" | "options"; width?: number; height?: number; hasHandwriting?: boolean };
 
@@ -629,6 +629,7 @@ export type HomeworkSubmission = {
   outputs: HomeworkOutputs;
   curriculum: HomeworkCurriculum;
   originalDocuments?: Array<{name:string;url:string}>;
+  questionOriginals?: Array<{name:string;url:string}>;
   pageRevisions?: Array<{ pageId:string; originalUrl:string; processedUrl:string; createdAt:number }>;
   gradingSummary?: { correct: number; partial: number; incorrect: number; unresolved: number; archived: number; marks: HomeworkScoreSummary | null };
   id: string;

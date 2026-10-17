@@ -38,6 +38,9 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const scopedSheet=sheet&&pendingIds.length&&submission?.published_at==null?sheet.filter(q=>pendingIds.includes(q.id)):sheet;
   const knownNumbers=scopedSheet?new Set(scopedSheet.map(q=>q.question_number)):undefined;
   const inventory:KnownSheetQuestion[]|undefined=scopedSheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem.replace(/\s+/g,' ').slice(0,80)}));
+  const originals=await db.prepare("SELECT asset_id FROM assignment_assets WHERE assignment_id=? AND role='question' ORDER BY page_order").bind(assignmentId).all<{asset_id:string}>();
+  if(originals.results.length>30)throw new Error('学校作业原件最多30页');
+  const originalImages=await Promise.all((originals.results as Array<{asset_id:string}>).map(row=>homeworkAssetDataUrl(row.asset_id)));
   const extracted=await boundedMap(pages,HOMEWORK_AI_CONCURRENCY,async(page,index):Promise<PageExtraction>=>{
     const fingerprint=await coverageFingerprint(pages,index);
     const cached=await db.prepare('SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND page_id=? AND fingerprint=? AND status=\'complete\'').bind(submissionId,page.id,fingerprint).first<{result_json:string}>();
@@ -49,17 +52,19 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
       const images=await Promise.all(context.map(p=>homeworkAssetDataUrl(p.processed_asset_id)));
       const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum,inventory),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum,knownNumbers);
       const incomplete=read.questions.filter(q=>!q.question_complete);
-      if(curriculum==='school' && incomplete.length && pages.length>1){
-        const neighbours=pages.slice(Math.max(0,index-1),index+2).filter(p=>p.id!==page.id);
+      if(!sheet && read.questions.length && (originalImages.length || (curriculum==='school' && incomplete.length && pages.length>1))){
+        const targets=originalImages.length?read.questions:incomplete;
+        const neighbours=curriculum==='school'?pages.slice(Math.max(0,index-1),index+2).filter(p=>p.id!==page.id):context.filter(p=>p.id!==page.id);
+        const contextPages=[page,...neighbours],contextImages=await Promise.all(contextPages.map(p=>homeworkAssetDataUrl(p.processed_asset_id)));
         const supplemented=normalizePageExtraction(await model({
-          images:[...images,...await Promise.all(neighbours.map(p=>homeworkAssetDataUrl(p.processed_asset_id)))],
-          prompt:completedPageExtractionPrompt(page.page_order+1,[page.page_order+1,...neighbours.map(p=>p.page_order+1)],pages.length,curriculum)+`\n当前任务只补全已独立识别的下列题目缺失的印刷条件，不重新识别题目清单。第1张图是目标 PDF 第${page.page_order+1}页，后续图片仅作条件参考。PDF可能乱序，不能假定前一张就是题目的前半页。只有能在原图确认属于同一题的条件才可补入 stem、options、figure_notes；无法确认仍 question_complete=false。不得补写其他小问或学生解答。question_number、page_numbers、bbox、figures、teacher_mark、student_answer、answer_state 必须沿用下列目标页记录，不得采用参考页的题号或坐标。page.question_numbers只列下列题号：\n${JSON.stringify(incomplete)}`,
+          images:[...contextImages,...originalImages],
+          prompt:completedPageExtractionPrompt(page.page_order+1,contextPages.map(p=>p.page_order+1),pages.length,curriculum)+`\n当前任务只补全已独立识别的下列题目缺失的印刷条件，不重新识别题目清单。第1张图是目标 PDF 第${page.page_order+1}页，后续图片仅作条件参考。PDF可能乱序，不能假定前一张就是题目的前半页。${originalImages.length?`前 ${contextImages.length} 张是学生作业页面，最后 ${originalImages.length} 张是学校作业原件，仅含印刷题目。原件页码与学生页面不一定对应，必须结合题号和题干内容确认同一题；不能把原件中的空白当作学生漏答，不能加入只在原件出现的题，原件上的内容也不能当作参考答案。`:''}只有能在原图确认属于同一题的条件才可补入 stem、options、figure_notes、max_score；无法确认则保留目标页原有条件和 question_complete，不猜测。不得补写其他小问或学生解答。question_number、page_numbers、bbox、figures、teacher_mark、student_answer、answer_state 必须沿用下列目标页记录，不得采用参考页的题号或坐标。page.question_numbers只列下列题号：\n${JSON.stringify(targets)}`,
           schema:completedPageExtractionSchema,schemaName:'completed_homework_page_context',upperAttempt,
         }),page.page_order+1,[page.page_order+1],pages.length,curriculum);
-        requireExactQuestionNumbers(incomplete.map(q=>q.question_number),supplemented.questions.map(q=>q.question_number),'跨页条件补全');
+        requireExactQuestionNumbers(targets.map(q=>q.question_number),supplemented.questions.map(q=>q.question_number),'题目条件补全');
         read.questions=read.questions.map(q=>{
           const extra=supplemented.questions.find(item=>item.question_number===q.question_number);
-          return extra?{...q,stem:extra.stem,options:extra.options,figure_notes:extra.figure_notes,question_complete:extra.question_complete}:q;
+          return extra?{...q,stem:extra.stem,options:extra.options,figure_notes:extra.figure_notes,question_complete:extra.question_complete,max_score:extra.max_score??q.max_score}:q;
         });
       }
       // Figures are cut once here; the cached extraction keeps their stored images for every later run.
