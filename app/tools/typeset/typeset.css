@@ -63,6 +63,12 @@
 .typeset-close{margin-left:auto;width:26px;height:26px;border:0;border-radius:50%;background:none;color:inherit;font-size:18px;line-height:1;cursor:pointer}
 .typeset-close:hover{background:var(--green-soft,#edf5f0)}
 .typeset-link{justify-self:start;padding:0;border:0;background:none;color:var(--green,#2f6b53);font-size:12.5px;cursor:pointer}
+.typeset-link:disabled{opacity:.6;cursor:default}
+.typeset-paste{display:grid;gap:8px;margin-top:-12px}
+.typeset-paste textarea{width:100%;min-height:110px;resize:vertical;padding:10px;border:1px solid var(--line);border-radius:calc(8px*var(--radius-scale));background:var(--surface);color:inherit;font:inherit}
+.typeset-paste textarea:focus{outline:2px solid var(--green);outline-offset:1px}
+.typeset-paste small{color:var(--muted);font-size:12px}
+.typeset-paste .secondary{height:32px;font-size:13px}
 .typeset-history{flex:1;overflow:auto;padding:20px 24px 32px}
 .typeset-history>header{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
 .typeset-history>header b{font-size:16px}

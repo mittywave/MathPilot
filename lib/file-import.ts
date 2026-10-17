@@ -377,6 +377,157 @@ export function structuredDocxQuestions(pages: ImportPage[]) {
   });
 }
 
+// Normalize clipboard content to a Word source so reading, history and assignment keep one path.
+// The detached HTML document is never mounted: scripts, event handlers and page styles cannot run.
+export async function clipboardWordFile(html: string, text: string): Promise<File> {
+  const [{ Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell }, { richText }, { mml2omml }] = await Promise.all([
+    import("docx"), import("./export-word"), import("mathml2omml"),
+  ]);
+  const document = new DOMParser().parseFromString(html || "<body></body>", "text/html");
+  if (!html) text.replace(/\r\n?/g, "\n").split("\n").forEach((line) => {
+    const paragraph = document.createElement("p"); paragraph.textContent = line; document.body.append(paragraph);
+  });
+  document.querySelectorAll("script:not([type^='math/tex']),style,link,meta,iframe,object,embed,template,[hidden],[aria-hidden='true']:not(.katex-html)").forEach((node) => node.remove());
+  document.querySelectorAll("ol").forEach((list) => Array.from(list.children).forEach((item, index) => {
+    if (item.localName === "li" && !/^\s*\d+[.．、]/.test(item.textContent ?? "")) item.prepend(`${Number(list.getAttribute("start") || 1) + index}．`);
+  }));
+  const blocks: Array<{ nodes: Node[]; table?: HTMLTableElement }> = [];
+  let pending: Node[] = [];
+  const flush = () => { if (pending.length) blocks.push({ nodes: pending }); pending = []; };
+  const visit = (node: Node) => {
+    if (node instanceof Element && node.localName === "table") { flush(); blocks.push({ nodes: [], table: node as HTMLTableElement }); return; }
+    if (node instanceof Element && /^(?:p|div|section|article|h[1-6]|li|ul|ol|br|blockquote)$/.test(node.localName)) {
+      flush(); Array.from(node.childNodes).forEach(visit); flush();
+    } else if (node instanceof Element && node.querySelector("p,div,br,table")) {
+      Array.from(node.childNodes).forEach(visit);
+    } else pending.push(node);
+  };
+  Array.from(document.body.childNodes).forEach(visit); flush();
+  const numberPattern = /^\s*\d{1,3}(?:[．、]|\.(?!\d)|[)）])\s*/;
+  const hasNumbered = blocks.some((block) => numberPattern.test(block.nodes.map((node) => node.textContent ?? "").join("")));
+  const images = new Map<string, Promise<InstanceType<typeof ImageRun>>>();
+  const inline = async (node: Node): Promise<Array<string | import("docx").ParagraphChild>> => {
+    if (node.nodeType === Node.TEXT_NODE) return [node.textContent ?? ""];
+    if (!(node instanceof Element)) return [];
+    const latex = node.getAttribute("data-latex") ?? node.getAttribute("data-tex")
+      ?? (node.matches("math,.katex,.katex-mathml") ? node.querySelector("annotation[encoding='application/x-tex']")?.textContent : null);
+    if (latex) return [`$${latex.replace(/^\$+|\$+$/g, "")}$`];
+    if (node.localName === "math") {
+      const formulas = docxMathLatex(mml2omml(new XMLSerializer().serializeToString(node)));
+      if (!formulas.length) throw new Error("有公式无法读取，请改用 Word 文件导入。");
+      return formulas.map((formula) => `$${formula}$`);
+    }
+    if (node.localName === "script") return node.getAttribute("type")?.startsWith("math/tex") ? [`$${node.textContent}$`] : [];
+    if (node.localName === "img") {
+      const source = node.getAttribute("src") ?? node.getAttribute("data-src") ?? "";
+      if (!/^(?:https?:\/\/|data:image\/)/i.test(source)) throw new Error("配图地址无法读取，请从原网页重新复制，或改用 Word 文件导入。");
+      let image = images.get(source);
+      if (!image) {
+        image = (async () => {
+          try {
+            const response = await fetch(source, { credentials: "omit", signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error("读取失败");
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob); const picture = new Image();
+            try {
+              picture.src = url; await picture.decode();
+              const scale = Math.min(1, 550 / picture.naturalWidth, 650 / picture.naturalHeight);
+              const width = Math.max(1, Math.round(picture.naturalWidth * scale)), height = Math.max(1, Math.round(picture.naturalHeight * scale));
+              const canvas = globalThis.document.createElement("canvas"); canvas.width = width; canvas.height = height;
+              const context = canvas.getContext("2d"); if (!context) throw new Error("读取失败");
+              context.drawImage(picture, 0, 0, width, height);
+              const data = Uint8Array.from(atob(canvas.toDataURL("image/png").split(",")[1]), (char) => char.charCodeAt(0));
+              return new ImageRun({ data, type: "png", transformation: { width, height } });
+            } finally { URL.revokeObjectURL(url); }
+          } catch { throw new Error("有网页配图未能读取（可能受原网站限制），请改用 Word 文件导入，避免漏图。"); }
+        })();
+        images.set(source, image);
+      }
+      return [await image];
+    }
+    if (node.localName === "sup" || node.localName === "sub") return [`${node.localName === "sup" ? "^" : "_"}{${node.textContent ?? ""}}`];
+    if (node.localName === "u" && !node.textContent?.trim()) return ["______"];
+    return (await Promise.all(Array.from(node.childNodes).map(inline))).flat();
+  };
+  const children: Array<InstanceType<typeof Paragraph> | InstanceType<typeof Table>> = [];
+  const questionStarts: Array<{ number: string; index: number }> = [];
+  const footer = new Map<string, typeof children>();
+  let answerNumber = "";
+  let count = 0, analysis = false, answerSection = false;
+  const heading = (number = String(count + 1)) => {
+    questionStarts.push({ number, index: children.length });
+    children.push(new Paragraph({ children: [new TextRun({ text: `网页练习 ${++count}`, bold: true })] })); analysis = false;
+  };
+  const paragraph = async (nodes: Node[], cell = false) => {
+    const parts = (await Promise.all(nodes.map(inline))).flat();
+    const raw = parts.filter((part) => typeof part === "string").join("");
+    const value = raw.trim();
+    if (!value && parts.every((part) => typeof part === "string")) return new Paragraph({});
+    const number = value.match(numberPattern);
+    if (!cell) {
+      if (/^(?:参考)?答案(?:与(?:试题)?解析)?$/.test(value)) { answerSection = true; return new Paragraph("参考答案与试题解析"); }
+      if (!answerSection && /^[一二三四五六七八九十]+[.．、].*(?:选择|填空|判断|解答|计算)题/.test(value)) return new Paragraph(value);
+      if (!count && !number && hasNumbered) return new Paragraph(value);
+      if (answerSection && number) answerNumber = number[0].match(/\d+/)![0];
+      if (!answerSection && (number || !count)) {
+        heading(number?.[0].match(/\d+/)?.[0]);
+        if (number) {
+          let left = raw.length - raw.trimStart().length + number[0].length;
+          for (let index = 0; index < parts.length && left; index += 1) if (typeof parts[index] === "string") {
+            const part = parts[index] as string; parts[index] = part.slice(left); left = Math.max(0, left - part.length);
+          }
+        }
+      }
+      if (!answerSection && /^(?:【(?:答案|解析|分析|解答|解|点评)】|(?:参考)?答案\s*[:：]|解析\s*[:：]|解\s*[:：])/.test(value)) analysis = true;
+    }
+    // Join adjacent text first so a superscript or a formula split across spans stays one expression.
+    let runs: import("docx").ParagraphChild[] = [], words = "";
+    const addText = () => {
+      // Keep an option label in one run; richText otherwise italicizes its letter separately from the dot.
+      const marker = !runs.length ? words.match(/^\s*([A-F][.．、])\s*/) : null;
+      if (marker) { runs.push(new TextRun(marker[1])); words = words.slice(marker[0].length); }
+      if (answerSection && number) words = words.replace(numberPattern, "答案：");
+      if (words) runs.push(...richText(words.replace(/【答案】/g, "答案："))); words = "";
+    };
+    const style = (analysis || answerSection) && !cell ? "StudioAnswer" : undefined;
+    const splitOptions = !cell && !analysis && !answerSection && /A[.．、][\s\S]*B[.．、]/.test(value);
+    for (const part of parts) {
+      if (typeof part !== "string") { addText(); runs.push(part); continue; }
+      for (const piece of splitOptions ? part.split(/(?=[A-F][.．、])/g) : [part]) {
+        if (/^[A-F][.．、]/.test(piece) && (words.trim() || runs.length)) {
+          addText(); children.push(new Paragraph({ children: runs })); runs = [];
+        }
+        words += piece;
+      }
+    }
+    addText();
+    return new Paragraph({ style, children: runs });
+  };
+  for (const block of blocks) {
+    let content: (typeof children)[number];
+    if (block.table) {
+      if (!count) heading();
+      content = new Table({ rows: await Promise.all(Array.from(block.table.rows).map(async (row) => new TableRow({
+        children: await Promise.all(Array.from(row.cells).map(async (cell) => new TableCell({ children: [await paragraph(Array.from(cell.childNodes), true)] }))),
+      }))) });
+    } else content = await paragraph(block.nodes);
+    if (!answerSection) children.push(content);
+    else if (answerNumber) footer.set(answerNumber, [...(footer.get(answerNumber) ?? []), content]);
+  }
+  for (let index = questionStarts.length - 1; index >= 0; index -= 1) {
+    const question = questionStarts[index], answers = footer.get(question.number);
+    if (!answers) continue;
+    if (questionStarts.filter((item) => item.number === question.number).length > 1) throw new Error("网页中有重复题号，无法对应文末答案，请分段粘贴或改用 Word 文件导入。");
+    children.splice(questionStarts[index + 1]?.index ?? children.length, 0, ...answers);
+  }
+  if (!count) throw new Error("请先从网页复制题目内容，再粘贴到这里。");
+  const blob = await Packer.toBlob(new Document({
+    styles: { default: { document: { run: { font: { ascii: "Times New Roman", eastAsia: "Songti SC" }, size: 22 } } }, paragraphStyles: [{ id: "StudioAnswer", name: "Studio Answer", basedOn: "Normal" }] },
+    sections: [{ children }],
+  }));
+  return new File([blob], "网页粘贴练习.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
 // A Word file: its own structure when it can be read, else page pictures for the AI. PDF and pictures are read
 // page by page by the background import job (readStudioFilesInBatches), the way 文件转录 reads them.
 export async function renderImportFile(file: File, onProgress: (current: number, total: number) => void): Promise<ImportPage[]> {

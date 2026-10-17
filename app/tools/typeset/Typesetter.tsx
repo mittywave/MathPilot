@@ -116,6 +116,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const [error, setError] = useState("");
   const [result, setResult] = useState<Result | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [pasteText, setPasteText] = useState<string | null>(null);
   // History: null when nobody is signed in. The open material saves into its record; saved holds what was last written.
   const [records, setRecords] = useState<TypesetRecord[] | null>(null);
   const [listedAt, setListedAt] = useState(0);
@@ -127,9 +128,11 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   // What the open record last saved; a 智能组卷 plan's record opens with the title and settings it was handed.
   const saved = useRef(basket?.recordId ? JSON.stringify({ title: basket.title, settings: restoredSettings(basket.settings) }) : "");
   const fileInput = useRef<HTMLInputElement>(null);
+  const pasteInput = useRef<HTMLTextAreaElement>(null);
   const run = useRef(0);
   const [assigning, setAssigning] = useState(false);
   const closeAssign = useCallback(() => setAssigning(false), []);
+  useEffect(() => { if (pasteText === "") pasteInput.current?.focus(); }, [pasteText]);
 
   useEffect(() => {
     statusReady.current = import("../../../lib/handout-latex-files").then(({ latexCompilerStatus }) => latexCompilerStatus())
@@ -224,6 +227,15 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     } catch (reason) { setBusy(""); setError(reason instanceof Error ? reason.message : "Word 读取失败"); }
   }
 
+  async function openPaste(html: string, text: string) {
+    run.current += 1; setError(""); setBusy("正在读取粘贴内容…");
+    try {
+      const { clipboardWordFile } = await import("../../../lib/file-import");
+      const file = await clipboardWordFile(html, text);
+      await openFile(file); setPasteText(null);
+    } catch (reason) { setBusy(""); if (html) setPasteText(""); setError(reason instanceof Error ? reason.message : "粘贴内容读取失败"); }
+  }
+
   async function openRecord(record: TypesetRecord) {
     if (record.sourceKind === "library") { await openLibraryRecord(record); return; }
     setError(""); setBusy("正在打开…");
@@ -307,7 +319,11 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
   const historyToggle = records !== null && <button type="button" className={`secondary typeset-history-toggle${showHistory || !source ? " active" : ""}`} aria-pressed={showHistory || !source} onClick={() => setShowHistory((open) => source ? !open : false)}><TypesetIcon name="history" /><span>历史记录</span></button>;
   return <>{!basket && <SiteHeader active="tools" user={user ?? null} loading={user === undefined} trail={[{label:"工具箱",href:"/tools"},{label:"快速排版"}]} trailActions={historyToggle} />}<main className={`typeset${basket ? " typeset-overlay" : ""}`}>
-    <aside className="typeset-panel">
+    <aside className="typeset-panel" onPaste={(event) => {
+      if (basket || busy || (event.target instanceof Element && event.target.closest("input,textarea,[contenteditable]"))) return;
+      const html = event.clipboardData.getData("text/html"), text = event.clipboardData.getData("text/plain");
+      if (html || text.trim()) { event.preventDefault(); void openPaste(html, text); }
+    }}>
       {basket && <div className="typeset-top"><button type="button" className="secondary" onClick={close}>{origin.back}</button>{historyToggle}</div>}
       {basket ? <button type="button" className="typeset-drop loaded" onClick={close}>
         <TypesetIcon name="list" />
@@ -319,17 +335,26 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         </a>
         <button type="button" className="typeset-link" onClick={() => fileInput.current?.click()}>改排一份 Word 练习</button>
       </> : <>
-        <button className={`typeset-drop${dragging ? " dragging" : ""}${source ? " loaded" : ""}`} disabled={busy === "正在读取 Word…"}
+        <button className={`typeset-drop${dragging ? " dragging" : ""}${source ? " loaded" : ""}`} disabled={Boolean(busy)}
           onClick={() => fileInput.current?.click()}
           onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
           onDrop={(event) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void openFile(file); }}>
           <TypesetIcon name="upload" />
           {source ? <span><b>{source.fileName}</b><small>{source.questions.length} 道题{withAnswers ? ` · ${withAnswers} 道带答案或解析` : ""} · 点击换一份</small></span>
-            : <span><b>选择或拖入 Word 练习</b><small>.docx，按题号读出题目、配图、答案与解析</small></span>}
+            : <span><b>选择或拖入 Word 练习</b><small>.docx，也可在这里按 ⌘V / Ctrl+V 粘贴网页题目</small></span>}
         </button>
       </>}
       {!basket && <input ref={fileInput} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden
         onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void openFile(file); }} />}
+      {!basket && <div className="typeset-paste">
+        <button type="button" className="typeset-link" disabled={Boolean(busy)} aria-expanded={pasteText !== null} onClick={() => setPasteText(current => current === null ? "" : null)}>{pasteText === null ? "粘贴网页题目" : "收起粘贴"}</button>
+        {pasteText !== null && <>
+          <textarea ref={pasteInput} aria-label="网页题目" placeholder="复制网页中的题目，在这里按 ⌘V / Ctrl+V，粘贴后自动排版。" value={pasteText} disabled={Boolean(busy)} onChange={(event) => setPasteText(event.target.value)}
+            onPaste={(event) => { event.preventDefault(); if (busy) return; const html = event.clipboardData.getData("text/html"), text = event.clipboardData.getData("text/plain"); setPasteText(text); void openPaste(html, text); }} />
+          <small>支持文字、公式、表格和可读取的网页配图。多道题请保留题号。</small>
+          <button type="button" className="secondary" disabled={Boolean(busy) || !pasteText.trim()} onClick={() => void openPaste("", pasteText)}>开始排版</button>
+        </>}
+      </div>}
 
       <label className="typeset-field"><span>标题</span>
         <input value={title} disabled={!source} placeholder="练习标题" onChange={(event) => setTitle(event.target.value)}
@@ -365,8 +390,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
       <div className="typeset-actions">
       <button className="primary-button typeset-download" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || busy === "正在读取 Word…"} onClick={() => setAssigning(true)}>布置给学生</button>}
-      {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习</button></p>}
+      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || busy === "正在读取 Word…" || busy === "正在读取粘贴内容…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习或网页题目</button></p>}
       {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
@@ -382,7 +407,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         : result && source ? <PdfPreview pdf={result.pdf} count={source.questions.length} picked={picked} onPick={setPicked} popover={pickedPopover}
         label={(index) => `${labelOf(index)} · ${teacher ? "教师版不留白" : `${ROOM[source.units[index]].name} ${roomOf(index)} ${source.units[index]}${index in ownRoom ? "（单独）" : ""}`}`} />
         : <div className="typeset-empty">
-          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择一份 Word 练习，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在运行 MathPilot 的这台电脑上打开。" : "排好的 PDF 会显示在这里。"}</p></>}
+          {busy ? <><i className="typeset-spinner" /><b>{busy}</b></> : <><b>PDF 预览</b><p>{!source && !basket ? "选择 Word 练习或粘贴网页题目，排好的 PDF 会显示在这里。" : status && !status.available ? "这里无法生成 PDF，请在运行 MathPilot 的这台电脑上打开。" : "排好的 PDF 会显示在这里。"}</p></>}
         </div>}
       {busy && result && <div className="typeset-busy"><i className="typeset-spinner" />{busy}</div>}
     </section>
