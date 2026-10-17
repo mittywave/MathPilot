@@ -140,11 +140,21 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     // The basket's questions open at once. They stay in the basket and are not kept in the history; a 智能组卷 plan
     // brings its own record, and settings changed here are written to it.
     if (basket) { void show((basket.origin ?? BASKET_ORIGIN).name, basket.questions, basket.title, restoredSettings(basket.settings), basket.groups, basket.groupMode); return; }
-    void fetchMe().then(({ user }) => { setUser(user); return user ? fetchTypesetRecords() : null; })
-      .then((result) => { if (result) { setRecords(result.records); setListedAt(Date.now()); } }).catch(() => { setUser(current => current ?? null); setHistoryNote("历史记录读取失败，请刷新重试。"); });
+    void fetchMe().then(({ user }) => setUser(user)).catch(() => { setUser(null); setHistoryNote("历史记录读取失败，请刷新重试。"); });
   // The basket is read once, when the tool opens; it is out of sight until the tool closes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Refresh after assigning, opening the history or returning from the student archive (where homework can be cancelled).
+  useEffect(() => {
+    if (basket || !user || assigning) return;
+    let current = true;
+    const refresh = () => { void fetchTypesetRecords().then(({ records }) => {
+      if (current) { setRecords(records); setListedAt(Date.now()); }
+    }).catch(() => { if (current) setHistoryNote("历史记录读取失败，请刷新重试。"); }); };
+    refresh(); window.addEventListener("focus", refresh);
+    return () => { current = false; window.removeEventListener("focus", refresh); };
+  }, [basket, user, showHistory, assigning]);
 
   const groups = useMemo(() => {
     const list: { key: string; type: string; unit: Unit; count: number }[] = [];

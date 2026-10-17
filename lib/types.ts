@@ -239,6 +239,8 @@ export type TypesetSettings = { answers: "none" | "end" | "each"; showSource?: b
 export type TypesetRecord = {
   id: string; title: string; fileName: string; questionCount: number; settings: Partial<TypesetSettings>; createdAt: number; updatedAt: number;
   sourceKind: "word" | "library"; studentId: string | null; studentName: string | null; plan: SmartPaperPlan | null;
+  /** Actual recipients of homework from this record, excluding cancelled assignments; names and classes follow the student archive. */
+  assignedTo: Pick<Student, "id" | "name" | "className">[];
 };
 
 // 智能组卷的方案：老师的原话、agent 对需求的理解、从学生档案里看到的问题，以及按天挑好的题。

@@ -28,16 +28,21 @@ export function TypesetHistory({ records, current, now, busy, onOpen, onDelete, 
       <b>历史记录</b><small>{records.length ? `${records.length} 份，最近编辑的在前` : "排过的资料会记在这里"}</small>
       {onClose && <button type="button" className="secondary" onClick={onClose}>返回预览</button>}
     </header>
-    {records.length ? <ul>{records.map((record) => <li key={record.id} className={record.id === current ? "current" : ""}>
+    {records.length ? <ul>{records.map((record) => {
+      const recipients = new Map<string, string[]>();
+      for (const student of record.assignedTo ?? []) recipients.set(student.className, [...(recipients.get(student.className) ?? []), student.name]);
+      const assigned = [...recipients].map(([className, names]) => className ? `${className}（${names.join("、")}）` : names.join("、")).join("、");
+      return <li key={record.id} className={record.id === current ? "current" : ""}>
       <button type="button" className="typeset-history-open" disabled={busy} onClick={() => onOpen(record)}>
         <span className="typeset-history-name"><b>{titleWithoutStudent(record.title, record.studentName)}</b>{record.id === current && <em>正在编辑</em>}</span>
         <small>{record.sourceKind === "library" ? `智能组卷${record.studentName ? ` · ${record.studentName}` : ""}${record.plan ? ` · 分 ${record.plan.groups.length} 天` : ""}` : record.fileName} · {record.questionCount} 道题 · {EDITION_LABELS[record.settings.answers ?? "none"] ?? "学生版"}</small>
+        {assigned && <small className="typeset-history-assigned" title={`已布置给：${assigned}`}>已布置给：{assigned}</small>}
       </button>
       <span className="typeset-history-time"><b>{historyTime(record.updatedAt, now)} 编辑</b><small>{historyTime(record.createdAt, now)} 首次排版</small></span>
       <button type="button" className={`typeset-history-delete${confirming === record.id ? " confirming" : ""}`} disabled={busy}
         onBlur={() => setConfirming(null)} onClick={() => { if (confirming === record.id) { setConfirming(null); onDelete(record); } else setConfirming(record.id); }}>
         {confirming === record.id ? "确认删除" : "删除"}
       </button>
-    </li>)}</ul> : <p className="typeset-history-empty">选择一份 Word 练习开始排版，排过的资料会按时间列在这里，点开就能接着调整。</p>}
+    </li>; })}</ul> : <p className="typeset-history-empty">选择一份 Word 练习开始排版，排过的资料会按时间列在这里，点开就能接着调整。</p>}
   </div>;
 }

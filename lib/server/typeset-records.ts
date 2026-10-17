@@ -8,7 +8,7 @@ import type { AuthUser, SmartPaperPlan, TypesetRecord } from "../types";
 type AppEnv = { DB: D1Database };
 type RecordRow = {
   id: string; title: string; file_name: string; question_count: number; settings_json: string; created_at: number; updated_at: number;
-  source_kind: "word" | "library"; plan_json: string; student_id: string | null; student_name: string | null;
+  source_kind: "word" | "library"; plan_json: string; student_id: string | null; student_name: string | null; assigned_to_json: string;
 };
 
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -17,7 +17,15 @@ const MAX_SETTINGS_BYTES = 64 * 1024;
 const MAX_PLAN_BYTES = 256 * 1024;
 const MAX_RECORDS = 300;
 const SELECT = `SELECT r.id, r.title, r.file_name, r.question_count, r.settings_json, r.created_at, r.updated_at,
-  r.source_kind, r.plan_json, r.student_id, s.name AS student_name
+  r.source_kind, r.plan_json, r.student_id, s.name AS student_name,
+  (SELECT json_group_array(json_object('id', recipient.id, 'name', recipient.name, 'className', recipient.class_name)) FROM (
+    SELECT DISTINCT student.id, student.name, student.class_name
+    FROM homework_assignments a JOIN homework_submissions submission ON submission.assignment_id = a.id
+    JOIN students student ON student.id = submission.student_id AND student.owner_user_id = r.owner_user_id
+    WHERE a.owner_user_id = r.owner_user_id AND a.status <> 'archived'
+      AND json_extract(CASE WHEN json_valid(a.sheet_json) THEN a.sheet_json ELSE '{}' END, '$.recordId') = r.id
+    ORDER BY student.class_name, student.name, student.id
+  ) recipient) AS assigned_to_json
   FROM typeset_records r LEFT JOIN students s ON s.id = r.student_id`;
 
 function db() {
@@ -40,6 +48,7 @@ function toRecord(row: RecordRow): TypesetRecord {
     settings: settings && typeof settings === "object" && !Array.isArray(settings) ? settings : {}, createdAt: row.created_at, updatedAt: row.updated_at,
     sourceKind: row.source_kind, studentId: row.student_id, studentName: row.student_name,
     plan: row.source_kind === "library" ? normalizeSmartPaperPlan(parsed(row.plan_json)) : null,
+    assignedTo: JSON.parse(row.assigned_to_json),
   };
 }
 
@@ -100,7 +109,7 @@ export async function createTypesetRecord(user: AuthUser, raw: unknown): Promise
   const questionCount = count(body.questionCount);
   await db().prepare(`INSERT INTO typeset_records (id, owner_user_id, title, file_name, question_count, source_kind, source_asset_id, settings_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 'word', ?, ?, ?, ?)`).bind(id, user.id, title, fileName, questionCount, assetId, settings, now, now).run();
-  return { id, title, fileName, questionCount, settings: JSON.parse(settings), createdAt: now, updatedAt: now, sourceKind: "word", studentId: null, studentName: null, plan: null };
+  return { id, title, fileName, questionCount, settings: JSON.parse(settings), createdAt: now, updatedAt: now, sourceKind: "word", studentId: null, studentName: null, plan: null, assignedTo: [] };
 }
 
 async function createLibraryRecord(user: AuthUser, body: { title?: unknown; settings?: unknown; plan?: unknown }) {

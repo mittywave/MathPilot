@@ -62,10 +62,15 @@ test("student classes preserve legacy membership, isolate teachers, and assign i
     const memberIds = students.filter((s) => s.className === "提高班").map((s) => s.id);
     assert.deepEqual(memberIds.sort(), [a.id, b.id].sort());
     const question = { id: "class-question", type: "填空题", difficulty: "基础", categoryId: "", stem: "计算 $1+1$", options: [], answer: "2", analysis: "", source: "", createdAt: 0, updatedAt: 0 };
-    const assigned = await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentIds: [...memberIds, b.id], title: "全班计算练习", questions: [question] } });
+    const record = (await jsonRequest(base, "/api/typeset-records", { cookie: one, method: "POST", body: { title: "全班计算练习", plan: { studentId: a.id, groups: [{ items: [{ id: question.id }] }] } } })).payload.record;
+    assert.deepEqual(record.assignedTo, [], "a plan's intended student is not a homework recipient yet");
+    const assigned = await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentIds: [...memberIds, b.id], title: "全班计算练习", questions: [question], recordId: record.id } });
     assert.equal(assigned.response.status, 201, JSON.stringify(assigned.payload));
     assert.equal(assigned.payload.assigned.length, 2, "class plus individual choices never duplicate a recipient");
     assert.equal(new Set(assigned.payload.assigned.map((s) => s.id)).size, 2);
+    const historyRecord = async () => (await jsonRequest(base, "/api/typeset-records", { cookie: one })).payload.records.find((item) => item.id === record.id);
+    assert.deepEqual((await historyRecord()).assignedTo.map((student) => student.id).sort(), [...memberIds].sort(), "the history lists the actual whole-class recipients");
+    assert.ok((await historyRecord()).assignedTo.every((student) => student.className === "提高班"));
     assert.equal((await jsonRequest(base, `/api/students/${independent.id}/homework`, { cookie: one })).payload.homework.length, 0);
     for (const id of memberIds) {
       const homework = (await jsonRequest(base, `/api/students/${id}/homework`, { cookie: one })).payload.homework;
@@ -80,6 +85,10 @@ test("student classes preserve legacy membership, isolate teachers, and assign i
     students = (await jsonRequest(base, "/api/students", { cookie: one })).payload.students;
     assert.equal(students.find((s) => s.id === a.id).className, "");
     for (const id of memberIds) assert.equal((await jsonRequest(base, `/api/students/${id}/homework`, { cookie: one })).payload.homework.length, 1, "removal and class deletion preserve homework");
+    assert.ok((await historyRecord()).assignedTo.every((student) => student.className === ""), "class changes do not lose or invent recipients");
+    const cancelled = assigned.payload.assigned.find((item) => item.studentId === a.id);
+    assert.equal((await jsonRequest(base, `/api/submissions/${cancelled.id}`, { cookie: one, method: "PUT", body: { action: "cancel-homework" } })).response.status, 200);
+    assert.deepEqual((await historyRecord()).assignedTo.map((student) => student.id), [b.id], "cancelling one student's assignment only removes that recipient");
     assert.equal((await jsonRequest(base, "/api/students", { cookie: two })).payload.students[0].className, "空班级");
     // A normal class can exceed the old 50-recipient picker limit.
     const large = [];

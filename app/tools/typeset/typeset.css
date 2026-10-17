@@ -85,6 +85,7 @@
 .typeset-history-name b{overflow:hidden;font-size:14.5px;text-overflow:ellipsis;white-space:nowrap}
 .typeset-history-name em{flex:none;padding:0 7px;border-radius:999px;background:var(--green,#2f6b53);color:#fff;font-size:12px;font-style:normal;line-height:19px}
 .typeset-history-open small,.typeset-history-time small{overflow:hidden;color:var(--muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.typeset-history-open .typeset-history-assigned{color:var(--green,#2f6b53)}
 .typeset-history-time{display:grid;flex:none;justify-items:end;gap:2px}
 .typeset-history-time b{font-size:13px;font-weight:600}
 .typeset-history-delete{flex:none;min-height:32px;padding:0 10px;border:1px solid transparent;border-radius:calc(8px*var(--radius-scale));background:none;color:var(--muted);font-size:12.5px;opacity:0;cursor:pointer}
