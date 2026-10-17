@@ -5,7 +5,7 @@ import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, Su
 
 type Result = GradingItem | AssignedHomework["questions"][number]["result"];
 type Bucket = "correct" | "corrected" | "partial" | "incorrect" | "pending" | "missing";
-const STATE: Record<string, string> = { correct: "对", corrected: "已订正", incorrect: "错", pending: "待处理", missing: "未交" };
+export const STATE: Record<string, string> = { correct: "对", corrected: "已订正", incorrect: "错", pending: "待处理", missing: "未交" };
 /** School questions are either wholly correct or still need correction; exam papers retain step marks. */
 export function resultState(result: Result, international = false): Bucket {
   if (!result) return "missing";
