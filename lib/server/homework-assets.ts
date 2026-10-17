@@ -41,7 +41,7 @@ function safeName(value: string) {
 
 export async function assertTeacherUploadContext(user: AuthUser, input: { assignmentId?: string; submissionId?: string; role: HomeworkAssetRole }) {
   if (input.assignmentId) {
-    const row = await appEnv().DB.prepare(`SELECT id FROM homework_assignments a WHERE id = ? AND owner_user_id = ? AND input_mode='completed_homework' AND
+    const row = await appEnv().DB.prepare(`SELECT id FROM homework_assignments a WHERE id = ? AND owner_user_id = ? AND input_mode='completed_homework' AND status <> 'archived' AND
       EXISTS(SELECT 1 FROM homework_submissions s WHERE s.assignment_id=a.id AND
         (s.status='draft' OR (?<>'question' AND s.status='published' AND (EXISTS(SELECT 1 FROM grading_items g WHERE g.submission_id=s.id AND g.requires_review=1)
           OR EXISTS(SELECT 1 FROM submission_page_extractions e WHERE e.submission_id=s.id AND e.status='complete' AND json_extract(e.result_json,'$.kind')='unreadable')))))`)
@@ -52,7 +52,7 @@ export async function assertTeacherUploadContext(user: AuthUser, input: { assign
   if (input.submissionId) {
     const row = await appEnv().DB.prepare(`SELECT homework_submissions.id FROM homework_submissions
       JOIN homework_assignments ON homework_assignments.id=homework_submissions.assignment_id
-      WHERE homework_submissions.id=? AND homework_assignments.owner_user_id=? AND
+      WHERE homework_submissions.id=? AND homework_assignments.owner_user_id=? AND homework_assignments.status <> 'archived' AND
       (homework_submissions.status='draft' OR (homework_submissions.status='published' AND
         (EXISTS(SELECT 1 FROM grading_items WHERE grading_items.submission_id=homework_submissions.id AND grading_items.requires_review=1)
         OR EXISTS(SELECT 1 FROM submission_page_extractions e WHERE e.submission_id=homework_submissions.id AND e.status='complete' AND json_extract(e.result_json,'$.kind')='unreadable'))))`)

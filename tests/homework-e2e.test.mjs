@@ -1039,6 +1039,46 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal((await jsonRequest(base,`/api/submissions/${dayTwo.id}`,{cookie:teacherOne,method:"PUT",body:{action:"cancel"}})).response.status,409);
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
+    // Cancelling one student's whole homework archives it, including unfinished days, without deleting graded evidence.
+    for (const status of ["submitted","processing","ready","review_required"]) {
+      setDayTwo(`status='${status}'`);
+      assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"cancel-homework"}})).response.status,409,"an active upload blocks cancellation of the whole homework, even through an older upload");
+    }
+    setDayTwo("status='draft',published_at=NULL");
+    const dailyEvidence=d1Rows(stateDir,"SELECT * FROM student_capability_evidence WHERE assignment_id=? ORDER BY id",[dayOne.assignmentId]);
+    const dailyGrading=d1Rows(stateDir,"SELECT * FROM grading_items WHERE submission_id=? ORDER BY id",[dailyFirst]);
+    assert.ok(dailyEvidence.length && dailyGrading.length);
+    const wrongBeforeCancel=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries;
+    const othersBeforeCancel=(await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework.filter(h=>h.assignmentId!==dayOne.assignmentId);
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherTwo,method:"PUT",body:{action:"cancel-homework"}})).response.status,404);
+    assert.equal((await jsonRequest(base,dailyUrl,{method:"PUT",body:{action:"cancel-homework"}})).response.status,401);
+    assert.equal((await fetch(base+dailyUrl,{method:"PUT",headers:{Cookie:teacherOne,Origin:"https://other.example","Content-Type":"application/json"},body:JSON.stringify({action:"cancel-homework"})})).status,403);
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"cancel-homework"}})).response.status,200);
+    assert.equal(d1Rows(stateDir,"SELECT status FROM homework_assignments WHERE id=?",[dayOne.assignmentId])[0].status,"archived");
+    assert.deepEqual((await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework,othersBeforeCancel,"other homework stays unchanged");
+    assert.ok(!(await jsonRequest(base,"/api/submissions",{cookie:teacherOne})).payload.submissions.some(s=>s.assignmentId===dayOne.assignmentId));
+    assert.deepEqual(d1Rows(stateDir,"SELECT * FROM student_capability_evidence WHERE assignment_id=? ORDER BY id",[dayOne.assignmentId]),dailyEvidence);
+    assert.deepEqual(d1Rows(stateDir,"SELECT * FROM grading_items WHERE submission_id=? ORDER BY id",[dailyFirst]),dailyGrading);
+    assert.deepEqual((await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries,wrongBeforeCancel);
+    assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne})).response.status,200,"earlier grading details remain readable");
+    assert.equal((await fetch(base+dayOne.pages[0].processedUrl,{headers:{Cookie:teacherOne}})).status,200,"original pages are retained");
+    for (const action of ["new-version","submit","cancel","retry","correct","publish","cancel-homework"]) {
+      const refused=await jsonRequest(base,`/api/submissions/${dayTwo.id}`,{cookie:teacherOne,method:"PUT",body:{action}});
+      assert.equal(refused.response.status,409);assert.match(refused.payload.error,/已取消/);
+    }
+    assert.equal((await upload(base,`/api/homework-assets?submissionId=${dayTwo.id}&role=submission_original`,teacherOne,bytes)).response.status,404);
+    assert.equal((await upload(base,`/api/homework-assets?assignmentId=${dayOne.assignmentId}&role=answer`,teacherOne,bytes)).response.status,404);
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"cancel-homework"}})).response.status,400,"directly uploaded grading records are not assigned tasks");
+
+    const cancelBatch=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{...dailyBody,studentIds:[studentOneId,studentTwoId],title:"同名作业取消回归"}});
+    assert.equal(cancelBatch.response.status,201);
+    const [cancelOne,cancelTwo]=cancelBatch.payload.assigned;
+    const untouched=(await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework;
+    assert.equal((await jsonRequest(base,`/api/submissions/${cancelOne.id}`,{cookie:teacherOne,method:"PUT",body:{action:"cancel-homework"}})).response.status,200);
+    assert.ok(!(await jsonRequest(base,`/api/students/${studentOneId}/homework`,{cookie:teacherOne})).payload.homework.some(h=>h.latest.id===cancelOne.id));
+    assert.deepEqual((await jsonRequest(base,`/api/students/${studentTwoId}/homework`,{cookie:teacherOne})).payload.homework,untouched,"the same homework assigned to another student remains");
+    assert.equal((await jsonRequest(base,`/api/submissions/${cancelTwo.id}`,{cookie:teacherOne})).payload.submission.status,"draft");
+
     mock.state.failAll=true;
     const failing=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentTwoId,title:"队列失败恢复"}});
     const failedId=failing.payload.submission.id;

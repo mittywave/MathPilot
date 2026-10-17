@@ -29,7 +29,7 @@ export async function upsertResult(input: {
 }) {
   // A run the teacher stopped (back to 待上传) may still be finishing a batch; it no longer writes results.
   const live = await homeworkDb().prepare(`SELECT a.sheet_json,a.curriculum FROM homework_submissions s
-    JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=? AND s.status IN ('submitted','processing','failed')`)
+    JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=? AND a.status <> 'archived' AND s.status IN ('submitted','processing','failed')`)
     .bind(input.submissionId).first<{sheet_json:string;curriculum:string}>();
   if (!live) return;
   // Assigned school homework has two settled outcomes, including crossed-out or unreadable answers.
@@ -59,7 +59,8 @@ export async function upsertResult(input: {
 }
 
 async function processingSubmission(submissionId: string) {
-  return homeworkDb().prepare("SELECT id,assignment_id,status,reprocess_question_ids_json FROM homework_submissions WHERE id = ?")
+  return homeworkDb().prepare(`SELECT s.id,s.assignment_id,s.status,s.reprocess_question_ids_json FROM homework_submissions s
+    JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id = ? AND a.status <> 'archived'`)
     .bind(submissionId).first<SubmissionRow>();
 }
 

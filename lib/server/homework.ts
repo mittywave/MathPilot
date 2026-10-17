@@ -230,7 +230,7 @@ async function assignedHomework(row: Record<string, unknown>): Promise<AssignedH
 
 // Only homework uploaded after it was completed is graded; legacy assignment templates stay out of every list and action.
 const SUBMISSION_SELECT = `SELECT homework_submissions.*, homework_assignments.title AS assignment_title, homework_assignments.outputs_json, homework_assignments.curriculum,
-  homework_assignments.sheet_json, homework_assignments.created_at AS assignment_created_at, homework_assignments.owner_user_id AS owner_user_id, students.name AS student_name
+  homework_assignments.sheet_json, homework_assignments.status AS assignment_status, homework_assignments.created_at AS assignment_created_at, homework_assignments.owner_user_id AS owner_user_id, students.name AS student_name
   FROM homework_submissions JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id
   JOIN students ON students.id = homework_submissions.student_id
   WHERE homework_assignments.input_mode = 'completed_homework'`;
@@ -242,14 +242,14 @@ async function teacherSubmissionRow(id: string, user: AuthUser) {
 }
 
 export async function readTeacherSubmissions(user: AuthUser) {
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.owner_user_id = ? ORDER BY homework_submissions.updated_at DESC`)
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status <> 'archived' AND homework_assignments.owner_user_id = ? ORDER BY homework_submissions.updated_at DESC`)
     .bind(user.id).all<Record<string, unknown>>();
   return Promise.all(rows.results.map((row) => submissionDetails(row)));
 }
 
 export async function countGradingHomework(user: AuthUser) {
   const row = await appEnv().DB.prepare(`SELECT COUNT(DISTINCT assignment_id) AS count FROM (${SUBMISSION_SELECT}
-    AND homework_assignments.owner_user_id = ? AND homework_submissions.status IN ('submitted', 'processing'))`)
+    AND homework_assignments.status <> 'archived' AND homework_assignments.owner_user_id = ? AND homework_submissions.status IN ('submitted', 'processing'))`)
     .bind(user.id).first<{ count: number }>();
   return Number(row?.count ?? 0);
 }
@@ -368,7 +368,7 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
  */
 export async function readStudentHomework(studentId: string, user: AuthUser): Promise<StudentHomework[]> {
   await ownedStudent(studentId, user.id);
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.owner_user_id = ? AND homework_submissions.student_id = ?
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status <> 'archived' AND homework_assignments.owner_user_id = ? AND homework_submissions.student_id = ?
     ORDER BY homework_assignments.created_at DESC, homework_submissions.version DESC`).bind(user.id, studentId).all<Record<string, unknown>>();
   const latest = new Map<string, Record<string, unknown>>();
   for (const row of rows.results as Array<Record<string, unknown>>) if (!latest.has(String(row.assignment_id))) latest.set(String(row.assignment_id), row);
@@ -499,10 +499,12 @@ export async function submitHomeworkSubmission(id: string, user: AuthUser) {
   const pageCount = await appEnv().DB.prepare("SELECT COUNT(*) AS count FROM submission_pages WHERE submission_id = ?").bind(id).first<{ count: number }>();
   if (!Number(pageCount?.count ?? 0)) throw responseError("请先上传作业页面", 400);
   const now = Date.now();
-  await appEnv().DB.batch([
-    appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=?").bind(row.assignment_id),
-    appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, failure_reason = '', updated_at = ? WHERE id = ?").bind(now, now, id),
+  const submitted = await appEnv().DB.batch([
+    appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=? AND status <> 'archived'").bind(row.assignment_id),
+    appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, failure_reason = '', updated_at = ? WHERE id = ? AND status = 'draft'
+      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, now, id),
   ]);
+  if (!submitted[1].meta.changes) throw responseError("这份作业已取消或当前提交已经锁定", 409);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id, user);
 }
@@ -645,8 +647,19 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
 }
 
 export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown; uploadDay?: unknown }, user: AuthUser) {
+  const row = await teacherSubmissionRow(id, user);
+  if (row.assignment_status === "archived") throw responseError("这份作业已取消，不能继续上传或批改", 409);
+  if (body.action === "cancel-homework") {
+    if (!row.sheet_json) throw responseError("只有布置给学生的作业可以取消", 400);
+    // Archive the whole homework, including a multi-day sheet, without deleting its earlier results or evidence.
+    const archived = await appEnv().DB.prepare(`UPDATE homework_assignments SET status = 'archived', updated_at = ?
+      WHERE id = ? AND owner_user_id = ? AND status <> 'archived' AND NOT EXISTS
+        (SELECT 1 FROM homework_submissions WHERE assignment_id = homework_assignments.id AND status IN ('submitted', 'processing', 'ready', 'review_required'))`)
+      .bind(Date.now(), row.assignment_id, user.id).run();
+    if (!archived.meta.changes) throw responseError("这份作业正在批改，请先停止批改再取消作业", 409);
+    return submissionDetails(row);
+  }
   if (body.action === "profile") {
-    const row = await teacherSubmissionRow(id, user);
     if (typeof body.profile !== "boolean") throw responseError("计入定档必须为开或关", 400);
     if (await assignedHomework(row)) throw responseError("布置的作业总是计入定档", 400);
     const db = appEnv().DB;
