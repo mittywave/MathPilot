@@ -21,7 +21,12 @@ export function d1(sqlite) {
         async first() { return sqlite.prepare(sql).get(...args) ?? null; },
         async all() { return { success: true, results: sqlite.prepare(sql).all(...args) }; },
         async run() { const result = sqlite.prepare(sql).run(...args); return { success: true, meta: { changes: result.changes } }; },
-        execute() { const prepared = sqlite.prepare(sql); return { success: true, results: prepared.columns().length ? prepared.all(...args) : (prepared.run(...args), []) }; },
+        execute() {
+          const prepared = sqlite.prepare(sql);
+          if (prepared.columns().length) return { success: true, results: prepared.all(...args), meta: { changes: 0 } };
+          const result = prepared.run(...args);
+          return { success: true, results: [], meta: { changes: result.changes } };
+        },
       };
       return statement;
     },

@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   AssignedHomework, AssignmentQuestion, AuthUser, GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkDay, HomeworkSheetGroup, HomeworkSubmission, HomeworkSubmissionListItem, Question, QuestionType,
   StudentHomework, SubmissionPage, SubmissionStatus,
@@ -15,11 +16,58 @@ type HomeworkQueue = { send(message: HomeworkQueueMessage): Promise<void> };
 type AppEnv = { DB: D1Database; HOMEWORK_GRADING_QUEUE?: HomeworkQueue };
 const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const VERDICTS: GradingVerdict[] = ["correct", "partial", "incorrect", "unreadable", "review_required"];
+const gradingRun = new AsyncLocalStorage<{ db: D1Database; signal: AbortSignal }>();
+
+export function homeworkGradingSignal() { return gradingRun.getStore()?.signal; }
+
+/** Fence the existing grading writes in the same D1 transaction as the ownership check.
+ * Request handlers outside this run continue using the original binding unchanged. */
+export function withHomeworkGradingRun<T>(id: string, token: string, signal: AbortSignal, work: () => Promise<T>) {
+  const database = (env as unknown as AppEnv).DB;
+  const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  const batch = async (statements: D1PreparedStatement[]) => {
+    signal.throwIfAborted();
+    if (!statements.length) return [];
+    const guard = database.prepare(`SELECT CASE WHEN EXISTS (
+      SELECT 1 FROM homework_submissions s JOIN homework_assignments a ON a.id = s.assignment_id
+      WHERE s.id = ? AND s.grading_run_id = ? AND s.status IN ('processing','ready','published') AND a.status <> 'archived'
+    ) THEN 1 ELSE json_extract('grading run no longer owns submission', '$') END AS valid`).bind(id, token);
+    return (await database.batch([guard, ...statements.map(statement => originals.get(statement) ?? statement)])).slice(1);
+  };
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
+    const wrapped = new Proxy(statement, {
+      get(target, key) {
+        if (key === "bind") return (...values: Parameters<D1PreparedStatement["bind"]>) => wrap(target.bind(...values));
+        if (key === "run" || key === "all") return async () => (await batch([target]))[0];
+        if (key === "first") return async (column?: string) => {
+          const row = (await batch([target]))[0].results[0] as Record<string, unknown> | undefined;
+          return column === undefined ? row ?? null : row?.[column] ?? null;
+        };
+        // Grading never uses raw writes; do not leave a way to bypass the fence.
+        if (key === "raw") return () => { throw new Error("批改写入请使用 run、all 或 first"); };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    originals.set(wrapped, statement);
+    return wrapped;
+  };
+  const guarded = new Proxy(database, {
+    get(target, key) {
+      if (key === "prepare") return (sql: string) => /^\s*SELECT\b/i.test(sql) ? target.prepare(sql) : wrap(target.prepare(sql));
+      if (key === "batch") return batch;
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return gradingRun.run({ db: guarded, signal }, work);
+}
 
 function appEnv(): AppEnv {
   const bindings = env as unknown as AppEnv;
   if (!bindings.DB) throw new Error("D1 数据库尚未绑定");
-  return bindings;
+  const run = gradingRun.getStore();
+  return run ? { ...bindings, DB: run.db } : bindings;
 }
 
 function responseError(message: string, status: number) {
@@ -471,7 +519,7 @@ async function resetUpload(id: string, ownerUserId: string) {
       OR (upload_submission_id = ? AND role = 'submission_original' AND content_type = 'application/pdf'))`)
     .bind(ownerUserId, id, id, id).all<{ id: string; r2_key: string }>();
   await db.batch([
-    db.prepare("UPDATE homework_submissions SET status = 'draft', submitted_at = NULL, failure_reason = '', updated_at = ? WHERE id = ?").bind(Date.now(), id),
+    db.prepare("UPDATE homework_submissions SET status = 'draft', submitted_at = NULL, grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ?").bind(Date.now(), id),
     db.prepare("DELETE FROM grading_items WHERE submission_id = ?").bind(id),
     db.prepare("DELETE FROM submission_pages WHERE submission_id = ?").bind(id),
   ]);
@@ -527,7 +575,7 @@ async function dispatchSubmissionGrading(id: string) {
 }
 
 async function markDispatchFailure(id: string, error: unknown) {
-  await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?")
+  await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ? AND status = 'submitted' AND grading_run_id = ''")
     .bind(error instanceof Error ? error.message.slice(0, 500) : "批改任务提交失败", Date.now(), id).run();
 }
 
@@ -539,7 +587,7 @@ export async function submitHomeworkSubmission(id: string, user: AuthUser) {
   const now = Date.now();
   const submitted = await appEnv().DB.batch([
     appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=? AND status <> 'archived'").bind(row.assignment_id),
-    appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, failure_reason = '', updated_at = ? WHERE id = ? AND status = 'draft'
+    appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'draft'
       AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, now, id),
   ]);
   if (!submitted[1].meta.changes) throw responseError("这份作业已取消或当前提交已经锁定", 409);
@@ -550,8 +598,9 @@ export async function submitHomeworkSubmission(id: string, user: AuthUser) {
 export async function retryHomeworkSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   if (row.status !== "failed") throw responseError("只有处理失败的提交可以重试", 409);
-  await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', failure_reason = '', updated_at = ? WHERE id = ?")
+  const claimed = await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'failed' AND grading_run_id = ''")
     .bind(Date.now(), id).run();
+  if (!claimed.meta.changes) throw responseError("这份作业已开始重试或状态已变化", 409);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id, user);
 }
@@ -666,7 +715,7 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
   changes.push(appEnv().DB.prepare(`UPDATE assignment_questions SET reference_fingerprint='' WHERE id IN
     (SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND verdict IN ('incorrect','partial'))
     AND (answer='' OR reference_verified=0) AND reference_fingerprint NOT LIKE 'pending:%' AND reference_evidence NOT LIKE '教师补充并确认%'`).bind(id));
-  changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
+  changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
   changes.push(appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id));
   await appEnv().DB.batch(changes);
   await dispatchSubmissionGrading(id);
@@ -677,7 +726,7 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   const row=await teacherSubmissionRow(id,user);
   if(!["published","ready","failed"].includes(String(row.status)))throw responseError("请等待当前批改完成",409);
   const now=Date.now();
-  const claimed=await appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,reprocess_question_ids_json='[]',failure_reason='',updated_at=? WHERE id=? AND status IN ('published','ready','failed')").bind(now,now,id).run();
+  const claimed=await appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json='[]',failure_reason='',updated_at=? WHERE id=? AND status IN ('published','ready','failed')").bind(now,now,id).run();
   if(!claimed.meta.changes)return readTeacherSubmission(id,user);
   const previous=await appEnv().DB.prepare('SELECT * FROM grading_items WHERE submission_id=?').bind(id).all<Record<string,unknown>>();
   for(const item of previous.results)await appEnv().DB.prepare('INSERT INTO grading_item_revisions(id,grading_item_id,submission_id,corrected_by,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)')
