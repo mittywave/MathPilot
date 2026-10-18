@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { homeworkQuestionLabel, isPendingGradingItem } from "../../lib/homework-grading-rules.mjs";
 import type { AssignedHomework, GradingItem, HomeworkDay, HomeworkSubmission, Question, SubmissionStatus } from "../../lib/types";
 import { DocxContent } from "./DocxContent";
@@ -70,9 +70,10 @@ export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [uplo
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport }: {
+export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport, children }: {
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
   selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[], kind: "word" | "pdf", includeAnalysis?: boolean) => void;
+  children?: ReactNode;
 }) {
   const { assigned } = submission;
   const [showOriginals, setShowOriginals] = useState(false);
@@ -84,6 +85,8 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     return { ...item, state: dayState(item), items: assigned.questions.slice(from, from + item.size) };
   });
   const several = days.length > 1;
+  const nextUpload = latest && latest.status !== "published" && latest.id !== submission.id && (latest.status !== "draft" || several || !mistakes.length) ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
+    : latest?.status === "published" && days.some((group) => group.state !== "done") && (several || !mistakes.length) ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null;
   const corrections = days.map((group, index) => {
     const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
     const allCorrect = group.done === group.size && group.correct === group.size;
@@ -91,9 +94,9 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     return (mistakes > 0 || group.state === "done") && <button key={index} type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || Boolean(wait)} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
       title={allCorrect ? correctionLabel === "已订正" ? "这一天的错题已全部订正正确" : "这一天的题目全部正确，无需订正" : !mistakes ? "请先核实待处理题目" : wait || `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>{correctionLabel}{allCorrect && <span aria-hidden="true"> ✅</span>}</button>;
   });
-  return <section className="assigned-sheet" aria-label="整份作业">
-    <header>
-      <h2>整份作业</h2>
+  return <>
+    <section className="review-summary">
+      {children}
       <div className="assigned-sheet-actions">
         <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
         {[false, true].map((includeAnalysis) => {
@@ -111,11 +114,10 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
             <option value="" disabled>{label}</option><option value="pdf">PDF</option><option value="word">Word</option>
           </select>;
         })}
-        {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
-          : latest?.status === "published" && days.some((group) => group.state !== "done") ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null}
-        {!several && corrections[0]}
       </div>
-    </header>
+    </section>
+    <section className="assigned-sheet" aria-label="整份作业">
+    {several && nextUpload && <header><div className="assigned-sheet-actions">{nextUpload}</div></header>}
     {days.map((group, index) => {
       const note = dayNote(group);
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
@@ -135,7 +137,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
         {/* A day not handed in yet is uploaded on its own; corrections only make sense for what has been handed in. */}
         {several && group.state !== "done" && <button type="button" className="assigned-upload" disabled={busy || Boolean(wait)} onClick={() => onUpload(index)} aria-label={`${group.title || dayName}上传这天`}
           title={wait || `上传${dayName}还没交的 ${group.size - group.done} 道题的照片或 PDF，只批改这几道`}>上传这天</button>}
-        {several && corrections[index]}
+        {several ? corrections[index] : <div className="assigned-sheet-actions">{nextUpload}{corrections[index]}</div>}
       </div>;
     })}
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id
@@ -163,5 +165,5 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
         })}</div>
       </div>)}
     </section>}
-  </section>;
+  </section></>;
 }

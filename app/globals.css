@@ -429,12 +429,12 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .review-overview .review-summary>div:first-child { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 .review-overview .review-summary h1 { order:-1; max-width:100%; margin:0; font-size:24px; }
 .review-overview .review-summary p { flex-basis:100%; font-size:13px; line-height:1.6; }
+.review-summary>.assigned-sheet-actions { align-self:flex-start; }
 .review-overview .review-status { padding:4px 8px; border-radius:5px; background:var(--green-soft); font-size:12px; }
 .review-overview .review-status.processing { color:var(--amber); background:var(--amber-soft); }
 .review-overview .review-outputs { flex:none; margin-left:0; padding:0; border:0; background:transparent; }
-.review-overview>.assigned-sheet { max-width:none; margin:0; padding:0 24px 18px; border:0; border-radius:0; background:transparent; }
-.review-overview>.assigned-sheet>header { padding-top:12px; border-top:1px solid var(--line); margin-bottom:0; }
-.review-overview>.assigned-sheet>header h2 { font-size:13px; }
+.review-overview>.assigned-sheet { max-width:none; margin:0 24px; padding:12px 0 18px; border:0; border-top:1px solid var(--line); border-radius:0; background:transparent; }
+.review-overview>.assigned-sheet>header { justify-content:flex-end; margin-bottom:0; }
 @media (min-width:1001px) {
   .review-shell>:is(.review-overview,.assigned-sheet,.review-evidence-layout,.review-ledger,.review-upload,.live-board,.review-callout,.pending-homework,.review-archive-panel,.legacy-result-banner) { width:calc(100% - 64px); max-width:none; }
 }
@@ -1171,9 +1171,9 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-sheet { max-width:1180px; margin:0 auto 20px; padding:18px 22px; border:1px solid var(--line); border-radius:calc(14px*var(--radius-scale)); background:var(--surface); }
 .assigned-sheet>header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; }
 .assigned-sheet h2 { margin:0; font:700 17px "Songti SC",serif; }
-.assigned-sheet header .primary,.assigned-sheet header button,.assigned-sheet header select { display:inline-flex; align-items:center; min-height:38px; padding:0 16px; font-size:13px; text-decoration:none; white-space:nowrap; }
-.assigned-sheet header a.primary { border-radius:calc(9px*var(--radius-scale)); background:var(--accent-strong); color:var(--on-accent); font-weight:700; }
-.assigned-sheet-actions { display:flex; align-items:center; gap:8px; }
+.assigned-sheet header .primary,.assigned-sheet header button,.assigned-sheet header select,.assigned-sheet-actions>button,.assigned-sheet-actions>select,.assigned-sheet-actions>a { display:inline-flex; align-items:center; min-height:38px; padding:0 16px; font-size:13px; text-decoration:none; white-space:nowrap; }
+.assigned-sheet-actions>a.primary { border-radius:calc(9px*var(--radius-scale)); background:var(--accent-strong); color:var(--on-accent); font-weight:700; }
+.assigned-sheet-actions { flex:none; display:flex; align-items:center; gap:8px; }
 .assigned-originals { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
 .assigned-originals h3 { margin:0; font:700 17px "Songti SC",serif; }
 .assigned-originals h4 { margin:20px 0 0; font-size:14px; }
