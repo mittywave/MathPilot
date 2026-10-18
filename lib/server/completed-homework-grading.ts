@@ -56,10 +56,10 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
   for(const q of gradeable){
     const evidence=JSON.parse(q.input_evidence_json) as CompletedQuestion;const item=results.find(r=>r.question_number===q.question_number);const page=pages.results[evidence.page_numbers[0]-1];
     if(!item){await upsertResult({submissionId,question:q,pageId:page.id,verdict:'review_required',studentAnswer:evidence.student_answer,feedback:'本题未返回可确认的批改结果',errorType:'待处理',confidence:0,bbox:evidence.bbox,requiresReview:true});continue;}
-    if(isSimpleObjectiveAnswer(q.type,q.answer) && normalizeHomeworkAnswer(evidence.student_answer)!==normalizeHomeworkAnswer(item.student_answer)) {
+    if(isSimpleObjectiveAnswer(q.type,q.answer) && normalizeHomeworkAnswer(evidence.student_answer,q.type)!==normalizeHomeworkAnswer(item.student_answer,q.type)) {
       await upsertResult({submissionId,question:q,pageId:page.id,verdict:'review_required',studentAnswer:evidence.student_answer,feedback:assigned?'识别阶段与批改阶段的学生作答不一致，未能确认正确，按错误处理':'识别阶段与批改阶段的学生作答转录不一致，请查看原卷或补图确认',errorType:'转录不一致',confidence:0,bbox:evidence.bbox,requiresReview:true});continue;
     }
-    const final=finalizeHomeworkVerdict({type:q.type,standardAnswer:q.answer,studentAnswer:item.student_answer,modelVerdict:item.verdict,confidence:item.confidence,maxScore:evidence.max_score,modelScore:item.score,curriculum});
+    const final=finalizeHomeworkVerdict({type:q.type,stem:q.stem,standardAnswer:q.answer,studentAnswer:item.student_answer,modelVerdict:item.verdict,confidence:item.confidence,maxScore:evidence.max_score,modelScore:item.score,curriculum});
     const bbox:GradingItem['bbox']=item.page_number===evidence.page_numbers[0]?item.bbox??evidence.bbox:evidence.bbox;
     const analysis=curriculum==='international'?{feedback:item.feedback,errorType:item.error_type,stepAnalysis:item.step_analysis,evidenceSummary:item.evidence_summary}:{feedback:['incorrect','partial'].includes(final.verdict)&&!bbox?.errors?.length?item.feedback:'',errorType:'',stepAnalysis:[],evidenceSummary:''};
     await upsertResult({submissionId,question:q,pageId:page.id,verdict:final.verdict,score:final.score,studentAnswer:item.student_answer,...analysis,capabilityKeys:item.capability_keys,confidence:final.confidence,bbox,requiresReview:final.requiresReview});

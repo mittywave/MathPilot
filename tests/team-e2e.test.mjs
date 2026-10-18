@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
+import { bootstrapAdmin } from './helpers/migrated-d1.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
@@ -50,7 +51,11 @@ test("admins manage colleagues and the invite code; disabled accounts and reset 
       try { ready = (await fetch(`${base}/api/auth/me`)).ok; } catch { /* 等待监听端口 */ }
       if (!ready) await new Promise((wait) => setTimeout(wait, 120));
     }
-    const admin = cookieOf(await register("admin@team.test", INVITE));
+    const administrator = await register("admin@team.test", INVITE);
+    assert.equal(administrator.payload.user.role, "member", "ADMIN_EMAIL is not an authorization grant");
+    assert.equal((await register("admin@team.test", INVITE)).response.status, 409);
+    bootstrapAdmin(state, administrator.payload.user.id);
+    const admin = cookieOf(administrator);
     const one = cookieOf(await register("one@team.test", INVITE));
     const two = cookieOf(await register("two@team.test", INVITE));
 

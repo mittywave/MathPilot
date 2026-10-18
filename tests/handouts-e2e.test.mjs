@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { bootstrapAdmin } from "./helpers/migrated-d1.mjs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -83,6 +84,8 @@ test("course and topic handouts are shared, student handouts stay with the stude
     for (const email of ["one@handouts.test", "two@handouts.test", "admin@handouts.test"]) {
       const registration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email, password: "password123", inviteCode: INVITE } });
       assert.equal(registration.response.status, 201);
+      assert.equal(registration.payload.user.role, "member");
+      if (email === "admin@handouts.test") bootstrapAdmin(state, registration.payload.user.id);
       cookies.push((registration.response.headers.get("set-cookie") ?? "").split(";", 1)[0]);
     }
     const [one, two, admin] = cookies;

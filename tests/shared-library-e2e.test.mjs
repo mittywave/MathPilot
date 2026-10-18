@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { bootstrapAdmin } from "./helpers/migrated-d1.mjs";
 import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -109,6 +110,8 @@ test("one shared library: every teacher reads and edits it, only administrators 
     for (const name of ["one", "two", "admin"]) {
       const registration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: `${name}@shared.test`, password: "password123", inviteCode: INVITE } });
       assert.equal(registration.response.status, 201);
+      assert.equal(registration.payload.user.role, "member");
+      if (name === "admin") bootstrapAdmin(state, registration.payload.user.id);
       const setCookie = registration.response.headers.get("set-cookie") ?? "";
       assert.match(setCookie, /HttpOnly; SameSite=Lax/);
       assert.doesNotMatch(setCookie, /;\s*Secure\b/i, "browsers drop Secure cookies over the plain-http LAN address");

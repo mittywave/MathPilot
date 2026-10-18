@@ -4,7 +4,6 @@ import type { AuthUser } from "../../lib/types";
 type AppEnv = {
   DB: D1Database;
   REGISTRATION_INVITE_CODE?: string;
-  ADMIN_EMAIL?: string;
   LOCAL_ADMIN_MODE?: string;
 };
 
@@ -184,10 +183,6 @@ export async function inviteMatches(candidate: string) {
   const stored = await appEnv().DB.prepare("SELECT value FROM app_settings WHERE key = ?").bind(INVITE_SETTING).first<{ value: string }>();
   const codes = stored ? [stored.value.trim()].filter(Boolean) : configInviteCodes();
   return codes.reduce((matched, code) => constantTimeEqual(candidate.trim(), code) || matched, false);
-}
-
-export function roleForEmail(email: string): "admin" | "member" {
-  return normalizeEmail(appEnv().ADMIN_EMAIL ?? "") === normalizeEmail(email) ? "admin" : "member";
 }
 
 export async function authRateLimited(kind: "login" | "register", key: string) {

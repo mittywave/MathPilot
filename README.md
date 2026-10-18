@@ -28,7 +28,7 @@
 - Cloudflare D1 保存用户、会话、题库、动态模块、分类、题目、发布版本、图片分块及图片访问关联。
 - 密码使用 PBKDF2-SHA-256 加盐后保存，不保存明文。
 - 登录使用 `HttpOnly`、`Secure`、`SameSite=Lax` Cookie。
-- `ADMIN_EMAIL` 与 `REGISTRATION_INVITE_CODE` 必须通过 Wrangler Secret 配置，不能提交到 GitHub。
+- `REGISTRATION_INVITE_CODE` 必须通过 Wrangler Secret 配置，不能提交到 GitHub。普通注册始终创建会员；自填邮箱（包括旧配置 `ADMIN_EMAIL`）不会授予管理员权限。
 
 备份 JSON 包含 `scope`、模块、分类和题目。会员只能导入、导出自己的私人库；localhost 管理员备份公共编辑库。旧版顶级分类备份仍可导入，导入器会沿完整祖先链恢复其模块。
 
@@ -44,7 +44,6 @@ npm run dev
 本地注册和发布需要在未提交的 `.env.local` 或 `.dev.vars` 中配置：
 
 ```text
-ADMIN_EMAIL=管理员邮箱
 REGISTRATION_INVITE_CODE=邀请码
 PUBLIC_LIBRARY_REMOTE_URL=https://tiku.mittysapce.uk
 PUBLIC_LIBRARY_PUBLISH_TOKEN=至少32字节的随机密钥
@@ -59,7 +58,6 @@ AI 首选通过管理员页面 `/settings/ai` 配置；旧 `.env.local` / Worker
 ```bash
 npm run db:audit:scoped:remote
 npx wrangler d1 migrations apply zhiti-question-bank --remote
-npx wrangler secret put ADMIN_EMAIL
 npx wrangler secret put REGISTRATION_INVITE_CODE
 npx wrangler secret put PUBLIC_LIBRARY_PUBLISH_TOKEN
 npx wrangler secret put AI_PROVIDER_ENCRYPTION_KEY
@@ -67,6 +65,17 @@ npm run deploy
 ```
 
 正式迁移前必须先取得 Cloudflare API Token、导出远程 D1 备份并运行远程计数审计。首次发布功能测试应使用两套隔离的本地 D1，不使用生产库。
+
+首次管理员初始化只由持有 D1 管理权限的维护者执行，不开放注册提权接口：先通过普通注册创建维护者自己控制的账号，登录 `/api/auth/me` 核对其返回的账号 `id`，再在目标数据库执行以下 SQL（将占位符替换为刚核对的账号 ID）。不得仅凭邮箱字符串选择已有账号；注册出现邮箱冲突时先核实账号归属。SQL 仅在还没有启用的管理员时生效，已有管理员时通过“共享办公”授权。
+
+```sql
+UPDATE users SET role = 'admin'
+WHERE id = '已核对的账号ID' AND role = 'member' AND disabled_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND disabled_at IS NULL);
+```
+
+本地使用 `wrangler d1 execute DB --local --persist-to <隔离状态目录> --file <SQL文件>`；生产初始化由维护者在已确认的目标 D1 控制台执行。检查恰好更新 1 行，并重新请求 `/api/auth/me` 确认角色。此流程不修改密码、不删除账号、不依赖 `ADMIN_EMAIL`；旧的该项 Secret 可以移除。现有管理员角色和 localhost 本机管理员保持原有权限来源。
+
 
 线上地址：<https://tiku.mittysapce.uk>
 

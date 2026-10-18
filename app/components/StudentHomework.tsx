@@ -84,7 +84,7 @@ export function AssignPlan({ student, className, handedOut, onClose, onAssigned 
 }
 
 /** 学生档案 · 作业: the student's assigned and uploaded homework, newest first; each row opens its grading page. */
-export function StudentHomework({ student, onProgressChange }: { student: StudentSummary; onProgressChange?: (studentId: string, progress: ReturnType<typeof homeworkProgress>) => void }) {
+export function StudentHomework({ student, progress, onProgressChange }: { student: StudentSummary; progress?: ReturnType<typeof homeworkProgress>; onProgressChange?: (studentId: string, progress: ReturnType<typeof homeworkProgress>) => void }) {
   const [confirmNode, confirm] = useConfirm();
   const [cancelling, setCancelling] = useState("");
   // What was read, and for whom: switching students shows the loading state until that student's list arrives.
@@ -93,11 +93,28 @@ export function StudentHomework({ student, onProgressChange }: { student: Studen
   const [reads, setReads] = useState(0);
   const [assigning, setAssigning] = useState(false);
   useEffect(() => {
-    let current = true;
-    homeworkApi.studentHomework(student.id).then((result) => { if (current) { setLoaded({ studentId: student.id, homework: result.homework, error: "" }); onProgressChange?.(student.id, homeworkProgress(result.homework)); } })
-      .catch((reason) => { if (current) setLoaded({ studentId: student.id, homework: null, error: reason instanceof Error ? reason.message : "作业记录读取失败" }); });
-    return () => { current = false; };
-  }, [student.id, reads, onProgressChange]);
+    let current = true, reading = false, grading = progress === "grading";
+    const refresh = async () => {
+      if (document.hidden || reading) return;
+      reading = true;
+      try {
+        const result = await homeworkApi.studentHomework(student.id);
+        if (current) {
+          grading = result.homework.some(busy);
+          setLoaded({ studentId: student.id, homework: result.homework, error: "" });
+          onProgressChange?.(student.id, homeworkProgress(result.homework));
+        }
+      } catch (reason) {
+        if (current) setLoaded(previous => ({ studentId: student.id, homework: previous?.studentId === student.id ? previous.homework : null,
+          error: reason instanceof Error ? reason.message : "作业记录读取失败" }));
+      } finally { reading = false; }
+    };
+    void refresh();
+    // Only the visible student's active work needs short polling; the shared badge announces new background runs.
+    const timer = window.setInterval(() => { if (grading) void refresh(); }, 4000);
+    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
+    return () => { current = false; window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [student.id, reads, progress, onProgressChange]);
   const homework = loaded?.studentId === student.id ? loaded.homework : null;
   const error = loaded?.studentId === student.id ? loaded.error : "";
   const closeAssign = useCallback(() => setAssigning(false), []);

@@ -6,6 +6,24 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
+import { migratedDatabase, d1 } from "./helpers/migrated-d1.mjs";
+import { loadSource } from "./load-source.mjs";
+
+test("MP-08 ordinary invitations never grant admin by email; the operator can bootstrap one account by ID", async t => {
+  const sqlite = await migratedDatabase(); t.after(() => sqlite.close());
+  const bindings = { DB: d1(sqlite), REGISTRATION_INVITE_CODE: "ordinary-invite", ADMIN_EMAIL: "admin@bootstrap.test", LOCAL_ADMIN_MODE: "false" };
+  const { POST } = await loadSource("app/api/auth/register/route.ts", bindings);
+  const register = email => POST(new Request("https://fixture.test/api/auth/register", { method: "POST", headers: { Origin: "https://fixture.test", "Content-Type": "application/json" }, body: JSON.stringify({ email, password: "fixture-password", inviteCode: "ordinary-invite" }) }));
+  const response = await register(bindings.ADMIN_EMAIL), { user } = await response.json();
+  assert.equal(response.status, 201); assert.equal(user.role, "member");
+  assert.equal((await register(bindings.ADMIN_EMAIL)).status, 409);
+  // This is the documented operator-only D1 action, never an HTTP registration capability.
+  const bootstrap = sqlite.prepare("UPDATE users SET role='admin' WHERE id=? AND role='member' AND disabled_at IS NULL AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin' AND disabled_at IS NULL)");
+  assert.equal(bootstrap.run(user.id).changes, 1);
+  const next = await (await register("next@bootstrap.test")).json();
+  assert.equal(bootstrap.run(next.user.id).changes, 0, "subsequent promotions belong to an authenticated administrator");
+  assert.equal(sqlite.prepare("SELECT role FROM users WHERE id=?").get(user.id).role, "admin");
+});
 
 test("repeated local environment sync preserves the watched file while applying actual changes", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "mathpilot-local-env-"));

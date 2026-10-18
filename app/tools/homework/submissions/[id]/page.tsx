@@ -422,7 +422,7 @@ export default function TeacherSubmissionPage() {
       setItems(result.submission.gradingItems);
       setEditingId("");
       await load(submission.id);
-      setMessage({ text: "判定已修正，错题本和作业报告已同步更新", tone: "success" });
+      setMessage({ text: result.submission.failureReason || "判定已修正，错题本和作业报告已同步更新", tone: result.submission.failureReason ? "error" : "success" });
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "修正失败", tone: "error" });
     } finally { setBusy(false); }
@@ -443,7 +443,7 @@ export default function TeacherSubmissionPage() {
       setSubmission(result);
       setItems(result.gradingItems);
       await load(submission.id);
-      setMessage({ text: "旧提交结果已发布", tone: "success" });
+      setMessage({ text: result.failureReason || "结果已同步发布", tone: result.failureReason ? "error" : "success" });
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "旧提交处理失败", tone: "error" });
     } finally { setBusy(false); }
@@ -694,7 +694,7 @@ export default function TeacherSubmissionPage() {
     {!dayTask && submission.status === "draft" && <section className="review-upload"><div><h2>{correctionQuestions.length ? "上传错题订正" : scoped.length ? `上传${uploadDay?.title || "这一天"}的作业` : "上传学生作业"}</h2><p>{correctionQuestions.length ? `本次订正：${correctionQuestions.map((question) => homeworkQuestionLabel(question.number)).join("、")}。上传订正照片或 PDF，只更新本次找到的错题，其他题保留原状态。` : scoped.length ? `本次只批改这一天还没交的 ${scoped.length} 道题：${scoped.map((question) => homeworkQuestionLabel(question.number)).join("、")}。` : assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页${correctionQuestions.length ? "订正" : "作业"}`}</button></section>}
 
 
-    {!dayTask && ["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>这是启用自动发布前产生的旧提交</b><p>保留旧流程兼容，不会被后台自动发布。</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>确认并发布</button></section>}
+    {!dayTask && ["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>{submission.failureReason.startsWith("修正已保存") ? "修正已保存，结果同步待完成" : "这是启用自动发布前产生的旧提交"}</b><p>{submission.failureReason || "保留旧流程兼容，不会被后台自动发布。"}</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>{submission.failureReason.startsWith("修正已保存") ? "重试同步" : "确认并发布"}</button></section>}
 
     {(dayTask || ["review_required", "ready", "published"].includes(submission.status)) && <>
       {!dayTask && submission.outputs.report && international && report?.details && <section className="diagnosis-grid"><InternationalReportCard report={report.details} /></section>}

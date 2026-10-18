@@ -174,21 +174,26 @@ export async function recordHomeworkAssetCleanupFailure(jobId: string, error: un
     .bind(final ? "failed" : "pending", error instanceof Error ? error.message.slice(0, 500) : "R2 清理失败", Date.now(), jobId).run();
 }
 
-export async function scheduleHomeworkAssetCleanup(ownerUserId: string, rawKeys: string[]) {
+export async function scheduleHomeworkAssetCleanup(ownerUserId: string, rawKeys: string[], changes: Array<ReturnType<AppEnv["DB"]["prepare"]>> = []) {
   const keys = [...new Set(rawKeys.map(String).filter(Boolean))];
-  if (!keys.length) return null;
-  const id = crypto.randomUUID(); const now = Date.now();
-  await appEnv().DB.prepare(`INSERT INTO homework_asset_cleanup_jobs
+  const id = keys.length ? crypto.randomUUID() : null; const now = Date.now();
+  // The cleanup record commits with its owning SQL changes. R2 is retried separately, never inside a SQL transaction.
+  if (id) changes.push(appEnv().DB.prepare(`INSERT INTO homework_asset_cleanup_jobs
     (id, owner_user_id, r2_keys_json, status, attempts, last_error, created_at, updated_at)
     VALUES (?, ?, ?, 'pending', 0, '', ?, ?)`)
-    .bind(id, ownerUserId, JSON.stringify(keys), now, now).run();
+    .bind(id, ownerUserId, JSON.stringify(keys), now, now));
+  if (changes.length) await appEnv().DB.batch(changes);
+  // A later save/delete also recovers a failed dispatch (including local mode without a queue).
   try {
-    if (appEnv().HOMEWORK_GRADING_QUEUE) await appEnv().HOMEWORK_GRADING_QUEUE.send({ kind: "cleanup_homework_assets", jobId: id });
-    else await processHomeworkAssetCleanup(id);
-  } catch (error) {
-    try { await processHomeworkAssetCleanup(id); }
-    catch (cleanupError) { await recordHomeworkAssetCleanupFailure(id, cleanupError, false); throw error; }
-  }
+    const pending = await appEnv().DB.prepare("SELECT id FROM homework_asset_cleanup_jobs WHERE owner_user_id=? AND status<>'completed' ORDER BY created_at LIMIT 10").bind(ownerUserId).all<{ id: string }>();
+    for (const job of pending.results) try {
+      if (appEnv().HOMEWORK_GRADING_QUEUE) await appEnv().HOMEWORK_GRADING_QUEUE!.send({ kind: "cleanup_homework_assets", jobId: job.id });
+      else await processHomeworkAssetCleanup(job.id);
+    } catch {
+      try { await processHomeworkAssetCleanup(job.id); }
+      catch (cleanupError) { await recordHomeworkAssetCleanupFailure(job.id, cleanupError, false); console.error("作业保存成功，素材清理待重试", job.id); }
+    }
+  } catch (error) { console.error("作业保存成功，已入库的素材清理任务待重试", id, error); }
   return id;
 }
 
