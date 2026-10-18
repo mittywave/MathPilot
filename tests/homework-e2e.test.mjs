@@ -173,8 +173,8 @@ function startMockModel(port) {
     if (prompt.startsWith("你是数学作业错处定位助手")) {
       const references = JSON.parse(prompt.split("\n")[1]);
       const results = references.map(item => ({ question_number:item.question_number,bbox:{...item.bbox,errors:[
-        {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。"},
-        {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留"},
+        {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。",part:""},
+        {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留",part:""},
       ]} }));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({results})}));return;
     }
@@ -327,7 +327,7 @@ function startMockModel(port) {
       error_type: number === "D2" ? "步骤" : "计算", confidence: .98,
       step_analysis: number === "D2" ? ["正确写出了部分移项过程", "缺少最终验算"] : [], evidence_summary: "学生作答与参考答案不同",
       capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190,
-        errors:[{x:600,y:140+index*280,width:140,height:45,reason:"此处结果与参考答案不同，移项时应改变符号。"}] }, warnings: [],
+        errors:[{x:600,y:140+index*280,width:140,height:45,reason:"此处结果与参考答案不同，移项时应改变符号。",part:""}] }, warnings: [],
     }));
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ output_text: JSON.stringify({ results }) }));
   });

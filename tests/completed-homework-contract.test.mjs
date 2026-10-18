@@ -29,6 +29,20 @@ test('each reason stays with its validated mark and old coordinate-only marks re
  assert.deepEqual(normalize([first,{...first,reason:'重复标记'}]),[first]);
  assert.equal(normalize([{...first,reason:'字'.repeat(1300)}])[0].reason.length,1200);
 });
+test('error labels retain actual subquestions independently of error order, including repeated errors in one part',async()=>{
+ const {normalizeHomeworkGrading}=await loadSource('lib/homework-grading-contract.ts');
+ const outer={x:100,y:200,width:700,height:500};
+ const first={x:150,y:250,width:120,height:40},second={x:400,y:550,width:150,height:50};
+ const normalize=(errors,question_number='2')=>normalizeHomeworkGrading({results:[{question_number,verdict:'incorrect',bbox:{...outer,errors}}]})[0];
+ assert.equal(normalize([{...first,part:'(2)'}]).bbox.errors[0].part,'(2)','the only error may belong to part 2');
+ assert.deepEqual(normalize([{...first,part:'(2)'},{...second,part:'(2)'}]).bbox.errors.map(e=>e.part),['(2)','(2)'],'independent errors in the same part keep the same printed number');
+ for(const part of [undefined,'',1,'2','(1)/(2)','unknown'])assert.equal(normalize([{...first,part}]).bbox.errors[0].part,undefined,'missing or ambiguous ownership never becomes an error index');
+ assert.equal(normalize([{...first,part:'（2）'}]).bbox.errors[0].part,'(2)');
+ assert.equal(normalize([{...first,part:'(a)(ii)'}]).bbox.errors[0].part,'(a)(ii)');
+ const scoped=normalize([{...first,part:'(2)'}],'2(2)');
+ assert.equal(scoped.question_number,'2(2)');assert.equal(scoped.bbox.errors[0].part,undefined,'a question already scoped to a part is never numbered twice');
+ assert.equal(normalize([{...first,x:0,part:'(2)'},{...second,part:'(1)'}]).bbox.errors[0].part,'(1)','rejected coordinates cannot shift part ownership onto another mark');
+});
 test('cross-page transcription retains page attribution and rejects duplicate question numbers or invalid pages',()=>{
  const questions=normalizeCompletedQuestions({questions:[base]},2);assert.deepEqual(questions[0].page_numbers,[1,2]);
  assert.throws(()=>normalizeCompletedQuestions({questions:[base,base]},2),/重复/);
