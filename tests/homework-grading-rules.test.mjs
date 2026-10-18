@@ -7,6 +7,24 @@ import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { migratedDatabase, d1 } from "./helpers/migrated-d1.mjs";
 import { finalizeHomeworkVerdict, isPendingGradingItem, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel, titleWithoutStudent } from "../lib/homework-grading-rules.mjs";
+import { rotateNormalizedBox } from "../lib/image-processing-rules.mjs";
+
+test("upright homework keeps nested error locations aligned through every quarter turn without rewriting evidence", () => {
+  const box = { x: 100, y: 200, width: 300, height: 400, errors: [{ x: 150, y: 250, width: 80, height: 40, reason: "移项未变号", part: "(2)" }] };
+  const before = structuredClone(box);
+  for (const [rotation, rect] of [[90, [400, 100, 400, 300]], [180, [600, 400, 300, 400]], [270, [200, 600, 400, 300]]]) {
+    const turned = rotateNormalizedBox(box, rotation);
+    assert.deepEqual([turned.x, turned.y, turned.width, turned.height], rect);
+    assert.equal(turned.errors[0].reason, box.errors[0].reason);
+    assert.equal(turned.errors[0].part, "(2)");
+    assert.ok(turned.errors[0].x >= turned.x && turned.errors[0].x + turned.errors[0].width <= turned.x + turned.width);
+    assert.ok(turned.errors[0].y >= turned.y && turned.errors[0].y + turned.errors[0].height <= turned.y + turned.height);
+    assert.deepEqual(rotateNormalizedBox(turned, 360 - rotation), before);
+  }
+  assert.equal(rotateNormalizedBox(box, 0), box);
+  assert.equal(rotateNormalizedBox(box, undefined), box);
+  assert.deepEqual(box, before);
+});
 
 async function gradingRunFixture(t, phase) {
   const sqlite = await migratedDatabase(); t.after(() => sqlite.close());

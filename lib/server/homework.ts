@@ -117,10 +117,12 @@ export async function readAssignmentQuestions(assignmentId: string, user: AuthUs
 }
 
 function submissionPage(row: Record<string, unknown>): SubmissionPage {
+  const rotation = parseJson<{ rotation?: unknown }>(row.quality_json, {}).rotation;
   return {
     id: String(row.id), submissionId: String(row.submission_id), pageOrder: Number(row.page_order),
     originalAssetId: String(row.original_asset_id), processedAssetId: String(row.processed_asset_id),
     originalUrl: `/api/homework-assets/${row.original_asset_id}`, processedUrl: `/api/homework-assets/${row.processed_asset_id}`,
+    ...([0, 90, 180, 270].includes(rotation as number) ? { rotation: rotation as SubmissionPage["rotation"] } : {}),
     createdAt: Number(row.created_at),
   };
 }
@@ -772,6 +774,11 @@ export async function updateSubmission(id: string, body: { action?: string; page
     return readTeacherSubmission(id, user);
   }
   if (body.action === "save-pages") return replaceSubmissionPages(id, body.pages ?? [], user);
+  if (body.action === "orient-pages") {
+    await teacherSubmissionRow(id, user);
+    await (await import("./homework-assets")).orientHomeworkPages(id);
+    return readTeacherSubmission(id, user);
+  }
   if (body.action === "submit") return submitHomeworkSubmission(id, user);
   if (body.action === "retry") return retryHomeworkSubmission(id, user);
   if (body.action === "new-version") return createSubmissionVersion(id, user, body.correctionDay, body.uploadDay);

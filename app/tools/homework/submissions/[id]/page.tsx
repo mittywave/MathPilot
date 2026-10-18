@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { SiteHeader } from "../../../../components/SiteHeader";
 import { PaperMoreMenu } from "../../../../components/PaperMoreMenu";
 import { fetchMe } from "../../../../../lib/api-client";
@@ -9,6 +9,7 @@ import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../
 import { MathText } from "../../../../components/MathText";
 import { homeworkApi, uploadHomeworkAsset } from "../../../../../lib/homework-api-client";
 import { homeworkQuestionLabel, isPendingGradingItem, reconcileHomeworkScore, titleWithoutStudent } from "../../../../../lib/homework-grading-rules.mjs";
+import { rotateNormalizedBox } from "../../../../../lib/image-processing-rules.mjs";
 import type { AuthUser, GradingItem, HomeworkSubmission, InternationalReport, Question } from "../../../../../lib/types";
 
 const STATUS: Record<string, string> = {
@@ -19,6 +20,22 @@ const VERDICT: Record<string, string> = { correct: "正确", partial: "部分正
 function verdictLabel(item: GradingItem, international: boolean) {
   const label = !international && item.verdict === "partial" ? "错误" : international && item.verdict === "unreadable" ? "看不清" : VERDICT[item.verdict] ?? item.verdict;
   return item.maxScore != null && item.score != null ? `${label} · ${item.score}/${item.maxScore} 分` : label;
+}
+
+/** Rotate the pixels, so normal document flow, image decoding and the PDF exporter share the upright image. */
+function HomeworkPageImage({ page, alt, loading }: { page: HomeworkSubmission["pages"][number]; alt: string; loading?: "lazy" }) {
+  const [upright, setUpright] = useState("");
+  // eslint-disable-next-line @next/next/no-img-element -- Preserve the page pixels and the same decoded image in PDF export.
+  return <img src={upright || page.processedUrl} alt={alt} loading={loading} data-orienting={Boolean(page.rotation && !upright) || undefined} onLoad={event => {
+    if (!page.rotation || upright) return;
+    const image = event.currentTarget, canvas = document.createElement("canvas");
+    const swap = page.rotation === 90 || page.rotation === 270;
+    canvas.width = swap ? image.naturalHeight : image.naturalWidth; canvas.height = swap ? image.naturalWidth : image.naturalHeight;
+    const context = canvas.getContext("2d"); if (!context) return;
+    context.translate(canvas.width / 2, canvas.height / 2); context.rotate(page.rotation * Math.PI / 180);
+    context.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+    setUpright(canvas.toDataURL("image/png")); canvas.width = canvas.height = 0;
+  }} />;
 }
 
 /** The same measured layout places notes and connectors on screen and in the PDF. */
@@ -52,10 +69,11 @@ function gradedPageLayout(element: HTMLElement) {
 }
 
 /** Keep each explanation beside its source page and measure its connector after text and images have laid out. */
-function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, international, onFocus }: {
+function GradedHomeworkPage({ page, items: sourceItems, caption, studentName, activeItemId, international, onFocus }: {
   page: HomeworkSubmission["pages"][number]; items: GradingItem[]; caption: string; studentName: string;
   activeItemId: string; international: boolean; onFocus(item: GradingItem): void;
 }) {
+  const items = useMemo(() => sourceItems.map(item => item.bbox ? { ...item, bbox: rotateNormalizedBox(item.bbox, page.rotation) } : item), [sourceItems, page.rotation]);
   const frame = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<{ height: number; tops: number[]; paths: string[] }>({ height: 0, tops: [], paths: [] });
   const callouts = items.flatMap(item => {
@@ -89,8 +107,7 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
         <p><MathText text={error.reason || "这处标记尚未补全错误原因。"} /></p>
       </article>)}</aside>
     <div className="graded-page">
-      {/* eslint-disable-next-line @next/next/no-img-element -- The original page must preserve its exact image coordinates. */}
-      <img src={page.processedUrl} alt={`${studentName}答卷${caption}`} />
+      <HomeworkPageImage key={`${page.processedAssetId}-${page.rotation}`} page={page} alt={`${studentName}答卷${caption}`} />
       {items.filter(item => item.bbox).map(item => {
         const box = item.bbox!;
         const errors = !item.requiresReview && ["incorrect", "partial"].includes(item.verdict) ? box.errors ?? [] : [];
@@ -158,7 +175,10 @@ function LiveBoard({ submission, international, busy, onRetry, onCancel }: { sub
         const info = coverage?.pages.find((entry) => entry.pageNumber === page.pageOrder + 1), state = pageState(info, !failed);
         const marks = fresh.filter((item) => item.pageId === page.id), wrong = marks.filter((item) => resultState(item, international) === "incorrect").length;
         return <figure key={page.id} className={`page-tile ${state}`} title={info?.reason || undefined}>
-          <div><img src={page.processedUrl} alt={`第 ${page.pageOrder + 1} 页`} loading="lazy" />{marks.filter((item) => item.bbox).map((item) => <i key={item.id} className={`tile-mark ${resultState(item, international)}`} style={{ left: `${(item.bbox!.x + item.bbox!.width / 2) / 10}%`, top: `${(item.bbox!.y + item.bbox!.height / 2) / 10}%` }} />)}</div>
+          <div><HomeworkPageImage key={`${page.processedAssetId}-${page.rotation}`} page={page} alt={`第 ${page.pageOrder + 1} 页`} loading="lazy" />{marks.filter((item) => item.bbox).map((item) => {
+            const box = rotateNormalizedBox(item.bbox!, page.rotation);
+            return <i key={item.id} className={`tile-mark ${resultState(item, international)}`} style={{ left: `${(box.x + box.width / 2) / 10}%`, top: `${(box.y + box.height / 2) / 10}%` }} />;
+          })}</div>
           <figcaption><span>{page.pageOrder + 1}</span><small>{marks.length ? `${marks.length} 题${wrong ? ` · ${wrong} 错` : ""}` : pageLabel(state, Boolean(submission.assigned))}</small></figcaption>
         </figure>;
       })}</div>
@@ -206,6 +226,8 @@ export default function TeacherSubmissionPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState({ text: "", tone: "success" as "success" | "error" });
   const [loading, setLoading] = useState(true);
+  const orientationRequests = useRef(new Set<string>());
+  const [orienting, setOrienting] = useState(0);
 
   async function load(submissionId = id) {
     if (!submissionId) return;
@@ -230,6 +252,26 @@ export default function TeacherSubmissionPage() {
     const timer = setInterval(() => { void load(submission.id).catch(()=>{}); }, 4000);
     return () => clearInterval(timer);
   }, [submission?.id, submission?.status]);
+
+  useEffect(() => {
+    for (const upload of [submission, ...dayEvidence?.uploads ?? []]) {
+      if (!upload || !upload.pages.some(page => page.rotation == null)) continue;
+      const key = `${upload.id}:${upload.pages.map(page => `${page.id}:${page.processedAssetId}`).join(",")}`;
+      if (orientationRequests.current.has(key)) continue;
+      orientationRequests.current.add(key);
+      setOrienting(count => count + 1);
+      void homeworkApi.updateSubmission(upload.id, { action: "orient-pages" }).then(({ submission: checked }) => {
+        const apply = (current: HomeworkSubmission) => current.id !== checked.id ? current : { ...current, pages: current.pages.map(page => {
+          const found = checked.pages.find(candidate => candidate.id === page.id && candidate.processedAssetId === page.processedAssetId);
+          return found ? { ...page, rotation: found.rotation } : page;
+        }) };
+        // Only display metadata changes; a poll, replacement or unsaved judgment edit keeps its current data.
+        setSubmission(current => current && apply(current));
+        setDayEvidence(current => current && { ...current, uploads: current.uploads.map(apply) });
+      }).catch(error => setMessage({ text: error instanceof Error ? error.message : "图片方向检查失败，请刷新后重试", tone: "error" }))
+        .finally(() => setOrienting(count => count - 1));
+    }
+  }, [submission, dayEvidence]);
 
   // A day's latest answers can span the original upload, later additions and corrections. Read their existing evidence on demand.
   useEffect(() => {
@@ -493,6 +535,7 @@ export default function TeacherSubmissionPage() {
       ]);
       if (!(await latexCompilerStatus()).available) throw new Error("当前服务无法生成 PDF，请使用本地 MathPilot 导出。");
       await Promise.all(figures.flatMap(figure => Array.from(figure.querySelectorAll("img"), async image => {
+        if (image.dataset.orienting) throw new Error("图片方向正在纠正，请稍后再导出");
         try { await image.decode(); } catch { throw new Error("原卷图片读取失败，请刷新页面后重试导出"); }
       })));
       await document.fonts.ready;
@@ -604,9 +647,9 @@ export default function TeacherSubmissionPage() {
   let dayEnd = 0;
   const uploadDay = !correctionQuestions.length && scoped.length ? assigned!.days.find((entry) => (dayEnd += entry.size) > assigned!.questions.indexOf(scoped[0])) : undefined;
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
-  const canExportGrading = !!evidencePages.length && !!evidenceItems.length && (Boolean(dayTask) || ["review_required", "ready", "published"].includes(submission.status));
+  const canExportGrading = !!evidencePages.length && evidencePages.every(page => page.rotation != null) && !!evidenceItems.length && (Boolean(dayTask) || ["review_required", "ready", "published"].includes(submission.status));
   const gradingExport = <button type="button" disabled={busy || !!editingId || !canExportGrading} onClick={() => void exportGrading()}
-    title={editingId ? "请先保存或取消判定修正" : canExportGrading ? `导出下方原卷标记的全部 ${evidencePages.length} 页，包含批改痕迹和错误原因（PDF）` : "当前暂无可导出的原卷批改"}>导出批改</button>;
+    title={editingId ? "请先保存或取消判定修正" : evidencePages.some(page => page.rotation == null) ? "图片方向检查尚未完成，请稍后再导出；检查失败时请刷新重试" : canExportGrading ? `导出下方原卷标记的全部 ${evidencePages.length} 页，包含批改痕迹和错误原因（PDF）` : "当前暂无可导出的原卷批改"}>导出批改</button>;
   const overview = <><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1>{submission.submittedAt != null && <p>提交日期：{new Date(submission.submittedAt).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }).replaceAll("/", ".")}</p>}</div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
       {!assigned && <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
@@ -662,7 +705,7 @@ export default function TeacherSubmissionPage() {
       {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}>
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
         <div className="review-pages" id="review-originals" role="region" aria-label="原卷标记，独立滚动" tabIndex={0}>
-        <div className="review-pages-heading"><h2>原卷标记</h2></div>
+        <div className="review-pages-heading"><h2>原卷标记</h2>{orienting > 0 && <small role="status">正在自动检查图片方向…</small>}</div>
         {evidencePages.map(page => <GradedHomeworkPage key={page.id} page={page} items={evidenceItems.filter(item => item.pageId === page.id)}
           caption={`${dayTask ? `第 ${assigned!.uploads.find(upload => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`}
           studentName={submission.studentName} activeItemId={activeItemId} international={international} onFocus={item => focusEvidence(item, true)} />)}
