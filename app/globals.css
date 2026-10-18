@@ -424,6 +424,20 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .review-score b { font:700 46px/1 "Songti SC",serif; color:var(--ink); }
 .review-score span { color:var(--muted); font-size:16px; }
 .review-score small { grid-column:1 / -1; margin-top:6px; color:var(--muted); font-size:13px; }
+.review-overview { max-width:1180px; margin:20px auto; padding:0; }
+.review-overview>.review-summary { align-items:center; padding:20px 24px 14px; }
+.review-overview .review-summary>div:first-child { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+.review-overview .review-summary h1 { order:-1; max-width:100%; margin:0; font-size:24px; }
+.review-overview .review-summary p { flex-basis:100%; font-size:13px; line-height:1.6; }
+.review-overview .review-status { padding:4px 8px; border-radius:5px; background:var(--green-soft); font-size:12px; }
+.review-overview .review-outputs { flex:none; margin-left:0; padding:0; border:0; background:transparent; }
+.review-overview>.assigned-sheet { max-width:none; margin:0; padding:0 24px 18px; border:0; border-radius:0; background:transparent; }
+.review-overview>.assigned-sheet>header { padding-top:12px; border-top:1px solid var(--line); margin-bottom:10px; }
+.review-overview>.assigned-sheet>header h2 { display:inline; margin-right:8px; font-size:13px; }
+.review-overview>.assigned-sheet>header p:first-of-type { display:inline; }
+@media (min-width:1001px) {
+  .review-shell>:is(.review-overview,.assigned-sheet,.review-evidence-layout,.review-ledger,.review-upload,.live-board,.review-callout,.pending-homework,.review-archive-panel,.legacy-result-banner) { width:calc(100% - 64px); max-width:none; }
+}
 .review-upload { width:min(1180px,calc(100% - 40px)); margin:0 auto 60px; padding:20px; border:1px solid var(--line); border-radius:calc(15px*var(--radius-scale)); background:var(--surface); }
 .review-upload>div:first-child h2 { margin:0; font:700 19px "Songti SC",serif; }
 .review-upload>div:first-child p { margin:5px 0 17px; color:var(--muted); font-size:13px; }
@@ -840,8 +854,7 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .grade-marker[aria-pressed="true"] { outline:3px solid var(--green); outline-offset:3px; background:color-mix(in srgb,var(--green) 15%,transparent)!important; }
 .grade-marker.has-errors { background:transparent!important; }
 .grade-error { position:absolute; box-sizing:border-box; border:2px solid #c43b32; border-radius:50%; pointer-events:none; }
-.grade-error::after,.grade-unlocated { position:absolute; right:-9px; top:-12px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:#fff; color:#b83229; font-size:22px; line-height:1; text-shadow:none; }
-.grade-error::after { content:"× " attr(data-error-number); width:max-content; min-width:28px; padding:0 4px; font-size:13px; }
+.grade-unlocated { position:absolute; right:-9px; top:-12px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:#fff; color:#b83229; font-size:22px; line-height:1; text-shadow:none; }
 .grade-unlocated { top:-9px; color:inherit; }
 .annotated-homework-page { position:relative; display:grid; grid-template-columns:230px minmax(0,1fr); gap:28px; padding-left:10px; background:var(--page); }
 .annotated-homework-page>.graded-page { align-self:start; }

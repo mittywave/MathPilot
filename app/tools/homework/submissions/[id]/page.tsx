@@ -93,7 +93,7 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
         const label = `查看${homeworkQuestionLabel(item.questionNumber)}${errors.length ? `，已标出 ${errors.length} 处错处` : wrong ? "，整题有错，具体位置待确认" : ""}`;
         return <button id={`marker-${item.id}`} key={item.id} className={`grade-marker ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${errors.length ? " has-errors" : ""}`} aria-pressed={activeItemId === item.id}
           style={{ left: `${box.x / 10}%`, top: `${box.y / 10}%`, width: `${box.width / 10}%`, height: `${box.height / 10}%` }} onClick={() => onFocus(item)} aria-label={label} title={label}>
-          {errors.length ? errors.map((error, index) => <span id={`error-${item.id}-${index}`} key={index} className="grade-error" data-error-number={`${item.questionNumber}.${index + 1}`} aria-hidden="true"
+          {errors.length ? errors.map((error, index) => <span id={`error-${item.id}-${index}`} key={index} className="grade-error" aria-hidden="true"
             style={{ left: `${(error.x - box.x) / box.width * 100}%`, top: `${(error.y - box.y) / box.height * 100}%`, width: `${error.width / box.width * 100}%`, height: `${error.height / box.height * 100}%` }} />)
             : wrong ? <span className="grade-unlocated" aria-hidden="true">{item.verdict === "partial" && international ? "△" : "×"}</span> : item.verdict === "correct" ? "✓" : "?"}
         </button>;
@@ -516,7 +516,8 @@ export default function TeacherSubmissionPage() {
     trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
     trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={() => void newVersion({}, "上传新版本")}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
     {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
-    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1><p>{[assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"].join(" · ")}</p></div>
+    <section className="homework-panel review-overview" aria-label="作业概览">
+    <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1><p>{[assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [`${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), ...(assigned ? [] : [outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"])].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
       <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
         {submission.outputs.wrongBook && <div><span>写入错题本</span><a href={archiveLink}>已归档错题 {summary?.archived ?? 0} 道 →</a></div>}
@@ -536,6 +537,7 @@ export default function TeacherSubmissionPage() {
         if (!evidenceItems.includes(item)) { setSelectedDay(null); requestAnimationFrame(() => focusEvidence(item, true)); }
         else focusEvidence(item, true);
       }} />}
+    </section>
     {dayTask && <section className="assigned-sheet" id="day-results" aria-label="当天提交与批改">
       <header><div><h2>{dayTask.title || `第 ${selectedDay! + 1} 天`} · 提交与批改</h2><p>{dayNote(dayTask)} · 共 {dayTask.size} 道题</p></div>
         <button type="button" onClick={() => { setSelectedDay(null); setActiveItemId(""); }}>返回第 {submission.version} 次上传</button></header>
