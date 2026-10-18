@@ -40,6 +40,13 @@ test('OCR nequiv typo is normalized to the intended parallel symbol',async()=>{
   assert.equal(normalized,String.raw`$NE \parallel BC$`);
   assert.match(mathOmml(splitMathText(normalized).find(s=>s.kind==='math').value),/>∥<\/m:t>/);
 });
+test('transcribed commands whose backslash JSON decoding swallowed export as native symbols',()=>{
+  const normalized=normalizeStudioMathEscapes('$\therefore BNDM$，$\frac{1}{2}$，$\because x\ne0$');
+  assert.equal(normalized,String.raw`$\therefore BNDM$，$\frac{1}{2}$，$\because x\ne0$`);
+  const xml=splitMathText(normalized).filter(s=>s.kind==='math').map(s=>mathOmml(s.value)).join('');
+  for(const symbol of ['∴','∵','≠'])assert.match(xml,new RegExp(`>${symbol}</m:t>`));
+  assert.match(xml,/<m:f>/);assert.doesNotMatch(xml,/herefore|ecause/);
+});
 test('doubly escaped newlines between transcribed choices become real lines with native formulas',()=>{
   // A whole page of model output arrived with \\n instead of \n; \nA then failed Word export as a command.
   const stem=String.raw`假设$-1<x<0$，那么$\sqrt{x^2}-\sqrt{(x+1)^2}$等于( )\n\nA. -1\nB. 1\nC. $-2x-1$\nD. $-2x+1$`;

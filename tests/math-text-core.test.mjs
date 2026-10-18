@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import katex from 'katex';
-import { normalizeProseLineBreaks } from '../lib/math-source.mjs';
+import { normalizeProseLineBreaks, restoreDecodedCommands } from '../lib/math-source.mjs';
 import { splitMathText, splitMathLines, plainTextWebLines, toReadableNestedFractionLatex, toLatexMath, latexFractionDepth } from '../lib/math-text-core.mjs';
 import { fullSizeInlineFractions, wordMathFractionDepth, ensureWordMathSettings } from '../lib/word-math-sizing.mjs';
 
@@ -108,6 +108,23 @@ test('saved homework prose with escaped newlines renders without becoming a form
     assert.doesNotThrow(() => katex.renderToString(toLatexMath(segment.value), { throwOnError: true, strict: 'ignore' }));
     assert.doesNotMatch(segment.value, /对称|点/);
   }
+});
+
+test('saved model output whose JSON decoding swallowed a command backslash renders the intended symbol', () => {
+  // One-backslash \therefore, \frac, \because, \right and \ne are valid JSON escapes (tab, form feed, ...).
+  for (const [source, expected] of [
+    ['得出“$\therefore BNDM$为菱形”', String.raw`\therefore BNDM`], ['$\triangle ABO$', String.raw`\triangle ABO`],
+    ['$\frac{1}{2}$', String.raw`\frac{1}{2}`], ['$BC \bot AB$', String.raw`BC \bot AB`], ['$\\left(x\right)$', String.raw`\left(x\right)`],
+    ['$a,b,c\ne0$', String.raw`a,b,c\ne0`], ['$x \ne 0$', String.raw`x \ne 0`], ['$$x\neq 0$$', String.raw`x\neq 0`],
+  ]) {
+    const [segment] = math(source);
+    assert.equal(segment.value, expected, JSON.stringify(source));
+    assert.equal(restoreDecodedCommands(restoreDecodedCommands(source)), restoreDecodedCommands(source));
+  }
+  assert.match(katex.renderToString(toLatexMath(math('$\therefore BNDM$')[0].value), { output: 'html' }), /∴/);
+  // Prose tabs, real line breaks, row breaks and e^x are not commands.
+  for (const source of ['(3)\tsolve $x$', '$$x\ne 0$$', '$x\ne^{2}$', '$$\nx=1\ny=2\n$$', '$\\begin{cases}x=1\\\\\ne=2\\end{cases}$'])
+    assert.equal(restoreDecodedCommands(source), source, JSON.stringify(source));
 });
 
 test('prose newline recovery handles CRLF, consecutive lines and remains idempotent', () => {

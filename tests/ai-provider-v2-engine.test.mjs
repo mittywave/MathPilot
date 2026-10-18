@@ -50,6 +50,11 @@ for(const [name,payload,status,expected] of [
  const m=await setup('auto'),backup={...m.runtime,provider:{...m.runtime.provider,id:'backup'}};
  const {result,calls}=await mocked(()=>json(payload,status),()=>m.engine.executeTargets(m.runtime,backup,m.input));assert.equal(result.code,expected);assert.equal(calls.length,1);assert.ok(!JSON.stringify(result).includes(m.runtime.key));
 });
+test('a LaTeX command the model wrote as a JSON control escape keeps its backslash',async()=>{
+ const m=await setup(),schema={type:'object',properties:{reason:{type:'string'}},required:['reason'],additionalProperties:false};
+ const {result}=await mocked(()=>json(good('responses','{"reason":"得出“$\\therefore BNDM$为菱形”，$\\\\triangle OMD$"}')),()=>m.engine.executeTargets(m.runtime,null,{...m.input,schema}));
+ assert.equal(result.code,'OK');assert.equal(JSON.parse(result.text).reason,String.raw`得出“$\therefore BNDM$为菱形”，$\triangle OMD$`);
+});
 test('Retry-After stops even service failure from triggering explicit backup',async()=>{const m=await setup();const {result,calls}=await mocked(()=>json({error:{}},503,{'retry-after':'120'}),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));assert.equal(result.retryAfter,'120');assert.equal(calls.length,1);});
 test('unsupported optional parameter + protocol + explicit backup share exactly three attempts',async()=>{
  const m=await setup('auto');m.runtime.provider.reasoningEffort='high';const backup={...m.runtime,provider:{...m.runtime.provider,id:'backup'}};

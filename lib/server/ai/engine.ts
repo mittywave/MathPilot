@@ -2,6 +2,7 @@ import type { AiTaskRole, ProviderConfig, ProviderDiagnostic, ProviderModel } fr
 import { providerEndpoint } from '../../ai-provider-presets';
 import { aiFetch, AiTimeoutError, aiTimeoutMs, readAiBody, withAiDeadline } from '../ai-http';
 import { aiSchemaIssue } from '../ai-schema';
+import { restoreDecodedCommands } from '../../math-source.mjs';
 import { setting } from './credentials';
 import { modelReasoningEffort, modelConfigurationFingerprint } from './model-options';
 import { assertTrustedDestination } from './endpoint-policy';
@@ -170,7 +171,8 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
                 return { ...failure('OUTPUT_EMPTY', 502, budget.used), protocol, retryAfter };
             let parsed: unknown;
             try {
-                parsed = JSON.parse(output.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+                // \therefore with one backslash is still valid JSON: a tab and "herefore".
+                parsed = JSON.parse(output.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''), (_key, value: unknown) => typeof value === 'string' ? restoreDecodedCommands(value) : value);
             }
             catch {
                 return { ...failure('OUTPUT_INVALID', 422, budget.used), error: '上游正文不是有效 JSON（可能包含未转义的公式或额外说明），已拒绝使用', protocol, retryAfter };
