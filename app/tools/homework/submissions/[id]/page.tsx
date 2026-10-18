@@ -29,8 +29,12 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<{ height: number; tops: number[]; paths: string[] }>({ height: 0, tops: [], paths: [] });
-  const callouts = items.flatMap(item => !item.requiresReview && ["incorrect", "partial"].includes(item.verdict)
-    ? (item.bbox?.errors ?? []).map((error, index) => ({ item, error, index })) : [])
+  const callouts = items.flatMap(item => {
+    if (item.requiresReview || !["incorrect", "partial"].includes(item.verdict) || !item.bbox) return [];
+    const errors = [...(item.bbox.errors ?? [])];
+    if (!errors.length && item.feedback) errors.push({ ...item.bbox, reason: item.feedback });
+    return errors.map((error, index) => ({ item, error, index, markerId: item.bbox!.errors?.length ? `error-${item.id}-${index}` : `marker-${item.id}` }));
+  })
     .sort((a, b) => a.error.y + a.error.height / 2 - b.error.y - b.error.height / 2);
 
   useEffect(() => {
@@ -41,9 +45,9 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
       const image = element.querySelector(".graded-page>img");
       if (!image) return;
       const bounds = element.getBoundingClientRect(), imageBounds = image.getBoundingClientRect();
-      const notes = callouts.map(({ item, index }) => ({
+      const notes = callouts.map(({ item, index, markerId }) => ({
         note: document.getElementById(`error-note-${item.id}-${index}`)?.getBoundingClientRect(),
-        mark: document.getElementById(`error-${item.id}-${index}`)?.getBoundingClientRect(),
+        mark: document.getElementById(markerId)?.getBoundingClientRect(),
       }));
       if (!imageBounds.height || notes.some(({ note, mark }) => !note || !mark)) return;
       const height = Math.ceil(Math.max(imageBounds.height, notes.reduce((sum, { note }) => sum + note!.height + 12, 12)));
@@ -81,7 +85,7 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
       <article id={`error-note-${item.id}-${index}`} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
         style={{ top: layout.tops[position] ?? 0, visibility: layout.tops[position] == null ? "hidden" : undefined }}>
         <header><span className="grade-error-number">{item.questionNumber}{error.part}</span><b>错误原因</b></header>
-        <p><MathText text={error.reason || "这处标记还没有错因说明，可点击“分析错因”补全。"} /></p>
+        <p><MathText text={error.reason || "无法从原图可靠确认这处标记的具体错因，请结合原卷和参考答案核对。"} /></p>
       </article>)}</aside>
     <div className="graded-page">
       {/* eslint-disable-next-line @next/next/no-img-element -- The original page must preserve its exact image coordinates. */}
@@ -250,17 +254,6 @@ export default function TeacherSubmissionPage() {
   async function attachFigures(){
     if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
     try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
-  }
-  async function locateErrors() {
-    if (!submission) return;
-    setBusy(true); setMessage({ text: "正在对照原答分析每处错误的原因，请稍候…", tone: "success" });
-    try {
-      const { submission: next } = await homeworkApi.updateSubmission(submission.id, { action: "locate-errors" });
-      setSubmission(next); setItems(next.gradingItems);
-      const located = next.gradingItems.filter(item => ["incorrect", "partial"].includes(item.verdict) && item.bbox?.errors?.some(error => error.reason)).length;
-      setMessage({ text: located ? `已为 ${located} 道题标出错处并补充错因；未能可靠确认的题保留整题标记。` : "暂未生成能够可靠确认的错因，请查看原答；已有整题标记保留。", tone: "success" });
-    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "错因分析失败，请重试", tone: "error" }); }
-    finally { setBusy(false); }
   }
   // A new upload: the whole sheet, one day not handed in yet, or one day's mistakes. A failed latest upload gives way once the teacher agrees.
   async function newVersion(scope: { correctionDay?: number; uploadDay?: number }, next: string) {
@@ -576,7 +569,7 @@ export default function TeacherSubmissionPage() {
       {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}>
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
         <div className="review-pages" id="review-originals" role="region" aria-label="原卷标记，独立滚动" tabIndex={0}>
-        <div className="review-pages-heading"><h2>原卷标记</h2>{!dayTask && evidenceItems.some(item => ["incorrect", "partial"].includes(item.verdict) && !item.requiresReview && item.referenceVerified && item.standardAnswer && item.bbox && item.pageId) && <button type="button" onClick={locateErrors} disabled={busy} title="对照原答标出错处，解释错误原因与逻辑漏洞">分析错因</button>}</div>
+        <div className="review-pages-heading"><h2>原卷标记</h2></div>
         {evidencePages.map(page => <GradedHomeworkPage key={page.id} page={page} items={evidenceItems.filter(item => item.pageId === page.id)}
           caption={`${dayTask ? `第 ${assigned!.uploads.find(upload => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`}
           studentName={submission.studentName} activeItemId={activeItemId} international={international} onFocus={item => focusEvidence(item, true)} />)}

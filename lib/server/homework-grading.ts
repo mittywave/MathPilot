@@ -2,7 +2,7 @@ import { AiQueueFailure, queueRetryDelay } from "./ai/queue-policy";
 import { env } from "cloudflare:workers";
 import type { GradingVerdict, QuestionType } from "../types";
 import { processHomeworkAssetCleanup, recordHomeworkAssetCleanupFailure } from "./homework-assets";
-import { homeworkDb } from "./homework";
+import { homeworkDb, readTeacherSubmission } from "./homework";
 import { readRecognizedQuestionNumbers } from './homework-page-coverage';
 
 type AppEnv = {
@@ -35,7 +35,7 @@ export async function upsertResult(input: {
   // Assigned school homework has two settled outcomes, including crossed-out or unreadable answers.
   if (live.sheet_json && live.curriculum !== "international") {
     input = { ...input, verdict: input.verdict === "correct" && !input.requiresReview ? "correct" : "incorrect", requiresReview: false,
-      score: null, feedback: "", errorType: "", stepAnalysis: [], evidenceSummary: "" };
+      score: null, errorType: "", stepAnalysis: [], evidenceSummary: "" };
   }
   if (input.bbox && typeof input.bbox === "object" && (!["incorrect", "partial"].includes(input.verdict) || input.requiresReview)) {
     const bbox = { ...input.bbox } as Record<string, unknown>; delete bbox.errors; input = { ...input, bbox };
@@ -67,7 +67,7 @@ async function processingSubmission(submissionId: string) {
     .bind(submissionId).first<SubmissionRow>();
 }
 
-async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
+async function finalizeSubmissionIfComplete(submission: SubmissionRow, upperAttempt: number) {
   const scope=await homeworkDb().prepare('SELECT reprocess_question_ids_json FROM homework_submissions WHERE id=?').bind(submission.id).first<{reprocess_question_ids_json:string}>();
   const pendingIds = JSON.parse(scope?.reprocess_question_ids_json || "[]") as string[];
   const recognized=await readRecognizedQuestionNumbers(submission.id);
@@ -83,6 +83,12 @@ async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
     const completed = await homeworkDb().prepare(`SELECT COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id=g.submission_id WHERE g.submission_id=? AND g.assignment_question_id IN (${pendingIds.map(()=>"?").join(",")}) AND (g.updated_at>=s.submitted_at OR (g.reviewed_at IS NOT NULL AND g.requires_review=0))`).bind(submission.id,...pendingIds).first<{count:number}>();
     if (Number(completed?.count??0)<pendingIds.length) return false;
   }
+  const owner = await homeworkDb().prepare("SELECT owner_user_id FROM homework_assignments WHERE id=? AND status<>'archived'")
+    .bind(submission.assignment_id).first<{owner_user_id:string}>();
+  if (!owner) return false;
+  // Finish explanations while still processing, so analysis failures use the existing queue/retry policy.
+  await (await import("./completed-homework-grading")).locateHomeworkErrors(
+    await readTeacherSubmission(submission.id, {id:owner.owner_user_id,email:"",role:"member"}), upperAttempt);
   const now = Date.now();
   const claimed = await homeworkDb().prepare(`UPDATE homework_submissions SET status = 'ready', failure_reason = '', updated_at = ?
     WHERE id = ? AND status IN ('submitted', 'processing', 'failed')`).bind(now, submission.id).run();
@@ -96,7 +102,7 @@ async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
 
 async function processHomeworkSubmissionQuestions(submissionId: string, upperAttempt = 1, questionIds?: string[]) {
   const submission = await processingSubmission(submissionId);
-  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission); return; }
+  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission, upperAttempt); return; }
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
   await homeworkDb().prepare("UPDATE homework_submissions SET status = 'processing', failure_reason = '', updated_at = ? WHERE id = ?")
     .bind(Date.now(), submissionId).run();
@@ -114,14 +120,14 @@ async function processHomeworkSubmissionQuestions(submissionId: string, upperAtt
 
 export async function processHomeworkSubmission(submissionId: string, upperAttempt = 1) {
   const submission = await processingSubmission(submissionId);
-  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission); return; }
+  if (submission?.status === "ready") { await finalizeSubmissionIfComplete(submission, upperAttempt); return; }
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
   // Failures are recorded by the caller: only it knows whether the queue will retry or this was the last attempt.
   await homeworkDb().prepare("UPDATE homework_submissions SET status='processing',failure_reason='',updated_at=? WHERE id=? AND status IN ('submitted','failed')").bind(Date.now(),submissionId).run();
   await (await import("./completed-homework")).prepareCompletedHomework(submissionId,submission.assignment_id,upperAttempt,ids=>processHomeworkSubmissionQuestions(submissionId,upperAttempt,ids));
   // Batch all pending questions together so sparse pages can fill the same four worker slots.
   await processHomeworkSubmissionQuestions(submissionId, upperAttempt);
-  await finalizeSubmissionIfComplete(submission);
+  await finalizeSubmissionIfComplete(submission, upperAttempt);
 }
 
 type QueueBody = { kind?: string; submissionId?: string; jobId?: string };
