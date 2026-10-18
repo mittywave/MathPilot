@@ -41,7 +41,7 @@
 .smart-paper-item:first-child{border-top:0}
 .smart-paper-item .stem{margin:2px 0 4px}
 .smart-paper-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;font-size:12px}
-.smart-paper-meta span{padding:1px 6px;border-radius:calc(4px*var(--radius-scale));background:color-mix(in srgb,var(--line,#e4e9e6) 55%,var(--surface,#fff));color:var(--muted)}
+.smart-paper-meta>span{padding:1px 6px;border-radius:calc(4px*var(--radius-scale));background:color-mix(in srgb,var(--line,#e4e9e6) 55%,var(--surface,#fff));color:var(--muted)}
 .smart-paper-meta em{padding:1px 7px;border:1px solid color-mix(in srgb,var(--green,#2f6b53) 30%,var(--line,#e4e9e6));border-radius:999px;color:var(--green,#2f6b53);font-style:normal}
 .smart-paper-meta small{flex:1;color:var(--muted);font-size:12px}
 .smart-paper-day>.smart-paper-link{margin-top:6px}

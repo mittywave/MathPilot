@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readdirSync, readFileSync } from "node:fs";
 import { loadSource } from "./load-source.mjs";
+import { sqliteD1 } from "./helpers/ai-v2-sqlite.mjs";
 
 // 智能组卷 rules that need no model: how a question's calculation is read, how a focus maps onto it, and how the model's
 // answer is checked and completed.
@@ -34,14 +36,26 @@ test("a focus names the features that train it", () => {
 });
 
 test("the brief keeps only categories the outline offered", () => {
+  const evidence = "《计算复习》第3题（第1次上传）：将括号外的负号也参与平方，错误算成正数。";
   const { brief, findings } = normalizeSmartPaperBriefResult({
     title: "刘羽汐 · 计算打卡", days: 5, per_day: 10, category_ids: ["calc-rational-mixed", "invented"], question_types: ["解答题", "作文"],
-    difficulty: "由易到难", focus: [{ label: "去括号", description: "括号前是负号" }], findings: [{ label: "计算", evidence: "计算类错误 37 次" }],
-  }, new Set(["calc-rational-mixed"]));
+    difficulty: "由易到难", focus: [{ label: "去括号", description: "括号前是负号" }], findings: [{ label: "负号与乘方", evidence }],
+  }, new Set(["calc-rational-mixed"]), `- ${evidence}｜原题：计算`);
   assert.deepEqual(brief.categoryIds, ["calc-rational-mixed"]);
   assert.deepEqual(brief.questionTypes, ["解答题"]);
   assert.equal(brief.perDay, 10);
-  assert.equal(findings[0].evidence, "计算类错误 37 次");
+  assert.equal(findings[0].evidence, evidence);
+});
+
+test("historical causes require a verbatim source and concrete feedback, not invented or stitched evidence", () => {
+  const first = "《复习》第14题（第1次上传）：化简已正确，但未利用整体关系继续求值。";
+  const second = "《复习》第31题（第1次上传）：将负号在括号外的平方误算成正数。";
+  const digest = `- ${first}｜原题：整式求值\n- ${second}｜原题：乘方\n- 未作答记录（待确认）：《复习》第6题（第1次上传）：未作答，缺少过程。`;
+  const sources = [first, second, first.replace("14题", "99题"), first.replace("化简已正确", "不会化简"), first + second, "《复习》第31题（第1次上传）：", "《复习》第6题（第1次上传）：未作答，缺少过程。"];
+  const raw = { findings: sources.map((evidence, index) => ({ label: `原因${index}`, evidence })) };
+  const { findings } = normalizeSmartPaperBriefResult(raw, new Set(), digest);
+  assert.deepEqual(findings.map((item) => item.evidence), [first, second]);
+  assert.deepEqual(normalizeSmartPaperBriefResult(raw, new Set(), "").findings, []);
 });
 
 const candidate = (n, difficulty, features) => ({ id: `id-${n}`, code: String(n).padStart(4, "0"), difficulty, level: { 基础: 1, 中等: 3, 提高: 5 }[difficulty], stem: `$${n}$`, features });
@@ -59,9 +73,24 @@ test("the model's answer is checked: unknown and repeated codes go, days are cut
   const plan = assembleSmartPaperPlan({ request: "出题", studentId: "s1", brief, findings: [], avoided: 2, selection, candidates });
   assert.deepEqual(plan.groups.map((group) => group.items.map((item) => item.id)), [["id-1", "id-2", "id-3"], ["id-6", "id-5", "id-4"]]);
   assert.equal(plan.groups[0].theme, "热身");
-  assert.equal(plan.groups[1].items[0].reason, "系统补选：式子含括号前负号", "filled with the focus first");
-  assert.equal(plan.groups[1].items[2].reason, "系统补选");
+  assert.equal(plan.groups[1].items[0].reason, "一般巩固（系统补选：式子含括号前负号），未核对具体历史错因", "filled with the focus first without inventing a historical link");
+  assert.equal(plan.groups[1].items[2].reason, "一般巩固（系统补选），未核对具体历史错因");
   assert.deepEqual(normalizeSmartPaperPlan(plan), plan, "an assembled plan is a valid stored plan");
+});
+
+test("a selected question keeps the verified historical cause through balancing and draft normalization", () => {
+  const evidence = "《整式复习》第31题（第1次上传）：把 $-(1)^2$ 错误计算为 $1$。";
+  const focus = "负号与乘方";
+  const reason = "比较括号内外的负号，先算乘方。".repeat(18);
+  const findings = [{ label: focus, evidence }];
+  const plan = assembleSmartPaperPlan({ request: "两天持平", studentId: "s1", brief: { ...brief, perDay: 1, difficulty: "各天持平" }, findings, avoided: 0,
+    candidates, selection: { days: [{ items: [{ code: "0001", focus, reason }] }, { items: [{ code: "0002", focus: "通分", reason: "分数运算" }] }] } });
+  const linked = plan.groups.flatMap((day) => day.items).find((item) => item.id === "id-1");
+  assert.equal(linked.reason, `针对历史错因：${evidence}；本题训练：${reason}`);
+  assert.ok(linked.reason.length > 300, "source and full training explanation must survive saved-plan normalization");
+  const general = plan.groups.flatMap((day) => day.items).find((item) => item.id === "id-2");
+  assert.equal(general.reason, "一般巩固：分数运算");
+  assert.deepEqual(normalizeSmartPaperPlan(plan), plan);
 });
 
 test("the select prompt lists candidates by code and carries the previous plan when revising", () => {
@@ -142,5 +171,76 @@ test("progressive, unspecified and explicitly unequal requests are not flattened
     const plan = assembleSmartPaperPlan({ request: "练习", studentId: null, brief: { ...brief, perDay: 2, difficulty }, findings: [], avoided: 0, selection, candidates });
     assert.deepEqual(plan.groups.map((day) => day.items.map((item) => item.id)), [["id-1", "id-3"], ["id-2", "id-4"]], difficulty);
     assert.deepEqual(plan.groups.map((day) => day.theme), ["基础", "提高"]);
+  }
+});
+
+test("generation sends published inline error causes to both model calls and attaches only verified sources", async () => {
+  const db = sqliteD1({ v2: false });
+  const previousFetch = globalThis.fetch;
+  const previousEnv = { ...process.env };
+  try {
+    for (const file of readdirSync("migrations").filter((file) => file.endsWith(".sql")).sort()) {
+      if (!/^001[45]_/.test(file)) db.sqlite.exec(readFileSync(`migrations/${file}`, "utf8"));
+    }
+    db.sqlite.exec(`
+      INSERT INTO users(id,email,password_hash,password_salt,password_iterations,role,created_at) VALUES('teacher','teacher@example.invalid','test','test',1,'admin',1);
+      INSERT INTO students(id,owner_user_id,name,created_at,updated_at) VALUES('student','teacher','示例同学',1,1);
+      UPDATE libraries_v2 SET active_publication_id=NULL WHERE id='public';
+      INSERT INTO library_modules_v2(row_id,source_id,library_id,name,created_at,updated_at) VALUES('m','calc','public','计算',1,1);
+      INSERT INTO scoped_library_meta(key,value) VALUES('asset_access_v1','done');
+      INSERT INTO homework_assignments(id,owner_user_id,title,created_at,updated_at) VALUES('homework','teacher','整式复习',1,1);
+    `);
+    for (let i = 1; i <= 3; i++) {
+      const question = { stem: i === 2 ? "$3+4$" : `$-${i}^2+(-3)^2$`, type: "解答题", difficulty: "基础", tags: [] };
+      db.sqlite.prepare(`INSERT INTO library_questions_v2(row_id,source_id,library_id,module_source_id,payload_json,created_at,updated_at) VALUES(?,?,'public','calc',?,1,1)`)
+        .run(`row-${i}`, `new-${i}`, JSON.stringify(question));
+    }
+    const cause = "将 $-(1)^2$ 错误计算为 $1$，应先算乘方再保留外面的负号。";
+    const evidence = `《整式复习》第31题（第1次上传）：${cause}`;
+    const focus = "负号与乘方";
+    for (const [index, status, review, feedback, bbox] of [
+      [1, "published", 0, "", JSON.stringify({ errors: [{ reason: cause }] })],
+      [2, "ready", 0, "未发布的错误不能参与选题", "{}"],
+      [3, "published", 1, "尚待复核的错误不能参与选题", "{}"],
+      [4, "published", 0, "未作答，缺少所需过程。", "invalid legacy box"],
+    ]) {
+      db.sqlite.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,sort_order,created_at,updated_at) VALUES(?,'homework',?,1,'解答题','计算',?,1,1)`)
+        .run(`old-${index}`, String(index === 1 ? 31 : index), index);
+      db.sqlite.prepare(`INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,'homework','student',?,?,'teacher','teacher',1,1)`)
+        .run(`upload-${index}`, index, status);
+      db.sqlite.prepare(`INSERT INTO grading_items(id,submission_id,assignment_question_id,verdict,feedback,bbox_json,requires_review,created_at,updated_at) VALUES(?,?,?,'incorrect',?,?,?,1,1)`)
+        .run(`grade-${index}`, `upload-${index}`, `old-${index}`, feedback, bbox, review);
+    }
+    Object.assign(process.env, { OPENAI_API_KEY: "synthetic-test-key", OPENAI_BASE_URL: "https://smart-paper.test.invalid", OPENAI_API_MODE: "responses", OPENAI_TEXT_MODEL: "synthetic-model" });
+    const prompts = [];
+    globalThis.fetch = async (url, init) => {
+      assert.ok(String(url).startsWith("https://smart-paper.test.invalid/"), "never call a real provider in this test");
+      const body = JSON.parse(init.body);
+      prompts.push(body.input[0].content[0].text);
+      const result = prompts.length === 1
+        ? { title: "针对训练", days: 1, per_day: 3, category_ids: ["calc"], question_types: [], difficulty: "基础",
+          focus: [{ label: focus, description: "比较负号与乘方" }], findings: [{ label: focus, evidence }, { label: "编造错因", evidence: evidence.replace("31题", "99题") }] }
+        : { days: [{ theme: "针对训练", items: [{ code: "0001", focus, reason: "本题含括号外的负号，需要先算平方再取相反数。" }, { code: "0002", focus: "普通计算", reason: "整数加法。" }] }] };
+      return Response.json({ output_text: JSON.stringify(result) });
+    };
+    const { generateSmartPaper } = await loadSource("lib/server/smart-paper.ts", { DB: db });
+    const { plan } = await generateSmartPaper({ id: "teacher", role: "admin", email: "teacher@example.invalid" }, { studentId: "student", request: "3道计算题" });
+    assert.equal(prompts.length, 2);
+    for (const prompt of prompts) {
+      assert.ok(prompt.includes(cause), "the inline reason survives even when feedback is empty");
+      assert.ok(prompt.includes("《整式复习》第31题（第1次上传）"));
+      assert.doesNotMatch(prompt, /未发布的错误不能参与选题|尚待复核的错误不能参与选题/);
+    }
+    assert.deepEqual(plan.findings, [{ label: focus, evidence }], "fabricated question references are discarded");
+    assert.ok(plan.groups[0].items[0].reason.includes(evidence));
+    assert.match(plan.groups[0].items[0].reason, /先算平方再取相反数/);
+    assert.equal(plan.groups[0].items[1].reason, "一般巩固：整数加法。");
+    assert.match(plan.groups[0].items[2].reason, /^一般巩固（系统补选/);
+    assert.deepEqual(normalizeSmartPaperPlan(plan), plan);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const key of Object.keys(process.env)) if (!(key in previousEnv)) delete process.env[key];
+    Object.assign(process.env, previousEnv);
+    db.sqlite.close();
   }
 });
