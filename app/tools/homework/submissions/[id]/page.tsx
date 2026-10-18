@@ -521,12 +521,12 @@ export default function TeacherSubmissionPage() {
     <section className="homework-panel review-overview" aria-label="作业概览">
     <section className="review-summary"><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1><p>{[assigned ? `第 ${submission.version} 次上传` : `第 ${submission.version} 版`, ...(submission.status === "draft" ? [] : [...(submission.submittedAt == null ? [] : [`提交日期：${new Date(submission.submittedAt).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }).replaceAll("/", ".")}`]), `${submission.pages.length} 页`, ...(live ? [] : [`${items.length} 道题`, ...(items.length ? [`${issues} 处需要改进`] : [])])]), ...(assigned ? [] : [outputs.length ? outputs.join("、") : "仅批改，不写入学生档案"])].join(" · ")}</p></div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
-      <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
+      {!assigned && <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
         {submission.outputs.wrongBook && <div><span>写入错题本</span><a href={archiveLink}>已归档错题 {summary?.archived ?? 0} 道 →</a></div>}
-        <label><input type="checkbox" role="switch" aria-label="计入定档" checked={submission.outputs.profile} disabled={busy || Boolean(assigned) || live || submission.status === "ready"}
-          aria-describedby={assigned ? "profile-inclusion-note" : undefined} onChange={(event) => void changeProfile(event.target.checked)} /><span>计入定档</span></label>
-        {assigned ? <small id="profile-inclusion-note">布置的作业总是计入</small> : (live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
-      </div></section>
+        <label><input type="checkbox" role="switch" aria-label="计入定档" checked={submission.outputs.profile} disabled={busy || live || submission.status === "ready"}
+          onChange={(event) => void changeProfile(event.target.checked)} /><span>计入定档</span></label>
+        {(live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
+      </div>}</section>
 
     {assigned && <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} onExport={(questions, kind, includeAnalysis) => void exportHomework(questions, kind, includeAnalysis)}
       onDay={(day) => { setSelectedDay(day); setEditingId(""); setActiveItemId(""); requestAnimationFrame(() => document.getElementById("day-results")?.scrollIntoView({ block: "start", behavior: "instant" })); }}
