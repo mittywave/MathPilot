@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { WRONG_QUESTION_DELETED, type AuthUser, type Question, type Student, type StudentSummary, type WrongQuestionEntry } from "../types";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Question, type Student, type StudentSummary, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../types";
 
 type AppEnv = { DB: D1Database };
 
@@ -40,6 +40,7 @@ function toStudent(row: Record<string, unknown>): Student {
 }
 
 export async function readStudents(user: AuthUser): Promise<StudentSummary[]> {
+  await (await import("./homework-wrong-book")).ensureWrongQuestionKeys(user);
   const result = await appEnv().DB.prepare(`SELECT students.id, students.name, students.class_name, students.notes,
       students.created_at, students.updated_at,
       COUNT(student_wrong_questions.id) AS wrong_count
@@ -154,7 +155,8 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
     sourceScope: row.source_scope === "mine" ? "mine" : "public",
     sourceQuestionId: String(row.source_question_id),
     sourcePath: String(row.source_path ?? ""),
-    question: cleanQuestionSnapshot(question),
+    // 错题和题库共用一套编号；还没进题库的错题也有自己的 ID。
+    question: { ...cleanQuestionSnapshot(question), ...(row.code ? { code: String(row.code) } : {}) },
     mistakeCount: Number(row.mistake_count),
     lastWrongAt: Number(row.last_wrong_at),
     createdAt: Number(row.created_at),
@@ -172,8 +174,10 @@ function toWrongQuestion(row: Record<string, unknown>): WrongQuestionEntry {
 
 export async function readWrongQuestions(studentId: string, user: AuthUser, includeHistory = false): Promise<WrongQuestionEntry[]> {
   await ownedStudent(studentId, user);
+  await (await import("./homework-wrong-book")).ensureWrongQuestionKeys(user);
   const result = await appEnv().DB.prepare(`SELECT id, student_id, source_scope, source_question_id, source_path,
       question_snapshot_json, mistake_count, last_wrong_at, created_at, updated_at,
+      (SELECT printf('%04d', number) FROM question_codes WHERE question_id = source_question_id) AS code,
       source_kind, assignment_id, submission_id, grading_item_id, student_answer, feedback, answer_crop_asset_id, archived_at, archive_reason
     FROM student_wrong_questions WHERE student_id = ? AND owner_user_id = ? ${includeHistory ? "" : "AND archived_at IS NULL"}
     ORDER BY last_wrong_at DESC, created_at DESC`).bind(studentId, user.id).all<Record<string, unknown>>();
@@ -194,4 +198,25 @@ export async function restoreWrongQuestion(studentId: string, entryId: string, u
   const result = await appEnv().DB.prepare(`UPDATE student_wrong_questions SET archived_at = NULL, archive_reason = '', updated_at = ?
     WHERE id = ? AND student_id = ? AND owner_user_id = ? AND archive_reason = ?`).bind(Date.now(), entryId, studentId, user.id, WRONG_QUESTION_DELETED).run();
   if (!result.meta.changes) throw responseError("历史记录中没有这道被删除的错题", 404);
+}
+
+/** 老师所有学生错题本里、还没进题库的题，每道题一条：最近一次的题目内容、编号和做错过的学生。题库页按它搜索。 */
+export async function readWrongQuestionCatalog(user: AuthUser): Promise<WrongQuestionCatalogItem[]> {
+  await (await import("./homework-wrong-book")).ensureWrongQuestionKeys(user);
+  const result = await appEnv().DB.prepare(`SELECT w.source_question_id, w.question_snapshot_json, w.mistake_count, w.last_wrong_at, s.id AS student_id, s.name AS student_name,
+      (SELECT printf('%04d', number) FROM question_codes WHERE question_id = w.source_question_id) AS code
+    FROM student_wrong_questions w JOIN students s ON s.id = w.student_id AND s.owner_user_id = w.owner_user_id
+    WHERE w.owner_user_id = ? AND w.archived_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM library_questions_v2 l WHERE l.source_id = w.source_question_id AND l.deleted_at IS NULL)
+    ORDER BY w.last_wrong_at DESC`).bind(user.id).all<Record<string, unknown>>();
+  const items = new Map<string, WrongQuestionCatalogItem>();
+  for (const row of result.results) {
+    const key = String(row.source_question_id);
+    const item = items.get(key) ?? { question: { ...cleanQuestionSnapshot(JSON.parse(String(row.question_snapshot_json)) as Question), id: key, ...(row.code ? { code: String(row.code) } : {}) },
+      students: [], mistakeCount: 0, lastWrongAt: Number(row.last_wrong_at) };
+    item.students.push({ id: String(row.student_id), name: String(row.student_name) });
+    item.mistakeCount += Number(row.mistake_count);
+    items.set(key, item);
+  }
+  return [...items.values()];
 }

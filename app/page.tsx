@@ -23,10 +23,10 @@ import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./compon
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../lib/library-tree";
-import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
+import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../lib/client-random-id.mjs";
-import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionEntry } from "../lib/types";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../lib/types";
 
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
@@ -44,6 +44,20 @@ const LIBRARY_FIRST = 8;
 const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
+
+// A wrong-book question's pictures sit with the student's homework; joining the library sends them along as files.
+async function inlineHomeworkImages(value: unknown): Promise<unknown> {
+  if (typeof value === "string") {
+    if (!value.startsWith("/api/homework-assets/")) return value;
+    const response = await fetch(value);
+    if (!response.ok) throw new Error("错题配图读取失败，请稍后重试");
+    const blob = await response.blob();
+    return await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("错题配图读取失败")); reader.readAsDataURL(blob); });
+  }
+  if (Array.isArray(value)) return Promise.all(value.map(inlineHomeworkImages));
+  if (value && typeof value === "object") return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([key, item]) => [key, await inlineHomeworkImages(item)] as const)));
+  return value;
+}
 function currentTimestamp() { return Date.now(); }
 
 type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; activate: (id: string) => void; hover: (id: string) => void; place: (id: string, sectionId: string | null) => void };
@@ -105,6 +119,10 @@ export default function Home() {
   const [showSelected, setShowSelected] = useState(initialView === "selected");
   const [expandedAnswers, setExpandedAnswers] = useState<string[]>([]);
   const [entryDraft, setEntryDraft] = useState<Question | null>(null);
+  // The question entry is open to add a wrong-book question to the library (it keeps its ID).
+  const [entryAddsWrong, setEntryAddsWrong] = useState(false);
+  // Questions in students' wrong books that are not in the library, read when a search starts; 题库 search finds them too.
+  const [wrongCatalog, setWrongCatalog] = useState<WrongQuestionCatalogItem[] | null>(null);
   const [categoryDialog, setCategoryDialog] = useState<"new" | "manage" | "trash" | null>(null);
   const [trashQuestions, setTrashQuestions] = useState<Array<Question & { deletedAt: number }> | null>(null);
   const [restoringIds, setRestoringIds] = useState<string[]>([]);
@@ -364,6 +382,19 @@ export default function Home() {
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode]);
+  // A search also finds questions that are only in students' wrong books, by their ID or their text.
+  const searchingWrong = Boolean(authUser) && !showSelected && !showWrongBook && Boolean(query.trim());
+  useEffect(() => {
+    if (!searchingWrong || wrongCatalog) return;
+    let current = true;
+    fetchWrongQuestionCatalog().then(({ items }) => { if (current) setWrongCatalog(items); }).catch(() => { if (current) setWrongCatalog([]); });
+    return () => { current = false; };
+  }, [searchingWrong, wrongCatalog]);
+  const wrongMatches = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!searchingWrong || !wrongCatalog) return [];
+    return wrongCatalog.filter((item) => item.question.code === query.trim() || questionMatchesKeyword(item.question, keyword, `错题本 ${item.students.map((student) => student.name).join(" ")}`));
+  }, [searchingWrong, wrongCatalog, query]);
   // A new filter starts again from the top (8 cards, then 40); the end marker loads the next 40 while it is still well below the screen.
   const listKey = `${activeModuleId}|${activeCategory}|${typeFilter}|${query}|${showSelected}`;
   const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
@@ -438,7 +469,7 @@ export default function Home() {
   const filteredWrongEntries = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return wrongEntries.filter(entry => entry.archivedAt == null);
-    return wrongEntries.filter(entry => entry.archivedAt == null).filter((entry) => `${entry.question.stem} ${entry.question.answer} ${entry.question.analysis} ${entry.question.source} ${entry.sourcePath}`.toLowerCase().includes(keyword));
+    return wrongEntries.filter(entry => entry.archivedAt == null).filter((entry) => `${entry.question.code ?? ""} ${entry.question.stem} ${entry.question.answer} ${entry.question.analysis} ${entry.question.source} ${entry.sourcePath}`.toLowerCase().includes(keyword));
   }, [query, wrongEntries]);
   // Wrong questions are filed by the month they were last got wrong, newest month first.
   const wrongMonthOf = (entry: WrongQuestionEntry) => { const date = new Date(entry.lastWrongAt); return `${date.getFullYear()}年${date.getMonth() + 1}月`; };
@@ -557,6 +588,18 @@ export default function Home() {
     setSelectedIds((current) => allFilteredSelected ? current.filter((id) => !selectableIds.includes(id)) : [...current, ...selectableIds.filter((id) => !current.includes(id))]);
   };
   const openNewQuestion = () => { if (!requireLogin() || !canManageLibrary) return; if (!activeModule) { setModuleDialog("new"); return; } setEntryDraft(newQuestionDraft(activeModule, activeCategory ?? activeModule.id)); };
+  const addWrongToLibrary = async (item: WrongQuestionCatalogItem) => {
+    if (!requireLogin() || !canManageLibrary) return;
+    if (!activeModule) { setModuleDialog("new"); return; }
+    try {
+      // The student's photographed page is evidence of the mistake, not part of the question.
+      const question: Question = { ...item.question };
+      delete question.code; delete question.canEdit; delete question.originalImage;
+      const draft = await inlineHomeworkImages(question) as Question;
+      setEntryAddsWrong(true);
+      setEntryDraft(editableQuestionDraft({ ...draft, moduleId: activeModule.id, categoryId: activeCategory ?? activeModule.id, createdAt: Date.now(), updatedAt: Date.now() }, activeModule));
+    } catch (error) { show({ text: error instanceof Error ? error.message : "错题读取失败", tone: "error" }); }
+  };
   const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { show({ text: "当前题库为只读", tone: "error" }); return; } const questionModule = modules.find((item) => item.id === question.moduleId); if (questionModule && questionModule.id !== activeModuleId) { setActiveModuleId(questionModule.id); setPaperTitle(`${questionModule.name}专项练习`); setActiveCategory(question.categoryId); } setEntryDraft(editableQuestionDraft(question, questionModule)); };
 
   async function submitAuth() {
@@ -840,7 +883,7 @@ export default function Home() {
               <div className="archive-tabs" role="tablist" aria-label={`${activeStudent.name}的档案`}>{ARCHIVE_TABS.map(([key, label]) => <button key={key} role="tab" aria-selected={archiveTab === key} className={archiveTab === key ? "active" : ""} onClick={() => chooseArchiveTab(key)}>{label}{key === "wrong" && <span>{activeStudent.wrongCount}</span>}</button>)}</div>
               {archiveTab === "homework" ? <StudentHomework student={activeStudent} onProgressChange={updateHomeworkProgress} /> : archiveTab === "profile" ? <StudentProfile student={activeStudent} /> : archiveTab === "report" ? <StudentReports student={activeStudent} /> : <>
               {!!activeWrongEntries.length && <div className="wrong-book-head"><button className="wrong-upload-link" onClick={() => setWrongUploadOpen(true)}>＋ 新建错题</button></div>}
-              <div className="filters"><label className="search"><span>⌕</span><input value={query} onChange={(event) => { setQuery(event.target.value); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }} aria-label="搜索学生错题" placeholder="搜索题干或来源…" /></label><div className="page-language-switch filter-segments" role="group" aria-label="错题月份">
+              <div className="filters"><label className="search"><span>⌕</span><input value={query} onChange={(event) => { setQuery(event.target.value); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }} aria-label="搜索学生错题" placeholder="搜索 ID、题干或来源…" /></label><div className="page-language-switch filter-segments" role="group" aria-label="错题月份">
                 <button className={`filter ${activeWrongMonth === "全部" ? "active" : ""}`} onClick={() => { setWrongMonth("全部"); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }}>全部 <span>{activeWrongEntries.length}</span></button>
                 {wrongMonths.map((month) => <button key={month} className={`filter ${activeWrongMonth === month ? "active" : ""}`} onClick={() => { setWrongMonth(month); document.querySelector(".wrong-question-list")?.scrollIntoView({ block: "start" }); }}>{month} <span>{activeWrongEntries.filter((entry) => wrongMonthOf(entry) === month).length}</span></button>)}
                 </div><button className={`select-visible ${allFilteredSelected ? "active" : ""}`} disabled={!selectableIds.length} onClick={toggleAllFiltered}>{allFilteredSelected ? "取消选中" : "选中结果"}</button>
@@ -854,7 +897,7 @@ export default function Home() {
                   return <article className={`question-card wrong-question-card ${checked ? "checked" : ""}`} key={entry.id} onClick={(event) => selectOnCardClick(event, () => toggleSelected(question.id))}>
                     <button className={`check ${checked ? "on" : ""}`} aria-label={`${checked ? "取消选择" : "选择"}${group.month}第 ${index + 1} 题`} onClick={() => toggleSelected(question.id)}>{checked ? "✓" : ""}</button>
                     <div className="question-main">
-                      <div className="meta"><span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span><span className="wrong-count-badge">错 {entry.mistakeCount} 次</span><em>{entry.sourcePath}</em></div>
+                      <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span><span className="wrong-count-badge">错 {entry.mistakeCount} 次</span><em>{entry.sourcePath}</em></div>
                       <QuestionBody question={question} number={index + 1} figureAlt="错题配图" />
                       <WrongQuestionEvidence entry={entry} />
                       {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
@@ -876,7 +919,7 @@ export default function Home() {
             </aside>
           </> : <>
           <div className="filters">
-            <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
+            <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (!value.trim()) setWrongCatalog(null); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
             <div className="page-language-switch filter-segments" role="group" aria-label={pageCopy.allTypes}>
               <button className={`filter ${typeFilter === "全部" ? "active" : ""}`} aria-pressed={typeFilter === "全部"} onClick={() => { setTypeFilter("全部"); window.scrollTo(0,0); }}>{pageCopy.all} <span>{byCode ? 1 : categoryQuestions.length}</span></button>
               {questionTypes.filter(type => (byCode ? [byCode] : categoryQuestions).some(item => item.type === type)).map(type => <button key={type} className={`filter ${typeFilter === type ? "active" : ""}`} aria-pressed={typeFilter === type} onClick={() => { setTypeFilter(type); window.scrollTo(0,0); }}>{pageLocale === "en" ? alevelPageLabel(type, pageLocale) : type.replace("单选题", "选择题")} <span>{(byCode ? [byCode] : categoryQuestions).filter(item => item.type === type).length}</span></button>)}
@@ -886,8 +929,22 @@ export default function Home() {
           </div>
           {!libraryLoading && <div className="library-position">{byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeName.split(" / ").join(" › ")} · {alevelQuestionCount(filteredQuestions.length, pageLocale)}</div>}
           </>}
+          {!!wrongMatches.length && <section className="question-list wrong-catalog" aria-label="错题本中还没进题库的题">
+            <h2 className="basket-section-heading">错题本中未入题库<small>{wrongMatches.length} 题 · 可加入题库，ID 不变</small></h2>
+            {wrongMatches.map((item, index) => {
+              const question = item.question; const answerKey = `catalog-${question.id}`; const answerOpen = expandedAnswers.includes(answerKey);
+              return <article className="question-card" key={question.id}>
+                <div className="question-main">
+                  <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{question.type}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{question.difficulty}</span><span className="wrong-count-badge">错 {item.mistakeCount} 次</span><em>错题本 · {item.students.map((student) => student.name).join("、")}</em></div>
+                  <QuestionBody question={question} number={index + 1} figureAlt="错题配图" />
+                  {answerOpen && <div className="answer-box"><b>答案</b><p><MathText text={question.answer || "略"} /></p>{question.analysis && <><b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
+                  <div className="question-actions"><button onClick={() => setExpandedAnswers((current) => current.includes(answerKey) ? current.filter((id) => id !== answerKey) : [...current, answerKey])}>{answerOpen ? "收起解析" : "查看解析"}</button><small>最近记录 {new Date(item.lastWrongAt).toLocaleDateString("zh-CN")}</small><span></span>{canManageLibrary && <button onClick={() => void addWrongToLibrary(item)}>加入题库</button>}</div>
+                </div>
+              </article>;
+            })}
+          </section>}
           <div className="question-list">
-            {!filteredQuestions.length && (libraryLoading ? <div className="wrong-book-loading"><i></i><span>{showSelected ? "正在读取组卷篮…" : "正在读取题库…"}</span></div> : <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>)}
+            {!filteredQuestions.length && !wrongMatches.length && (libraryLoading ? <div className="wrong-book-loading"><i></i><span>{showSelected ? "正在读取组卷篮…" : "正在读取题库…"}</span></div> : <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>)}
             {filteredQuestions.slice(0, visibleCount).map((question, index) => {
               const path = pathOf(question.categoryId);
               const section = showSelected ? paperSections.find((item) => index >= item.start && index < item.start + item.questions.length) : undefined;
@@ -911,7 +968,7 @@ export default function Home() {
 
 {authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
 
-      {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} onClose={() => setEntryDraft(null)} onNotice={onNotice} onSaved={(saved) => setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt))} />}
+      {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} addToLibrary={entryAddsWrong} onClose={() => { setEntryDraft(null); setEntryAddsWrong(false); }} onNotice={onNotice} onSaved={(saved) => { setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt)); if (entryAddsWrong) setWrongCatalog((current) => current?.filter((item) => !saved.some((entry) => entry.id === item.question.id)) ?? null); }} />}
 
       {categoryDialog && activeModule && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理">
         <div className="modal-head"><div><span className="eyebrow">{activeModule.name}</span><h2>{categoryDialog === "new" ? "新建模块内分类" : categoryDialog === "trash" ? "回收站" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>
