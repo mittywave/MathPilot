@@ -21,6 +21,90 @@ function verdictLabel(item: GradingItem, international: boolean) {
   const label = !international && item.verdict === "partial" ? "错误" : international && item.verdict === "unreadable" ? "看不清" : VERDICT[item.verdict] ?? item.verdict;
   return item.maxScore != null && item.score != null ? `${label} · ${item.score}/${item.maxScore} 分` : label;
 }
+
+/** Keep each explanation beside its source page and measure its connector after text and images have laid out. */
+function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, international, onFocus }: {
+  page: HomeworkSubmission["pages"][number]; items: GradingItem[]; caption: string; studentName: string;
+  activeItemId: string; international: boolean; onFocus(item: GradingItem): void;
+}) {
+  const frame = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<{ height: number; tops: number[]; paths: string[] }>({ height: 0, tops: [], paths: [] });
+  const callouts = items.flatMap(item => !item.requiresReview && ["incorrect", "partial"].includes(item.verdict)
+    ? (item.bbox?.errors ?? []).map((error, index) => ({ item, error, index })) : [])
+    .sort((a, b) => a.error.y + a.error.height / 2 - b.error.y - b.error.height / 2);
+
+  useEffect(() => {
+    const element = frame.current;
+    if (!element) return;
+    let animation = 0;
+    const measure = () => {
+      const image = element.querySelector(".graded-page>img");
+      if (!image) return;
+      const bounds = element.getBoundingClientRect(), imageBounds = image.getBoundingClientRect();
+      const notes = callouts.map(({ item, index }) => ({
+        note: document.getElementById(`error-note-${item.id}-${index}`)?.getBoundingClientRect(),
+        mark: document.getElementById(`error-${item.id}-${index}`)?.getBoundingClientRect(),
+      }));
+      if (!imageBounds.height || notes.some(({ note, mark }) => !note || !mark)) return;
+      const height = Math.ceil(Math.max(imageBounds.height, notes.reduce((sum, { note }) => sum + note!.height + 12, 12)));
+      let bottom = 12;
+      const tops = notes.map(({ note, mark }) => {
+        const top = Math.max(bottom, mark!.top - bounds.top + mark!.height / 2 - note!.height / 2);
+        bottom = top + note!.height + 12;
+        return top;
+      });
+      bottom = height - 12;
+      for (let index = notes.length - 1; index >= 0; index--) {
+        tops[index] = Math.round(Math.min(tops[index], bottom - notes[index].note!.height));
+        bottom = tops[index] - 12;
+      }
+      const paths = notes.map(({ note, mark }, index) => {
+        const x = note!.right - bounds.left, y = tops[index] + note!.height / 2;
+        const targetX = mark!.left - bounds.left - 3, targetY = mark!.top - bounds.top + mark!.height / 2;
+        const elbow = imageBounds.left - bounds.left - 12;
+        return `M ${x.toFixed(1)} ${y.toFixed(1)} H ${elbow.toFixed(1)} V ${targetY.toFixed(1)} H ${targetX.toFixed(1)}`;
+      });
+      const next = { height, tops, paths };
+      setLayout(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+    };
+    const observer = new ResizeObserver(() => { cancelAnimationFrame(animation); animation = requestAnimationFrame(measure); });
+    observer.observe(element);
+    element.querySelectorAll(".graded-page>img,.error-callout").forEach(node => observer.observe(node));
+    measure();
+    return () => { observer.disconnect(); cancelAnimationFrame(animation); };
+    // The notes are derived entirely from this page's items; resizing is observed above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  return <figure id={`page-${page.id}`}><div ref={frame} className="annotated-homework-page" style={{ minHeight: layout.height || undefined }}>
+    <aside className="error-reasons" aria-label={`${caption}的错误原因`}>{callouts.map(({ item, error, index }, position) =>
+      <article id={`error-note-${item.id}-${index}`} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
+        style={{ top: layout.tops[position] ?? 0, visibility: layout.tops[position] == null ? "hidden" : undefined }}>
+        <header><span className="grade-error-number">{item.questionNumber}.{index + 1}</span><b>{homeworkQuestionLabel(item.questionNumber)} · 错误原因</b></header>
+        <p><MathText text={error.reason || "这处标记还没有错因说明，可点击“分析错因”补全。"} /></p>
+      </article>)}</aside>
+    <div className="graded-page">
+      {/* eslint-disable-next-line @next/next/no-img-element -- The original page must preserve its exact image coordinates. */}
+      <img src={page.processedUrl} alt={`${studentName}答卷${caption}`} />
+      {items.filter(item => item.bbox).map(item => {
+        const box = item.bbox!;
+        const errors = !item.requiresReview && ["incorrect", "partial"].includes(item.verdict) ? box.errors ?? [] : [];
+        const wrong = ["incorrect", "partial"].includes(item.verdict);
+        const label = `查看${homeworkQuestionLabel(item.questionNumber)}${errors.length ? `，已标出 ${errors.length} 处错处` : wrong ? "，整题有错，具体位置待确认" : ""}`;
+        return <button id={`marker-${item.id}`} key={item.id} className={`grade-marker ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${errors.length ? " has-errors" : ""}`} aria-pressed={activeItemId === item.id}
+          style={{ left: `${box.x / 10}%`, top: `${box.y / 10}%`, width: `${box.width / 10}%`, height: `${box.height / 10}%` }} onClick={() => onFocus(item)} aria-label={label} title={label}>
+          {errors.length ? errors.map((error, index) => <span id={`error-${item.id}-${index}`} key={index} className="grade-error" data-error-number={`${item.questionNumber}.${index + 1}`} aria-hidden="true"
+            style={{ left: `${(error.x - box.x) / box.width * 100}%`, top: `${(error.y - box.y) / box.height * 100}%`, width: `${error.width / box.width * 100}%`, height: `${error.height / box.height * 100}%` }} />)
+            : wrong ? <span className="grade-unlocated" aria-hidden="true">{item.verdict === "partial" && international ? "△" : "×"}</span> : item.verdict === "correct" ? "✓" : "?"}
+        </button>;
+      })}
+    </div>
+    <svg className="error-connectors" aria-hidden="true" focusable="false">
+      <defs><marker id={`error-arrow-${page.id}`} markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M 0 0 L 6 3 L 0 6 Z" fill="currentColor" /></marker></defs>
+      {layout.paths.map((path, index) => <path key={index} d={path} fill="none" stroke="currentColor" strokeWidth="1.5" markerEnd={`url(#error-arrow-${page.id})`} />)}
+    </svg>
+  </div><figcaption>{caption}</figcaption></figure>;
+}
 type Coverage = NonNullable<HomeworkSubmission["pageCoverage"]>;
 type PageInfo = Coverage["pages"][number];
 const PAGE_LABEL: Record<string, string> = { read: "已读取", blank: "空白页", unreadable: "待补图", waiting: "待读取", retrying: "重试中", error: "未完成" };
@@ -113,7 +197,7 @@ export default function TeacherSubmissionPage() {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const scrolledDay = useRef<number | null>(null);
   const [dayEvidence, setDayEvidence] = useState<{ day: number; submission: HomeworkSubmission; uploads: HomeworkSubmission[]; error: string } | null>(null);
-  const [split, setSplit] = useState(45);
+  const [split, setSplit] = useState(70);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState({ text: "", tone: "success" as "success" | "error" });
   const [loading, setLoading] = useState(true);
@@ -265,9 +349,13 @@ export default function TeacherSubmissionPage() {
       if (window.matchMedia("(min-width:1001px)").matches) card?.closest(".review-evidence-layout")?.scrollIntoView({ block: "start", behavior: "instant" });
       const marker = document.getElementById(`marker-${item.id}`);
       const page = document.getElementById(`page-${item.pageId}`);
+      const note = document.getElementById(`error-note-${item.id}-0`);
       for (const target of [marker ?? page, card]) {
         const pane = target?.closest<HTMLElement>(".review-pages,.grading-list");
-        if (pane && target) pane.scrollTo({ top: pane.scrollTop + target.getBoundingClientRect().top - pane.getBoundingClientRect().top - 12, behavior: "instant" });
+        if (pane && target) {
+          const top = target === marker && note ? Math.min(target.getBoundingClientRect().top, note.getBoundingClientRect().top) : target.getBoundingClientRect().top;
+          pane.scrollTo({ top: pane.scrollTop + top - pane.getBoundingClientRect().top - 12, behavior: "instant" });
+        }
       }
     });
   }
@@ -474,38 +562,26 @@ export default function TeacherSubmissionPage() {
         <article className="submission-report-card"><header><span>整份诊断</span><h2>{report?.overallSummary || "逐题结果已完成"}</h2><p>{report?.studentMessage || "当前提交尚未生成整份建议。"}</p></header>{report && <><div className="report-columns"><section><b>做得好的地方</b>{report.strengths.length ? report.strengths.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">本次暂无足够证据。</p>}</section><section><b>优先改进</b>{report.gaps.length ? report.gaps.map((point) => <div key={`${point.title}-${point.questionNumbers.join("-")}`}><strong>{point.title}</strong><p>{point.detail}</p><small>{point.questionNumbers.map(homeworkQuestionLabel).join("、")}</small></div>) : <p className="report-empty">暂未发现优先问题。</p>}</section></div><section className="report-actions"><b>下一步建议</b><ol>{report.actions.map((action) => <li key={action}>{action}</li>)}</ol></section></>}</article>
       </section>}
 
-      {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}>{/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
-        <div className="grading-list" id="review-details" role="region" aria-label="逐题详情，独立滚动" tabIndex={0}><div className="grading-heading"><div><h2>逐题证据</h2><p>错因编号与右侧红圈对应，参考答案可展开核对。</p></div></div>{evidenceItems.map((item) => {
-          const editing = editingId === item.id;
-          const wrong = !item.requiresReview && ["incorrect", "partial"].includes(item.verdict);
-          const errors = wrong ? item.bbox?.errors ?? [] : [];
-          return <details id={`grading-${item.id}`} key={item.id} className={`grading-card compact ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${activeItemId === item.id ? " selected" : ""}`} open={editing || errors.some(error => error.reason) || undefined}><summary onClick={() => focusEvidence(item)}><span>{homeworkQuestionLabel(item.questionNumber)}</span><b>{verdictLabel(item, international)}</b>{dayTask && <small>第 {assigned!.uploads.find((upload) => upload.id === item.submissionId)?.version} 次上传</small>}{item.teacherMark && <small>老师批改</small>}</summary><div className="grading-detail">{international && <p className="grading-stem"><MathText text={item.stem} /></p>}{international && !!item.figures?.length && <div className="grading-figures">{item.figures.map((figure, index) => <img key={figure.url} className={figure.kind} src={figure.url} alt={`${homeworkQuestionLabel(item.questionNumber)}配图 ${index + 1}`} loading="lazy" />)}</div>}{editing ? <><div className="grading-fields"><label>批改结论<select value={item.verdict} onChange={(event) => updateItem(item.id, reconcileHomeworkScore(event.target.value as GradingItem["verdict"], null, item.maxScore, submission.curriculum))}><option value="correct">正确</option><option value="incorrect">错误</option>{!binary && <><option value="partial">部分正确</option><option value="unreadable">{international ? "看不清（0 分）" : "待补图"}</option><option value="review_required">待核实</option></>}</select></label><label>错误类型<input value={item.errorType} onChange={(event) => updateItem(item.id, { errorType: event.target.value })} placeholder="计算、审题、步骤…" /></label>{!binary && <label>满分<input type="number" min={0} step={0.5} inputMode="decimal" value={item.maxScore ?? ""} onChange={(event) => { const maxScore = event.target.value === "" ? null : Number(event.target.value); updateItem(item.id, { maxScore, ...reconcileHomeworkScore(item.verdict, item.score, maxScore, submission.curriculum) }); }} placeholder="原卷无分值可留空" /></label>}{!binary && item.maxScore != null && <label>得分<input type="number" min={0} max={item.maxScore} step={0.5} inputMode="decimal" value={item.score ?? ""} onChange={(event) => updateItem(item.id, event.target.value === "" ? { score: null } : reconcileHomeworkScore("partial", event.target.value, item.maxScore))} /></label>}</div><label>题干<textarea rows={3} value={item.stem} onChange={event=>updateItem(item.id,{stem:event.target.value})} /></label><label>参考答案<input value={item.standardAnswer} onChange={event=>updateItem(item.id,{standardAnswer:event.target.value})} /></label><label>参考解析<textarea rows={3} value={item.standardAnalysis} onChange={event=>updateItem(item.id,{standardAnalysis:event.target.value})} /></label><label><input type="checkbox" checked={item.referenceVerified === true} onChange={event=>updateItem(item.id,{referenceVerified:event.target.checked})} />我已核实题目与参考解答</label><label>学生作答<textarea rows={2} value={item.studentAnswer} onChange={(event) => updateItem(item.id, { studentAnswer: event.target.value })} /></label><label>给学生的反馈<textarea rows={3} value={item.feedback} onChange={(event) => updateItem(item.id, { feedback: event.target.value })} /></label><div className="correction-actions"><button onClick={() => { setEditingId(""); void load(submission.id); }}>取消</button><button className="primary" onClick={() => saveCorrection(item)} disabled={busy}>保存修正</button></div></> : <>{wrong && <section className="error-reasons" id={`error-reasons-${item.id}`} aria-label={`${homeworkQuestionLabel(item.questionNumber)}错误原因`}><b>错误原因与逻辑漏洞</b>{errors.length ? <ol>{errors.map((error, index) => <li key={index}><span className="grade-error-number">{item.questionNumber}.{index + 1}</span><p><MathText text={error.reason || "这处标记还没有错因说明，请点击“分析错因”补全。"} /></p></li>)}</ol> : <p className="reference-empty">尚未可靠定位具体错处，可点击“分析错因”重新查看原答。</p>}</section>}{international && item.stepAnalysis.length > 0 && <div className="step-analysis"><b>步骤分析</b><ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol></div>}{item.standardAnswer && <details className="standard-answer" open={international || undefined}><summary>参考答案 · {item.referenceSource === "agent" ? "独立解题" : item.referenceSource === "unresolved" ? "待校验" : item.referenceEvidence === "题库原题答案" ? "题库答案" : item.referenceEvidence === "布置时资料自带的答案" ? "资料自带答案" : "教师提供"}</summary><p><MathText text={item.standardAnswer} /></p>{item.standardAnalysis && <small><MathText text={item.standardAnalysis} /></small>}</details>}{international && (item.evidenceSummary || item.feedback || item.errorType) && <div className="evidence-feedback"><b>判定依据与反馈</b><p>{[item.evidenceSummary, item.feedback].filter(Boolean).join("。")}</p>{item.errorType && <small>问题标签：{item.errorType}</small>}</div>}{!item.standardAnswer && <p className="reference-empty">{item.teacherMark === "correct" ? "老师已判为正确，无需补充参考答案。" : item.referenceEvidence || item.feedback || "参考答案待补全，可在上方待处理区重新处理。"}</p>}{(dayTask || submission.status === "published") && <button className="quiet-correction" onClick={() => dayTask ? location.assign(`/tools/homework/submissions/${encodeURIComponent(item.submissionId)}#grading-${item.id}`) : setEditingId(item.id)}>{dayTask ? "去原上传修正判定" : "修正判定"}</button>}</>}</div></details>;
-        })}</div>
-        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- A focusable ARIA window splitter supports pointer and keyboard resizing. */}
-        <div className="review-splitter" role="separator" aria-label="调整错因与原卷宽度" aria-orientation="vertical" aria-valuemin={30} aria-valuemax={70} aria-valuenow={split} aria-controls="review-originals review-details" tabIndex={0}
-          onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
-          onPointerMove={event => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.parentElement!.getBoundingClientRect(); setSplit(Math.max(30, Math.min(70, Math.round((event.clientX - box.left) / box.width * 100)))); }}
-          onPointerUp={event => { if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId); }}
-          onDoubleClick={() => setSplit(45)}
-          onKeyDown={event => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); setSplit(current => event.key === "Home" ? 30 : event.key === "End" ? 70 : Math.max(30, Math.min(70, current + (event.key === "ArrowLeft" ? -2 : 2)))); }} />
+      {!!evidencePages.length && <section className="review-evidence-layout" style={{ "--review-split": `${split}%` } as CSSProperties}>
         {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
         <div className="review-pages" id="review-originals" role="region" aria-label="原卷标记，独立滚动" tabIndex={0}>
         <div className="review-pages-heading"><h2>原卷标记</h2>{!dayTask && evidenceItems.some(item => ["incorrect", "partial"].includes(item.verdict) && !item.requiresReview && item.referenceVerified && item.standardAnswer && item.bbox && item.pageId) && <button type="button" onClick={locateErrors} disabled={busy} title="对照原答标出错处，解释错误原因与逻辑漏洞">分析错因</button>}</div>
-        {evidencePages.map((page) => <figure id={`page-${page.id}`} key={page.id}><div className="graded-page">
-          <img src={page.processedUrl} alt={`${submission.studentName}答卷${dayTask ? `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`} />
-          {evidenceItems.filter((item) => item.pageId === page.id && item.bbox).map((item) => {
-            const box = item.bbox!;
-            const errors = !item.requiresReview && ["incorrect", "partial"].includes(item.verdict) ? box.errors ?? [] : [];
-            const wrong = ["incorrect", "partial"].includes(item.verdict);
-            const label = `查看${homeworkQuestionLabel(item.questionNumber)}${errors.length ? `，已标出 ${errors.length} 处错处` : wrong ? "，整题有错，具体位置待确认" : ""}`;
-            return <button id={`marker-${item.id}`} key={item.id} className={`grade-marker ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${errors.length ? " has-errors" : ""}`} aria-pressed={activeItemId === item.id}
-              style={{ left: `${box.x / 10}%`, top: `${box.y / 10}%`, width: `${box.width / 10}%`, height: `${box.height / 10}%` }} onClick={() => focusEvidence(item, true)} aria-label={label} title={label}>
-              {errors.length ? errors.map((error, index) => <span key={index} className="grade-error" data-error-number={`${item.questionNumber}.${index + 1}`} aria-hidden="true" style={{ left: `${(error.x - box.x) / box.width * 100}%`, top: `${(error.y - box.y) / box.height * 100}%`, width: `${error.width / box.width * 100}%`, height: `${error.height / box.height * 100}%` }} />)
-                : wrong ? <span className="grade-unlocated" aria-hidden="true">{item.verdict === "partial" && international ? "△" : "×"}</span> : item.verdict === "correct" ? "✓" : "?"}
-            </button>;
-          })}
-        </div><figcaption>{dayTask && `第 ${assigned!.uploads.find((upload) => upload.id === page.submissionId)?.version} 次上传 · `}第 {page.pageOrder + 1} 页</figcaption></figure>)}
+        {evidencePages.map(page => <GradedHomeworkPage key={page.id} page={page} items={evidenceItems.filter(item => item.pageId === page.id)}
+          caption={`${dayTask ? `第 ${assigned!.uploads.find(upload => upload.id === page.submissionId)?.version} 次上传 · ` : ""}第 ${page.pageOrder + 1} 页`}
+          studentName={submission.studentName} activeItemId={activeItemId} international={international} onFocus={item => focusEvidence(item, true)} />)}
       </div>
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- A focusable ARIA window splitter supports pointer and keyboard resizing. */}
+        <div className="review-splitter" role="separator" aria-label="调整原卷与解析宽度" aria-orientation="vertical" aria-valuemin={55} aria-valuemax={80} aria-valuenow={split} aria-controls="review-originals review-details" tabIndex={0}
+          onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+          onPointerMove={event => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.parentElement!.getBoundingClientRect(); setSplit(Math.max(55, Math.min(80, Math.round((event.clientX - box.left) / box.width * 100)))); }}
+          onPointerUp={event => { if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId); }}
+          onDoubleClick={() => setSplit(70)}
+          onKeyDown={event => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); setSplit(current => event.key === "Home" ? 55 : event.key === "End" ? 80 : Math.max(55, Math.min(80, current + (event.key === "ArrowLeft" ? -2 : 2)))); }} />
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users must be able to scroll this region independently. */}
+        <div className="grading-list" id="review-details" role="region" aria-label="逐题详情，独立滚动" tabIndex={0}><div className="grading-heading"><div><h2>逐题证据</h2><p>展开题目查看参考答案与解析。</p></div></div>{evidenceItems.map((item) => {
+          const editing = editingId === item.id;
+          return <details id={`grading-${item.id}`} key={item.id} className={`grading-card compact ${!international && item.verdict === "partial" ? "incorrect" : item.verdict}${activeItemId === item.id ? " selected" : ""}`} open={editing || undefined}><summary onClick={() => focusEvidence(item)}><span>{homeworkQuestionLabel(item.questionNumber)}</span><b>{verdictLabel(item, international)}</b>{dayTask && <small>第 {assigned!.uploads.find((upload) => upload.id === item.submissionId)?.version} 次上传</small>}{item.teacherMark && <small>老师批改</small>}</summary><div className="grading-detail">{international && <p className="grading-stem"><MathText text={item.stem} /></p>}{international && !!item.figures?.length && <div className="grading-figures">{item.figures.map((figure, index) => <img key={figure.url} className={figure.kind} src={figure.url} alt={`${homeworkQuestionLabel(item.questionNumber)}配图 ${index + 1}`} loading="lazy" />)}</div>}{editing ? <><div className="grading-fields"><label>批改结论<select value={item.verdict} onChange={(event) => updateItem(item.id, reconcileHomeworkScore(event.target.value as GradingItem["verdict"], null, item.maxScore, submission.curriculum))}><option value="correct">正确</option><option value="incorrect">错误</option>{!binary && <><option value="partial">部分正确</option><option value="unreadable">{international ? "看不清（0 分）" : "待补图"}</option><option value="review_required">待核实</option></>}</select></label><label>错误类型<input value={item.errorType} onChange={(event) => updateItem(item.id, { errorType: event.target.value })} placeholder="计算、审题、步骤…" /></label>{!binary && <label>满分<input type="number" min={0} step={0.5} inputMode="decimal" value={item.maxScore ?? ""} onChange={(event) => { const maxScore = event.target.value === "" ? null : Number(event.target.value); updateItem(item.id, { maxScore, ...reconcileHomeworkScore(item.verdict, item.score, maxScore, submission.curriculum) }); }} placeholder="原卷无分值可留空" /></label>}{!binary && item.maxScore != null && <label>得分<input type="number" min={0} max={item.maxScore} step={0.5} inputMode="decimal" value={item.score ?? ""} onChange={(event) => updateItem(item.id, event.target.value === "" ? { score: null } : reconcileHomeworkScore("partial", event.target.value, item.maxScore))} /></label>}</div><label>题干<textarea rows={3} value={item.stem} onChange={event=>updateItem(item.id,{stem:event.target.value})} /></label><label>参考答案<input value={item.standardAnswer} onChange={event=>updateItem(item.id,{standardAnswer:event.target.value})} /></label><label>参考解析<textarea rows={3} value={item.standardAnalysis} onChange={event=>updateItem(item.id,{standardAnalysis:event.target.value})} /></label><label><input type="checkbox" checked={item.referenceVerified === true} onChange={event=>updateItem(item.id,{referenceVerified:event.target.checked})} />我已核实题目与参考解答</label><label>学生作答<textarea rows={2} value={item.studentAnswer} onChange={(event) => updateItem(item.id, { studentAnswer: event.target.value })} /></label><label>给学生的反馈<textarea rows={3} value={item.feedback} onChange={(event) => updateItem(item.id, { feedback: event.target.value })} /></label><div className="correction-actions"><button onClick={() => { setEditingId(""); void load(submission.id); }}>取消</button><button className="primary" onClick={() => saveCorrection(item)} disabled={busy}>保存修正</button></div></> : <>{international && item.stepAnalysis.length > 0 && <div className="step-analysis"><b>步骤分析</b><ol>{item.stepAnalysis.map((step) => <li key={step}>{step}</li>)}</ol></div>}{item.standardAnswer && <div className="standard-answer"><b>参考答案 · {item.referenceSource === "agent" ? "独立解题" : item.referenceSource === "unresolved" ? "待校验" : item.referenceEvidence === "题库原题答案" ? "题库答案" : item.referenceEvidence === "布置时资料自带的答案" ? "资料自带答案" : "教师提供"}</b><p><MathText text={item.standardAnswer} /></p>{item.standardAnalysis && <small><MathText text={item.standardAnalysis} /></small>}</div>}{international && (item.evidenceSummary || item.feedback || item.errorType) && <div className="evidence-feedback"><b>判定依据与反馈</b><p>{[item.evidenceSummary, item.feedback].filter(Boolean).join("。")}</p>{item.errorType && <small>问题标签：{item.errorType}</small>}</div>}{!item.standardAnswer && <p className="reference-empty">{item.teacherMark === "correct" ? "老师已判为正确，无需补充参考答案。" : item.referenceEvidence || item.feedback || "参考答案待补全，可在上方待处理区重新处理。"}</p>}{(dayTask || submission.status === "published") && <button className="quiet-correction" onClick={() => dayTask ? location.assign(`/tools/homework/submissions/${encodeURIComponent(item.submissionId)}#grading-${item.id}`) : setEditingId(item.id)}>{dayTask ? "去原上传修正判定" : "修正判定"}</button>}</>}</div></details>;
+        })}</div>
       </section>}
     </>}
     {!dayTask && !!submission.questionOriginals?.length && <details className="homework-panel review-archive-panel"><summary>学校作业原件（{submission.questionOriginals.length} 页）</summary><div className="original-files">{submission.questionOriginals.map((document,index)=><a key={document.url} className="original-file" href={document.url} target="_blank" rel="noreferrer"><img src={document.url} alt=""/><span><b>{document.name}</b><small>第 {index+1} 页 · 点击在新窗口打开</small></span></a>)}</div></details>}

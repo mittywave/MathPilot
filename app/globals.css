@@ -454,7 +454,6 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .grading-card textarea { padding:9px 10px; }
 .standard-answer { padding:10px 12px; border-left:3px solid var(--green); border-radius:0 calc(8px*var(--radius-scale)) calc(8px*var(--radius-scale)) 0; background:var(--green-soft); }
 .standard-answer b { color:var(--green); font-size:12px; }
-.standard-answer>summary { color:var(--green); font-size:12px; font-weight:700; cursor:pointer; }
 .standard-answer p { margin:5px 0; font-size:14px; white-space:pre-wrap; }
 .standard-answer small { color:var(--muted); font-size:12px; white-space:pre-wrap; }
 
@@ -832,7 +831,7 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .report-losses p b { margin-right:8px; color:var(--ink); }
 .submission-report-card>header p.report-overview { color:var(--ink); font-size:14px; }
 .report-actions ol,.step-analysis ol { margin:0; padding-left:20px; color:var(--ink); font-size:13px; line-height:1.8; }
-.review-evidence-layout {scroll-margin-top:calc(var(--topbar-h) + 60px);height:calc(100dvh - var(--topbar-h) - 72px);min-height:440px;max-width:1180px;margin:0 auto 48px;display:grid;grid-template-columns:minmax(0,var(--review-split,45%)) 14px minmax(0,1fr);padding:0;align-items:stretch; }
+.review-evidence-layout {scroll-margin-top:calc(var(--topbar-h) + 60px);height:calc(100dvh - var(--topbar-h) - 72px);min-height:440px;max-width:1180px;margin:0 auto 48px;display:grid;grid-template-columns:minmax(0,var(--review-split,70%)) 14px minmax(0,1fr);padding:0;align-items:stretch; }
 .review-evidence-layout>.review-pages,.review-evidence-layout>.grading-list { min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; align-content:start; grid-auto-rows:max-content; padding:4px; }
 .review-evidence-layout>.review-pages { max-width:none; width:auto; margin:0; }
 .review-splitter { position:relative; cursor:col-resize; touch-action:none; outline-offset:-2px; }
@@ -844,12 +843,17 @@ html[data-theme="dark"] .meta span.wrong-count-badge { background:color-mix(in s
 .grade-error::after,.grade-unlocated { position:absolute; right:-9px; top:-12px; display:grid; place-items:center; width:20px; height:20px; border-radius:50%; background:#fff; color:#b83229; font-size:22px; line-height:1; text-shadow:none; }
 .grade-error::after { content:"× " attr(data-error-number); width:max-content; min-width:28px; padding:0 4px; font-size:13px; }
 .grade-unlocated { top:-9px; color:inherit; }
-.error-reasons { display:grid; gap:10px; }
-.error-reasons>b { color:var(--danger); font-size:13px; }
-.error-reasons ol { display:grid; gap:14px; margin:0; padding:0; list-style:none; }
-.error-reasons li { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:9px; }
+.annotated-homework-page { position:relative; display:grid; grid-template-columns:230px minmax(0,1fr); gap:28px; padding-left:10px; background:var(--page); }
+.annotated-homework-page>.graded-page { align-self:start; }
+.annotated-homework-page .grade-marker { z-index:3; }
+.error-reasons { position:relative; min-width:0; }
+.error-callout { position:absolute; left:0; right:0; z-index:4; padding:12px; border:1px solid #c44e43; border-radius:8px; background:var(--surface); }
+.error-callout.selected { border-color:var(--green); box-shadow:0 0 0 1px var(--green); }
+.error-callout header { display:flex; align-items:center; gap:7px; }
+.error-callout header b { color:var(--ink); font-size:12px; }
 .grade-error-number { display:inline-flex; justify-content:center; min-width:28px; padding:3px 5px; border-radius:5px; background:var(--danger-soft); color:var(--danger); font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; }
-.error-reasons li p { margin:0; color:var(--ink); font-size:14px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
+.error-callout p { margin:8px 0 0; color:var(--ink); font-size:13px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
+.error-connectors { position:absolute; inset:0; width:100%; height:100%; z-index:2; overflow:visible; pointer-events:none; color:#c44e43; }
 .grading-card.selected { border-color:var(--green); box-shadow:inset 3px 0 0 var(--green); }
 .grading-card.compact { display:block; padding:0; overflow:hidden; }
 .grading-card.compact>summary { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-height:55px; padding:10px 14px; cursor:pointer; }
