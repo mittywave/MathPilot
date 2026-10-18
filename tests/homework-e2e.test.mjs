@@ -171,6 +171,12 @@ function startMockModel(port) {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const prompt = String(payload.input?.[0]?.content?.find((item) => item.type === "input_text")?.text ?? "");
+    if (prompt.startsWith("只判断这张学生作业图片的整页阅读方向")) {
+      state.orientationCalls = (state.orientationCalls ?? 0) + 1;
+      await new Promise(resolveWait => setTimeout(resolveWait, 30));
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ output_text: JSON.stringify({ rotation: state.orientationRotation ?? 270 }) })); return;
+    }
     if (prompt.startsWith("你是数学作业错处定位助手")) {
       assert.match(prompt,/最终答案规范[\s\S]*最简分数[\s\S]*2\/2\.5[\s\S]*4\/5/,"automatic error analysis receives the same final-answer rule as grading");
       const references = JSON.parse(prompt.split("\n")[1]);
@@ -359,6 +365,55 @@ async function submitPages(base, cookie, submissionId, pages) {
   assert.equal((await jsonRequest(base, `/api/submissions/${submissionId}`, { cookie, method: "PUT", body: { action: "save-pages", pages } })).response.status, 200);
   assert.equal((await jsonRequest(base, `/api/submissions/${submissionId}`, { cookie, method: "PUT", body: { action: "submit" } })).response.status, 200);
 }
+
+test("homework orientation caches all quarter turns, protects original evidence and rejects unauthorized or invalid checks", { timeout: 120_000 }, async () => {
+  const [port, modelPort] = await Promise.all([freePort(), freePort()]);
+  const stateDir = await mkdtemp(join(tmpdir(), "zhiti-homework-orientation-"));
+  command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
+  const mock = await startMockModel(modelPort), worker = startWorker(port, stateDir, {
+    LOCAL_ADMIN_MODE: "false", AI_PROVIDER_LOCAL_HTTP: "true", HOMEWORK_GRADING_ENABLED: "true", REGISTRATION_INVITE_CODE: INVITE,
+    OPENAI_API_KEY: "mock-key", OPENAI_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, OPENAI_API_MODE: "responses",
+    HOMEWORK_GRADING_MODEL: "mock-homework", HOMEWORK_AUTO_PUBLISH_ENABLED: "true",
+  });
+  const base = `http://localhost:${port}`, bytes = testJpeg();
+  try {
+    await waitForServer(`${base}/api/auth/me`, worker);
+    const register = async email => sessionCookie((await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email, password: "password123", inviteCode: INVITE } })).response);
+    const one = await register("one@orientation.test"), two = await register("two@orientation.test");
+    const student = (await jsonRequest(base, "/api/students", { cookie: one, method: "POST", body: { student: { name: "方向验证" } } })).payload.student;
+    const submission = (await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentId: student.id, title: "原卷方向" } })).payload.submission;
+    await submitPages(base, one, submission.id, [await uploadPage(base, one, submission.id, bytes)]);
+    const published = await waitForSubmission(base, one, submission.id, ["published"], worker);
+    const gradingCalls = mock.state.gradingCalls;
+    assert.equal((await jsonRequest(base, `/api/submissions/${submission.id}`, { cookie: two, method: "PUT", body: { action: "orient-pages" } })).response.status, 404);
+    assert.equal(mock.state.orientationCalls, undefined, "ownership is checked before calling AI");
+    const oriented = await jsonRequest(base, `/api/submissions/${submission.id}`, { cookie: one, method: "PUT", body: { action: "orient-pages" } });
+    assert.equal(oriented.response.status, 200, JSON.stringify(oriented.payload));
+    assert.equal(oriented.payload.submission.pages[0].rotation, 270);
+    assert.deepEqual(oriented.payload.submission.gradingItems, published.gradingItems, "historical correction never rewrites judgments or coordinates");
+    assert.equal(mock.state.gradingCalls, gradingCalls, "orientation cannot regrade a published upload");
+    const draft = (await jsonRequest(base, "/api/submissions", { cookie: one, method: "POST", body: { studentId: student.id, title: "四个方向" } })).payload.submission;
+    for (const rotation of [0, 90, 180, 270]) {
+      const page = await uploadPage(base, one, draft.id, bytes);
+      await jsonRequest(base, `/api/submissions/${draft.id}`, { cookie: one, method: "PUT", body: { action: "save-pages", pages: [page] } });
+      mock.state.orientationRotation = 45;
+      assert.equal((await jsonRequest(base, `/api/submissions/${draft.id}`, { cookie: one, method: "PUT", body: { action: "orient-pages" } })).response.status, 500);
+      assert.equal((await jsonRequest(base, `/api/submissions/${draft.id}`, { cookie: one })).payload.submission.pages[0].rotation, undefined, "invalid results are never cached");
+      mock.state.orientationRotation = rotation;
+      const beforeCheck = mock.state.orientationCalls;
+      const [checked, concurrent] = await Promise.all([1, 2].map(() => jsonRequest(base, `/api/submissions/${draft.id}`, { cookie: one, method: "PUT", body: { action: "orient-pages" } })));
+      assert.equal(checked.response.status, 200, JSON.stringify(checked.payload));
+      assert.equal(concurrent.response.status, 200);
+      assert.equal(mock.state.orientationCalls, beforeCheck + 1, "concurrent details share the same pending check");
+      assert.equal(checked.payload.submission.pages[0].rotation, rotation);
+      const calls = mock.state.orientationCalls;
+      await jsonRequest(base, `/api/submissions/${draft.id}`, { cookie: one, method: "PUT", body: { action: "orient-pages" } });
+      assert.equal(mock.state.orientationCalls, calls, "all valid directions, including zero, are cached by the real D1");
+      assert.deepEqual(Buffer.from(await (await fetch(base + checked.payload.submission.pages[0].originalUrl, { headers: { Cookie: one } })).arrayBuffer()), bytes);
+    }
+  } catch (error) { console.error(worker.output()); throw error; }
+  finally { await stopWorker(worker); mock.server.closeAllConnections(); await new Promise(resolveClose => mock.server.close(resolveClose)); }
+});
 
 test("completed homework is graded, archives only incorrect work, preserves pending items and correction history, isolates accounts, and retries failures", { timeout: 300_000 }, async () => {
   const [port, modelPort] = await Promise.all([freePort(), freePort()]); const stateDir = await mkdtemp(join(tmpdir(), "zhiti-homework-e2e-"));

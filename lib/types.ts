@@ -423,6 +423,8 @@ export type SubmissionPage = {
   processedAssetId: string;
   originalUrl: string;
   processedUrl: string;
+  /** Clockwise correction for display only; stored evidence remains in the photographed coordinates. */
+  rotation?: DiagramRotation;
   createdAt: number;
 };
 
