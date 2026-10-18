@@ -86,7 +86,7 @@ function teacherMark(evidenceJson: unknown): GradingItem["teacherMark"] {
 function gradingItem(row: Record<string, unknown>, assigned = false): GradingItem {
   // Apply the current assigned-school rule to historical results without rewriting their stored evidence.
   if (assigned && ["partial", "unreadable", "review_required"].includes(String(row.verdict))) row = { ...row, verdict: "incorrect", requires_review: 0,
-    score: null, feedback: "", error_type: "", step_analysis_json: "[]", evidence_summary: "" };
+    score: null, error_type: "", step_analysis_json: "[]", evidence_summary: "" };
   return {
     id: String(row.id), submissionId: String(row.submission_id), assignmentQuestionId: String(row.assignment_question_id),
     pageId: row.page_id == null ? null : String(row.page_id), questionNumber: String(row.question_number), questionType: row.question_type as QuestionType,
@@ -622,10 +622,12 @@ export async function publishSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   try { await (await import("./homework-page-coverage")).assertCompletePageCoverage(id); } catch(error) { throw responseError(error instanceof Error?error.message:"页面尚未全部核验",409); }
   const { applySubmissionOutputs } = await import("./homework-outputs");
-  if (row.status === "published") { await applySubmissionOutputs(await submissionDetails(row), user); return readTeacherSubmission(id, user); }
-  if (row.status !== "ready") throw responseError("仍有题目需要复核，暂不能发布", 409);
-  const submission = await submissionDetails(row);
+  if (!["ready", "published"].includes(String(row.status))) throw responseError("仍有题目需要复核，暂不能发布", 409);
+  let submission = await submissionDetails(row);
   if (!submission.gradingItems.length) throw responseError("没有可发布的批改结果", 409);
+  // Also fill historical gaps when publishing; complete explanations never trigger another model call.
+  if (await (await import("./completed-homework-grading")).locateHomeworkErrors(submission)) submission = await submissionDetails(row);
+  if (row.status === "published") { await applySubmissionOutputs(submission, user); return readTeacherSubmission(id, user); }
   // Reaching ready again means pending items were re-graded, so an earlier report is out of date.
   await applySubmissionOutputs(submission, user, { refreshReport: true });
   const now = Date.now();
@@ -727,11 +729,6 @@ export async function updateSubmission(id: string, body: { action?: string; page
   if (body.action === "cancel") return cancelSubmissionGrading(id, user);
   if (body.action === "rebuild-coverage") return rebuildSubmissionCoverage(id, user);
   if (body.action === "attach-figures") { await (await import("./homework-figures")).attachMissingFigures(id, user); return readTeacherSubmission(id, user); }
-  if (body.action === "locate-errors") {
-    if (!["published", "ready"].includes(String(row.status))) throw responseError("请等待本次批改完成后再定位错处", 409);
-    await (await import("./completed-homework-grading")).locateHomeworkErrors(await submissionDetails(row));
-    return readTeacherSubmission(id, user);
-  }
   if (body.action === "reprocess-pending") return reprocessPendingSubmission(id, body.pages ?? [], user);
   if (body.action === "review") return reviewSubmission(id, body.items ?? [], user);
   if (body.action === "correct") return correctPublishedSubmission(id, body.items ?? [], user);

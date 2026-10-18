@@ -20,8 +20,8 @@ const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: 
 export const homeworkErrorLocationSchema: Record<string, unknown> = {
   type: "object", additionalProperties: false, properties: {
     results: { type: "array", items: { type: "object", additionalProperties: false, properties: {
-      question_number: { type: "string" }, bbox: box,
-    }, required: ["question_number", "bbox"] } },
+      question_number: { type: "string" }, bbox: box, feedback: { type: "string" },
+    }, required: ["question_number", "bbox", "feedback"] } },
   }, required: ["results"],
 };
 

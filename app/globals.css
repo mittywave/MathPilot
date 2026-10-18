@@ -447,7 +447,6 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .review-pages,.grading-list { min-width:0; display:grid; gap:12px; }
 .grading-heading h2,.review-pages-heading h2 { margin:0; font:700 18px "Songti SC",serif; }
 .review-pages-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.review-pages-heading button { padding:6px 10px; font-size:12px; }
 .review-pages figure { margin:0; overflow:hidden; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); }
 .review-pages figcaption { padding:8px 10px; color:var(--muted); font-size:12px; }
 .graded-page { position:relative; overflow:hidden; background:#fff; }

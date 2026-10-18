@@ -164,7 +164,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
+  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,errorLocationNumbers:[],failErrorLocations:false,unlocatedErrors:false,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     state.requests += 1;
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -172,7 +172,9 @@ function startMockModel(port) {
     const prompt = String(payload.input?.[0]?.content?.find((item) => item.type === "input_text")?.text ?? "");
     if (prompt.startsWith("你是数学作业错处定位助手")) {
       const references = JSON.parse(prompt.split("\n")[1]);
-      const results = references.map(item => ({ question_number:item.question_number,bbox:{...item.bbox,errors:[
+      state.errorLocationNumbers.push(...references.map(item=>item.question_number));
+      if (state.failErrorLocations) { response.writeHead(401,{"Content-Type":"application/json"}); response.end(JSON.stringify({error:{message:"mock error analysis refused"}})); return; }
+      const results = references.map(item => ({ question_number:item.question_number,feedback:state.unlocatedErrors?"原答字迹无法可靠辨认，不能确认具体出错步骤。":"",bbox:{...item.bbox,errors:state.unlocatedErrors?[]:[
         {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。",part:""},
         {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留",part:""},
       ]} }));
@@ -452,15 +454,22 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const d1=directResult.gradingItems.find(i=>i.questionNumber==="D1");
     assert.equal(d1.bbox.errors.length,1,"automatic grading persists a precise mark alongside the answer box");
     assert.match(d1.bbox.errors[0].reason,/移项时应改变符号/,"automatic grading keeps the explanation attached to its mark");
-    const beforeLocations=d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]);
-    const beforeOccurrences=d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
-    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"locate-errors"}})).response.status,404);
-    const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"locate-errors"}});
+    const beforeLocations=d1Rows(stateDir,"SELECT id,verdict,score,student_answer,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]);
+    const beforeOccurrences=d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
+    // Simulate an old result with no explanation: publishing fills only that gap.
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id='${d1.id}'`]);
+    const beforeAutomatic=mock.state.errorLocationNumbers.length;
+    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"publish"}})).response.status,404);
+    const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
     assert.equal(located.response.status,200,JSON.stringify(located.payload));
     assert.equal(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors.length,1,"out-of-box candidate marks are rejected");
     assert.match(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors[0].reason,/定理的前提/,"historical marking gains a specific reason without regrading");
-    assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
-    assert.deepEqual(d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
+    assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
+    assert.deepEqual(d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
+    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic),["D1"],"only the missing explanation invokes analysis");
+    await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
+    assert.equal(mock.state.errorLocationNumbers.length,beforeAutomatic+1,"a repeated publish reuses complete explanations");
     const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
     assert.equal(correctedDirect.response.status,200,JSON.stringify(correctedDirect.payload));
     assert.equal(correctedDirect.payload.submission.gradingSummary.archived,1);
@@ -478,7 +487,10 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const oldPage=directResult.pages[0];
     const supplemental=await uploadPage(base,teacherOne,directId,bytes);
     mock.state.supplementalReadable=true;
-    assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"locate-errors"}})).response.status,200);
+    // A teacher correction has cleared its marks. Add an old mark to exercise page replacement clearing it again.
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE grading_items SET bbox_json=json_set(bbox_json,'$.errors',json('${JSON.stringify(d1.bbox.errors).replace(/'/g,"''")}')) WHERE id='${d1.id}'`]);
+    const beforeReplacementAnalysis=mock.state.errorLocationNumbers.length;
     const beforeKnown=d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND requires_review=0 ORDER BY id",[directId]);
     const supplementalResult=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"reprocess-pending",pages:[{...supplemental,replacePageId:oldPage.id}]}});
     assert.equal(supplementalResult.response.status,200,JSON.stringify(supplementalResult.payload));
@@ -488,7 +500,9 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(reprocessed.pageRevisions.length,1);
     assert.equal(reprocessed.pageRevisions[0].originalUrl,oldPage.originalUrl);
     assert.deepEqual(d1Rows(stateDir,"SELECT id,updated_at FROM grading_items WHERE submission_id=? AND id IN ("+beforeKnown.map(()=>"?").join(",")+") ORDER BY id",[directId,...beforeKnown.map(i=>i.id)]),beforeKnown);
-    assert.ok(reprocessed.gradingItems.filter(i=>beforeKnown.some(old=>old.id===i.id)).every(i=>!i.bbox?.errors),"replacing the original page clears old local coordinates without regrading settled work");
+    assert.equal(reprocessed.gradingItems.find(i=>i.id===d1.id).bbox.errors,undefined,"the teacher's existing feedback survives without keeping its stale circle");
+    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeReplacementAnalysis),["D2"],"a replacement automatically analyzes only the settled answer whose explanation is missing");
+    assert.match(reprocessed.gradingItems.find(i=>i.id===d2.id).bbox.errors[0].reason,/定理的前提/,"replacement coordinates are freshly checked against the new page");
 
     const withOriginal=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"学校作业原件验证",outputs:{wrongBook:false,report:false,profile:false}}});
     const originalId=withOriginal.payload.submission.id,originalAssignment=withOriginal.payload.submission.assignmentId;
@@ -679,11 +693,35 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.multiPage=false;
 
     // Teacher marks still decide the verdict; incorrect and partial work receives a reference without being re-judged.
-    mock.state.teacherMarked="merged";mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];
+    mock.state.teacherMarked="merged";mock.state.referenceNumbers=[];mock.state.gradedNumbers=[];mock.state.errorLocationNumbers=[];mock.state.failErrorLocations=true;
     const marked=await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentId:studentOneId,title:"老师已批改的练习",outputs:{wrongBook:true,report:false,profile:false}}});
     const markedId=marked.payload.submission.id;
     await submitPages(base,teacherOne,markedId,[await uploadPage(base,teacherOne,markedId,bytes)]);
+    const analysisFailed=await waitForSubmission(base,teacherOne,markedId,["failed"],worker);
+    assert.equal(analysisFailed.publishedAt,null,"analysis is completed before publication");
+    assert.equal(analysisFailed.gradingItems.length,3,"analysis failure preserves finished verdicts");
+    const savedMarked=analysisFailed.gradingItems.map(i=>[i.id,i.verdict,i.updatedAt]);
+    const finishedGrading=mock.state.gradingCalls,finishedReferences=mock.state.referenceNumbers.length;
+    assert.deepEqual(mock.state.errorLocationNumbers,["1-3(2)"],"the teacher's cross is analyzed automatically without rejudging");
+    mock.state.failErrorLocations=false;
+    assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"retry"}})).response.status,200);
     const markedResult=await waitForSubmission(base,teacherOne,markedId,["published"],worker);
+    assert.deepEqual(markedResult.gradingItems.map(i=>[i.id,i.verdict,i.updatedAt]),savedMarked,"retry only fills the missing analysis");
+    assert.deepEqual([mock.state.gradingCalls,mock.state.referenceNumbers.length],[finishedGrading,finishedReferences]);
+    assert.match(markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").bbox.errors[0].reason,/定理的前提/);
+    assert.equal(markedResult.gradingItems.find(i=>i.questionNumber==="1-3(1)").bbox.errors,undefined,"correct teacher-marked work is not analyzed");
+    // No trustworthy position: retain a whole-answer explanation without fabricating a local circle.
+    const markedWrongId=markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").id;
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id='${markedWrongId}'`]);
+    mock.state.unlocatedErrors=true;
+    const unlocated=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}})).payload.submission.gradingItems.find(i=>i.id===markedWrongId);
+    assert.equal(unlocated.bbox.errors,undefined);
+    assert.match(unlocated.feedback,/无法可靠辨认/);
+    const completeCalls=mock.state.errorLocationNumbers.length;
+    await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
+    assert.equal(mock.state.errorLocationNumbers.length,completeCalls,"whole-answer explanations also prevent repeated analysis");
+    mock.state.unlocatedErrors=false;
     assert.deepEqual(markedResult.gradingItems.map(i=>[i.questionNumber,i.verdict,i.teacherMark,i.evidenceSummary]),[["1-3(1)","correct","correct","老师已打勾"],["1-3(2)","incorrect","incorrect","老师已打叉或圈出答案"],["1-4","incorrect",null,""]]);
     assert.deepEqual([mock.state.referenceNumbers.sort(),mock.state.gradedNumbers],[["1-3(2)","1-4"],["1-4"]],"teacher-marked mistakes receive answers without being re-judged");
     assert.ok(markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").referenceVerified);
@@ -1079,6 +1117,10 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(binaryResult.gradingItems.map(i=>[i.verdict,i.requiresReview]),[["correct",false],...Array.from({length:6},()=>["incorrect",false])]);
     assert.deepEqual([binaryResult.gradingSummary.correct,binaryResult.gradingSummary.partial,binaryResult.gradingSummary.incorrect,binaryResult.gradingSummary.unresolved,binaryResult.gradingSummary.archived],[1,0,6,0,6]);
     assert.deepEqual(binaryResult.assigned.days[0].firstAttempt,{correct:1,incorrect:6,pending:0});
+    assert.match(binaryResult.gradingItems[1].feedback,/无法辨认/);
+    assert.match(binaryResult.gradingItems[2].feedback,/未作答/);
+    assert.ok(!binaryResult.gradingItems[1].bbox.errors&&!binaryResult.gradingItems[2].bbox.errors,"blank and unreadable work retains factual feedback without fabricated local errors");
+    assert.match(binaryResult.gradingItems[5].bbox.errors[0].reason,/定理的前提/,"teacher-marked partial work gains an explanation automatically");
     assert.ok(d1Rows(stateDir,"SELECT verdict,requires_review FROM grading_items WHERE submission_id=?",[binaryId]).every(i=>["correct","incorrect"].includes(i.verdict)&&i.requires_review===0),"binary verdicts are persisted, not just relabelled in the browser");
     const binaryWrong=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(i=>i.assignmentId===binaryResult.assignmentId);
     assert.equal(binaryWrong.length,6,"blank and unreadable answers enter the wrong book and correction scope");
