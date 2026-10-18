@@ -50,7 +50,7 @@ PUBLIC_LIBRARY_REMOTE_URL=https://tiku.mittysapce.uk
 PUBLIC_LIBRARY_PUBLISH_TOKEN=至少32字节的随机密钥
 ```
 
-AI 首选通过管理员页面 `/settings/ai` 配置；旧 `.env.local` / Worker Secret 仍作为未配置或停用数据库 Provider 时的回退。`npm run dev` 会自动执行本地数据库迁移，把两份本地配置安全合并到 Worker 使用的 `.dev.vars`，并仅为本地开发注入 `LOCAL_ADMIN_MODE=true`。绝对不要把 `LOCAL_ADMIN_MODE` 配置为线上 Secret。
+AI 首选通过管理员页面 `/settings/ai` 配置；旧 `.env.local` / Worker Secret 仍作为未配置或停用数据库 Provider 时的回退。`npm run dev` 会自动执行本地数据库迁移，把两份本地配置安全合并到 Worker 使用的 `.dev.vars`，并仅为本地开发注入 `LOCAL_ADMIN_MODE=true`。合并内容不变时保留原文件，避免重复启动触发正在运行的 Worker 重启、中断组卷等请求。3001 只保留一个启动来源：后台任务托管时不要再手动启动另一份；若后台任务因已有服务而反复退出，先停止重复启动，再让后台任务接管服务。绝对不要把 `LOCAL_ADMIN_MODE` 配置为线上 Secret。
 
 一键发布先比对内容哈希，只上传变化实体和远端缺失图片；远端在暂存版本完成校验后原子切换。删除也属于完整镜像的一部分，任何失败都会继续展示上一公共版本。相同内容的图片按哈希复用。
 
