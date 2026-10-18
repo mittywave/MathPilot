@@ -3,7 +3,150 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadSource } from "./load-source.mjs";
+import { build } from "esbuild";
+import { createRequire } from "node:module";
+import { migratedDatabase, d1 } from "./helpers/migrated-d1.mjs";
 import { finalizeHomeworkVerdict, isPendingGradingItem, isSimpleObjectiveAnswer, normalizeHomeworkAnswer, reconcileHomeworkScore, summarizeHomeworkScore, homeworkQuestionLabel, titleWithoutStudent } from "../lib/homework-grading-rules.mjs";
+
+async function gradingRunFixture(t, phase) {
+  const sqlite = await migratedDatabase(); t.after(() => sqlite.close());
+  sqlite.exec(`INSERT INTO users(id,email,password_hash,password_salt,password_iterations,role,created_at) VALUES('u','u@test','h','s',1,'admin',0);
+    INSERT INTO students(id,owner_user_id,name,class_name,notes,created_at,updated_at) VALUES('student','u','Fixture','','',0,0);
+    INSERT INTO homework_assignments(id,owner_user_id,title,status,input_mode,created_at,updated_at) VALUES('assignment','u','Original','closed','completed_homework',0,0);
+    INSERT INTO homework_submissions(id,assignment_id,student_id,status,submitted_by_type,submitted_by_id,submitted_at,created_at,updated_at) VALUES('submission','assignment','student','submitted','teacher','u',1,0,0);`);
+  const database = d1(sqlite), fixture = { sqlite, database, calls: 0, queued: [], api: null, model: async () => ({ status: 200, text: "{}" }) };
+  const hooks = {
+    phase: async () => { fixture.calls++; return phase(fixture); },
+    callStructuredAi: input => fixture.model(input),
+  };
+  const compiled = await build({
+    stdin: { contents: `export * from './lib/server/homework-grading'; export * from './lib/server/homework'; export { callHomeworkModel } from './lib/server/homework-model'; export { AiQueueFailure } from './lib/server/ai/queue-policy';`, resolveDir: process.cwd() },
+    bundle: true, write: false, format: "cjs", platform: "node", packages: "external", logLevel: "silent", external: ["fixture:grading"],
+    plugins: [{ name: "controlled-grading-phase", setup(plugin) {
+      plugin.onResolve({ filter: /^(?:\.\/completed-homework|\.\/ai-gateway)$/ }, args => {
+        if (args.path === "./completed-homework" && args.importer.endsWith("/homework-grading.ts")) return { path: "prepare", namespace: "fixture" };
+        if (args.path === "./ai-gateway") return { path: "model", namespace: "fixture" };
+      });
+      plugin.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ contents: args.path === "prepare"
+        ? 'export { phase as prepareCompletedHomework } from "fixture:grading";'
+        : 'export { callStructuredAi } from "fixture:grading";', loader: "js" }));
+    } }],
+  });
+  const require = createRequire(import.meta.url), module = { exports: {} };
+  new Function("require", "module", "exports", compiled.outputFiles[0].text)(id => id === "cloudflare:workers" ? { env: { DB: database, HOMEWORK_GRADING_QUEUE: { send: async message => { fixture.queued.push(message); } } } } : id === "fixture:grading" ? hooks : require(id), module, module.exports);
+  fixture.api = module.exports;
+  fixture.row = () => sqlite.prepare("SELECT * FROM homework_submissions WHERE id='submission'").get();
+  fixture.message = (attempts = 1) => ({ body: { kind: "grade_submission", submissionId: "submission" }, attempts, acknowledged: false, retried: null,
+    ack() { this.acknowledged = true; }, retry(options) { this.retried = options; } });
+  return fixture;
+}
+
+test("duplicate grading deliveries cannot enter the recognition phase together and a busy delivery is retried", async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await gradingRunFixture(t, async f => { entered.resolve(); await release.promise; throw new f.api.AiQueueFailure({ code: "UPSTREAM_AUTH_FAILED", status: 401, error: "synthetic terminal failure" }); });
+  const first = f.message(), second = f.message();
+  const running = f.api.processHomeworkQueue({ messages: [first] });
+  await entered.promise;
+  try {
+    await f.api.processHomeworkQueue({ messages: [second] });
+    assert.equal(f.calls, 1);
+    assert.equal(second.acknowledged, false); assert.equal(second.retried.delaySeconds, 300);
+  } finally { release.resolve(); await running; }
+  assert.equal(first.acknowledged, true); assert.equal(f.row().status, "failed"); assert.equal(f.row().grading_run_id, "");
+  await f.api.processHomeworkQueue({ messages: [f.message(2)] });
+  assert.equal(f.calls, 1, "a terminally failed submission needs an explicit teacher retry");
+});
+
+test("a crashed grading worker is not acknowledged away and is reclaimable after its lease", async t => {
+  const f = await gradingRunFixture(t, async f => { throw new f.api.AiQueueFailure({ code: "UPSTREAM_AUTH_FAILED", status: 401, error: "synthetic terminal failure" }); });
+  f.sqlite.prepare("UPDATE homework_submissions SET status='processing',grading_run_id='crashed',updated_at=?").run(Date.now());
+  const early = f.message(2); await f.api.processHomeworkQueue({ messages: [early] });
+  assert.equal(f.calls, 0); assert.equal(early.acknowledged, false); assert.equal(early.retried.delaySeconds, 300);
+  f.sqlite.prepare("UPDATE homework_submissions SET updated_at=?").run(Date.now() - 6 * 60_000);
+  const later = f.message(3); await f.api.processHomeworkQueue({ messages: [later] });
+  assert.equal(f.calls, 1); assert.equal(later.acknowledged, true); assert.equal(f.row().grading_run_id, "");
+});
+
+test("heartbeats keep a slow active grader from being reclaimed", async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await gradingRunFixture(t, async f => { entered.resolve(); await release.promise; throw new f.api.AiQueueFailure({ code: "UPSTREAM_AUTH_FAILED", status: 401, error: "fixture" }); });
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 1_800_000_000_000 });
+  const running = f.api.processHomeworkQueue({ messages: [f.message()] }); await entered.promise;
+  try {
+    t.mock.timers.tick(6 * 60_000);
+    await Promise.resolve();
+    assert.equal(f.row().updated_at, Date.now());
+    const duplicate = f.message(2); await f.api.processHomeworkQueue({ messages: [duplicate] });
+    assert.equal(f.calls, 1); assert.equal(duplicate.retried.delaySeconds, 300);
+  } finally { release.resolve(); await running; }
+});
+
+test("two teacher retries enqueue a failed submission only once", async t => {
+  const f = await gradingRunFixture(t, async () => {}), user = { id: "u", email: "u@test", role: "admin" };
+  f.sqlite.exec("UPDATE homework_submissions SET status='failed'");
+  const retried = await Promise.allSettled([f.api.retryHomeworkSubmission("submission", user), f.api.retryHomeworkSubmission("submission", user)]);
+  assert.equal(retried.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(retried.find(result => result.status === "rejected").reason.status, 409);
+  assert.equal(f.queued.length, 1); assert.equal(f.row().status, "submitted");
+});
+
+test("late writes and failure handling from an expired grader cannot change its replacement", async t => {
+  const entered = [Promise.withResolvers(), Promise.withResolvers()], release = [Promise.withResolvers(), Promise.withResolvers()];
+  const f = await gradingRunFixture(t, async f => {
+    const index = f.calls - 1; entered[index].resolve(); await release[index].promise;
+    if (index === 0) await f.api.homeworkDb().prepare("UPDATE homework_assignments SET title='stale result' WHERE id='assignment'").run();
+    throw new f.api.AiQueueFailure({ code: "UPSTREAM_AUTH_FAILED", status: 401, error: index ? "new run failure" : "old run failure" });
+  });
+  const old = f.api.processHomeworkQueue({ messages: [f.message()] }); await entered[0].promise;
+  f.sqlite.prepare("UPDATE homework_submissions SET updated_at=?").run(Date.now() - 6 * 60_000);
+  const replacement = f.api.processHomeworkQueue({ messages: [f.message(2)] }); await entered[1].promise;
+  const token = f.row().grading_run_id;
+  release[0].resolve(); await old;
+  assert.equal(f.sqlite.prepare("SELECT title FROM homework_assignments WHERE id='assignment'").get().title, "Original");
+  assert.equal(f.row().grading_run_id, token); assert.equal(f.row().status, "processing"); assert.equal(f.row().failure_reason, "");
+  release[1].resolve(); await replacement;
+  assert.equal(f.row().failure_reason, "new run failure"); assert.equal(f.row().grading_run_id, "");
+});
+
+test("a cancelled grading run cannot write back or fail the teacher's draft", async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await gradingRunFixture(t, async f => {
+    entered.resolve(); await release.promise;
+    await f.api.homeworkDb().prepare("UPDATE homework_assignments SET title='cancelled result' WHERE id='assignment'").run();
+  });
+  const running = f.api.processHomeworkQueue({ messages: [f.message()] }); await entered.promise;
+  await f.api.updateSubmission("submission", { action: "cancel" }, { id: "u", email: "u@test", role: "admin" });
+  release.resolve(); await running;
+  assert.equal(f.row().status, "draft"); assert.equal(f.row().grading_run_id, ""); assert.equal(f.row().failure_reason, "");
+  assert.equal(f.sqlite.prepare("SELECT title FROM homework_assignments WHERE id='assignment'").get().title, "Original");
+});
+
+test("transient queue failures keep checkpoints retryable and release their run token", async t => {
+  const f = await gradingRunFixture(t, async f => { throw new f.api.AiQueueFailure({ code: "UPSTREAM_FAILED", status: 503, error: "synthetic upstream failure" }); });
+  const first = f.message(); await f.api.processHomeworkQueue({ messages: [first] });
+  assert.equal(first.retried.delaySeconds, 30); assert.equal(f.row().status, "processing"); assert.match(f.row().failure_reason, /自动重试/); assert.equal(f.row().grading_run_id, "");
+  const last = f.message(4); await f.api.processHomeworkQueue({ messages: [last] });
+  assert.equal(f.calls, 2); assert.equal(last.retried, null); assert.equal(last.acknowledged, true); assert.equal(f.row().status, "failed");
+});
+
+test("grading write fences are atomic and do not leak into other requests; model calls receive cancellation", async t => {
+  const f = await gradingRunFixture(t, async () => {}), controller = new AbortController();
+  f.sqlite.exec("UPDATE homework_submissions SET status='processing',grading_run_id='owner'");
+  assert.equal(f.api.homeworkDb(), f.database);
+  await f.api.withHomeworkGradingRun("submission", "owner", controller.signal, async () => {
+    const db = f.api.homeworkDb();
+    const changed = await db.prepare("UPDATE homework_assignments SET title=? WHERE id=?").bind("current", "assignment").run();
+    assert.equal(changed.meta.changes, 1);
+    f.sqlite.exec("UPDATE homework_submissions SET grading_run_id='replacement'");
+    await assert.rejects(db.batch([db.prepare("UPDATE homework_assignments SET title='stale' WHERE id='assignment'"), db.prepare("UPDATE homework_submissions SET failure_reason='stale' WHERE id='submission'")]), /malformed JSON/);
+    assert.equal(f.row().failure_reason, "");
+  });
+  assert.equal(f.api.homeworkDb(), f.database);
+  assert.equal(f.sqlite.prepare("SELECT title FROM homework_assignments WHERE id='assignment'").get().title, "current");
+  f.model = async input => { assert.equal(input.signal, controller.signal); controller.abort(new Error("cancel fixture")); return { status: 200, text: "{}" }; };
+  await assert.rejects(f.api.withHomeworkGradingRun("submission", "replacement", controller.signal,
+    () => f.api.callHomeworkModel({ prompt: "fixture", images: [], schema: {}, schemaName: "fixture" })), /cancel fixture/);
+});
 
 test("school distribution shares whole-question states with the sheet and keeps exam step marks separate", async () => {
   const { resultState, VerdictTally } = await loadSource("app/components/AssignedHomeworkSheet.tsx");

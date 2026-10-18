@@ -1118,7 +1118,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(allCorrected.assigned.days[0].correct,3,"current progress still reaches fully corrected");
     const completedHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:allCorrected,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
     assert.match(completedHtml,/首交对 0\/3/);
-    assert.match(completedHtml,/首交对 1 · 错 3/);
+    assert.match(completedHtml,/首交对 1\/1/);
+    assert.deepEqual(allCorrected.assigned.days.reduce((total,day)=>[total[0]+day.firstAttempt.correct,total[1]+day.firstAttempt.incorrect],[0,0]),[1,3],"per-day captions retain the original whole-sheet counts");
     assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");

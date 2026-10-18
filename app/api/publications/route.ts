@@ -34,13 +34,8 @@ export async function POST(request: Request) {
     if (body.action !== "publish-local") return Response.json({ error: "未知发布操作" }, { status: 400 });
     return Response.json(await publishLocalLibrary(user));
   } catch (error) {
-    const publicationId = typeof body.publicationId === "string" ? body.publicationId : "";
-    if (publicationId) {
-      try {
-        const { libraryBindings } = await import("../../../lib/server/library");
-        await libraryBindings().DB.prepare("UPDATE library_publications SET status = 'failed' WHERE id = ? AND status = 'staging'").bind(publicationId).run();
-      } catch { /* 保留原错误 */ }
-    }
+    // The authenticated publisher already sends its explicit "fail" action.
+    // An error (including rejected credentials) must never trust a body ID to mutate a job.
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "公共资源库发布失败" }, { status: 500 });
   }

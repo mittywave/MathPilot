@@ -1,5 +1,6 @@
 import { recognitionReasoningEffort } from "./recognition-model-rules.mjs";
 import { callStructuredAi, type AiGatewayResult } from "./ai-gateway";
+import { homeworkGradingSignal } from "./homework";
 
 type ModelInput = {
   prompt: string;
@@ -10,7 +11,10 @@ type ModelInput = {
 };
 
 export async function callHomeworkModel(input: ModelInput): Promise<AiGatewayResult> {
-  return callStructuredAi({
+  const signal = homeworkGradingSignal();
+  signal?.throwIfAborted();
+  const result = await callStructuredAi({
+    signal,
     role: "grading",
     upperAttempt: input.upperAttempt,
     prompt: input.prompt,
@@ -20,6 +24,8 @@ export async function callHomeworkModel(input: ModelInput): Promise<AiGatewayRes
     reasoningEffort: recognitionReasoningEffort(),
     missingMessage: "尚未配置智能批改",
   });
+  signal?.throwIfAborted();
+  return result;
 }
 
 export function parseHomeworkModelText(value: string) {

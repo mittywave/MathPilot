@@ -222,8 +222,8 @@ async function beginPublication(manifest: SnapshotManifest) {
     currentHashes("library_categories_v2", library?.active_publication_id ?? null),
     currentHashes("library_questions_v2", library?.active_publication_id ?? null),
   ]);
-  const existingAssets = manifest.assets.length ? await db.prepare(`SELECT content_hash FROM question_assets WHERE content_hash IN (${manifest.assets.map(() => "?").join(",")})`)
-    .bind(...manifest.assets.map((item) => item.hash)).all<{ content_hash: string }>() : { results: [] as Array<{ content_hash: string }> };
+  const existingAssets = manifest.assets.length ? await db.prepare("SELECT content_hash FROM question_assets WHERE content_hash IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(manifest.assets.map((item) => item.hash))).all<{ content_hash: string }>() : { results: [] as Array<{ content_hash: string }> };
   const present = new Set<string>((existingAssets.results as Array<{ content_hash: string }>).map((item) => item.content_hash));
   const missingAssetHashes = manifest.assets.map((item) => item.hash).filter((hash) => !present.has(hash));
   const diff: PublishDiff = {
@@ -269,8 +269,8 @@ async function uploadPublicationAsset(publicationId: string, hash: string, conte
 async function remoteAssetMap(snapshot: Snapshot) {
   const hashes = [...new Set(snapshot.assets.map((item) => item.hash))];
   if (!hashes.length) return new Map<string, string>();
-  const rows = await libraryBindings().DB.prepare(`SELECT id, content_hash FROM question_assets WHERE content_hash IN (${hashes.map(() => "?").join(",")})`)
-    .bind(...hashes).all<{ id: string; content_hash: string }>();
+  const rows = await libraryBindings().DB.prepare("SELECT id, content_hash FROM question_assets WHERE content_hash IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(hashes)).all<{ id: string; content_hash: string }>();
   const result = new Map<string, string>((rows.results as Array<{ id: string; content_hash: string }>).map((item) => [item.content_hash, item.id]));
   if (result.size !== hashes.length) throw new Response(JSON.stringify({ error: "尚有图片未上传完成" }), { status: 409, headers: { "Content-Type": "application/json" } });
   return result;

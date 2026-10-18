@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
@@ -12,6 +13,7 @@ const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
 const CONFIG = join(ROOT, "dist", "server", "wrangler.json");
 const INVITE = "shared-e2e-invite";
+const PUBLISH_TOKEN = "synthetic-shared-library-publication-token";
 const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 function command(args) {
@@ -92,7 +94,7 @@ test("one shared library: every teacher reads and edits it, only administrators 
   const port = await freePort();
   const state = await mkdtemp(join(tmpdir(), "zhiti-shared-"));
   command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "--config", join(ROOT, "wrangler.jsonc")]);
-  const worker = startWorker(port, state, { LOCAL_ADMIN_MODE: "false", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@shared.test" });
+  const worker = startWorker(port, state, { LOCAL_ADMIN_MODE: "false", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@shared.test", PUBLIC_LIBRARY_PUBLISH_TOKEN: PUBLISH_TOKEN });
   const base = `http://public.localtest.me:${port}`;
   try {
     await waitForServer(`${base}/api/library`, worker);
@@ -213,6 +215,31 @@ test("one shared library: every teacher reads and edits it, only administrators 
     assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: one })).payload.handout.title, "第1讲 平行四边形");
     assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: two, method: "DELETE", body: {} })).response.status, 403);
     assert.equal((await jsonRequest(base, `/api/handouts/${handoutId}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
+
+    // Exercise the real Worker/D1 publisher, including more assets than D1's 100-parameter limit.
+    const assets = Array.from({ length: 173 }, (_, index) => {
+      const bytes = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><title>Fixture ${index}</title><rect width="1" height="1"/></svg>`);
+      return { hash: createHash("sha256").update(bytes).digest("hex"), contentType: "image/svg+xml", byteSize: bytes.length, base64: bytes.toString("base64") };
+    });
+    const publish = body => jsonRequest(base, "/api/publications", { method: "POST", body, headers: { Authorization: `Bearer ${PUBLISH_TOKEN}` } });
+    for (const count of [100, 101, 173]) {
+      const selected = assets.slice(0, count);
+      const manifest = { modules: [], categories: [], questions: [], assets: selected.map(({ hash, contentType, byteSize }) => ({ hash, contentType, byteSize })) };
+      const begun = await publish({ action: "begin", manifest });
+      assert.equal(begun.response.status, 200, JSON.stringify(begun.payload));
+      const publicationId = begun.payload.publicationId;
+      const rejected = await jsonRequest(base, "/api/publications", { method: "POST", body: { action: "fail", publicationId }, headers: { Authorization: "Bearer wrong-synthetic-token" } });
+      assert.equal(rejected.response.status, 403);
+      for (const hash of begun.payload.missingAssetHashes) {
+        const uploaded = await publish({ action: "asset", publicationId, ...selected.find(asset => asset.hash === hash) });
+        assert.equal(uploaded.response.status, 200, "a rejected request must leave the legitimate staging publication usable");
+      }
+      const committed = await publish({ action: "commit", publicationId, manifest, changes: { modules: [], categories: [], questions: [] } });
+      assert.equal(committed.response.status, 200, JSON.stringify(committed.payload));
+      assert.ok(committed.payload.publishedAt);
+    }
+    const failed = await publish({ action: "begin", manifest: { modules: [], categories: [], questions: [], assets: [] } });
+    assert.equal((await publish({ action: "fail", publicationId: failed.payload.publicationId })).response.status, 200, "authorized failure cleanup is retained");
   } catch (error) {
     console.error(worker.output());
     throw error;

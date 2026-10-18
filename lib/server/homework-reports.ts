@@ -1,15 +1,13 @@
-import { env } from "cloudflare:workers";
+import { homeworkDb } from "./homework";
 import { buildInternationalReportPrompt, buildSubmissionReportPrompt, internationalReportSchema, normalizeHomeworkReport, submissionReportSchema } from "../homework-grading-contract";
 import { buildFallbackInternationalReport, buildFallbackSubmissionReport, completeInternationalReport, normalizeInternationalReport, normalizeSubmissionReport } from "../homework-report.mjs";
 import type { AuthUser, HomeworkSubmission, SubmissionReport } from "../types";
 import { callHomeworkModel, parseHomeworkModelText } from "./homework-model";
 
-type AppEnv = { DB: D1Database };
-function appEnv(): AppEnv { return env as unknown as AppEnv; }
 function parseJson<T>(value: unknown, fallback: T): T { try { return value == null ? fallback : JSON.parse(String(value)) as T; } catch { return fallback; } }
 
 export async function readSubmissionReport(submissionId: string): Promise<SubmissionReport | null> {
-  const row = await appEnv().DB.prepare("SELECT * FROM submission_reports WHERE submission_id = ?").bind(submissionId).first<Record<string, unknown>>();
+  const row = await homeworkDb().prepare("SELECT * FROM submission_reports WHERE submission_id = ?").bind(submissionId).first<Record<string, unknown>>();
   if (!row) return null;
   return normalizeSubmissionReport({ overallSummary: row.overall_summary, studentMessage: row.student_message,
     strengths: parseJson(row.strengths_json, []), gaps: parseJson(row.gaps_json, []), actions: parseJson(row.actions_json, []),
@@ -18,7 +16,7 @@ export async function readSubmissionReport(submissionId: string): Promise<Submis
 
 export async function saveSubmissionReport(submissionId: string, ownerUserId: string, report: SubmissionReport, frameworkVersion: string) {
   const normalized = normalizeSubmissionReport(report); const now = Date.now();
-  await appEnv().DB.prepare(`INSERT INTO submission_reports
+  await homeworkDb().prepare(`INSERT INTO submission_reports
     (submission_id, owner_user_id, framework_version, overall_summary, student_message, strengths_json, gaps_json, actions_json, warnings_json, details_json, generated_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(submission_id) DO UPDATE SET framework_version = excluded.framework_version, overall_summary = excluded.overall_summary,
