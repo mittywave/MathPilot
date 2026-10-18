@@ -226,7 +226,7 @@ function startMockModel(port) {
     // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
       state.assignedPrompts.push(prompt);
-      const questions=state.assignedPage.map(q=>({page_numbers:[1],type:"填空题",stem:"",options:[],student_answer:"",answer_state:"readable",question_complete:true,max_score:null,bbox:{x:90,y:120,width:700,height:90},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none",...q}));
+      const questions=state.assignedPage.map(q=>({printed_id:"",page_numbers:[1],type:"填空题",stem:"",options:[],student_answer:"",answer_state:"readable",question_complete:true,max_score:null,bbox:{x:90,y:120,width:700,height:90},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none",...q}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("IGCSE / A Level 英文试卷")) {
@@ -234,7 +234,7 @@ function startMockModel(port) {
         {question_number:"1(a)",page_numbers:[1],type:"解答题",stem:"Solve $x+1=3$.",options:[],student_answer:"x=2",answer_state:"readable",question_complete:true,max_score:2},
         {question_number:"1(b)",page_numbers:[1],type:"解答题",stem:"Hence find $x^2$.",options:[],student_answer:"x^2=2",answer_state:"readable",question_complete:true,max_score:3},
         {question_number:"2",page_numbers:[1],type:"解答题",stem:"Sketch $y=x^2$.",options:[],student_answer:"",answer_state:"unreadable",question_complete:true,max_score:4},
-      ].map(q=>({...q,bbox:{x:90,y:100,width:700,height:100},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none"}));
+      ].map(q=>({...q,bbox:{x:90,y:100,width:700,height:100},knowledge_tags:[],capability_keys:[],figures:[],figure_notes:"",teacher_mark:"none",printed_id:""}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if (prompt.includes("当前任务只补全已独立识别") && prompt.includes("学校作业原件")) {
@@ -242,7 +242,7 @@ function startMockModel(port) {
       assert.equal(payload.input[0].content.filter(item=>item.type==='input_image').length,3,"the student's page and two originals remain distinct");
       assert.match(prompt,/不能把原件中的空白当作学生漏答[\s\S]*不能加入只在原件出现的题/);
       const targets=JSON.parse(prompt.split('page.question_numbers只列下列题号：\n')[1].split('\n')[0]);
-      const questions=targets.map(q=>({...q,stem:q.question_number==='D5'?'计算 5+5':q.stem,question_complete:true,student_answer:'原件的空白不得覆盖学生答案',answer_state:'blank',teacher_mark:'correct',bbox:{x:10,y:10,width:100,height:100},figures:[]}));
+      const questions=targets.map(q=>({printed_id:"",...q,stem:q.question_number==='D5'?'计算 5+5':q.stem,question_complete:true,student_answer:'原件的空白不得覆盖学生答案',answer_state:'blank',teacher_mark:'correct',bbox:{x:10,y:10,width:100,height:100},figures:[]}));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({questions,page:{page_number:1,kind:"questions",question_numbers:questions.map(q=>q.question_number),reason:""}})}));return;
     }
     if (prompt.includes("只识别学生已完成的数学作业")) {
@@ -265,7 +265,7 @@ function startMockModel(port) {
         {question_number:"D3",page_numbers:[1],type:"填空题",stem:"计算 3+3",options:[],student_answer:"",answer_state:"blank",question_complete:true},
         {question_number:"D4",page_numbers:[1],type:"填空题",stem:"计算 4+4",options:[],student_answer:state.supplementalReadable?"8":"",answer_state:state.supplementalReadable?"readable":"unreadable",question_complete:true},
         {question_number:"D5",page_numbers:[1],type:"解答题",stem:"条件不完整",options:[],student_answer:"10",answer_state:"readable",question_complete:false},
-      ]).map(q=>({teacher_mark:"none",...q,max_score:({D1:2,D2:4,D3:1,D4:1,D5:3}[q.question_number]??null),bbox:{x:90,y:100,width:700,height:100},knowledge_tags:["有理数运算"],capability_keys:["skill:calculation"],
+      ]).map(q=>({teacher_mark:"none",printed_id:"",...q,max_score:({D1:2,D2:4,D3:1,D4:1,D5:3}[q.question_number]??null),bbox:{x:90,y:100,width:700,height:100},knowledge_tags:["有理数运算"],capability_keys:["skill:calculation"],
         figures:q.question_number==="D1"?[{kind:"stem",bbox:{x:660,y:240,width:180,height:50},hasHandwriting:false}]:[],figure_notes:q.question_number==="D1"?"坐标轴":""}));
       if(state.contextProbe && primary===3){
         if(context){questions[0].bbox={x:700,y:800,width:100,height:100};questions[0].teacher_mark='correct';questions[0].student_answer='邻页答案';}

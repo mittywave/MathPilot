@@ -75,7 +75,7 @@ export const batchRecognitionSchema: Record<string, unknown> = {
 };
 
 export const commonRecognitionRequirements = [
-  "stem 去掉题号，但必须保留全部条件、结论、分问和设问，不得概括或改写。",
+  "stem 去掉题号和题号旁印的题目编号（MathPilot 印的“ID 1322”小框），但必须保留全部条件、结论、分问和设问，不得概括或改写。",
   ...mathOutputRequirements,
   "不得用图片代替公式；只转录原件，不因格式校验而改写数学内容。",
   "Keep each complete equality/inequality together in a math delimiter; prose explanations and their parentheses belong outside the formula, e.g. $y=ax^{2}+bx+c$ followed by the explanation of $a$, $b$ and $c$.",

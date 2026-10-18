@@ -210,12 +210,14 @@ function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
 async function assignedHomework(row: Record<string, unknown>, bodies = true): Promise<AssignedHomework | null> {
   if (!row.sheet_json) return null;
   const [questions, uploads] = await Promise.all([
-    appEnv().DB.prepare(`SELECT id, question_number${bodies ? ", source_json" : ""} FROM assignment_questions WHERE assignment_id = ? AND source_json <> '' ORDER BY sort_order`)
-      .bind(row.assignment_id).all<{ id: string; question_number: string; source_json?: string }>(),
+    // A question's ID now (it may have got one after it was handed out) goes with it, so a printed export shows it.
+    appEnv().DB.prepare(`SELECT id, question_number${bodies ? ", source_json, (SELECT printf('%04d', number) FROM question_codes WHERE question_id = NULLIF(question_key, '')) AS code" : ""}
+      FROM assignment_questions WHERE assignment_id = ? AND source_json <> '' ORDER BY sort_order`)
+      .bind(row.assignment_id).all<{ id: string; question_number: string; source_json?: string; code?: string | null }>(),
     appEnv().DB.prepare(`SELECT id, version, status, created_at, submitted_at, (SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id = s.id) AS page_count
       FROM homework_submissions s WHERE assignment_id = ? AND student_id = ? ORDER BY version`).bind(row.assignment_id, row.student_id).all<UploadRow>(),
   ]);
-  const sheet = questions.results as Array<{ id: string; question_number: string; source_json?: string }>, handedIn = uploads.results as UploadRow[];
+  const sheet = questions.results as Array<{ id: string; question_number: string; source_json?: string; code?: string | null }>, handedIn = uploads.results as UploadRow[];
   const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
   const firstHandedIn = new Map<string, { at: number; result: NonNullable<AssignedHomework["questions"][number]["result"]> }>();
   for (const upload of handedIn.filter((item) => item.status === "published")) {
@@ -228,7 +230,7 @@ async function assignedHomework(row: Record<string, unknown>, bodies = true): Pr
       if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, { at: Number(upload.submitted_at ?? upload.created_at), result: graded });
     }
   }
-  const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: parseJson<Question>(question.source_json, {} as Question), result: results.get(question.id) ?? null }));
+  const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: { ...parseJson<Question>(question.source_json, {} as Question), ...(question.code ? { code: question.code } : {}) }, result: results.get(question.id) ?? null }));
   const { groups } = parseJson<HomeworkSheet>(row.sheet_json, {});
   let from = 0;
   const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map((group) => {

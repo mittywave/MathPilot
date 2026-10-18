@@ -53,6 +53,19 @@ const COMPACT_LINE = { lineRule: LineRuleType.AT_LEAST, line: 390 } as const;
 
 type RunStyle = { bold?: boolean; color?: string; italicMath?: boolean; size?: number };
 
+// A question's ID, printed after its number in a small grey box as the PDF does, so a photographed paper names its
+// questions. The XML form goes into stems kept as the original Word paragraphs.
+const ID_FONT = { ascii: "Arial", hAnsi: "Arial", eastAsia: "PingFang SC", cs: "Arial" } as const;
+const ID_COLOR = "7A8580", ID_BORDER = "BFC7C3", ID_SIZE = 16;
+function questionIdRuns(code: string) {
+  return [new TextRun({ text: `ID ${code}`, size: ID_SIZE, color: ID_COLOR, font: ID_FONT, border: { style: BorderStyle.SINGLE, size: 4, color: ID_BORDER, space: 0 } }),
+    new TextRun({ text: " ", size: BODY_SIZE, font: BODY_FONT })];
+}
+function questionIdXml(code: string) {
+  return `<w:r><w:rPr><w:rFonts w:ascii="${ID_FONT.ascii}" w:hAnsi="${ID_FONT.hAnsi}" w:eastAsia="${ID_FONT.eastAsia}" w:cs="${ID_FONT.cs}"/><w:color w:val="${ID_COLOR}"/><w:sz w:val="${ID_SIZE}"/><w:szCs w:val="${ID_SIZE}"/><w:bdr w:val="single" w:sz="4" w:space="0" w:color="${ID_BORDER}"/></w:rPr><w:t xml:space="preserve">ID ${code}</w:t></w:r>`
+    + `<w:r><w:rPr><w:sz w:val="${BODY_SIZE}"/><w:szCs w:val="${BODY_SIZE}"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>`;
+}
+
 function textRuns(text: string, size = BODY_SIZE, style: RunStyle = {}) {
   const pieces = style.italicMath ? text.split(/([A-Za-z]+)/g).filter(Boolean) : [text];
   return pieces.map((piece) => new TextRun({
@@ -411,7 +424,7 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
   };
   const imageParagraph = (source: string, maxWidth = 300, maxHeight = 210, after = 140, alignment: (typeof AlignmentType)[keyof typeof AlignmentType] = AlignmentType.CENTER, before = 80) =>
     imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment, before);
-  const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: string }> = [];
+  const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: string; questionCode?: string }> = [];
   // A row of figures side by side, captions under each and the row's note beside them, as a borderless table.
   const figureRow = async (line: Extract<NoteLine, { kind: "figures" }>): Promise<Array<Paragraph | Table>> => {
     const spansRuns = (spans: NoteSpan[], size = BODY_SIZE) => spans.flatMap((span) => richText(span.text, { bold: span.bold, size }));
@@ -487,6 +500,8 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       let label = String(number);
       if (part) { const count = (partCounters.get(part.key) ?? 0) + 1; partCounters.set(part.key, count); label = `${part.prefix ?? ""}${count}`; }
       rendered.push({ question, label, part, section });
+      // Question lists print each question's ID, as their PDF does; a 讲义's bands do not.
+      const code = !part && question.code?.trim() ? question.code.trim() : "";
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
       const compactConclusion = isCompactConclusionQuestion(question);
@@ -494,13 +509,13 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       if (question.stemDocxXml?.length) {
         question.stemDocxXml.forEach((xml, rawIndex) => {
           const token = `__ZHITI_RAW_STEM_${rawParagraphs.length}__`;
-          rawParagraphs.push({ token, xml, assets: question.stemDocxAssets, questionNumber: rawIndex === 0 ? label : undefined });
+          rawParagraphs.push({ token, xml, assets: question.stemDocxAssets, questionNumber: rawIndex === 0 ? label : undefined, questionCode: rawIndex === 0 && code ? code : undefined });
           children.push(new Paragraph({ children: textRuns(token) }));
         });
       } else {
         // Hanging indent: wrapped lines of the first paragraph line up with the paragraphs after it, as on the web card.
         // Like the page, drop the number a homework stem was printed with; the paper numbers its questions itself.
-        const stem = new Paragraph({ keepNext: images.length > 0, indent: { left: 420, hanging: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100 }, children: [...textRuns(`${label}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText((stemParagraphs[0] ?? question.stem).replace(/^\s*\d{1,3}[.．、]\s*/, ""))] });
+        const stem = new Paragraph({ keepNext: images.length > 0, indent: { left: 420, hanging: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100 }, children: [...textRuns(`${label}．`), ...(code ? questionIdRuns(code) : []), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText((stemParagraphs[0] ?? question.stem).replace(/^\s*\d{1,3}[.．、]\s*/, ""))] });
         children.push(stem);
         for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ keepNext: images.length > 0, indent: { left: 420 }, spacing: { ...(compactConclusion ? COMPACT_LINE : BODY_LINE), after: compactConclusion ? 0 : 40 }, children: richText(continuation) }));
       }
@@ -597,7 +612,19 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
         return body.slice(properties.length).split(/(<m:oMathPara\b[^>]*>[\s\S]*?<\/m:oMathPara>|<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>)/g)
           .map((part) => !part.trim() ? "" : /^<m:oMath(?:Para)?\b/.test(part) ? part : `${open}${properties}${part}</w:r>`).join("");
       });
-      if (replacement.questionNumber != null) {
+      // A paragraph that still shows an ID after its number (from a Word read back without removing it) keeps that one.
+      const shownText = Array.from(safeParagraphXml.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g), (match) => match[1]).join("");
+      const questionCode = replacement.questionCode && !/^\s*(?:\d{1,3}(?:[．、]|\.(?!\d))\s*)?ID\s?\d{4,7}/.test(shownText) ? replacement.questionCode : "";
+      if (replacement.questionNumber != null && questionCode) {
+        // The number and the ID go in front in runs of their own; a number the stem was printed with is dropped, and the
+        // number takes the format of the run that had it (or of the first run).
+        const first = safeParagraphXml.match(/<(w|m):t\b[^>]*>([^<]*)<\/\1:t>/);
+        const numbered = first?.[1] === "w" && /^\s*\d{1,3}(?:[．、]|\.(?!\d))/.test(first[2]);
+        const format = (numbered ? safeParagraphXml.match(/<w:r\b[^>]*>\s*(<w:rPr\b[^>]*(?:\/>|>(?:(?!<\/?w:r\b)[\s\S])*?<\/w:rPr>))?(?:(?!<\/?w:r\b)[\s\S])*?<w:t\b[^>]*>\s*\d{1,3}(?:[．、]|\.(?!\d))/)?.[1]
+          : safeParagraphXml.match(/<w:r\b[^>]*>\s*(<w:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:rPr>))/)?.[1]) ?? "";
+        if (numbered) safeParagraphXml = safeParagraphXml.replace(/(<w:t\b[^>]*>)\s*\d{1,3}(?:[．、]|\.(?!\d))\s*/, "$1");
+        safeParagraphXml = safeParagraphXml.replace(/^(<w:p\b[^>]*>(?:\s*<w:pPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:pPr>))?)/, `$1<w:r>${format}<w:t xml:space="preserve">${replacement.questionNumber}．</w:t></w:r>${questionIdXml(questionCode)}`);
+      } else if (replacement.questionNumber != null) {
         // The paper numbers its questions: a stem printed with a number gets the paper's; one imported from under a
         // 讲义 heading (“例题精练 1”) starts without a number and gets it put in front, in its first run's format.
         const first = safeParagraphXml.match(/<(w|m):t\b[^>]*>([^<]*)<\/\1:t>/);
