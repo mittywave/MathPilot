@@ -631,7 +631,6 @@ export type HomeworkSubmission = {
   figuresPending?: number;
   outputs: HomeworkOutputs;
   curriculum: HomeworkCurriculum;
-  originalDocuments?: Array<{name:string;url:string}>;
   questionOriginals?: Array<{name:string;url:string}>;
   pageRevisions?: Array<{ pageId:string; originalUrl:string; processedUrl:string; createdAt:number }>;
   gradingSummary?: { correct: number; partial: number; incorrect: number; unresolved: number; archived: number; marks: HomeworkScoreSummary | null };

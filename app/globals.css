@@ -1076,13 +1076,6 @@ button.drop-entry.compact b { font-size:14px; }
 .original-file>img { width:48px; height:64px; object-fit:contain; flex-shrink:0; }
 .original-file b { overflow:hidden; font-size:14px; font-weight:600; white-space:nowrap; text-overflow:ellipsis; }
 .original-file small { color:var(--muted); font-size:12px; }
-.pdf-icon { width:32px; height:40px; flex:none; }
-.pdf-icon path { fill:var(--surface); stroke:color-mix(in srgb,var(--muted) 60%,var(--line)); stroke-width:1.5; stroke-linejoin:round; }
-.pdf-icon path+path { fill:none; }
-.pdf-icon rect { fill:var(--danger-fill); }
-.pdf-icon text { fill:var(--on-fill); font:700 7.5px system-ui,sans-serif; letter-spacing:.02em; text-anchor:middle; }
-.open-icon { width:18px; height:18px; flex:none; fill:none; stroke:var(--muted); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; transition:stroke .2s, transform .2s; }
-.original-file:hover .open-icon { stroke:var(--green); transform:translate(2px,-2px); }
 @media(max-width:650px){.review-archive-panel { margin:16px 12px; }}
 
 .grading-figures { display:flex; flex-wrap:wrap; gap:10px; }.grading-figures img { display:block; max-width:min(100%,340px); max-height:230px; object-fit:contain; padding:6px; border-radius:calc(8px*var(--radius-scale)); background:white; }.grading-figures img.options { max-width:100%; }
