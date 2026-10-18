@@ -4,9 +4,9 @@ import type {
   AssignedHomework, AssignmentQuestion, AuthUser, GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkDay, HomeworkSheetGroup, HomeworkSubmission, HomeworkSubmissionListItem, Question, QuestionType,
   StudentHomework, SubmissionPage, SubmissionStatus,
 } from "../types";
-import { homeworkAssetsBucket, requireHomeworkEnabled, scheduleHomeworkAssetCleanup } from "./homework-assets";
+import { requireHomeworkEnabled, scheduleHomeworkAssetCleanup } from "./homework-assets";
 import { normalizeHomeworkOutputs } from "./homework-outputs";
-import { homeworkProgress, isPendingGradingItem, normalizeMaxScore, reconcileHomeworkScore, summarizeHomeworkScore } from "../homework-grading-rules.mjs";
+import { isPendingGradingItem, normalizeMaxScore, reconcileHomeworkScore, summarizeHomeworkScore } from "../homework-grading-rules.mjs";
 import { resolveKnowledgeTaxonomyKeys } from "../homework-capability-framework.mjs";
 
 type HomeworkQueueMessage =
@@ -22,7 +22,7 @@ export function homeworkGradingSignal() { return gradingRun.getStore()?.signal; 
 
 /** Fence the existing grading writes in the same D1 transaction as the ownership check.
  * Request handlers outside this run continue using the original binding unchanged. */
-export function withHomeworkGradingRun<T>(id: string, token: string, signal: AbortSignal, work: () => Promise<T>) {
+export function withHomeworkGradingRun<T>(id: string, token: string, signal: AbortSignal, work: () => Promise<T>, updatedAt?: number) {
   const database = (env as unknown as AppEnv).DB;
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
   const batch = async (statements: D1PreparedStatement[]) => {
@@ -31,7 +31,8 @@ export function withHomeworkGradingRun<T>(id: string, token: string, signal: Abo
     const guard = database.prepare(`SELECT CASE WHEN EXISTS (
       SELECT 1 FROM homework_submissions s JOIN homework_assignments a ON a.id = s.assignment_id
       WHERE s.id = ? AND s.grading_run_id = ? AND s.status IN ('processing','ready','published') AND a.status <> 'archived'
-    ) THEN 1 ELSE json_extract('grading run no longer owns submission', '$') END AS valid`).bind(id, token);
+        AND (? IS NULL OR s.updated_at = ?)
+    ) THEN 1 ELSE json_extract('grading run no longer owns submission', '$') END AS valid`).bind(id, token, updatedAt ?? null, updatedAt ?? null);
     return (await database.batch([guard, ...statements.map(statement => originals.get(statement) ?? statement)])).slice(1);
   };
   const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
@@ -155,11 +156,16 @@ function gradingItem(row: Record<string, unknown>, assigned = false): GradingIte
 }
 
 // One upload's grading results with the question each one grades, in sheet order.
-function gradingRows(submissionId: string) {
-  return appEnv().DB.prepare(`SELECT grading_items.*, assignment_questions.question_number, assignment_questions.type AS question_type,
-      assignment_questions.stem, assignment_questions.input_evidence_json AS question_evidence_json, assignment_questions.answer AS standard_answer, assignment_questions.analysis AS standard_analysis, assignment_questions.reference_source, assignment_questions.reference_verified, assignment_questions.reference_evidence
-    FROM grading_items JOIN assignment_questions ON assignment_questions.id = grading_items.assignment_question_id
-    WHERE grading_items.submission_id = ? ORDER BY assignment_questions.sort_order`).bind(submissionId).all<Record<string, unknown>>();
+function gradingRows(submissionIds: string | string[], summary = false): Promise<{ results: Record<string, unknown>[] }> {
+  return appEnv().DB.prepare(`SELECT ${summary ? `grading_items.id,grading_items.submission_id,grading_items.assignment_question_id,grading_items.verdict,
+      grading_items.requires_review,grading_items.score,grading_items.wrong_book_applied_at,
+      json_object('teacher_mark',json_extract(assignment_questions.input_evidence_json,'$.teacher_mark'),'max_score',json_extract(assignment_questions.input_evidence_json,'$.max_score')) AS question_evidence_json,
+      CASE WHEN assignment_questions.answer<>'' THEN 'present' ELSE '' END AS standard_answer` : `grading_items.*,assignment_questions.stem,
+      assignment_questions.input_evidence_json AS question_evidence_json,assignment_questions.answer AS standard_answer,assignment_questions.analysis AS standard_analysis`},
+      assignment_questions.question_number,assignment_questions.type AS question_type,assignment_questions.reference_source,assignment_questions.reference_verified,assignment_questions.reference_evidence
+    FROM grading_items JOIN assignment_questions ON assignment_questions.id=grading_items.assignment_question_id
+    WHERE grading_items.submission_id IN (SELECT value FROM json_each(?)) ORDER BY assignment_questions.sort_order`)
+    .bind(JSON.stringify(typeof submissionIds === "string" ? [submissionIds] : submissionIds)).all<Record<string, unknown>>();
 }
 
 // The results an upload's page and 作业批改's list count: questions a later reading of its pages no longer finds drop
@@ -217,28 +223,35 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   };
 }
 
-type UploadRow = { id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
-type ResultRow = { assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; reference_verified: number; question_evidence_json: string };
+type UploadRow = { id: string; assignment_id: string; student_id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
+type ResultRow = { submission_id: string; assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; reference_verified: number; question_evidence_json: string };
 
 // The published results of one upload, without questions a later reading of its pages no longer finds.
-async function uploadResults(submissionId: string, assigned = false) {
+async function uploadResults(submissionIds: string[], bodies = false) {
   const [rows, recognized] = await Promise.all([
-    appEnv().DB.prepare(`SELECT g.assignment_question_id, q.question_number, g.verdict, g.requires_review,
-        q.answer AS standard_answer, q.reference_verified, q.input_evidence_json AS question_evidence_json FROM grading_items g
-      JOIN assignment_questions q ON q.id = g.assignment_question_id WHERE g.submission_id = ?`).bind(submissionId).all<ResultRow>(),
-    import("./homework-page-coverage").then(({ readRecognizedQuestionNumbers }) => readRecognizedQuestionNumbers(submissionId)),
+    appEnv().DB.prepare(`SELECT g.submission_id,g.assignment_question_id,q.question_number,g.verdict,g.requires_review,
+        ${bodies ? "q.answer" : "CASE WHEN q.answer<>'' THEN 'present' ELSE '' END"} AS standard_answer,q.reference_verified,
+        json_object('teacher_mark',json_extract(q.input_evidence_json,'$.teacher_mark')) AS question_evidence_json FROM grading_items g
+      JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id IN (SELECT value FROM json_each(?))`)
+      .bind(JSON.stringify(submissionIds)).all<ResultRow>(),
+    import("./homework-page-coverage").then(({ readRecognizedQuestionNumbers }) => readRecognizedQuestionNumbers(submissionIds)),
   ]);
-  return (rows.results as ResultRow[])
-    .filter((row) => !recognized || recognized.has(row.question_number) || [...recognized].some((number) => row.question_number.startsWith(`${number}(`)))
-    .map((row) => assigned && ["partial", "unreadable", "review_required"].includes(row.verdict) ? { ...row, verdict: "incorrect" as const, requires_review: 0 } : row)
-    .map((row) => ({ assignmentQuestionId: row.assignment_question_id,
-      verdict: VERDICTS.includes(row.verdict) ? row.verdict : "review_required" as GradingVerdict,
-      requiresReview: Number(row.requires_review) === 1, teacherMark: teacherMark(row.question_evidence_json),
-      standardAnswer: String(row.standard_answer ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
+  const grouped = new Map<string, ResultRow[]>();
+  for (const row of rows.results) { const group = grouped.get(row.submission_id) ?? []; group.push(row); grouped.set(row.submission_id, group); }
+  return new Map(submissionIds.map(id => {
+    const numbers = recognized.get(id);
+    const results = (grouped.get(id) ?? [])
+      .filter(row => !numbers || numbers.has(row.question_number) || [...numbers].some(number => row.question_number.startsWith(`${number}(`)))
+      .map(row => ({ assignmentQuestionId: row.assignment_question_id,
+        verdict: VERDICTS.includes(row.verdict) ? row.verdict : "review_required" as GradingVerdict,
+        requiresReview: Number(row.requires_review) === 1, teacherMark: teacherMark(row.question_evidence_json),
+        standardAnswer: String(row.standard_answer ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
+    return [id, results] as const;
+  }));
 }
 
 // Task groups and the 快速排版 record they were assigned from. Legacy start dates are ignored.
-type HomeworkSheet = { groups?: HomeworkSheetGroup[]; recordId?: string };
+type HomeworkSheet = { groups?: HomeworkSheetGroup[]; recordId?: string; requestHash?: string };
 
 // How the results so far add up: graded ones as right or wrong, and those a teacher still has to look at.
 function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
@@ -257,42 +270,53 @@ function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
  * Each day is a task group, handed in when the first upload that found any of its questions was.
  * Lists that only count results pass bodies = false: they skip each question's stored copy, by far the largest column.
  */
-async function assignedHomework(row: Record<string, unknown>, bodies = true): Promise<AssignedHomework | null> {
-  if (!row.sheet_json) return null;
+function assignedHomework(row: Record<string, unknown>, bodies?: boolean): Promise<AssignedHomework | null>;
+function assignedHomework(rows: Record<string, unknown>[], bodies?: boolean): Promise<Map<string, AssignedHomework>>;
+async function assignedHomework(input: Record<string, unknown> | Record<string, unknown>[], bodies = true) {
+  const rows = (Array.isArray(input) ? input : [input]).filter(row => row.sheet_json);
+  const result = new Map<string, AssignedHomework>();
+  if (!rows.length) return Array.isArray(input) ? result : null;
+  const ids = JSON.stringify([...new Set(rows.map(row => String(row.assignment_id)))]);
   const [questions, uploads] = await Promise.all([
-    // A question's ID now (it may have got one after it was handed out) goes with it, so a printed export shows it.
-    appEnv().DB.prepare(`SELECT id, question_number${bodies ? ", source_json, (SELECT printf('%04d', number) FROM question_codes WHERE question_id = NULLIF(question_key, '')) AS code" : ""}
-      FROM assignment_questions WHERE assignment_id = ? AND source_json <> '' ORDER BY sort_order`)
-      .bind(row.assignment_id).all<{ id: string; question_number: string; source_json?: string; code?: string | null }>(),
-    appEnv().DB.prepare(`SELECT id, version, status, created_at, submitted_at, (SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id = s.id) AS page_count
-      FROM homework_submissions s WHERE assignment_id = ? AND student_id = ? ORDER BY version`).bind(row.assignment_id, row.student_id).all<UploadRow>(),
+    appEnv().DB.prepare(`SELECT assignment_id,id,question_number${bodies ? ",source_json,(SELECT printf('%04d',number) FROM question_codes WHERE question_id=NULLIF(question_key,'')) AS code" : ""}
+      FROM assignment_questions WHERE assignment_id IN (SELECT value FROM json_each(?)) AND source_json<>'' ORDER BY sort_order`)
+      .bind(ids).all<{ assignment_id: string; id: string; question_number: string; source_json?: string; code?: string | null }>(),
+    appEnv().DB.prepare(`SELECT assignment_id,student_id,id,version,status,created_at,submitted_at${bodies ? ",(SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id=s.id) AS page_count" : ""}
+      FROM homework_submissions s WHERE assignment_id IN (SELECT value FROM json_each(?)) ORDER BY version`).bind(ids).all<UploadRow>(),
   ]);
-  const sheet = questions.results as Array<{ id: string; question_number: string; source_json?: string; code?: string | null }>, handedIn = uploads.results as UploadRow[];
-  const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
-  const firstHandedIn = new Map<string, { at: number; result: NonNullable<AssignedHomework["questions"][number]["result"]> }>();
-  for (const upload of handedIn.filter((item) => item.status === "published")) {
-    for (const result of await uploadResults(upload.id, homeworkCurriculum(row.curriculum) === "school")) {
-      const { assignmentQuestionId, ...grading } = result;
+  const questionRows = questions.results as Array<{ assignment_id: string; id: string; question_number: string; source_json?: string; code?: string | null }>;
+  const uploadRows = uploads.results as UploadRow[];
+  const grades = await uploadResults(uploadRows.filter(upload => upload.status === "published").map(upload => upload.id), bodies);
+  const byAssignment = new Map<string, typeof questionRows>(), byStudent = new Map<string, UploadRow[]>();
+  for (const question of questionRows) { const group = byAssignment.get(question.assignment_id) ?? []; group.push(question); byAssignment.set(question.assignment_id, group); }
+  for (const upload of uploadRows) { const key = `${upload.assignment_id}:${upload.student_id}`, group = byStudent.get(key) ?? []; group.push(upload); byStudent.set(key, group); }
+  for (const row of rows) {
+    const sheet = byAssignment.get(String(row.assignment_id)) ?? [], handedIn = byStudent.get(`${row.assignment_id}:${row.student_id}`) ?? [];
+    const results = new Map<string, NonNullable<AssignedHomework["questions"][number]["result"]>>();
+    const firstHandedIn = new Map<string, { at: number; result: NonNullable<AssignedHomework["questions"][number]["result"]> }>();
+    for (const upload of handedIn.filter(item => item.status === "published")) for (const result of grades.get(upload.id) ?? []) {
+      const { assignmentQuestionId, ...original } = result;
+      const grading = homeworkCurriculum(row.curriculum) === "school" && ["partial", "unreadable", "review_required"].includes(original.verdict)
+        ? { ...original, verdict: "incorrect" as const, requiresReview: false } : original;
       const previous = results.get(assignmentQuestionId);
       const wasIncorrect = previous?.wasIncorrect || Boolean(previous && !isPendingGradingItem(previous) && ["incorrect", "partial"].includes(previous.verdict));
       const graded = { ...grading, submissionId: upload.id, wasIncorrect };
       results.set(assignmentQuestionId, graded);
       if (!firstHandedIn.has(assignmentQuestionId)) firstHandedIn.set(assignmentQuestionId, { at: Number(upload.submitted_at ?? upload.created_at), result: graded });
     }
+    const items = sheet.map(question => ({ id: question.id, number: question.question_number, question: { ...parseJson<Question>(question.source_json, {} as Question), ...(question.code ? { code: question.code } : {}) }, result: results.get(question.id) ?? null }));
+    const { groups } = parseJson<HomeworkSheet>(row.sheet_json, {});
+    let from = 0;
+    const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map(group => {
+      const day = items.slice(from, from += group.size), first = day.flatMap(item => firstHandedIn.get(item.id) ?? []);
+      const { correct, incorrect, pending } = tally(first.map(item => item.result));
+      return { title: group.title, size: group.size, ...tally(day.flatMap(item => item.result ?? [])), firstAttempt: { correct, incorrect, pending }, handedInAt: first.length ? Math.min(...first.map(item => item.at)) : null };
+    });
+    result.set(String(row.id), { days, questions: items,
+      uploads: handedIn.map(upload => ({ id: upload.id, version: Number(upload.version), status: upload.status, pageCount: Number(upload.page_count ?? 0), createdAt: Number(upload.created_at), submittedAt: upload.submitted_at == null ? null : Number(upload.submitted_at) })),
+    });
   }
-  const items = sheet.map((question) => ({ id: question.id, number: question.question_number, question: { ...parseJson<Question>(question.source_json, {} as Question), ...(question.code ? { code: question.code } : {}) }, result: results.get(question.id) ?? null }));
-  const { groups } = parseJson<HomeworkSheet>(row.sheet_json, {});
-  let from = 0;
-  const days: HomeworkDay[] = (groups?.length ? groups : [{ title: "", size: items.length }]).map((group) => {
-    const day = items.slice(from, from += group.size);
-    const first = day.flatMap((item) => firstHandedIn.get(item.id) ?? []);
-    const { correct, incorrect, pending } = tally(first.map((item) => item.result));
-    return { title: group.title, size: group.size, ...tally(day.flatMap((item) => item.result ?? [])), firstAttempt: { correct, incorrect, pending }, handedInAt: first.length ? Math.min(...first.map((item) => item.at)) : null };
-  });
-  return {
-    days, questions: items,
-    uploads: handedIn.map((upload) => ({ id: upload.id, version: Number(upload.version), status: upload.status, pageCount: Number(upload.page_count), createdAt: Number(upload.created_at), submittedAt: upload.submitted_at == null ? null : Number(upload.submitted_at) })),
-  };
+  return Array.isArray(input) ? result : result.get(String(input.id)) ?? null;
 }
 
 // Only homework uploaded after it was completed is graded; legacy assignment templates stay out of every list and action.
@@ -309,15 +333,21 @@ async function teacherSubmissionRow(id: string, user: AuthUser) {
 }
 
 // 作业批改's list: each upload's status and the same result counts its page shows.
-export async function readTeacherSubmissions(user: AuthUser): Promise<HomeworkSubmissionListItem[]> {
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status <> 'archived' AND homework_assignments.owner_user_id = ? ORDER BY homework_submissions.updated_at DESC`)
-    .bind(user.id).all<Record<string, unknown>>();
-  const { readRecognizedQuestionNumbers } = await import("./homework-page-coverage");
-  return Promise.all((rows.results as Array<Record<string, unknown>>).map(async (row) => {
-    const [grading, recognized] = await Promise.all([gradingRows(String(row.id)), readRecognizedQuestionNumbers(String(row.id))]);
-    return { id: String(row.id), assignmentId: String(row.assignment_id), assignmentTitle: String(row.assignment_title), studentName: String(row.student_name),
-      status: row.status as SubmissionStatus, createdAt: Number(row.created_at), gradingSummary: gradingSummary(uploadGradingItems(grading.results, recognized, row)) };
-  }));
+export async function readTeacherSubmissions(user: AuthUser, cursor: string | null = null): Promise<{ submissions: HomeworkSubmissionListItem[]; nextCursor: string | null }> {
+  const split = cursor?.indexOf(":") ?? -1, time = cursor ? Number(cursor.slice(0, split)) : 0, lastId = cursor?.slice(split + 1) ?? "";
+  if (cursor && (split < 1 || !Number.isSafeInteger(time) || time < 0 || !lastId || lastId.length > 200)) throw responseError("分页位置无效", 400);
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status<>'archived' AND homework_assignments.owner_user_id=?
+    ${cursor ? "AND (homework_submissions.updated_at<? OR (homework_submissions.updated_at=? AND homework_submissions.id<?))" : ""}
+    ORDER BY homework_submissions.updated_at DESC,homework_submissions.id DESC LIMIT 41`)
+    .bind(user.id, ...(cursor ? [time, time, lastId] : [])).all<Record<string, unknown>>();
+  const page = (rows.results as Record<string, unknown>[]).slice(0, 40), ids = page.map(row => String(row.id));
+  const [grading, recognized] = await Promise.all([gradingRows(ids, true), import("./homework-page-coverage").then(({ readRecognizedQuestionNumbers }) => readRecognizedQuestionNumbers(ids))]);
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const item of grading.results) { const key = String(item.submission_id), group = grouped.get(key) ?? []; group.push(item); grouped.set(key, group); }
+  const submissions = page.map(row => ({ id: String(row.id), assignmentId: String(row.assignment_id), assignmentTitle: String(row.assignment_title), studentName: String(row.student_name),
+    status: row.status as SubmissionStatus, createdAt: Number(row.created_at), gradingSummary: gradingSummary(uploadGradingItems(grouped.get(String(row.id)) ?? [], recognized.get(String(row.id)) ?? null, row)) }));
+  const last = page.at(-1);
+  return { submissions, nextCursor: rows.results.length > 40 && last ? `${last.updated_at}:${last.id}` : null };
 }
 
 export async function countGradingHomework(user: AuthUser) {
@@ -385,27 +415,51 @@ export function hasReference(question: Pick<Question, "answer" | "analysis">) {
  * library itself; any new Word or wrong-book question is registered first with its permanent ID and media.
  * Task groups have no preset submission dates.
  */
-export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; recordId?: unknown }, user: AuthUser) {
+export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; recordId?: unknown; operationId?: unknown }, user: AuthUser) {
   requireHomeworkEnabled();
   const studentIds = [...new Set(Array.isArray(input.studentIds) ? input.studentIds.map((id) => String(id)) : [])];
   if (!studentIds.length || studentIds.length > 200) throw responseError("请选择 1–200 位要布置的学生", 400);
-  const students = await Promise.all(studentIds.map((id) => ownedStudent(id, user.id)));
+  const db = appEnv().DB;
+  const owned = await db.prepare("SELECT id,name FROM students WHERE owner_user_id=? AND id IN (SELECT value FROM json_each(?))")
+    .bind(user.id, JSON.stringify(studentIds)).all<{ id: string; name: string }>();
+  if (owned.results.length !== studentIds.length) throw responseError("学生档案不存在", 404);
+  const ownedStudents = owned.results as Array<{ id: string; name: string }>;
+  const students = studentIds.map(id => ownedStudents.find(student => student.id === id)!);
   const title = text(input.title, 120); if (!title) throw responseError("请填写作业名称", 400);
   const raw = Array.isArray(input.questions) ? input.questions.filter((item): item is Question => Boolean(item) && typeof item === "object") : [];
   if (!raw.length) throw responseError("这份资料里没有题目", 400);
   if (raw.length > MAX_ASSIGNED_QUESTIONS) throw responseError(`一份作业最多 ${MAX_ASSIGNED_QUESTIONS} 道题`, 400);
   const groups = assignedGroups(input.groups, raw.length);
   const numbers = assignedNumbers(groups, raw.length);
+  const operationId = input.operationId === undefined ? crypto.randomUUID() : String(input.operationId);
+  if (!/^[a-zA-Z0-9-]{16,80}$/.test(operationId)) throw responseError("布置操作标识无效", 400);
+  const { readLibrary, ensureLibraryQuestions, hashText } = await import("./library");
+  // Existing primary keys identify each operation/student pair; sheet metadata rejects changed-payload replays.
+  const requestHash = await hashText(JSON.stringify({ studentIds: [...studentIds].sort(), title, groups, questions: raw, recordId: input.recordId ?? null }));
+  const identities = new Map(await Promise.all(students.map(async student => [student.id, `assigned-${await hashText(`${user.id}:${operationId}:${student.id}`)}`] as const)));
+  const previous = await db.prepare(`SELECT a.id,a.sheet_json,s.id AS submission_id FROM homework_assignments a
+    LEFT JOIN homework_submissions s ON s.assignment_id=a.id AND s.version=1 WHERE a.owner_user_id=? AND a.id IN (SELECT value FROM json_each(?))`)
+    .bind(user.id, JSON.stringify([...identities.values()])).all<{ id: string; sheet_json: string; submission_id: string | null }>();
+  const previousRows = previous.results as Array<{ id: string; sheet_json: string; submission_id: string | null }>;
+  if (previousRows.some(item => parseJson<HomeworkSheet>(item.sheet_json, {}).requestHash !== requestHash || !item.submission_id)) throw responseError("同一次布置的内容已变化，请完成原操作后重新布置", 409);
+  const completed = new Map(previousRows.map(item => [item.id, item.submission_id!]));
+  if (completed.size === students.length) return students.map(student => ({ id: completed.get(identities.get(student.id)!)!, studentId: student.id, studentName: student.name }));
   // The record is remembered only when it is this teacher's; the archive then knows the plan is handed out.
   const record = typeof input.recordId === "string" && input.recordId ? await appEnv().DB.prepare("SELECT id FROM typeset_records WHERE id = ? AND owner_user_id = ?")
     .bind(input.recordId, user.id).first<{ id: string }>() : null;
-  const sheet: HomeworkSheet = { groups, ...(record ? { recordId: record.id } : {}) };
-  const { readLibrary, ensureLibraryQuestions } = await import("./library");
-  const registered = await ensureLibraryQuestions(raw, user);
-  const library = new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
+  const sheet: HomeworkSheet = { groups, requestHash, ...(record ? { recordId: record.id } : {}) };
+  const registered = completed.size ? [] : await ensureLibraryQuestions(raw, user);
+  const library = completed.size ? new Map<string, Question>() : new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
   const { index: graph } = await (await import("./knowledge-graph")).loadPublishedKnowledgeGraph();
   const questions = [];
-  for (const item of registered) {
+  if (completed.size) {
+    // A partial retry uses the first student's saved snapshot even if someone has since edited the library.
+    const saved = await db.prepare("SELECT * FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order").bind([...completed.keys()][0]).all<Record<string, unknown>>();
+    for (const q of saved.results) questions.push({ source: parseJson<Question>(q.source_json, {} as Question), type: q.type as QuestionType, stem: String(q.stem),
+      answer: String(q.answer), analysis: String(q.analysis), tags: parseJson<string[]>(q.knowledge_tags_json, []), taxonomyKeys: parseJson<string[]>(q.taxonomy_keys_json, []),
+      options: parseJson<string[]>(q.options_json, []), reference: Boolean(q.reference_verified), fromLibrary: q.reference_evidence === "题库原题答案" });
+  } else for (const item of registered) {
+
     const fromLibrary = library.get(String(item.id ?? ""));
     const copy = givenQuestion(fromLibrary ?? item);
     if (new TextEncoder().encode(JSON.stringify(copy)).byteLength > MAX_SOURCE_BYTES) throw responseError("有一道题的内容过大，无法布置", 413);
@@ -418,25 +472,45 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
     questions.push({ source, type, stem, answer, analysis, tags, taxonomyKeys, options: Array.isArray(source.options) ? source.options.map((option) => text(option, 2_000)) : [],
       reference: hasReference({ answer, analysis }), fromLibrary: Boolean(fromLibrary) });
   }
-  const db = appEnv().DB;
+  // Bound each parameter's payload as well as the question count. Each student's complete material is one transaction.
+  const chunks: string[] = []; let chunk: string[] = [], bytes = 2;
+  for (const [index, question] of questions.entries()) {
+    const value = JSON.stringify({ ...question, index, number: numbers[index], reference: question.reference ? 1 : 0 });
+    const size = new TextEncoder().encode(value).byteLength + 1;
+    if (size > 1_500_000) throw responseError("有一道题的内容过大，无法布置", 413);
+    if (chunk.length && (bytes + size > 1_500_000 || chunk.length >= 50)) { chunks.push(`[${chunk.join(",")}]`); chunk = []; bytes = 2; }
+    chunk.push(value); bytes += size;
+  }
+  if (chunk.length) chunks.push(`[${chunk.join(",")}]`);
   const created: Array<{ id: string; studentId: string; studentName: string }> = [];
   for (const student of students) {
-    const assignmentId = crypto.randomUUID(), submissionId = crypto.randomUUID(), now = Date.now();
-    const statements = [
-      db.prepare(`INSERT INTO homework_assignments(id,owner_user_id,title,instructions,status,template_confirmed,created_at,updated_at,input_mode,outputs_json,curriculum,sheet_json)
-        VALUES(?,?,?,'','published',0,?,?,'completed_homework',?,'school',?)`).bind(assignmentId, user.id, title, now, now, JSON.stringify(ASSIGNED_OUTPUTS), JSON.stringify(sheet)),
-      ...questions.map((question, index) => db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,
-          knowledge_tags_json,taxonomy_keys_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,reference_evidence,input_evidence_json,source_json)
-        VALUES(?,?,?,0,?,?,?,?,?,NULL,1,'[]',?,?,'[]',?,?,?,?,?,?,'{}',?)`).bind(crypto.randomUUID(), assignmentId, numbers[index], question.type, question.stem,
-          JSON.stringify(question.options), question.answer, question.analysis, JSON.stringify(question.tags), JSON.stringify(question.taxonomyKeys), index, now, now,
-          question.reference ? "provided" : "unresolved", question.reference ? 1 : 0,
-          question.reference ? question.fromLibrary ? "题库原题答案" : "布置时资料自带的答案" : "布置时没有答案，批改时由 AI 解题并核验", JSON.stringify(question.source))),
-    ];
-    for (let start = 0; start < statements.length; start += 50) await db.batch(statements.slice(start, start + 50));
-    // The waiting upload is written last: until it exists, a half-written homework shows up nowhere.
-    await db.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,?,?,1,'draft','teacher',?,?,?)")
-      .bind(submissionId, assignmentId, student.id, user.id, now, now).run();
-    created.push({ id: submissionId, studentId: student.id, studentName: student.name });
+    const assignmentId = identities.get(student.id)!, submissionId = `${assignmentId}-upload-1`, now = Date.now();
+    if (!completed.has(assignmentId)) try {
+      await db.batch([
+        db.prepare(`INSERT INTO homework_assignments(id,owner_user_id,title,instructions,status,template_confirmed,created_at,updated_at,input_mode,outputs_json,curriculum,sheet_json)
+          VALUES(?,?,?,'','published',0,?,?,'completed_homework',?,'school',?)`).bind(assignmentId, user.id, title, now, now, JSON.stringify(ASSIGNED_OUTPUTS), JSON.stringify(sheet)),
+        ...chunks.map(questionsJson => db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,
+            knowledge_tags_json,taxonomy_keys_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,reference_evidence,input_evidence_json,source_json)
+          SELECT ?||'-q-'||json_extract(value,'$.index'),?,json_extract(value,'$.number'),0,json_extract(value,'$.type'),json_extract(value,'$.stem'),
+            json_extract(value,'$.options'),json_extract(value,'$.answer'),json_extract(value,'$.analysis'),NULL,1,'[]',json_extract(value,'$.tags'),json_extract(value,'$.taxonomyKeys'),'[]',
+            json_extract(value,'$.index'),?,?,CASE WHEN json_extract(value,'$.reference')=1 THEN 'provided' ELSE 'unresolved' END,json_extract(value,'$.reference'),
+            CASE WHEN json_extract(value,'$.reference')=0 THEN '布置时没有答案，批改时由 AI 解题并核验' WHEN json_extract(value,'$.fromLibrary')=1 THEN '题库原题答案' ELSE '布置时资料自带的答案' END,
+            '{}',json_extract(value,'$.source') FROM json_each(?)`).bind(assignmentId, assignmentId, now, now, questionsJson)),
+        db.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,version,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES(?,?,?,1,'draft','teacher',?,?,?)")
+          .bind(submissionId, assignmentId, student.id, user.id, now, now),
+      ]);
+    } catch (error) {
+      // Concurrent retries race on the same primary key. Only a fully committed, matching operation counts as success.
+      const raced = await db.prepare("SELECT a.sheet_json,s.id FROM homework_assignments a JOIN homework_submissions s ON s.assignment_id=a.id AND s.version=1 WHERE a.id=? AND a.owner_user_id=?")
+        .bind(assignmentId, user.id).first<{ sheet_json: string; id: string }>();
+      if (raced && parseJson<HomeworkSheet>(raced.sheet_json, {}).requestHash !== requestHash) throw responseError("同一次布置的内容已变化，请刷新后重试", 409);
+      if (!raced) {
+        console.error("布置未完成", error);
+        throw new Response(JSON.stringify({ error: `已布置 ${created.length}/${students.length} 位学生${created.length ? `（${created.map(item => item.studentName).join("、")}）` : ""}，其余未完成。请点重试继续本次布置，已成功的不会重复。`, assigned: created }),
+          { status: 503, headers: { "Content-Type": "application/json" } });
+      }
+    }
+    created.push({ id: completed.get(assignmentId) ?? submissionId, studentId: student.id, studentName: student.name });
   }
   return created;
 }
@@ -447,21 +521,21 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
  * uploaded one the questions its last upload found.
  */
 async function teacherHomework(user: AuthUser, studentId?: string) {
-  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status <> 'archived' AND homework_assignments.owner_user_id = ?${studentId ? " AND homework_submissions.student_id = ?" : ""}
-    ORDER BY homework_assignments.created_at DESC, homework_submissions.version DESC`).bind(user.id, ...(studentId ? [studentId] : [])).all<Record<string, unknown>>();
-  const latest = new Map<string, Record<string, unknown>>();
-  for (const row of rows.results as Array<Record<string, unknown>>) if (!latest.has(String(row.assignment_id))) latest.set(String(row.assignment_id), row);
-  return Promise.all([...latest.values()].map(async (row): Promise<{ studentId: string; homework: StudentHomework }> => {
-    const assigned = await assignedHomework(row, false);
-    const results = assigned ? assigned.questions.flatMap((question) => question.result ?? [])
-      : row.status === "published" ? await uploadResults(String(row.id)) : [];
+  const rows = await appEnv().DB.prepare(`${SUBMISSION_SELECT} AND homework_assignments.status<>'archived' AND homework_assignments.owner_user_id=?${studentId ? " AND homework_submissions.student_id=?" : ""}
+    AND NOT EXISTS (SELECT 1 FROM homework_submissions newer WHERE newer.assignment_id=homework_submissions.assignment_id AND newer.student_id=homework_submissions.student_id AND newer.version>homework_submissions.version)
+    ORDER BY homework_assignments.created_at DESC,homework_submissions.id DESC`).bind(user.id, ...(studentId ? [studentId] : [])).all<Record<string, unknown>>();
+  const latest = rows.results as Record<string, unknown>[];
+  const [assignedById, uploads] = await Promise.all([assignedHomework(latest, false), uploadResults(latest.filter(row => !row.sheet_json && row.status === "published").map(row => String(row.id)))]);
+  return latest.map((row): { studentId: string; homework: StudentHomework } => {
+    const assigned = assignedById.get(String(row.id));
+    const results = assigned ? assigned.questions.flatMap(question => question.result ?? []) : uploads.get(String(row.id)) ?? [];
     return { studentId: String(row.student_id), homework: {
       assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
       latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
       days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
     } };
-  }));
+  });
 }
 
 export async function readStudentHomework(studentId: string, user: AuthUser): Promise<StudentHomework[]> {
@@ -471,12 +545,48 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
 
 /** The badges beside every student in 学生档案 in one read; students with neither 批改中 nor 作业中 are left out. */
 export async function readHomeworkProgress(user: AuthUser) {
-  const byStudent = new Map<string, StudentHomework[]>();
-  for (const { studentId, homework } of await teacherHomework(user)) byStudent.set(studentId, [...byStudent.get(studentId) ?? [], homework]);
-  return Object.fromEntries([...byStudent].flatMap(([studentId, homework]) => {
-    const progress = homeworkProgress(homework);
-    return progress ? [[studentId, progress]] : [];
-  }));
+  const db = appEnv().DB;
+  const rows = await db.prepare(`SELECT s.id,s.assignment_id,s.student_id,s.status,a.curriculum,a.sheet_json<>'' AS assigned
+    FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
+    WHERE a.owner_user_id=? AND a.input_mode='completed_homework' AND a.status<>'archived'
+      AND NOT EXISTS (SELECT 1 FROM homework_submissions newer WHERE newer.assignment_id=s.assignment_id AND newer.student_id=s.student_id AND newer.version>s.version)`)
+    .bind(user.id).all<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>();
+  const progress: Record<string, "grading" | "assigned"> = {};
+  const latestRows = rows.results as Array<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>;
+  for (const row of latestRows) if (["submitted", "processing"].includes(row.status)) progress[row.student_id] = "grading";
+  const pending = latestRows.filter(row => row.assigned && progress[row.student_id] !== "grading");
+  for (const row of pending) if (row.status !== "published") progress[row.student_id] = "assigned";
+  const candidates = pending.filter(row => row.status === "published" && !progress[row.student_id]);
+  if (!candidates.length) return progress;
+  const ids = JSON.stringify([...new Set(candidates.map(row => row.assignment_id))]);
+  const [questions, uploads] = await Promise.all([
+    db.prepare("SELECT assignment_id,id FROM assignment_questions WHERE assignment_id IN (SELECT value FROM json_each(?)) AND source_json<>''").bind(ids).all<{ assignment_id: string; id: string }>(),
+    db.prepare("SELECT id,assignment_id,student_id FROM homework_submissions WHERE assignment_id IN (SELECT value FROM json_each(?)) AND status='published' ORDER BY version")
+      .bind(ids).all<{ id: string; assignment_id: string; student_id: string }>(),
+  ]);
+  const uploadRows = uploads.results as Array<{ id: string; assignment_id: string; student_id: string }>;
+  const questionRows = questions.results as Array<{ assignment_id: string; id: string }>;
+  const results = await uploadResults(uploadRows.map(upload => upload.id));
+  // Badges need only the latest settled results and question IDs, not sheet bodies, day history or grading evidence.
+  const byAssignment = new Map<string, typeof questionRows>(), latest = new Map<string, Map<string, Awaited<ReturnType<typeof uploadResults>> extends Map<string, (infer T)[]> ? T : never>>();
+  for (const question of questionRows) { const group = byAssignment.get(question.assignment_id) ?? []; group.push(question); byAssignment.set(question.assignment_id, group); }
+  for (const upload of uploadRows) {
+    const key = `${upload.assignment_id}:${upload.student_id}`, values = latest.get(key) ?? new Map();
+    for (const result of results.get(upload.id) ?? []) values.set(result.assignmentQuestionId, result);
+    latest.set(key, values);
+  }
+  for (const row of candidates) {
+    const sheet = byAssignment.get(row.assignment_id) ?? [], values = latest.get(`${row.assignment_id}:${row.student_id}`);
+    const unfinished = sheet.some(question => {
+      const result = values?.get(question.id);
+      if (!result) return true;
+      const marked = homeworkCurriculum(row.curriculum) === "school" && ["partial", "unreadable", "review_required"].includes(result.verdict)
+        ? { ...result, verdict: "incorrect" as const, requiresReview: false } : result;
+      return isPendingGradingItem(marked);
+    });
+    if (unfinished) progress[row.student_id] = "assigned";
+  }
+  return progress;
 }
 
 /**
@@ -556,20 +666,30 @@ export async function replaceSubmissionPages(id: string, pages: Array<{ assetId:
   if (row.status !== "draft") throw responseError("当前提交已经锁定，不能修改页面", 409);
   const assetIds = pages.map((page) => String(page.assetId));
   await ownedPageAssets(id, user, assetIds);
-  const previousAssets = await appEnv().DB.prepare(`SELECT homework_assets.id, homework_assets.r2_key FROM submission_pages
+  const previousAssets = await appEnv().DB.prepare(`SELECT DISTINCT homework_assets.id, homework_assets.r2_key FROM submission_pages
     JOIN homework_assets ON homework_assets.id = submission_pages.original_asset_id OR homework_assets.id = submission_pages.processed_asset_id
     WHERE submission_pages.submission_id = ?`).bind(id).all<{ id: string; r2_key: string }>();
-  await appEnv().DB.prepare("DELETE FROM submission_pages WHERE submission_id = ?").bind(id).run();
-  const now = Date.now();
-  // Pages are graded as uploaded, so the original photo is also the page the model reads.
-  for (const [index, assetId] of assetIds.entries()) await appEnv().DB.prepare(`INSERT INTO submission_pages
-    (id, submission_id, original_asset_id, processed_asset_id, page_order, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(crypto.randomUUID(), id, assetId, assetId, index, now).run();
-  await appEnv().DB.prepare("UPDATE homework_submissions SET updated_at = ? WHERE id = ?").bind(now, id).run();
-  const retained = new Set(assetIds);
-  for (const asset of previousAssets.results) if (!retained.has(asset.id)) {
-    await homeworkAssetsBucket().delete(asset.r2_key);
-    await appEnv().DB.prepare("DELETE FROM homework_assets WHERE id = ?").bind(asset.id).run();
+  const db = appEnv().DB, now = Math.max(Date.now(), Number(row.updated_at) + 1);
+  const removed = (previousAssets.results as Array<{ id: string; r2_key: string }>).filter(asset => !assetIds.includes(asset.id));
+  const changes = [
+    db.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
+      WHERE s.id=? AND s.status='draft' AND s.updated_at=? AND a.owner_user_id=? AND a.status<>'archived')
+      AND (SELECT COUNT(*) FROM homework_assets WHERE owner_user_id=? AND upload_submission_id=? AND role='submission_original'
+        AND content_type<>'application/pdf' AND id IN (SELECT value FROM json_each(?)))=?
+      THEN 1 ELSE json_extract('page save conflict', '$') END AS valid`)
+      .bind(id, row.updated_at, user.id, user.id, id, JSON.stringify(assetIds), new Set(assetIds).size),
+    db.prepare("DELETE FROM submission_pages WHERE submission_id=?").bind(id),
+    // One set-based insert also keeps 30-page saves below D1's per-invocation query budget.
+    db.prepare(`INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at)
+      SELECT json_extract(value,'$.id'),?,json_extract(value,'$.assetId'),json_extract(value,'$.assetId'),CAST(key AS INTEGER),? FROM json_each(?)`)
+      .bind(id, now, JSON.stringify(assetIds.map(assetId => ({ id: crypto.randomUUID(), assetId })))),
+    db.prepare("UPDATE homework_submissions SET updated_at=? WHERE id=?").bind(now, id),
+    db.prepare("DELETE FROM homework_assets WHERE owner_user_id=? AND id IN (SELECT value FROM json_each(?))").bind(user.id, JSON.stringify(removed.map(asset => asset.id))),
+  ];
+  try { await scheduleHomeworkAssetCleanup(user.id, removed.map(asset => asset.r2_key), changes); }
+  catch (error) {
+    if (error instanceof Error && /malformed JSON/.test(error.message)) throw responseError("作业状态或页面已变化，请刷新后重试", 409);
+    throw error;
   }
   return readTeacherSubmission(id, user);
 }
@@ -615,6 +735,7 @@ export async function retryHomeworkSubmission(id: string, user: AuthUser) {
 
 export async function reviewSubmission(id: string, items: Array<Partial<GradingItem> & { id: string }>, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
+  if (row.grading_run_id || String(row.failure_reason).startsWith("修正已保存")) throw responseError("修正结果正在等待同步，请先完成发布", 409);
   if (!["review_required", "ready"].includes(String(row.status))) throw responseError("当前提交不在复核阶段", 409);
   const now = Date.now();
   for (const patch of items) {
@@ -633,50 +754,94 @@ export async function reviewSubmission(id: string, items: Array<Partial<GradingI
 }
 
 export async function correctPublishedSubmission(id: string, items: Array<Partial<GradingItem> & { id: string }>, user: AuthUser) {
-  const row = await teacherSubmissionRow(id, user);
+  const row = await teacherSubmissionRow(id, user), db = appEnv().DB;
   const binary = Boolean(row.sheet_json) && homeworkCurriculum(row.curriculum) === "school";
-  if (row.status !== "published") throw responseError("只有已发布结果可以修正", 409);
-  if (!items.length || items.length > 200) throw responseError("请选择需要修正的题目", 400);
-  const now = Date.now();
+  if (row.status !== "published" || row.grading_run_id) throw responseError("只有已发布且处理完成的结果可以修正", 409);
+  if (!items.length || items.length > 200 || new Set(items.map(item => item.id)).size !== items.length) throw responseError("请选择需要修正的题目，不能重复提交同一题", 400);
+  const existingRows = await db.prepare(`SELECT g.*,q.answer AS standard_answer,q.analysis AS standard_analysis,q.reference_source,q.reference_evidence,
+    q.reference_verified,q.stem,q.input_evidence_json,q.updated_at AS question_updated_at FROM grading_items g
+    JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id=? AND g.id IN (SELECT value FROM json_each(?))`)
+    .bind(id, JSON.stringify(items.map(item => item.id))).all<Record<string, unknown>>();
+  const existingItems = existingRows.results as Record<string, unknown>[];
+  const byId = new Map(existingItems.map(item => [String(item.id), item]));
+  const now = Math.max(Date.now(), Number(row.updated_at) + 1, ...existingItems.map(item => Number(item.question_updated_at) + 1)), questions = [], grades = [], revisions = [];
+  // Validate every patch before constructing the single commit. No question or history is written by a rejected request.
   for (const patch of items) {
-    if (!(["correct", "partial", "incorrect", "unreadable", "review_required"] as GradingVerdict[]).includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
+    if (!VERDICTS.includes(patch.verdict as GradingVerdict)) throw responseError("批改结论无效", 400);
     if (binary && !["correct", "incorrect"].includes(String(patch.verdict))) throw responseError("这份作业只判正确或错误", 400);
-    const existing = await appEnv().DB.prepare(`SELECT g.*,q.answer AS standard_answer,q.analysis AS standard_analysis,q.reference_verified,q.stem,q.input_evidence_json FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.id = ? AND g.submission_id = ?`).bind(patch.id, id).first<Record<string, unknown>>();
+    const existing = byId.get(patch.id);
     if (!existing) throw responseError("批改项不存在", 404);
-    if (patch.standardAnswer?.trim() && (patch.standardAnswer !== existing.standard_answer || patch.standardAnalysis !== existing.standard_analysis || (patch.referenceVerified === true && !Number(existing.reference_verified)))) await appEnv().DB.prepare("UPDATE assignment_questions SET answer=?,analysis=?,reference_source='provided',reference_verified=1,reference_evidence='教师补充并确认参考解答' WHERE id=? AND assignment_id=?")
-      .bind(text(patch.standardAnswer,100_000),text(patch.standardAnalysis,100_000),existing.assignment_question_id,row.assignment_id).run();
-    if(patch.stem?.trim() && patch.stem !== existing.stem) await appEnv().DB.prepare("UPDATE assignment_questions SET stem=? WHERE id=? AND assignment_id=?").bind(text(patch.stem,100_000),existing.assignment_question_id,row.assignment_id).run();
-    // The teacher may supply the marks a paper prints but recognition missed; they belong to the question, not this attempt.
-    const evidenceMax = normalizeMaxScore(parseJson<{ max_score?: unknown }>(existing.input_evidence_json, {}).max_score);
-    const maxScore = binary ? null : patch.maxScore === undefined ? evidenceMax : normalizeMaxScore(patch.maxScore);
-    if (maxScore !== evidenceMax) await appEnv().DB.prepare("UPDATE assignment_questions SET input_evidence_json=json_set(input_evidence_json,'$.max_score',?) WHERE id=? AND assignment_id=?")
-      .bind(maxScore, existing.assignment_question_id, row.assignment_id).run();
+    const referenceChanged = Boolean(patch.standardAnswer?.trim() && (patch.standardAnswer !== existing.standard_answer
+      || patch.standardAnalysis !== undefined && patch.standardAnalysis !== existing.standard_analysis || patch.referenceVerified === true && !Number(existing.reference_verified)));
+    if (referenceChanged && patch.referenceVerified !== true) throw responseError("请先补充并确认本题参考答案", 400);
+    const referenceVerified = referenceChanged || Number(existing.reference_verified) === 1;
+    if (["correct", "partial", "incorrect"].includes(String(patch.verdict)) && !referenceVerified && !teacherMark(existing.input_evidence_json)) throw responseError("请先补充并确认本题参考答案", 400);
+    const evidence = parseJson<Record<string, unknown>>(existing.input_evidence_json, {});
+    const maxScore = binary ? null : patch.maxScore === undefined ? normalizeMaxScore(evidence.max_score) : normalizeMaxScore(patch.maxScore);
     const marked = reconcileHomeworkScore(patch.verdict as GradingVerdict, patch.score !== undefined ? patch.score : patch.verdict === existing.verdict ? existing.score : null, maxScore, homeworkCurriculum(row.curriculum));
-    const reference = await appEnv().DB.prepare("SELECT reference_verified FROM assignment_questions WHERE id=?").bind(existing.assignment_question_id).first<{reference_verified:number}>();
-    // A question the teacher had already marked needs no reference answer: the verdict was always the teacher's own.
-    if (["correct","partial","incorrect"].includes(String(patch.verdict)) && !reference?.reference_verified && !teacherMark(existing.input_evidence_json)) throw responseError("请先补充并确认本题参考答案",400);
-    const next = { verdict: marked.verdict, score: marked.score, studentAnswer: text(patch.studentAnswer ?? existing.student_answer, 100_000),
+    const question = { id: existing.assignment_question_id, answer: referenceChanged ? text(patch.standardAnswer, 100_000) : existing.standard_answer,
+      analysis: referenceChanged ? text(patch.standardAnalysis ?? existing.standard_analysis, 100_000) : existing.standard_analysis,
+      stem: patch.stem?.trim() ? text(patch.stem, 100_000) : existing.stem, referenceVerified: referenceVerified ? 1 : 0,
+      referenceSource: referenceChanged ? "provided" : existing.reference_source, referenceEvidence: referenceChanged ? "教师补充并确认参考解答" : existing.reference_evidence,
+      evidence: JSON.stringify({ ...evidence, max_score: maxScore }) };
+    const next = { id: patch.id, verdict: marked.verdict, score: marked.score, studentAnswer: text(patch.studentAnswer ?? existing.student_answer, 100_000),
       feedback: text(patch.feedback ?? existing.feedback, 4_000), errorType: text(patch.errorType ?? existing.error_type, 120),
       stepAnalysis: patch.stepAnalysis ?? parseJson<string[]>(existing.step_analysis_json, []), evidenceSummary: text(patch.evidenceSummary ?? existing.evidence_summary, 1_000),
-      capabilityKeys: patch.capabilityKeys ?? parseJson<string[]>(existing.capability_keys_json, []), confidence: Math.max(0, Math.min(1, Number(patch.confidence ?? existing.confidence) || 0)) };
-    await appEnv().DB.batch([
-      appEnv().DB.prepare(`INSERT INTO grading_item_revisions (id, grading_item_id, submission_id, corrected_by, before_json, after_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(crypto.randomUUID(), patch.id, id, user.id, JSON.stringify(existing), JSON.stringify(next), now),
-      appEnv().DB.prepare(`UPDATE grading_items SET verdict = ?, score = ?, student_answer = ?, feedback = ?, error_type = ?, step_analysis_json = ?,
-        evidence_summary = ?, capability_keys_json = ?, confidence = ?, requires_review = ?, reviewed_by = ?, reviewed_at = ?, corrected_at = ?,
-        wrong_book_applied_at = NULL, bbox_json = json_remove(bbox_json, '$.errors'), updated_at = ? WHERE id = ? AND submission_id = ?`)
-        .bind(next.verdict, next.score, next.studentAnswer, next.feedback, next.errorType, JSON.stringify(next.stepAnalysis), next.evidenceSummary,
-          JSON.stringify(next.capabilityKeys), next.confidence, ["unreadable","review_required"].includes(String(next.verdict)) ? 1 : 0, user.id, now, now, now, patch.id, id),
-    ]);
-
+      capabilityKeys: patch.capabilityKeys ?? parseJson<string[]>(existing.capability_keys_json, []), confidence: Math.max(0, Math.min(1, Number(patch.confidence ?? existing.confidence) || 0)),
+      requiresReview: ["unreadable", "review_required"].includes(marked.verdict) ? 1 : 0 };
+    questions.push(question); grades.push(next);
+    revisions.push({ id: crypto.randomUUID(), itemId: patch.id, before: JSON.stringify(existing), after: JSON.stringify({ ...next, question }) });
   }
-  await (await import("./homework-outputs")).applySubmissionOutputs(await readTeacherSubmission(id, user), user, { refreshReport: true });
-  return readTeacherSubmission(id, user);
+  try { await db.batch([
+    db.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
+      WHERE s.id=? AND s.status='published' AND s.grading_run_id='' AND s.updated_at=? AND a.owner_user_id=? AND a.status<>'archived')
+      AND NOT EXISTS (SELECT 1 FROM json_each(?) expected LEFT JOIN assignment_questions q ON q.id=json_extract(expected.value,'$.assignment_question_id')
+        WHERE q.id IS NULL OR q.updated_at<>json_extract(expected.value,'$.question_updated_at'))
+      THEN 1 ELSE json_extract('correction conflict', '$') END AS valid`).bind(id, row.updated_at, user.id, JSON.stringify(existingItems)),
+    db.prepare(`UPDATE assignment_questions SET (answer,analysis,stem,reference_verified,reference_source,reference_evidence,input_evidence_json)=
+      (SELECT json_extract(value,'$.answer'),json_extract(value,'$.analysis'),json_extract(value,'$.stem'),json_extract(value,'$.referenceVerified'),
+        json_extract(value,'$.referenceSource'),json_extract(value,'$.referenceEvidence'),json_extract(value,'$.evidence') FROM json_each(?) WHERE json_extract(value,'$.id')=assignment_questions.id),updated_at=?
+      WHERE assignment_id=? AND id IN (SELECT json_extract(value,'$.id') FROM json_each(?))`).bind(JSON.stringify(questions), now, row.assignment_id, JSON.stringify(questions)),
+    db.prepare(`INSERT INTO grading_item_revisions(id,grading_item_id,submission_id,corrected_by,before_json,after_json,created_at)
+      SELECT json_extract(value,'$.id'),json_extract(value,'$.itemId'),?,?,json_extract(value,'$.before'),json_extract(value,'$.after'),? FROM json_each(?)`)
+      .bind(id, user.id, now, JSON.stringify(revisions)),
+    db.prepare(`UPDATE grading_items SET (verdict,score,student_answer,feedback,error_type,step_analysis_json,evidence_summary,capability_keys_json,confidence,requires_review)=
+      (SELECT json_extract(value,'$.verdict'),json_extract(value,'$.score'),json_extract(value,'$.studentAnswer'),json_extract(value,'$.feedback'),json_extract(value,'$.errorType'),
+        json_extract(value,'$.stepAnalysis'),json_extract(value,'$.evidenceSummary'),json_extract(value,'$.capabilityKeys'),json_extract(value,'$.confidence'),json_extract(value,'$.requiresReview')
+        FROM json_each(?) WHERE json_extract(value,'$.id')=grading_items.id),reviewed_by=?,reviewed_at=?,corrected_at=?,wrong_book_applied_at=NULL,bbox_json=json_remove(bbox_json,'$.errors'),updated_at=?
+      WHERE submission_id=? AND id IN (SELECT json_extract(value,'$.id') FROM json_each(?))`).bind(JSON.stringify(grades), user.id, now, now, now, id, JSON.stringify(grades)),
+    // Reuse the existing ready -> publish lifecycle as a durable output checkpoint; the revision is already saved.
+    db.prepare("UPDATE homework_submissions SET status='ready',published_at=COALESCE(published_at,?),failure_reason='修正已保存，结果同步待重试',updated_at=? WHERE id=?").bind(now, now, id),
+  ]); } catch (error) {
+    if (error instanceof Error && /malformed JSON/.test(error.message)) throw responseError("批改结果已变化，请刷新后重试", 409);
+    throw error;
+  }
+  return publishSubmission(id, user);
 }
-
 
 export async function publishSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
+  if (row.status === "ready" && String(row.failure_reason).startsWith("修正已保存")) {
+    const db = appEnv().DB, token = crypto.randomUUID(), now = Date.now();
+    const claimed = await db.prepare(`UPDATE homework_submissions SET grading_run_id=?,updated_at=? WHERE id=? AND status='ready'
+      AND failure_reason LIKE '修正已保存%' AND (grading_run_id='' OR updated_at<?)
+      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id=homework_submissions.assignment_id AND status<>'archived')`)
+      .bind(token, now, id, now - 300_000).run();
+    if (!claimed.meta.changes) throw responseError("结果正在同步，请稍后刷新", 409);
+    const heartbeat = setInterval(() => { void db.prepare("UPDATE homework_submissions SET updated_at=? WHERE id=? AND grading_run_id=?")
+      .bind(Date.now(), id, token).run().catch(() => {}); }, 30_000);
+    try {
+      await withHomeworkGradingRun(id, token, new AbortController().signal, async () => {
+        await (await import("./homework-outputs")).applySubmissionOutputs(await readTeacherSubmission(id, user), user, { refreshReport: true });
+        await homeworkDb().prepare("UPDATE homework_submissions SET status='published',failure_reason='',grading_run_id='',updated_at=MAX(updated_at+1,?) WHERE id=?")
+          .bind(Date.now(), id).run();
+      });
+    } catch (error) {
+      await db.prepare("UPDATE homework_submissions SET failure_reason=?,grading_run_id='',updated_at=? WHERE id=? AND grading_run_id=?")
+        .bind(`修正已保存，结果同步待重试：${error instanceof Error ? error.message.slice(0, 300) : "同步失败"}`, Date.now(), id, token).run();
+    } finally { clearInterval(heartbeat); }
+    return readTeacherSubmission(id, user);
+  }
   try { await (await import("./homework-page-coverage")).assertCompletePageCoverage(id); } catch(error) { throw responseError(error instanceof Error?error.message:"页面尚未全部核验",409); }
   const { applySubmissionOutputs } = await import("./homework-outputs");
   if (!["ready", "published"].includes(String(row.status))) throw responseError("仍有题目需要复核，暂不能发布", 409);
@@ -684,7 +849,12 @@ export async function publishSubmission(id: string, user: AuthUser) {
   if (!submission.gradingItems.length) throw responseError("没有可发布的批改结果", 409);
   // Also fill historical gaps when publishing; complete explanations never trigger another model call.
   if (await (await import("./completed-homework-grading")).locateHomeworkErrors(submission)) submission = await submissionDetails(row);
-  if (row.status === "published") { await applySubmissionOutputs(submission, user); return readTeacherSubmission(id, user); }
+  if (row.status === "published") {
+    // Re-publishing an older snapshot cannot overwrite outputs after a concurrent correction commits.
+    await withHomeworkGradingRun(id, String(row.grading_run_id ?? ""), new AbortController().signal,
+      () => applySubmissionOutputs(submission, user), Number(row.updated_at));
+    return readTeacherSubmission(id, user);
+  }
   // Reaching ready again means pending items were re-graded, so an earlier report is out of date.
   await applySubmissionOutputs(submission, user, { refreshReport: true });
   const now = Date.now();
@@ -810,8 +980,8 @@ export async function deleteStudentHomeworkAssets(studentId: string, ownerUserId
 }
 
 export async function deleteHomeworkAssetRows(assets: Array<{ id: string; r2_key: string }>, ownerUserId: string) {
-  for (const asset of assets) await appEnv().DB.prepare("DELETE FROM homework_assets WHERE id = ? AND owner_user_id = ?").bind(asset.id, ownerUserId).run();
-  await scheduleHomeworkAssetCleanup(ownerUserId, assets.map((asset) => asset.r2_key));
+  await scheduleHomeworkAssetCleanup(ownerUserId, assets.map((asset) => asset.r2_key), [appEnv().DB.prepare("DELETE FROM homework_assets WHERE owner_user_id=? AND id IN (SELECT value FROM json_each(?))")
+    .bind(ownerUserId, JSON.stringify(assets.map(asset => asset.id)))]);
 }
 
 export function homeworkDb() { return appEnv().DB; }

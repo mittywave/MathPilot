@@ -14,11 +14,167 @@ import { fileURLToPath } from "node:url";
 import jpeg from "jpeg-js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { localD1, bootstrapAdmin } from "./helpers/migrated-d1.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
 const CONFIG = join(ROOT, "dist", "server", "wrangler.json");
 const INVITE = "homework-e2e-invite";
+
+async function writeFixture(t) {
+  const { db, bucket } = await localD1(t);
+  await db.batch([
+    db.prepare("INSERT INTO users(id,email,password_hash,password_salt,password_iterations,role,created_at) VALUES('u','fixture@write.test','h','s',1,'admin',0)"),
+    db.prepare("INSERT INTO students(id,owner_user_id,name,class_name,notes,created_at,updated_at) VALUES('s1','u','甲','','',0,0),('s2','u','乙','','',0,0)"),
+    db.prepare("INSERT INTO homework_assignments(id,owner_user_id,title,status,input_mode,outputs_json,created_at,updated_at) VALUES('a','u','隔离练习','closed','completed_homework','{\"report\":false,\"profile\":true,\"wrongBook\":true}',0,0)"),
+    db.prepare("INSERT INTO homework_submissions(id,assignment_id,student_id,status,submitted_by_type,submitted_by_id,created_at,updated_at) VALUES('s','a','s1','draft','teacher','u',0,0)"),
+  ]);
+  const f = { db, bucket, before: async () => {}, deleteFails: false, queueFails: false, queued: [], user: { id: "u", email: "fixture@write.test", role: "admin" } };
+  const sqlOf = new WeakMap();
+  const observed = { prepare(sql) {
+    const wrap = statement => { const wrapped = new Proxy(statement, { get(target, key) {
+      if (key === "bind") return (...args) => wrap(target.bind(...args));
+      if (["first", "all", "run"].includes(key)) return async (...args) => { await f.before(sql); return target[key](...args); };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } }); sqlOf.set(wrapped, sql); return wrapped; };
+    return wrap(db.prepare(sql));
+  }, async batch(statements) { await f.before("BATCH"); for (const statement of statements) await f.before(sqlOf.get(statement) ?? ""); return db.batch(statements); } };
+  const bindings = { DB: observed, HOMEWORK_GRADING_ENABLED: "true", HOMEWORK_GRADING_QUEUE: { send: async message => { if (f.queueFails) throw new Error("injected dispatch failure"); f.queued.push(message); } },
+    HOMEWORK_ASSETS: { get: (...args) => bucket.get(...args), put: (...args) => bucket.put(...args), delete: async (...args) => { if (f.deleteFails) throw new Error("injected R2 failure"); return bucket.delete(...args); } } };
+  f.api = await loadSource("lib/server/homework.ts", bindings);
+  f.assets = await loadSource("lib/server/homework-assets.ts", bindings);
+  f.question = { id: "fixture-q", type: "填空题", stem: "计算 $1+1$ 的结果，写出答案。", options: [], answer: "2", analysis: "", categoryId: "", difficulty: "基础", source: "", createdAt: 0, updatedAt: 0 };
+  return f;
+}
+
+test("MP-03 D1 page replacement rolls back an intermediate insert and fences a concurrent submit", { timeout: 120_000 }, async t => {
+  const f = await writeFixture(t), { db, api, user } = f;
+  for (const id of ["o1", "o2", "o3", "n1", "n2", "n3"]) {
+    await db.prepare("INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,role,upload_submission_id,created_at) VALUES(?,'u',?,'image/jpeg',1,?,'submission_original','s',0)").bind(id, id, id).run();
+    await f.bucket.put(id, "fixture image");
+  }
+  for (const [index, asset] of ["o1", "o2", "o3"].entries()) await db.prepare("INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at) VALUES(?,'s',?,?,?,0)").bind(asset, asset, asset, index).run();
+  const snapshot = async () => (await db.prepare("SELECT * FROM submission_pages WHERE submission_id='s' ORDER BY page_order").all()).results;
+  const before = await snapshot(), pages = ["n1", "n2", "n3"].map(assetId => ({ assetId }));
+  await db.prepare("CREATE TRIGGER reject_second_page BEFORE INSERT ON submission_pages WHEN NEW.original_asset_id='n2' BEGIN SELECT RAISE(ABORT,'injected second insert'); END").run();
+  await assert.rejects(api.replaceSubmissionPages("s", pages, user), /injected second insert/);
+  assert.deepEqual(await snapshot(), before, "the original three page relations survive a failed replacement");
+  await db.prepare("DROP TRIGGER reject_second_page").run();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.before = async sql => { if (sql.includes("JOIN homework_assets ON")) { entered.resolve(); await release.promise; } };
+  const saving = api.replaceSubmissionPages("s", pages, user);
+  await entered.promise;
+  await api.submitHomeworkSubmission("s", user);
+  release.resolve();
+  await assert.rejects(saving, error => error instanceof Response && error.status === 409);
+  assert.deepEqual(await snapshot(), before, "a submitted upload cannot be rewritten after a stale draft read");
+  f.before = async () => {};
+  await db.prepare("UPDATE homework_submissions SET status='draft',grading_run_id='' WHERE id='s'").run();
+  f.deleteFails = true; f.queueFails = true;
+  const saved = await api.replaceSubmissionPages("s", [{ assetId: "o1" }, { assetId: "n2" }], user);
+  assert.equal(saved.pages.length, 2);
+  const jobs = (await db.prepare("SELECT id FROM homework_asset_cleanup_jobs WHERE status<>'completed'").all()).results;
+  assert.equal(jobs.length, 1, "cleanup is durably queued with the successful save");
+  assert.match((await db.prepare("SELECT last_error FROM homework_asset_cleanup_jobs WHERE id=?").bind(jobs[0].id).first()).last_error, /injected R2 failure/);
+  await assert.rejects(f.assets.processHomeworkAssetCleanup(jobs[0].id), /injected R2 failure/);
+  f.deleteFails = false;
+  await api.replaceSubmissionPages("s", [{ assetId: "o1" }, { assetId: "n2" }], user);
+  assert.equal((await db.prepare("SELECT status FROM homework_asset_cleanup_jobs WHERE id=?").bind(jobs[0].id).first()).status, "completed", "the next save retries a failed cleanup even when it removes no new assets");
+  await f.assets.processHomeworkAssetCleanup(jobs[0].id);
+  assert.ok(await f.bucket.get("o1"), "retained photos are not cleaned up");
+  assert.equal(await f.bucket.get("o2"), null);
+});
+
+test("MP-04 D1 correction validates the whole request, rolls back failures and retries outputs idempotently", { timeout: 120_000 }, async t => {
+  const f = await writeFixture(t), { db, api, user } = f;
+  await db.prepare("UPDATE homework_submissions SET status='published',published_at=1 WHERE id='s'").run();
+  await db.prepare("INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,answer,reference_verified,sort_order,created_at,updated_at) VALUES('q1','a','1',1,'填空题','原题','',0,0,0,0),('q2','a','2',1,'填空题','第二题','2',1,1,0,0)").run();
+  await db.prepare("INSERT INTO grading_items(id,submission_id,assignment_question_id,verdict,requires_review,created_at,updated_at) VALUES('g1','s','q1','review_required',1,0,0),('g2','s','q2','incorrect',0,0,0)").run();
+  await db.prepare("INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,created_at) VALUES('photo','u','photo','image/jpeg',1,'fixture',0)").run();
+  await db.prepare("INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at) VALUES('page','s','photo','photo',0,0)").run();
+  const { coverageFingerprint } = await loadSource("lib/server/homework-page-coverage.ts", { DB: db });
+  const fingerprint = await coverageFingerprint([{ id: "page", page_order: 0, processed_asset_id: "photo", quality_json: "{}" }], 0);
+  await db.prepare("INSERT INTO submission_page_extractions(submission_id,page_id,processed_asset_id,fingerprint,status,result_json,updated_at) VALUES('s','page','photo',?,'complete',?,0)")
+    .bind(fingerprint, JSON.stringify({ kind: "questions", questions: [{ question_number: "1" }, { question_number: "2" }] })).run();
+  await db.prepare("UPDATE homework_assignments SET outputs_json=json_set(outputs_json,'$.report',json('true')) WHERE id='a'").run();
+  const { applySubmissionOutputs } = await loadSource("lib/server/homework-outputs.ts", { DB: db, HOMEWORK_GRADING_ENABLED: "true", HOMEWORK_ASSETS: f.bucket });
+  await applySubmissionOutputs(await api.readTeacherSubmission("s", user), user);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM student_wrong_occurrences WHERE active=1").first()).n, 1);
+  const historyBefore = (await db.prepare("SELECT grading_item_id,created_at FROM student_wrong_occurrences ORDER BY grading_item_id").all()).results;
+  const reportBefore = await db.prepare("SELECT overall_summary FROM submission_reports WHERE submission_id='s'").first();
+  const snapshot = async () => Promise.all(["assignment_questions", "grading_items", "grading_item_revisions", "homework_submissions"].map(async table => (await db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()).results));
+  const before = await snapshot();
+  await assert.rejects(api.correctPublishedSubmission("s", [{ id: "g1", verdict: "correct", stem: "应当回滚的题干", maxScore: 9 }], user), error => error.status === 400);
+  assert.deepEqual(await snapshot(), before, "an unconfirmed reference cannot partially rewrite a question");
+  await assert.rejects(api.correctPublishedSubmission("s", [{ id: "g2", verdict: "correct" }, { id: "missing", verdict: "correct" }], user), error => error.status === 404);
+  assert.deepEqual(await snapshot(), before, "an invalid second patch leaves the first patch untouched");
+  await db.prepare("CREATE TRIGGER fail_revision BEFORE INSERT ON grading_item_revisions WHEN NEW.grading_item_id='g2' BEGIN SELECT RAISE(ABORT,'injected revision failure'); END").run();
+  await assert.rejects(api.correctPublishedSubmission("s", [{ id: "g1", verdict: "correct", standardAnswer: "2", referenceVerified: true }, { id: "g2", verdict: "correct" }], user), /injected revision failure/);
+  assert.deepEqual(await snapshot(), before);
+  await db.prepare("DROP TRIGGER fail_revision").run();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.before = async sql => { if (sql.startsWith("SELECT g.*")) { entered.resolve(); await release.promise; } };
+  const saving = api.correctPublishedSubmission("s", [{ id: "g2", verdict: "correct" }], user);
+  await entered.promise;
+  await db.prepare("UPDATE homework_submissions SET status='processing' WHERE id='s'").run();
+  release.resolve(); await assert.rejects(saving, error => error.status === 409);
+  await db.prepare("UPDATE homework_submissions SET status='published' WHERE id='s'").run();
+  assert.deepEqual(await snapshot(), before, "a publication-state race cannot commit a stale correction");
+  let failed = false;
+  f.before = async sql => { if (!failed && /student_capability_evidence/.test(sql)) { failed = true; throw new Error("injected output failure"); } };
+  // Intercept an actual output statement, including those in D1.batch.
+  const corrected = await api.correctPublishedSubmission("s", [{ id: "g2", verdict: "correct" }], user);
+  assert.equal(corrected.gradingItems.find(item => item.id === "g2").verdict, "correct");
+  assert.match(corrected.failureReason, /修正已保存/);
+  await assert.rejects(api.reviewSubmission("s", [{ id: "g2", verdict: "incorrect" }], user), error => error.status === 409);
+  f.before = async () => {};
+  const recovered = await api.updateSubmission("s", { action: "publish" }, user);
+  assert.equal(recovered.status, "published"); assert.equal(recovered.failureReason, "");
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM student_wrong_occurrences WHERE active=1").first()).n, 0);
+  assert.deepEqual((await db.prepare("SELECT grading_item_id,created_at FROM student_wrong_occurrences ORDER BY grading_item_id").all()).results, historyBefore, "the original attempt remains in history without duplicate occurrences");
+  assert.notDeepEqual(await db.prepare("SELECT overall_summary FROM submission_reports WHERE submission_id='s'").first(), reportBefore);
+  const revisions = await db.prepare("SELECT COUNT(*) AS n FROM grading_item_revisions").first();
+  const evidence = (await db.prepare("SELECT grading_item_id,capability_key,verdict FROM student_capability_evidence WHERE submission_id='s' ORDER BY capability_key").all()).results;
+  assert.ok(evidence.length > 0); assert.ok(evidence.every(item => item.grading_item_id === "g2" && item.verdict === "correct"));
+  await api.updateSubmission("s", { action: "publish" }, user);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM grading_item_revisions").first()).n, revisions.n);
+  assert.deepEqual((await db.prepare("SELECT grading_item_id,capability_key,verdict FROM student_capability_evidence WHERE submission_id='s' ORDER BY capability_key").all()).results, evidence, "retries replace the same evidence, not duplicate it");
+  const enteredOld = Promise.withResolvers(), releaseOld = Promise.withResolvers(); let held = false;
+  f.before = async sql => { if (!held && sql.startsWith("DELETE FROM student_capability_evidence")) { held = true; enteredOld.resolve(); await releaseOld.promise; } };
+  const stale = api.updateSubmission("s", { action: "publish" }, user);
+  await enteredOld.promise;
+  const newer = await api.correctPublishedSubmission("s", [{ id: "g2", verdict: "incorrect" }], user);
+  releaseOld.resolve(); await assert.rejects(stale, /malformed JSON/);
+  assert.equal(newer.status, "published");
+  assert.ok((await db.prepare("SELECT verdict FROM student_capability_evidence WHERE grading_item_id='g2'").all()).results.every(item => item.verdict === "incorrect"), "an older re-publish cannot overwrite newer profile evidence");
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM student_wrong_occurrences WHERE active=1").first()).n, 1);
+});
+
+test("MP-05 D1 assignment retries resume the same operation without duplicates or visible partial students", { timeout: 120_000 }, async t => {
+  const f = await writeFixture(t), { db, api, user } = f;
+  const input = { operationId: crypto.randomUUID(), studentIds: ["s1", "s2"], title: "重复练习", questions: Array.from({ length: 62 }, (_, index) => ({ ...f.question, id: `source-${index}`, stem: `第 ${index} 道计算题：$1+1$ 的结果是多少？` })) };
+  await db.prepare("CREATE TRIGGER fail_second_student BEFORE INSERT ON homework_submissions WHEN NEW.student_id='s2' BEGIN SELECT RAISE(ABORT,'injected second student'); END").run();
+  await assert.rejects(api.createAssignedHomework(input, user));
+  const first = (await db.prepare("SELECT id,assignment_id FROM homework_submissions WHERE id<>'s'").all()).results;
+  assert.equal(first.length, 1);
+  await db.prepare("DROP TRIGGER fail_second_student").run();
+  const retry = await api.createAssignedHomework(input, user);
+  assert.equal(retry.length, 2);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM homework_submissions WHERE id<>'s'").first()).n, 2);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM homework_assignments WHERE id<>'a'").first()).n, 2);
+  assert.equal(retry.find(item => item.studentId === "s1").id, first[0].id);
+  await api.createAssignedHomework({ ...input, operationId: crypto.randomUUID() }, user);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM homework_submissions WHERE id<>'s'").first()).n, 4, "a deliberate new operation is allowed");
+  await assert.rejects(api.createAssignedHomework({ ...input, title: "同一操作不得更换内容" }, user), error => error.status === 409);
+  const interrupted = { ...input, operationId: crypto.randomUUID(), studentIds: ["s1"] };
+  await db.prepare("CREATE TRIGGER fail_question_chunk BEFORE INSERT ON assignment_questions WHEN NEW.question_number='51' BEGIN SELECT RAISE(ABORT,'injected later question chunk'); END").run();
+  await assert.rejects(api.createAssignedHomework(interrupted, user));
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM homework_assignments WHERE id<>'a'").first()).n, 4, "a later question chunk rolls back the entire student's assignment");
+  await db.prepare("DROP TRIGGER fail_question_chunk").run();
+  const [concurrentOne, concurrentTwo] = await Promise.all([api.createAssignedHomework(interrupted, user), api.createAssignedHomework(interrupted, user)]);
+  assert.deepEqual(concurrentOne, concurrentTwo);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM homework_submissions WHERE id<>'s'").first()).n, 5, "concurrent retries commit the operation once");
+});
 
 test("student classes preserve legacy membership, isolate teachers, and assign independently to a whole class", { timeout: 120_000 }, async () => {
   // Existing names become classes without touching student ids or adding a second membership field.
@@ -442,6 +598,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     // Other roles retain the explicit read-only environment fallback in this suite.
     const adminRegistration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: "admin@homework.test", password: "password123", inviteCode: INVITE } });
     assert.equal(adminRegistration.response.status, 201);
+    assert.equal(adminRegistration.payload.user.role, "member");
+    bootstrapAdmin(stateDir, adminRegistration.payload.user.id);
     const adminCookie = sessionCookie(adminRegistration.response);
     const { newProvider } = await loadSource("lib/ai-provider-presets.ts");
     const providerResponse = await jsonRequest(base, "/api/admin/ai-providers", { cookie: adminCookie, method: "POST", body: {
@@ -1353,4 +1511,81 @@ test("completed homework is graded, archives only incorrect work, preserves pend
   } finally {
     await stopWorker(worker); mock.server.closeAllConnections(); await new Promise((resolveClose) => mock.server.close(resolveClose));
   }
+});
+
+// Opt in for a reproducible local D1 benchmark; ordinary E2E runs retain the functional assertions above.
+test("MP-07 local D1 query growth and list pagination at 20/100/500 uploads", { timeout: 600_000, skip: process.env.MATHPILOT_BENCHMARK !== "1" }, async t => {
+  const { db } = await localD1(t), user = { id: "perf-user", role: "member", email: "perf@fixture.test" };
+  await db.prepare("INSERT INTO users(id,email,password_hash,password_salt,password_iterations,role,created_at) VALUES('perf-user','perf@fixture.test','h','s',1,'member',0)").run();
+  await db.prepare("INSERT INTO students(id,owner_user_id,name,class_name,notes,created_at,updated_at) VALUES('perf-student','perf-user','隔离性能样本','','',0,0)").run();
+  const { coverageFingerprint } = await loadSource("lib/server/homework-page-coverage.ts", { DB: db });
+  let counts, seeded = 0, active = 0; const waiters = [];
+  const measured = { prepare(sql) {
+    const wrap = statement => new Proxy(statement, { get(target, key) {
+      if (key === "bind") return (...values) => wrap(target.bind(...values));
+      if (["all", "run", "first"].includes(key)) return async (...args) => {
+        // Keep the local Miniflare RPC transport at the same concurrency in both measurements.
+        if (active >= 16) await new Promise(resolve => waiters.push(resolve));
+        active++;
+        try {
+        let result;
+        for (let attempt = 0; ; attempt++) try {
+          result = await target[key === "first" ? "all" : key](...(key === "first" ? [] : args)); break;
+        } catch (error) {
+          if (error.message !== "fetch failed" || attempt >= 3) throw error;
+          counts.transportRetries++; await new Promise(resolve => setTimeout(resolve, 75));
+        }
+        counts.queries++; counts.rowsRead += Number(result.meta?.rows_read ?? 0); counts.rowsReturned += result.results?.length ?? 0;
+        counts.dbBytes += Buffer.byteLength(JSON.stringify(result.results ?? []));
+        return key === "first" ? args[0] ? result.results?.[0]?.[args[0]] ?? null : result.results?.[0] ?? null : result;
+        } finally { active--; waiters.shift()?.(); }
+      };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    return wrap(db.prepare(sql));
+  }, batch: statements => db.batch(statements) };
+  const api = await loadSource("lib/server/homework.ts", { DB: measured });
+  const measurements = [];
+  for (const size of [20, 100, 500]) {
+    const fixtures = await Promise.all(Array.from({ length: size - seeded }, async (_, index) => {
+      const n = seeded + index, id = `perf-${n}`;
+      return { id, n, fingerprint: await coverageFingerprint([{ id: `${id}-page`, page_order: 0, processed_asset_id: `${id}-asset`, quality_json: "{}" }], 0),
+        source: JSON.stringify({ id: `${id}-source`, stem: "这是隔离性能样本的题干。".repeat(100), answer: "2", options: [] }),
+        extraction: JSON.stringify({ kind: "questions", questions: [{ question_number: "1", stem: "识别后的原卷题干".repeat(100) }, { question_number: "2", stem: "另一道原卷题干".repeat(100) }] }) };
+    }));
+    for (let start = 0; start < fixtures.length; start += 20) {
+      const rows = JSON.stringify(fixtures.slice(start, start + 20));
+      await db.batch([
+        db.prepare(`INSERT INTO homework_assignments(id,owner_user_id,title,status,input_mode,sheet_json,created_at,updated_at)
+          SELECT json_extract(value,'$.id'),'perf-user','性能样本','closed','completed_homework','{"groups":[]}',json_extract(value,'$.n'),json_extract(value,'$.n') FROM json_each(?)`).bind(rows),
+        db.prepare(`INSERT INTO homework_submissions(id,assignment_id,student_id,status,submitted_by_type,submitted_by_id,published_at,created_at,updated_at)
+          SELECT json_extract(value,'$.id'),json_extract(value,'$.id'),'perf-student','published','teacher','perf-user',1,json_extract(value,'$.n'),json_extract(value,'$.n') FROM json_each(?)`).bind(rows),
+        ...[1, 2].map(number => db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,answer,reference_verified,input_evidence_json,source_json,sort_order,created_at,updated_at)
+          SELECT json_extract(value,'$.id')||'-q${number}',json_extract(value,'$.id'),'${number}',1,'填空题',json_extract(value,'$.source'),'2',${number === 1 ? 1 : 0},'{"max_score":2}',json_extract(value,'$.source'),${number},0,0 FROM json_each(?)`).bind(rows)),
+        ...[1, 2].map(number => db.prepare(`INSERT INTO grading_items(id,submission_id,assignment_question_id,verdict,requires_review,score,created_at,updated_at)
+          SELECT json_extract(value,'$.id')||'-g${number}',json_extract(value,'$.id'),json_extract(value,'$.id')||'-q${number}','${number === 1 ? "correct" : "incorrect"}',0,${number === 1 ? 2 : 0},0,0 FROM json_each(?)`).bind(rows)),
+        db.prepare(`INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,created_at)
+          SELECT json_extract(value,'$.id')||'-asset','perf-user',json_extract(value,'$.id'),'image/jpeg',1,'synthetic',0 FROM json_each(?)`).bind(rows),
+        db.prepare(`INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at)
+          SELECT json_extract(value,'$.id')||'-page',json_extract(value,'$.id'),json_extract(value,'$.id')||'-asset',json_extract(value,'$.id')||'-asset',0,0 FROM json_each(?)`).bind(rows),
+        db.prepare(`INSERT INTO submission_page_extractions(submission_id,page_id,processed_asset_id,fingerprint,status,result_json,updated_at)
+          SELECT json_extract(value,'$.id'),json_extract(value,'$.id')||'-page',json_extract(value,'$.id')||'-asset',json_extract(value,'$.fingerprint'),'complete',json_extract(value,'$.extraction'),0 FROM json_each(?)`).bind(rows),
+      ]);
+    }
+    seeded = size;
+    for (const [name, read] of [["submissions", () => api.readTeacherSubmissions(user)], ["progress", () => api.readHomeworkProgress(user)]]) {
+      counts = { queries: 0, rowsRead: 0, rowsReturned: 0, dbBytes: 0, transportRetries: 0 }; await read(); // warm-up
+      const times = []; let result;
+      for (let i = 0; i < 10; i++) {
+        counts = { queries: 0, rowsRead: 0, rowsReturned: 0, dbBytes: 0, transportRetries: 0 };
+        const begin = performance.now(); result = await read(); times.push(performance.now() - begin);
+      }
+      times.sort((a, b) => a - b);
+      const metric = { size, path: name, samples: times.length, transportConcurrency: 16, ...counts, responseBytes: Buffer.byteLength(JSON.stringify(result)), p50Ms: +times[4].toFixed(2), p95Ms: +times[9].toFixed(2) };
+      measurements.push(metric); console.log("MP07_BENCHMARK", JSON.stringify(metric));
+      if (name === "progress") assert.equal(result["perf-student"], "assigned");
+      else for (const row of Array.isArray(result) ? result : result.submissions) assert.deepEqual([row.gradingSummary.correct, row.gradingSummary.unresolved, row.gradingSummary.incorrect], [1, 1, 0]);
+    }
+  }
+  assert.ok(measurements.every(metric => metric.queries <= 8), "query count must be bounded independently of history size");
 });

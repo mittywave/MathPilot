@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { homeworkApi } from "../../lib/homework-api-client";
+import { randomClientId } from "../../lib/client-random-id.mjs";
 import type { HomeworkSheetGroup, Question, StudentSummary } from "../../lib/types";
 
 type Assigned = Array<{ id: string; studentId: string; studentName: string }>;
@@ -23,6 +24,9 @@ export function AssignHomework({ title, questions, groups, studentId, className,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [assigned, setAssigned] = useState<Assigned | null>(null);
+  const [operationId] = useState(randomClientId);
+  const [attempted, setAttempted] = useState(false);
+  const request = useRef<Parameters<typeof homeworkApi.assign>[0] | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -41,10 +45,13 @@ export function AssignHomework({ title, questions, groups, studentId, className,
 
   async function assign() {
     if (!chosen.length || !name.trim() || busy) return;
-    setBusy(true); setError("");
+    setBusy(true); setAttempted(true); setError("");
     try {
-      const ready = prepareQuestions ? await prepareQuestions() : questions;
-      const result = await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions: ready, groups, recordId });
+      if (!request.current) {
+        const ready = prepareQuestions ? await prepareQuestions() : questions;
+        request.current = { operationId, studentIds: [...chosen], title: name.trim(), questions: structuredClone(ready), groups: groups ? structuredClone(groups) : undefined, recordId };
+      }
+      const result = await homeworkApi.assign(request.current);
       if (onAssigned) onAssigned(); else setAssigned(result.assigned);
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : "布置失败"); }
@@ -59,8 +66,8 @@ export function AssignHomework({ title, questions, groups, studentId, className,
         <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`}>打开{item.studentName}的档案</a>)}</div>
         <div className="modal-actions"><button className="primary-button" onClick={onClose}>完成</button></div>
       </> : <>
-        <label className="field">作业名称<input value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-        {!!classes.length && <fieldset className="assign-students" disabled={busy}>
+        <label className="field">作业名称<input value={name} disabled={busy || attempted} onChange={(event) => setName(event.target.value)} /></label>
+        {!!classes.length && <fieldset className="assign-students" disabled={busy || attempted}>
           <legend>按班级选择</legend>
           {classes.map((name) => {
             const ids = students!.filter((student) => student.className === name).map((student) => student.id);
@@ -68,7 +75,7 @@ export function AssignHomework({ title, questions, groups, studentId, className,
             return <label key={name} className={all ? "on" : ""}><input type="checkbox" checked={all} onChange={() => setChosen((current) => all ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])])} /><b>{name}</b><small>{ids.length} 人</small></label>;
           })}
         </fieldset>}
-        <fieldset className="assign-students" disabled={busy}>
+        <fieldset className="assign-students" disabled={busy || attempted}>
           <legend>学生（可单独调整）</legend>
           {students === null ? <p>正在读取学生档案…</p> : students.length ? students.map((student) => <label key={student.id} className={chosen.includes(student.id) ? "on" : ""}>
             <input type="checkbox" checked={chosen.includes(student.id)} onChange={() => toggle(student.id)} />
@@ -79,7 +86,7 @@ export function AssignHomework({ title, questions, groups, studentId, className,
         <p className="assign-hint">确认布置时，题目自动加入题库并分配永久 ID，题目和答案同时存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。{days > 1 ? "各天任务可以分开完成，只记录实际提交日期。" : "只记录实际提交日期。"}</p>
         {error && <p className="assign-error" role="alert">{error}</p>}
         <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={busy || !chosen.length || !name.trim()} onClick={() => void assign()}>{busy ? "正在布置…" : chosen.length > 1 ? `布置给 ${chosen.length} 位学生` : "布置"}</button></div>
+          <button className="primary-button" disabled={busy || !chosen.length || !name.trim()} onClick={() => void assign()}>{busy ? "正在布置…" : attempted ? "重试本次布置" : chosen.length > 1 ? `布置给 ${chosen.length} 位学生` : "布置"}</button></div>
       </>}
     </section>
   </div>;

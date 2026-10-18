@@ -19,13 +19,26 @@ export default function HomeworkTeacherPage() {
   const [records, setRecords] = useState<HomeworkSubmissionListItem[]>([]);
   const [toastNode, show] = useToast();
   const [loading, setLoading] = useState(true);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const me = await homeworkApi.me(); setUser(me.user);
-      if (me.user) setRecords((await homeworkApi.submissions()).submissions);
+      if (me.user) { const result = await homeworkApi.submissions(); setRecords(result.submissions); setNextCursor(result.nextCursor); }
     })().catch((error) => { setUser((current) => current ?? null); show({ text: error instanceof Error ? error.message : "作业记录读取失败", tone: "error" }); }).finally(() => setLoading(false));
   }, [show]);
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await homeworkApi.submissions(nextCursor);
+      setRecords(current => [...current, ...result.submissions.filter(item => !current.some(previous => previous.id === item.id))]);
+      setNextCursor(result.nextCursor);
+    } catch (error) { show({ text: error instanceof Error ? error.message : "作业记录读取失败", tone: "error" }); }
+    finally { setLoadingMore(false); }
+  }
 
   return <><SiteHeader active="tools" user={user ?? null} loading={user === undefined}
     trail={[{ label: "工具箱", href: "/tools" }, { label: "作业批改" }]}
@@ -40,5 +53,6 @@ export default function HomeworkTeacherPage() {
         <time dateTime={new Date(record.createdAt).toISOString()}>{new Date(record.createdAt).toLocaleString("zh-CN")}</time>
       </a>; })}
     </div> : <p className="homework-records-empty">还没有上传过作业。</p>}
+    {!loading && nextCursor && <button className="secondary" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "正在读取…" : "加载更多作业"}</button>}
   </main></>;
 }

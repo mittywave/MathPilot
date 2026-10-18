@@ -9,6 +9,34 @@ const STEM_A = "如图，在▱ABCD中，对角线AC，BD相交于点O，过点O
 // The same question read again from another photo: printed number, half-width punctuation and LaTeX.
 const STEM_A_AGAIN = "3. 如图,在$\\square ABCD$中,对角线$AC$,$BD$相交于点$O$,过点$O$作$MN \\perp BD$,分别交$AD$,$BC$于点$M$,$N$.求证:四边形$BNDM$是菱形.";
 
+for (const [name, left, right] of [
+  ["fraction", "\\frac{1}{2+3}", "\\frac{1}{2}+3"],
+  ["root", "\\sqrt{9+16}", "\\sqrt{9}+16"],
+  ["exponent", "x^{2+3}", "x^{2}+3"],
+  ["coordinate", "(1,2)", "(12)"],
+  ["decimal", "1.2", "12"],
+]) test(`MP-01 ${name} scope differs in both deduplication and printed-ID checks`, async () => {
+  const { createQuestionMatcher, questionFingerprint } = await loadSource("lib/question-identity.ts");
+  // A long common prefix must not hide a one-token mathematical difference in a similarity score.
+  for (const prefix of ["请计算下列代数式的值：", "已知这是代数运算练习，请按照运算顺序计算下列代数式的值，并写出每一步的理由："]) {
+    const a = { stem: `${prefix}$${left}$` }, b = { stem: `${prefix}$${right}$` };
+    const matcher = createQuestionMatcher(); matcher.add("original", a);
+    assert.notEqual(questionFingerprint(a), questionFingerprint(b));
+    assert.equal(matcher.find(b), null);
+    assert.equal(matcher.confirms("original", b), false);
+    assert.equal(matcher.confirms("original", b, true), false);
+  }
+});
+
+test("mathematical grouping keeps harmless spacing, font and delimiter-size variations equivalent", async () => {
+  const { createQuestionMatcher } = await loadSource("lib/question-identity.ts");
+  const matcher = createQuestionMatcher();
+  matcher.add("original", { stem: "请计算下列代数式的值：$(\\frac{1}{2+3})+\\mathrm{x}^{2}$" });
+  const read = { stem: "３．请计算下列代数式的值：$\\left( \\dfrac{ 1 }{ 2 + 3 } \\right)+x^2$" };
+  assert.equal(matcher.find(read), "original");
+  assert.equal(matcher.confirms("original", read), true);
+});
+
 async function setup() {
   const sqlite = await migratedDatabase();
   sqlite.exec(`INSERT INTO users (id, email, password_hash, password_salt, password_iterations, role, created_at) VALUES ('u', 'u@test', 'h', 's', 1, 'admin', 0);

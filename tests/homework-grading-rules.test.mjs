@@ -253,6 +253,31 @@ test("day captions keep first-attempt marks after every mistake is corrected", a
   assert.equal(dayNote({ ...task, done: 0 }), "未提交");
 });
 
+for (const [name, type, standardAnswer, studentAnswer, verdict] of [
+  ["judgement synonyms", "判断题", "对", "正确", "correct"],
+  ["multiple-choice order", "多选题", "AB", "BA", "correct"],
+  ["two blanks are not one integer", "填空题", "1,2", "12", "incorrect"],
+  ["positive integer sign", "填空题", "2", "+2", "correct"],
+]) test(`MP-02 ${name}`, () => {
+  assert.equal(finalizeHomeworkVerdict({ type, standardAnswer, studentAnswer, modelVerdict: verdict, confidence: .99 }).verdict, verdict);
+});
+
+test("objective comparisons preserve choice validity, blank order and explicit answer format", () => {
+  const grade = (type, standardAnswer, studentAnswer, modelVerdict = "correct", stem = "") => finalizeHomeworkVerdict({ type, standardAnswer, studentAnswer, modelVerdict, stem, confidence: .99 }).verdict;
+  assert.equal(grade("判断题", "正确", "FALSE"), "incorrect");
+  assert.equal(grade("多选题", "A,C", "Ｃ、Ａ"), "correct");
+  assert.equal(grade("多选题", "AC", "AB"), "incorrect");
+  assert.equal(grade("多选题", "AC", "AAC"), "incorrect");
+  assert.equal(grade("单选题", "A", "AA"), "incorrect");
+  assert.equal(grade("填空题", "1,2", "2,1"), "incorrect");
+  assert.equal(grade("填空题", "1,2", "1;2"), "correct");
+  assert.equal(grade("填空题", "12", "1,2"), "incorrect");
+  assert.equal(grade("填空题", "2", "2/1", "correct"), "correct", "ambiguous final forms retain mathematical judgement");
+  assert.equal(grade("填空题", "2", "2/1", "incorrect"), "incorrect");
+  assert.equal(grade("填空题", "2", "+2", "incorrect", "答案不得带正号"), "incorrect");
+  assert.equal(grade("填空题", "2", "2", "incorrect", "保留两位小数"), "incorrect");
+});
+
 test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");
   assert.equal(normalizeHomeworkAnswer("✓"), "正确");

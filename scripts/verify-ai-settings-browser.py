@@ -133,6 +133,10 @@ class App:
         else:raise RuntimeError('Local Worker startup timeout')
         status,payload,headers=self.request('/api/auth/register','POST',{'email':ADMIN,'password':'Synthetic-only-Password1','inviteCode':INVITE});assert status==201,payload
         self.cookie=headers['Set-Cookie'].split(';')[0]
+        assert payload['user']['role']=='member'
+        user_id=payload['user']['id']
+        assert re.fullmatch(r'[0-9a-f-]{36}',user_id)
+        subprocess.run([WRANGLER,'d1','execute','DB','--local','--persist-to',self.state,'--config',str(ROOT/'wrangler.jsonc'),'--command',f"UPDATE users SET role='admin' WHERE id='{user_id}' AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin')"],cwd=ROOT,env=self.env,check=True,stdout=subprocess.DEVNULL)
     def request(self,path,method='GET',body=None,cookie=None,headers=None):
         h={'Connection':'close',**(headers or {})};c=self.cookie if cookie is None else cookie
         if c:h['Cookie']=c

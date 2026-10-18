@@ -1,4 +1,4 @@
-import { authBindings, authRateLimited, clientAddress, createSession, hashPassword, inviteMatches, normalizeEmail, recordAuthAttempt, requireSameOrigin, roleForEmail, validEmail, validPassword } from "../../../../lib/server/auth";
+import { authBindings, authRateLimited, clientAddress, createSession, hashPassword, inviteMatches, normalizeEmail, recordAuthAttempt, requireSameOrigin, validEmail, validPassword } from "../../../../lib/server/auth";
 
 export async function POST(request: Request) {
   try {
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     if (existing) return Response.json({ error: "这个邮箱已经注册，请直接登录" }, { status: 409 });
     const id = crypto.randomUUID();
     const passwordData = await hashPassword(password);
-    const role = roleForEmail(email);
+    const role = "member" as const;
     await db.prepare("INSERT INTO users (id, email, password_hash, password_salt, password_iterations, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(id, email, passwordData.hash, passwordData.salt, passwordData.iterations, role, Date.now()).run();
     const cookie = await createSession(id, new URL(request.url).protocol === "https:");

@@ -27,9 +27,24 @@ export async function assertCompletePageCoverage(submissionId:string){
 }
 
 /** A completed reread replaces the active inventory, not the saved history of older attempts. */
-export async function readRecognizedQuestionNumbers(submissionId:string){
-  const coverage=await readPageCoverage(submissionId);
-  if(!coverage.total || coverage.processed!==coverage.total)return null;
-  const rows=await homeworkDb().prepare("SELECT result_json FROM submission_page_extractions WHERE submission_id=? AND status='complete'").bind(submissionId).all<{result_json:string}>();
-  return new Set(rows.results.flatMap(row=>(JSON.parse(row.result_json) as PageExtraction).questions.map(q=>q.question_number)));
+export function readRecognizedQuestionNumbers(submissionId: string): Promise<Set<string> | null>;
+export function readRecognizedQuestionNumbers(submissionIds: string[]): Promise<Map<string, Set<string> | null>>;
+export async function readRecognizedQuestionNumbers(input: string | string[]) {
+  const ids = typeof input === 'string' ? [input] : input;
+  const recognized = new Map<string, Set<string> | null>(ids.map(id => [id, null]));
+  if (!ids.length) return typeof input === 'string' ? null : recognized;
+  // Lists need only the inventory, not the recognized stems, answers or evidence JSON.
+  const result = await homeworkDb().prepare(`SELECT p.submission_id,p.id,p.page_order,p.processed_asset_id,e.fingerprint,e.status,
+    (SELECT json_group_array(json_extract(value,'$.question_number')) FROM json_each(e.result_json,'$.questions')) AS numbers_json
+    FROM submission_pages p LEFT JOIN submission_page_extractions e ON e.submission_id=p.submission_id AND e.page_id=p.id
+    WHERE p.submission_id IN (SELECT value FROM json_each(?)) ORDER BY p.submission_id,p.page_order`)
+    .bind(JSON.stringify(ids)).all<ExtractionPage & { submission_id: string; fingerprint: string | null; status: string | null; numbers_json: string }>();
+  const rows = result.results as Array<ExtractionPage & { submission_id: string; fingerprint: string | null; status: string | null; numbers_json: string }>;
+  const bySubmission = new Map<string, typeof rows>();
+  for (const row of rows) { const group = bySubmission.get(row.submission_id) ?? []; group.push(row); bySubmission.set(row.submission_id, group); }
+  await Promise.all([...bySubmission].map(async ([id, pages]) => {
+    const valid = await Promise.all(pages.map(async (page, index) => page.status === 'complete' && page.fingerprint === await coverageFingerprint(pages, index)));
+    if (valid.every(Boolean)) recognized.set(id, new Set(pages.flatMap(page => JSON.parse(page.numbers_json) as string[])));
+  }));
+  return typeof input === 'string' ? recognized.get(input) ?? null : recognized;
 }
