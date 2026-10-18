@@ -78,19 +78,22 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
   const [showOriginals, setShowOriginals] = useState(false);
   const [expandedAnalyses, setExpandedAnalyses] = useState<string[]>([]);
   const mistakes = assigned.questions.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict));
-  const counts = assigned.days.reduce((all, day) => ({ correct: all.correct + day.firstAttempt.correct, incorrect: all.incorrect + day.firstAttempt.incorrect,
-    pending: all.pending + day.firstAttempt.pending, missing: all.missing - day.done }), { correct: 0, incorrect: 0, pending: 0, missing: assigned.questions.length });
-  const handedIn = assigned.questions.length - counts.missing;
   const latest = assigned.uploads.at(-1), wait = uploadWait(latest);
   const days = assigned.days.map((item, index) => {
     const from = assigned.days.slice(0, index).reduce((sum, entry) => sum + entry.size, 0);
     return { ...item, state: dayState(item), items: assigned.questions.slice(from, from + item.size) };
   });
   const several = days.length > 1;
+  const corrections = days.map((group, index) => {
+    const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
+    const allCorrect = group.done === group.size && group.correct === group.size;
+    const correctionLabel = mistakes ? "去订正" : allCorrect ? group.items.some(({ result }) => result?.wasIncorrect) ? "已订正" : "无错题" : "订正";
+    return (mistakes > 0 || group.state === "done") && <button key={index} type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || Boolean(wait)} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
+      title={allCorrect ? correctionLabel === "已订正" ? "这一天的错题已全部订正正确" : "这一天的题目全部正确，无需订正" : !mistakes ? "请先核实待处理题目" : wait || `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>{correctionLabel}{allCorrect && <span aria-hidden="true"> ✅</span>}</button>;
+  });
   return <section className="assigned-sheet" aria-label="整份作业">
     <header>
-      <div><h2>整份作业</h2><p>{several ? `${days.length} 天任务 · ` : ""}{assigned.questions.length} 道题 · 已交 {handedIn}{handedIn ? ` · 首交对 ${counts.correct} · 错 ${counts.incorrect}` : ""}{counts.pending ? ` · 首交待处理 ${counts.pending}` : ""}{counts.missing ? ` · 未交 ${counts.missing}` : ""}</p>
-      </div>
+      <h2>整份作业</h2>
       <div className="assigned-sheet-actions">
         <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
         {[false, true].map((includeAnalysis) => {
@@ -109,14 +112,12 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
           </select>;
         })}
         {latest && latest.status !== "published" && latest.id !== submission.id ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
-          : latest?.status === "published" && counts.missing > 0 ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null}
+          : latest?.status === "published" && days.some((group) => group.state !== "done") ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null}
+        {!several && corrections[0]}
       </div>
     </header>
     {days.map((group, index) => {
       const note = dayNote(group);
-      const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
-      const allCorrect = group.done === group.size && group.correct === group.size;
-      const correctionLabel = mistakes ? "去订正" : allCorrect ? group.items.some(({ result }) => result?.wasIncorrect) ? "已订正" : "无错题" : "订正";
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
       return <div className={`assigned-day ${group.state}`} key={index}>
         {several && <div className="assigned-day-head"><button type="button" onClick={() => onDay(index)} aria-pressed={selectedDay === index}
@@ -134,8 +135,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
         {/* A day not handed in yet is uploaded on its own; corrections only make sense for what has been handed in. */}
         {several && group.state !== "done" && <button type="button" className="assigned-upload" disabled={busy || Boolean(wait)} onClick={() => onUpload(index)} aria-label={`${group.title || dayName}上传这天`}
           title={wait || `上传${dayName}还没交的 ${group.size - group.done} 道题的照片或 PDF，只批改这几道`}>上传这天</button>}
-        {(mistakes > 0 || group.state === "done") && <button type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || Boolean(wait)} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
-          title={allCorrect ? correctionLabel === "已订正" ? "这一天的错题已全部订正正确" : "这一天的题目全部正确，无需订正" : !mistakes ? "请先核实待处理题目" : wait || `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>{correctionLabel}{allCorrect && <span aria-hidden="true"> ✅</span>}</button>}
+        {several && corrections[index]}
       </div>;
     })}
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id
