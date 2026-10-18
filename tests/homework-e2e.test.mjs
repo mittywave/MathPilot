@@ -164,7 +164,7 @@ function testJpeg() {
 }
 
 function startMockModel(port) {
-  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,errorLocationNumbers:[],failErrorLocations:false,unlocatedErrors:false,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
+  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,errorLocationNumbers:[],failErrorLocations:false,invalidErrorLocation:"",unlocatedErrors:false,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     state.requests += 1;
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -174,7 +174,7 @@ function startMockModel(port) {
       const references = JSON.parse(prompt.split("\n")[1]);
       state.errorLocationNumbers.push(...references.map(item=>item.question_number));
       if (state.failErrorLocations) { response.writeHead(401,{"Content-Type":"application/json"}); response.end(JSON.stringify({error:{message:"mock error analysis refused"}})); return; }
-      const results = references.map(item => ({ question_number:item.question_number,feedback:state.unlocatedErrors?"原答字迹无法可靠辨认，不能确认具体出错步骤。":"",bbox:{...item.bbox,errors:state.unlocatedErrors?[]:[
+      const results = references.map(item => ({ question_number:state.invalidErrorLocation===item.question_number?"other-question":item.question_number,feedback:state.unlocatedErrors?"原答字迹无法可靠辨认，不能确认具体出错步骤。":"",bbox:{...item.bbox,errors:state.unlocatedErrors?[]:[
         {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。",part:""},
         {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留",part:""},
       ]} }));
@@ -458,18 +458,25 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const beforeOccurrences=d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
     // Simulate an old result with no explanation: publishing fills only that gap.
     command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
-      `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id='${d1.id}'`]);
+      `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id IN ('${d1.id}','${directResult.gradingItems.find(i=>i.questionNumber==="D2").id}')`]);
     const beforeAutomatic=mock.state.errorLocationNumbers.length;
     assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"publish"}})).response.status,404);
+    mock.state.invalidErrorLocation="D1";
+    const failedAnalysis=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
+    assert.equal(failedAnalysis.response.status,500,"a wrong question number fails the analysis contract");
+    const partialAnalysis=(await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne})).payload.submission;
+    assert.equal(partialAnalysis.gradingItems.find(i=>i.id===d1.id).bbox.errors,undefined);
+    assert.match(partialAnalysis.gradingItems.find(i=>i.questionNumber==="D2").bbox.errors[0].reason,/定理的前提/,"another successful batch is saved even when one analysis fails");
+    mock.state.invalidErrorLocation="";
     const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
     assert.equal(located.response.status,200,JSON.stringify(located.payload));
     assert.equal(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors.length,1,"out-of-box candidate marks are rejected");
     assert.match(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors[0].reason,/定理的前提/,"historical marking gains a specific reason without regrading");
     assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
     assert.deepEqual(d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
-    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic),["D1"],"only the missing explanation invokes analysis");
+    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic),["D1","D2","D1"],"retry analyzes only the failed batch and preserves the successful one");
     await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
-    assert.equal(mock.state.errorLocationNumbers.length,beforeAutomatic+1,"a repeated publish reuses complete explanations");
+    assert.equal(mock.state.errorLocationNumbers.length,beforeAutomatic+3,"a repeated publish reuses complete explanations");
     const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
     assert.equal(correctedDirect.response.status,200,JSON.stringify(correctedDirect.payload));
     assert.equal(correctedDirect.payload.submission.gradingSummary.archived,1);
