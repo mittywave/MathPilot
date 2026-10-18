@@ -1,6 +1,9 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { authorizeDownload, createTypesetRecord, deleteTypesetRecord, fetchLibrary, fetchMe, fetchTypesetRecords, fetchTypesetSource, updateTypesetRecord } from "../../../lib/api-client";
+import { authorizeDownload, createTypesetRecord, deleteTypesetRecord, fetchLibrary, fetchMe, fetchTypesetRecords, fetchTypesetSource, saveTypesetQuestions, updateTypesetRecord } from "../../../lib/api-client";
+import { contentFingerprint } from "../../../lib/content-fingerprint.mjs";
+import { questionCreationContent } from "../../../lib/question-create-rules.mjs";
+import { createQuestionMatcher } from "../../../lib/question-identity";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
 import type { SheetGroup } from "../../../lib/handout-latex";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
@@ -47,6 +50,7 @@ function restoredSettings(raw: Partial<TypesetSettings>): TypesetSettings {
   return {
     answers: raw.answers === "end" || raw.answers === "each" ? raw.answers : "none",
     showSource: raw.showSource === true,
+    saveToLibrary: raw.saveToLibrary === true,
     linePitch: typeof raw.linePitch === "number" ? Math.min(PITCH.max, Math.max(PITCH.min, Math.round(raw.linePitch))) : PITCH.fallback,
     groupRoom: numbers(raw.groupRoom), ownRoom: numbers(raw.ownRoom),
   };
@@ -108,6 +112,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const [appliedTitle, setAppliedTitle] = useState("");
   const [answers, setAnswers] = useState<WordAnswerPlacement>("none");
   const [showSource, setShowSource] = useState(false);
+  const [saveToLibrary, setSaveToLibrary] = useState(false);
   const [linePitch, setLinePitch] = useState(PITCH.fallback);
   const [groupRoom, setGroupRoom] = useState<Record<string, number>>({});
   const [ownRoom, setOwnRoom] = useState<Record<number, number>>({});
@@ -173,6 +178,16 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const spacing = useMemo(() => source?.questions.map((_, index) => roomOf(index)) ?? [], [source, roomOf]);
   const spacingKey = spacing.join(",");
 
+  const registerQuestions = useCallback(async (questions: Question[]) => {
+    setError(""); setBusy("正在加入题库并分配 ID…");
+    try {
+      const saved = (await saveTypesetQuestions(questions)).questions;
+      setResult(null);
+      setSource((current) => current?.questions === questions ? { ...current, questions: saved } : current);
+      return saved;
+    } catch (reason) { setBusy(""); throw reason; }
+  }, []);
+
   // Any change of file, title, edition or spacing typesets again; quick successive changes make one run.
   useEffect(() => {
     if (!source) return;
@@ -180,6 +195,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     const timer = setTimeout(() => void (async () => {
       setError(""); setBusy(statusRef.current?.installed === false ? "首次排版：正在下载排版组件，约 1–2 分钟…" : "正在排版…");
       try {
+        if (saveToLibrary && source.questions.some((question) => !question.code)) { await registerQuestions(source.questions); return; }
         if (!statusRef.current) await statusReady.current;
         const { buildHandoutLatexProject, compileLatexPdf } = await import("../../../lib/handout-latex-files");
         // The hosted site has no typesetter; the panel says so instead.
@@ -195,13 +211,14 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       finally { if (id === run.current) setBusy(""); }
     })(), 350);
     return () => clearTimeout(timer);
-  }, [source, appliedTitle, answers, showSource, spacingKey, linePitch]);
+  }, [source, appliedTitle, answers, showSource, saveToLibrary, spacingKey, linePitch, registerQuestions]);
 
   // Puts a material on the page: its questions, with the title and the settings it opens with.
   async function show(fileName: string, questions: Question[], name: string, settings: TypesetSettings, groups?: SheetGroup[], groupMode?: "sections" | "days") {
     const { leavesAnswerLines } = await import("../../../lib/handout-latex");
     setTitle(name); setAppliedTitle(name); setAnswers(settings.answers); setLinePitch(settings.linePitch);
     setShowSource(settings.showSource === true);
+    setSaveToLibrary(settings.saveToLibrary === true);
     setGroupRoom(settings.groupRoom); setOwnRoom(Object.fromEntries(Object.entries(settings.ownRoom).map(([index, value]) => [Number(index), value])));
     setSource({ fileName, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm"), groups, groupMode });
   }
@@ -214,17 +231,26 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       const { renderImportFile, structuredDocxQuestions } = await import("../../../lib/file-import");
       const items = structuredDocxQuestions(await renderImportFile(file, () => {}));
       if (!items.length) { setBusy(""); setSource(null); setError("没有从这份 Word 里读出题目。题目需要以「1.」「2.」这样的题号开头，大题用「一、选择题」这类标题；讲义也可以每题单独一行加粗标题，如「例题精练 1」。"); return; }
-      // The questions are only typeset, never saved, so they carry no library fields. A number repeated in a later
-      // section gets a suffix, so the per-question spacing saved for the first one keeps its id.
-      const seen = new Map<string, number>();
-      const questions: Question[] = items.map((item) => {
-        const repeat = seen.get(item.questionNumber) ?? 0; seen.set(item.questionNumber, repeat + 1);
-        const question: Question & { questionNumber?: string; warnings?: string[] } = { ...item, id: `typeset-${item.questionNumber}${repeat ? `-${repeat + 1}` : ""}`, categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 };
+      // Content identities survive reopening the Word, retries and another browser, including plain-http LAN use.
+      // This is only a candidate key: a printed code is shown only after the library confirms the saved original.
+      const questions: Question[] = await Promise.all(items.map(async (item) => {
+        const question: Question & { questionNumber?: string; warnings?: string[] } = { ...item, id: "", moduleId: "", categoryId: "", difficulty: "中等", source: "", createdAt: 0, updatedAt: 0 };
         delete question.questionNumber; delete question.warnings;
+        question.id = `typeset-${await contentFingerprint(questionCreationContent(question), null)}`;
         return question;
-      });
+      }));
+      const library = (await fetchLibrary()).questions;
+      const known = new Map(library.map((question) => [question.id, question]));
+      const codes = new Map(library.map((question) => [question.code, question]));
+      const matcher = createQuestionMatcher();
+      for (const question of library) matcher.add(question.id, question);
+      for (const question of questions) {
+        const printed = codes.get(question.code);
+        const original = known.get(question.id) ?? (printed && matcher.confirms(printed.id, question, false) ? printed : undefined);
+        if (original) { question.id = original.id; question.code = original.code; } else delete question.code;
+      }
       const name = record?.title ?? file.name.replace(/\.docx$/i, "").trim();
-      const settings = record ? restoredSettings(record.settings) : { answers, showSource, linePitch, groupRoom: {}, ownRoom: {} };
+      const settings = record ? restoredSettings(record.settings) : { answers, showSource, saveToLibrary: false, linePitch, groupRoom: {}, ownRoom: {} };
       await show(file.name, questions, name, settings);
       setBusy(""); setShowHistory(false);
       saved.current = JSON.stringify({ title: name, settings });
@@ -281,7 +307,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   }
 
   // Every change of title, edition or spacing is written to the open record shortly after, which makes it the latest edit.
-  const settingsKey = JSON.stringify({ title: appliedTitle, settings: { answers, showSource, linePitch, groupRoom, ownRoom } });
+  const settingsKey = JSON.stringify({ title: appliedTitle, settings: { answers, showSource, saveToLibrary, linePitch, groupRoom, ownRoom } });
   // The paper basket keeps one local draft even while this overlay is open.
   const onBasketChange = basket?.onChange;
   useEffect(() => {
@@ -375,7 +401,11 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         <div className="typeset-editions" role="radiogroup" aria-label="版本">{EDITIONS.map((item) => <label key={item.value} title={item.hint} className={answers === item.value ? "active" : ""}>
           <input type="radio" name="edition" checked={answers === item.value} onChange={() => setAnswers(item.value)} /><b>{item.label}</b>
         </label>)}</div>
-        <label><input type="checkbox" checked={showSource} disabled={!source} onChange={(event) => setShowSource(event.target.checked)} /><span>显示题目来源</span></label>
+        <div className="typeset-options">
+          <label><input type="checkbox" checked={showSource} disabled={!source} onChange={(event) => setShowSource(event.target.checked)} /><span>显示题目来源</span></label>
+          <label title="勾选后加入题库并在 PDF 印上永久 ID；取消勾选不会删除已入库题目。"><input type="checkbox" checked={saveToLibrary} disabled={!source || Boolean(busy)} onChange={(event) => { setSaveToLibrary(event.target.checked); if (event.target.checked) { setResult(null); setBusy("正在加入题库并分配 ID…"); } }} /><span>加入题库并分配 ID</span></label>
+        </div>
+        <small>布置给学生时自动加入题库，已有题目保留原 ID。</small>
       </div>
 
       {source && <section className="typeset-field" aria-label="间距"><span>间距</span>
@@ -400,7 +430,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
       <div className="typeset-actions">
       <button className="primary-button typeset-download" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || busy === "正在读取 Word…" || busy === "正在读取粘贴内容…"} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || Boolean(busy)} onClick={() => setAssigning(true)}>布置给学生</button>}
       {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习或网页题目</button></p>}
       {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
@@ -409,7 +439,8 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       {error && <p className="typeset-note error" role="alert">{error}</p>}
       </div>
     </aside>
-      {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groupMode === "sections" ? undefined : source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign} />}
+      {assigning && source && <AssignHomework title={appliedTitle || title || "练习"} questions={source.questions} groups={source.groupMode === "sections" ? undefined : source.groups} studentId={basket?.studentId ?? libraryRecord?.studentId} recordId={recordId} onClose={closeAssign}
+        prepareQuestions={async () => { const questions = await registerQuestions(source.questions); setSaveToLibrary(true); return questions; }} />}
 
     <section className="typeset-preview" aria-label={records !== null && (showHistory || !source) ? "历史记录" : "PDF 预览"} aria-busy={Boolean(busy)}>
       {records !== null && (showHistory || !source && !busy) ? <TypesetHistory records={records} current={recordId} now={listedAt} busy={Boolean(busy)}
