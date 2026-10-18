@@ -22,11 +22,11 @@ function d1(sqlite) {
     prepare(sql) {
       let args = [];
       const statement = {
-        bind(...values) { args = values; return statement; },
+        bind(...values) { args = values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value); return statement; },
         async first() { return sqlite.prepare(sql).get(...args) ?? null; },
         async all() { return { success: true, results: sqlite.prepare(sql).all(...args) }; },
         async run() { const result = sqlite.prepare(sql).run(...args); return { success: true, meta: { changes: result.changes } }; },
-        execute() { const prepared = sqlite.prepare(sql); return prepared.columns().length ? prepared.all(...args) : prepared.run(...args); },
+        execute() { const prepared = sqlite.prepare(sql); return { results: prepared.columns().length ? prepared.all(...args) : [], ...(!prepared.columns().length ? { meta: { changes: prepared.run(...args).changes } } : {}) }; },
       };
       return statement;
     },
@@ -38,6 +38,41 @@ const seed = `
   INSERT INTO users (id, email, password_hash, password_salt, password_iterations, role, created_at) VALUES ('u1', 'one@test', 'h', 's', 1, 'member', 0), ('u2', 'two@test', 'h', 's', 1, 'member', 0);
   INSERT INTO question_assets (id, content_type, byte_size, created_at) VALUES ('a1', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 1, 0);
 `;
+
+test("quick typesetting registers full questions once, reuses printed IDs and never merges different figures", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  try {
+    sqlite.exec("PRAGMA foreign_keys=ON;"); await migrate(sqlite); sqlite.exec(seed);
+    const api = await loadSource("lib/server/library.ts", { DB: d1(sqlite) });
+    const teacher = { id: "u1", email: "one@test", role: "member" };
+    const module = (await api.readLibrary(teacher)).modules[0];
+    const original = { id: "typeset-1", categoryId: "", type: "解答题", difficulty: "中等", stem: "已知正方形 ABCD 的边长为 4，求正方形的面积。", options: [], answer: "16", analysis: "面积为 $4^2=16$。", source: "", createdAt: 0, updatedAt: 0,
+      stemDocxXml: ["<w:p><w:r><w:t>原始公式与表格</w:t></w:r></w:p>"], contentImages: ["data:image/png;base64,aGVsbG8="] };
+    const [saved] = await api.ensureLibraryQuestions([original], teacher);
+    assert.match(saved.code, /^\d{4,}$/); assert.notEqual(saved.id, "typeset-1");
+    assert.deepEqual(saved.stemDocxXml, original.stemDocxXml);
+    let library = await api.readLibrary(teacher);
+    assert.equal(library.questions.length, 1);
+    assert.equal(library.questions[0].moduleId, module.id);
+    assert.equal(library.questions[0].answer, original.answer);
+    assert.equal(library.questions[0].analysis, original.analysis);
+    assert.match(library.questions[0].contentImages[0], /^\/api\/assets\//);
+    const retry = await api.ensureLibraryQuestions([original, { ...original, id: "typeset-2" }], teacher);
+    assert.deepEqual(retry.map((q) => [q.id, q.code]), [[saved.id, saved.code], [saved.id, saved.code]]);
+    const [printed] = await api.ensureLibraryQuestions([{ ...original, id: "reimported-word", code: saved.code }], teacher);
+    assert.equal(printed.id, saved.id);
+    const [different] = await api.ensureLibraryQuestions([{ ...original, contentImages: ["data:image/png;base64,d29ybGQ="] }], teacher);
+    assert.notEqual(different.code, saved.code);
+    const [wrongCode] = await api.ensureLibraryQuestions([{ ...original, id: "typeset-3", code: saved.code, stem: "已知正方形 ABCD 的边长为 5，求正方形的面积。" }], teacher);
+    assert.notEqual(wrongCode.code, saved.code);
+    library = await api.readLibrary(teacher); assert.equal(library.questions.length, 3);
+    await assert.rejects(api.ensureLibraryQuestions([{ ...original, stem: "" }], teacher), (error) => error.status === 400);
+    assert.equal((await api.readLibrary(teacher)).questions.length, 3);
+    await api.deleteScopedQuestion(saved.id, { ...teacher, role: "admin" });
+    await assert.rejects(api.ensureLibraryQuestions([original], teacher), (error) => error.status === 409);
+    assert.equal((await api.readLibrary(teacher)).questions.length, 2, "a deleted question cannot silently count as registered");
+  } finally { sqlite.close(); }
+});
 
 test("0031 keeps every Word record and lets a record hold a question list instead", async () => {
   const sqlite = new DatabaseSync(":memory:");

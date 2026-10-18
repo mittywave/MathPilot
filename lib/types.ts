@@ -235,7 +235,7 @@ export type HandoutSummary = Omit<Handout, "items" | "temporaryQuestions"> & { o
 
 // 快速排版的历史记录：只属于排它的老师。settings 是当时的排版设置。Word 记录（word）另行读取原始 Word，打开时按原样
 // 再读一遍；智能组卷的记录（library）是一份按天分好的题库题目清单（plan），打开时按题目 ID 取题库原题。
-export type TypesetSettings = { answers: "none" | "end" | "each"; showSource?: boolean; linePitch: number; groupRoom: Record<string, number>; ownRoom: Record<string, number> };
+export type TypesetSettings = { answers: "none" | "end" | "each"; showSource?: boolean; saveToLibrary?: boolean; linePitch: number; groupRoom: Record<string, number>; ownRoom: Record<string, number> };
 export type TypesetRecord = {
   id: string; title: string; fileName: string; questionCount: number; settings: Partial<TypesetSettings>; createdAt: number; updatedAt: number;
   sourceKind: "word" | "library"; studentId: string | null; studentName: string | null; plan: SmartPaperPlan | null;

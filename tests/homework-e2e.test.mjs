@@ -68,6 +68,14 @@ test("student classes preserve legacy membership, isolate teachers, and assign i
     assert.equal(assigned.response.status, 201, JSON.stringify(assigned.payload));
     assert.equal(assigned.payload.assigned.length, 2, "class plus individual choices never duplicate a recipient");
     assert.equal(new Set(assigned.payload.assigned.map((s) => s.id)).size, 2);
+    const registered = (await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find((item) => item.id === question.id);
+    assert.match(registered.code, /^\d{4,}$/);
+    const assignedSheet = (await jsonRequest(base, `/api/submissions/${assigned.payload.assigned[0].id}`, { cookie: one })).payload.submission;
+    assert.equal(assignedSheet.assigned.questions[0].question.code, registered.code);
+    const savedAgain = await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { questions: [question] } });
+    assert.equal(savedAgain.response.status, 201);
+    assert.equal(savedAgain.payload.questions[0].code, registered.code);
+    assert.equal((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.filter((item) => item.id === question.id).length, 1);
     const historyRecord = async () => (await jsonRequest(base, "/api/typeset-records", { cookie: one })).payload.records.find((item) => item.id === record.id);
     assert.deepEqual((await historyRecord()).assignedTo.map((student) => student.id).sort(), [...memberIds].sort(), "the history lists the actual whole-class recipients");
     assert.ok((await historyRecord()).assignedTo.every((student) => student.className === "提高班"));
@@ -963,11 +971,11 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual((await jsonRequest(base,`/api/submissions/${firstUpload}`,{cookie:teacherOne})).payload.submission.outputs,{wrongBook:true,report:false,profile:true});
     assert.equal(mock.state.requests,assignedProfileRequests);
     assert.equal(sheet.processingProgress.identified,0,"nothing is identified before a page is read");
-    // A picture that came with the material is stored for this teacher only.
+    // Registered material pictures follow the shared question library; student work stays private.
     const sheetPicture=sheet.assigned.questions[0].question.contentImages[0];
     assert.match(sheetPicture,/^\/api\/assets\/[0-9a-f-]{36}$/);
     assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherOne}})).status,200);
-    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherTwo}})).status,404);
+    assert.equal((await fetch(base+sheetPicture,{headers:{Cookie:teacherTwo}})).status,200);
     const sheetRows=d1Rows(stateDir,"SELECT question_number,reference_source,reference_verified,taxonomy_keys_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order",[sheet.assignmentId]);
     assert.deepEqual(sheetRows.map(r=>[r.question_number,r.reference_source,r.reference_verified]),[["D1-1","provided",1],["D1-2","provided",1],["D2-1","unresolved",0],["D2-2","provided",1]]);
     assert.ok(JSON.parse(sheetRows[1].taxonomy_keys_json).length,"a question the library never saw is tagged from what its analysis says it tests");

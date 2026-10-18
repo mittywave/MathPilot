@@ -382,8 +382,8 @@ export function hasReference(question: Pick<Question, "answer" | "analysis">) {
 /**
  * 布置作业: a material from 快速排版 handed to one or more students. Each student gets a homework of their own whose
  * questions and answers are stored now, waiting for the work to come back. A library question is copied from the
- * library itself; any other question (one read from a Word, a wrong-book snapshot) as the browser sent it, its
- * pictures stored for this teacher only. Task groups have no preset submission dates.
+ * library itself; any new Word or wrong-book question is registered first with its permanent ID and media.
+ * Task groups have no preset submission dates.
  */
 export async function createAssignedHomework(input: { studentIds?: unknown; title?: unknown; groups?: unknown; questions?: unknown; recordId?: unknown }, user: AuthUser) {
   requireHomeworkEnabled();
@@ -400,15 +400,16 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
   const record = typeof input.recordId === "string" && input.recordId ? await appEnv().DB.prepare("SELECT id FROM typeset_records WHERE id = ? AND owner_user_id = ?")
     .bind(input.recordId, user.id).first<{ id: string }>() : null;
   const sheet: HomeworkSheet = { groups, ...(record ? { recordId: record.id } : {}) };
-  const { readLibrary, storeTeacherQuestionMedia } = await import("./library");
+  const { readLibrary, ensureLibraryQuestions } = await import("./library");
+  const registered = await ensureLibraryQuestions(raw, user);
   const library = new Map((await readLibrary(user)).questions.map((question) => [question.id, question]));
   const { index: graph } = await (await import("./knowledge-graph")).loadPublishedKnowledgeGraph();
   const questions = [];
-  for (const item of raw) {
+  for (const item of registered) {
     const fromLibrary = library.get(String(item.id ?? ""));
     const copy = givenQuestion(fromLibrary ?? item);
     if (new TextEncoder().encode(JSON.stringify(copy)).byteLength > MAX_SOURCE_BYTES) throw responseError("有一道题的内容过大，无法布置", 413);
-    const source = fromLibrary ? copy : await storeTeacherQuestionMedia(copy, user);
+    const source = copy;
     const type = QUESTION_TYPES.includes(source.type) ? source.type : "解答题";
     const stem = text(source.stem, 100_000), answer = text(source.answer, 100_000), analysis = text(source.analysis, 100_000);
     const tags = Array.isArray(source.tags) ? source.tags.map((tag) => text(tag, 120)).filter(Boolean) : [];

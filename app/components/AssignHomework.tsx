@@ -9,11 +9,13 @@ type Assigned = Array<{ id: string; studentId: string; studentName: string }>;
 // in 快速排版, or a plan picked in the student's archive. What the student hands in is uploaded later from the
 // student's archive, in one go or task by task, without preset dates. The 快速排版 record it came from is remembered,
 // so the archive knows it is out.
-export function AssignHomework({ title, questions, groups, studentId, className, recordId, origin = "快速排版", onClose, onAssigned }: {
+export function AssignHomework({ title, questions, groups, studentId, className, recordId, origin = "快速排版", onClose, onAssigned, prepareQuestions }: {
   title: string; questions: Question[]; groups?: HomeworkSheetGroup[]; studentId?: string | null; className?: string; recordId?: string | null; origin?: string;
   onClose: () => void;
   /** Called instead of showing the confirmation, when the caller shows the new homework itself. */
   onAssigned?: () => void;
+  /** Refresh the open typeset PDF with permanent IDs, only after the teacher confirms the recipients. */
+  prepareQuestions?: () => Promise<Question[]>;
 }) {
   const [students, setStudents] = useState<StudentSummary[] | null>(null);
   const [chosen, setChosen] = useState<string[]>(studentId ? [studentId] : []);
@@ -41,7 +43,8 @@ export function AssignHomework({ title, questions, groups, studentId, className,
     if (!chosen.length || !name.trim() || busy) return;
     setBusy(true); setError("");
     try {
-      const result = await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions, groups, recordId });
+      const ready = prepareQuestions ? await prepareQuestions() : questions;
+      const result = await homeworkApi.assign({ studentIds: chosen, title: name.trim(), questions: ready, groups, recordId });
       if (onAssigned) onAssigned(); else setAssigned(result.assigned);
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : "布置失败"); }
@@ -73,7 +76,7 @@ export function AssignHomework({ title, questions, groups, studentId, className,
           </label>) : <p>还没有学生档案，请先在“学生档案”里新建学生。</p>}
         </fieldset>
         <p className="assign-summary">{questions.length} 道题{days > 1 ? ` · ${days} 天任务` : ""} · {answered === questions.length ? "全部带答案" : `${answered} 道带答案，其余 ${questions.length - answered} 道批改时由 AI 解题`}</p>
-        <p className="assign-hint">题目和答案现在就存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。{days > 1 ? "各天任务可以分开完成，只记录实际提交日期。" : "只记录实际提交日期。"}</p>
+        <p className="assign-hint">确认布置时，题目自动加入题库并分配永久 ID，题目和答案同时存进作业。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF，按这份清单批改，可以分几次上传；没交的题不算错。{days > 1 ? "各天任务可以分开完成，只记录实际提交日期。" : "只记录实际提交日期。"}</p>
         {error && <p className="assign-error" role="alert">{error}</p>}
         <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button>
           <button className="primary-button" disabled={busy || !chosen.length || !name.trim()} onClick={() => void assign()}>{busy ? "正在布置…" : chosen.length > 1 ? `布置给 ${chosen.length} 位学生` : "布置"}</button></div>

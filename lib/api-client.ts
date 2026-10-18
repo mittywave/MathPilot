@@ -13,6 +13,7 @@ export function register(email: string, password: string, inviteCode: string) { 
 export function login(email: string, password: string) { return request<{ user: AuthUser }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); }
 export function logout() { return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }); }
 export function createCloudQuestion(question: Question) { return request<{ question: Question }>("/api/questions", { method: "POST", body: JSON.stringify({ question }) }); }
+export function saveTypesetQuestions(questions: Question[]) { return request<{ questions: Question[] }>("/api/questions", { method: "POST", body: JSON.stringify({ questions }) }); }
 export function updateCloudQuestion(question: Question) { return request<{ question: Question }>(`/api/questions/${encodeURIComponent(question.id)}`, { method: "PUT", body: JSON.stringify({ question }) }); }
 export function deleteCloudQuestion(id: string) { return request<{ ok: boolean }>(`/api/questions/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 export function fetchDeletedQuestions() { return request<{ questions: Array<Question & { deletedAt: number }> }>("/api/questions"); }

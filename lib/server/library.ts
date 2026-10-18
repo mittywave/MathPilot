@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import type { AuthUser, Category, LibraryData, LibraryModule, LibraryScope, Question } from "../../lib/types";
 import { retainedQuestionCreatedAt } from "../../lib/question-order-rules.mjs";
 import { questionCreationContent } from "../../lib/question-create-rules.mjs";
+import { contentFingerprint } from "../content-fingerprint.mjs";
+import { createQuestionMatcher } from "../question-identity";
 import { normalizeQuestionProvenance } from "../../lib/exam-modules.mjs";
 import { resolveKnowledgeTaxonomyKeys } from "../../lib/homework-capability-framework.mjs";
 import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
@@ -146,13 +148,6 @@ export async function teacherNamespaceId(user: AuthUser) {
     VALUES (?, 'personal', ?, NULL, NULL, ?)`)
     .bind(id, user.id, Date.now()).run();
   return id;
-}
-
-// A question one teacher hands to a student without it entering the library (a Word's question in 布置作业): its
-// pictures are stored like library pictures, but only that teacher's namespace may read them.
-export async function storeTeacherQuestionMedia<T>(value: T, user: AuthUser): Promise<T> {
-  const context: LibraryContext = { libraryId: await teacherNamespaceId(user), scope: "mine", publicationId: null, ownerUserId: user.id, writable: true, publishedAt: null };
-  return await uploadMediaValue(value, context) as T;
 }
 
 export function requireWritable(context: LibraryContext) {
@@ -365,6 +360,41 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
     return { ...stored, code: code.code, createdByEmail: user.email, canEdit: true };
   }
   return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: user.id, createdByEmail: user.email, canEdit: true };
+}
+
+// Quick typesetting and assignment use the same insertion path and permanent codes as manual entry.
+// Keep the submitted layout: only its library identity is replaced when an original already exists.
+export async function ensureLibraryQuestions(raw: unknown, user: AuthUser): Promise<Question[]> {
+  if (!Array.isArray(raw) || !raw.length || raw.length > 300 || raw.some((item) => !item || typeof item.stem !== "string" || !item.stem.trim())) {
+    throw new Response(JSON.stringify({ error: "请选择 1–300 道有题干的题目" }), { status: 400 });
+  }
+  const library = await readLibrary(user);
+  const context = await resolveLibraryContext(user);
+  const known = new Map(library.questions.map((question) => [question.id, question]));
+  const codes = new Map(library.questions.map((question) => [question.code, question]));
+  const matcher = createQuestionMatcher();
+  for (const question of library.questions) matcher.add(question.id, question);
+  const questions: Question[] = [];
+  for (const item of raw as Question[]) {
+    const printed = codes.get(item.code);
+    let original = known.get(item.id) ?? (printed && matcher.confirms(printed.id, item, false) ? printed : undefined);
+    if (!original) {
+      const moduleId = library.modules.find((module) => module.id === item.moduleId)?.id ?? library.modules[0]?.id;
+      if (!moduleId) throw new Response(JSON.stringify({ error: "请先在题库创建一个模块，再加入题库" }), { status: 400 });
+      const categoryId = library.categories.find((category) => category.id === item.categoryId && category.moduleId === moduleId)?.id ?? moduleId;
+      // Old clients used typeset-1, typeset-2 for every file. Never make those temporary IDs permanent.
+      const id = !item.id || /^typeset-\d+(?:-\d+)?$/.test(item.id)
+        ? `typeset-${await contentFingerprint(questionCreationContent({ ...item, id: "", moduleId: "", categoryId: "" }), null)}` : item.id;
+      const deleted = await appEnv().DB.prepare(`SELECT source_id FROM library_questions_v2 WHERE library_id = ?
+        AND ${versionWhere(context.publicationId)} AND source_id = ? AND deleted_at IS NOT NULL`)
+        .bind(context.libraryId, ...versionBindings(context.publicationId), id).first();
+      if (deleted) throw new Response(JSON.stringify({ error: "有一道题已在回收站，请先恢复后再加入题库" }), { status: 409 });
+      original = known.get(id) ?? await createScopedQuestion({ ...item, id, moduleId, categoryId, code: undefined }, user);
+      known.set(original.id, original);
+    }
+    questions.push({ ...item, id: original.id, code: original.code });
+  }
+  return questions;
 }
 
 export async function updateScopedQuestion(id: string, raw: Question, user: AuthUser) {
