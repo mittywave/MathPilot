@@ -174,7 +174,7 @@ function startMockModel(port) {
       const references = JSON.parse(prompt.split("\n")[1]);
       state.errorLocationNumbers.push(...references.map(item=>item.question_number));
       if (state.failErrorLocations) { response.writeHead(401,{"Content-Type":"application/json"}); response.end(JSON.stringify({error:{message:"mock error analysis refused"}})); return; }
-      const results = references.map(item => ({ question_number:state.invalidErrorLocation===item.question_number?"other-question":item.question_number,feedback:state.unlocatedErrors?"原答字迹无法可靠辨认，不能确认具体出错步骤。":"",bbox:{...item.bbox,errors:state.unlocatedErrors?[]:[
+      const results = references.map(item => ({ question_number:state.invalidErrorLocation===item.question_number?"other-question":item.question_number,feedback:state.unlocatedErrors && state.unlocatedErrors !== "empty"?"原答字迹无法可靠辨认，不能确认具体出错步骤。":"",bbox:{...item.bbox,errors:state.unlocatedErrors?[]:[
         {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。",part:""},
         {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留",part:""},
       ]} }));
@@ -474,7 +474,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.match(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors[0].reason,/定理的前提/,"historical marking gains a specific reason without regrading");
     assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
     assert.deepEqual(d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
-    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic),["D1","D2","D1"],"retry analyzes only the failed batch and preserves the successful one");
+    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic,beforeAutomatic+2).sort(),["D1","D2"],"independent initial batches may reach the model in either order");
+    assert.deepEqual(mock.state.errorLocationNumbers.slice(beforeAutomatic+2),["D1"],"retry analyzes only the failed batch and preserves the successful one");
     await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
     assert.equal(mock.state.errorLocationNumbers.length,beforeAutomatic+3,"a repeated publish reuses complete explanations");
     const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
@@ -721,6 +722,12 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const markedWrongId=markedResult.gradingItems.find(i=>i.questionNumber==="1-3(2)").id;
     command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
       `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id='${markedWrongId}'`]);
+    mock.state.unlocatedErrors="empty";
+    const emptyAnalysis=await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
+    assert.equal(emptyAnalysis.response.status,500,"an empty analysis cannot be disguised as a completed explanation");
+    assert.equal((await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne})).payload.submission.gradingItems.find(i=>i.id===markedWrongId).feedback,"");
+    command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
+      `UPDATE grading_items SET feedback='本题已判为有错，但无法从原图可靠确认具体错处，请结合原卷和参考答案核对。' WHERE id='${markedWrongId}'`]);
     mock.state.unlocatedErrors=true;
     const unlocated=(await jsonRequest(base,`/api/submissions/${markedId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}})).payload.submission.gradingItems.find(i=>i.id===markedWrongId);
     assert.equal(unlocated.bbox.errors,undefined);
