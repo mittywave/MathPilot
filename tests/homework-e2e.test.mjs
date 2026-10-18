@@ -171,6 +171,7 @@ function startMockModel(port) {
     const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     const prompt = String(payload.input?.[0]?.content?.find((item) => item.type === "input_text")?.text ?? "");
     if (prompt.startsWith("你是数学作业错处定位助手")) {
+      assert.match(prompt,/最终答案规范[\s\S]*最简分数[\s\S]*2\/2\.5[\s\S]*4\/5/,"automatic error analysis receives the same final-answer rule as grading");
       const references = JSON.parse(prompt.split("\n")[1]);
       state.errorLocationNumbers.push(...references.map(item=>item.question_number));
       if (state.failErrorLocations) { response.writeHead(401,{"Content-Type":"application/json"}); response.end(JSON.stringify({error:{message:"mock error analysis refused"}})); return; }
@@ -315,6 +316,7 @@ function startMockModel(port) {
     }
     state.gradingCalls += 1;
     const numbers = [...prompt.matchAll(/题号 ([^\n]+)/g)].map((match) => match[1].trim());
+    assert.match(prompt,/最终答案规范[\s\S]*最简分数[\s\S]*不能先替学生约分/,"the grading pipeline checks the student's original final form");
     state.gradedNumbers.push(...numbers); if (prompt.includes("本作业只判对错")) state.verdictOnlyPrompts += 1;
     if (prompt.includes("本作业为 IGCSE / A Level")) {
       if(numbers.includes("1(b)"))assert.match(prompt, /题号 1\(b\)\n题型：解答题\n满分：3/); assert.match(prompt, /结果分（A）只在对应方法分已得时才给/);
