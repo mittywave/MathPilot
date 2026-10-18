@@ -113,9 +113,11 @@ type QuestionEntryProps = {
   // Handout imports reuse the same parser/editor, but save to the handout instead of the library.
   saveTemporaryQuestions?: (questions: Question[]) => Promise<Question[]>;
   startWithFile?: boolean;
+  // A wrong-book question joining the library: saved as a new library question that keeps its ID.
+  addToLibrary?: boolean;
 };
 
-export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice, saveTemporaryQuestions, startWithFile = false }: QuestionEntryProps) {
+export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice, saveTemporaryQuestions, startWithFile = false, addToLibrary = false }: QuestionEntryProps) {
   const [questionDraft, setQuestionDraft] = useState<Question | null>(initial);
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isReconstructingDiagram, setIsReconstructingDiagram] = useState(false);
@@ -550,8 +552,8 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true);
     try {
       if (saveTemporaryQuestions) { onSaved(await saveTemporaryQuestions([saved])); setNotice("临时题目已保存"); onClose(); return; }
-      const result = questionDraft.id ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
-      onSaved([result.question]); setNotice(questionDraft.id ? "云端试题已更新" : "试题已保存到云端"); onClose();
+      const result = questionDraft.id && !addToLibrary ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
+      onSaved([result.question]); setNotice(addToLibrary ? `已加入题库${result.question.code ? `，ID ${result.question.code} 不变` : ""}` : questionDraft.id ? "云端试题已更新" : "试题已保存到云端"); onClose();
     } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败", "error"); }
     finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
   }
@@ -559,7 +561,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   return <>
     {questionDraft && !fileImportOpen && <div className="modal-backdrop">
       <section className="modal question-modal" role="dialog" aria-modal="true" aria-label="试题编辑" onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); if (screenshotEntry) handleQuestionImage(file); else handleManualImages([file]); } }}>
-        <div className="modal-head"><div><span className="eyebrow">智能录题</span><h2>{questionDraft.id ? "编辑并校对试题" : "截图自动录题"}</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><span className="eyebrow">智能录题</span><h2>{addToLibrary ? "加入题库" : questionDraft.id ? "编辑并校对试题" : "截图自动录题"}</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={onClose}>×</button></div>
         {!questionDraft.id && <div className="entry-mode" role="tablist" aria-label="录题方式"><button className="active"><b>AI 截图录入</b><span>识别单道题目截图</span></button><button onClick={openFileImport}><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>}
         {screenshotEntry && (!questionDraft.originalImage ? <button type="button" className="smart-capture" onClick={() => questionImageRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = droppedImage(event); if (file) handleQuestionImage(file); else setRecognitionError("请选择图片文件"); }}>
           <div className="capture-icon">⌘V</div><div><b>直接粘贴题目截图</b><p>也可以点击选择图片，或把图片拖到这里</p></div><span>自动识别题干、公式、答案与配图</span>

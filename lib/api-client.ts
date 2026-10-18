@@ -1,4 +1,4 @@
-import type { AbilityNote, AuthUser, Category, Handout, HandoutCourseNode, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentReport, StudentReportText, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionEntry } from "./types";
+import type { AbilityNote, AuthUser, Category, Handout, HandoutCourseNode, HandoutGroup, HandoutSummary, LibraryData, LibraryModule, Question, SmartPaperPlan, Student, StudentObservation, StudentProfileSummary, StudentReport, StudentReportText, StudentSummary, TeamInvite, TeamMember, TypesetRecord, TypesetSettings, WrongQuestionCatalogItem, WrongQuestionEntry } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers } });
@@ -59,6 +59,7 @@ export function updateStudent(student: Student) { return request<{ student: Stud
 export function deleteStudent(id: string) { return request<{ ok: boolean; wrongQuestionCount: number }>(`/api/students/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 export function deleteWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "DELETE" }); }
 export function restoreWrongQuestion(studentId: string, entryId: string) { return request<{ ok: boolean }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions/${encodeURIComponent(entryId)}`, { method: "PATCH" }); }
+export function fetchWrongQuestionCatalog() { return request<{ items: WrongQuestionCatalogItem[] }>("/api/wrong-questions"); }
 export function fetchWrongQuestions(studentId: string) { return request<{ entries: WrongQuestionEntry[] }>(`/api/students/${encodeURIComponent(studentId)}/wrong-questions?includeHistory=true`); }
 // 定档: graded knowledge and question types, and the teacher's lesson feedback; `notice` says why a reading of the words failed.
 export function fetchStudentProfile(studentId: string, since: number | null) { return request<{ profile: StudentProfileSummary }>(`/api/students/${encodeURIComponent(studentId)}/profile${since ? `?since=${since}` : ""}`); }

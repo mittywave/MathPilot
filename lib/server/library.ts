@@ -583,12 +583,15 @@ export async function readAssetForUser(id: string, user: AuthUser | null) {
 export async function authorizeQuestionDownload(user: AuthUser, questionIds: string[]) {
   const data = await readLibrary(user);
   const available = new Set(data.questions.map((item) => item.id));
-  // 学生错题本里的题目是快照、不在题库中；属于本人学生档案的同样可以组卷导出。
+  // 学生错题本里的题目是快照、不在题库中；属于本人学生档案的同样可以组卷导出。组卷篮里早先选的错题还用
+  // 作业题自己的 ID（题目统一 ID 之前），按它对应的题目 ID 认。
   const outside = questionIds.filter((id) => !available.has(id));
   if (outside.length) {
     const owned = await appEnv().DB.prepare(`SELECT DISTINCT json_extract(question_snapshot_json, '$.id') AS id FROM student_wrong_questions
-      WHERE owner_user_id = ? AND json_extract(question_snapshot_json, '$.id') IN (SELECT value FROM json_each(?))`)
-      .bind(user.id, JSON.stringify(outside)).all<{ id: string }>();
+      WHERE owner_user_id = ? AND json_extract(question_snapshot_json, '$.id') IN (SELECT value FROM json_each(?))
+      UNION SELECT q.id FROM assignment_questions q JOIN student_wrong_questions w ON w.owner_user_id = ? AND w.source_question_id = q.question_key
+      WHERE q.id IN (SELECT value FROM json_each(?))`)
+      .bind(user.id, JSON.stringify(outside), user.id, JSON.stringify(outside)).all<{ id: string }>();
     for (const row of owned.results) available.add(String(row.id));
   }
   return questionIds.length > 0 && questionIds.every((id) => available.has(id));

@@ -153,14 +153,15 @@ async function upload(base, path, cookie, bytes, name = "作业页面.jpg") {
 
 function sessionCookie(response) { return (response.headers.get("set-cookie") ?? "").split(";", 1)[0]; }
 
-function testJpeg() {
+// Another quality gives another photo of the same page: a resubmission is photographed again.
+function testJpeg(quality = 82) {
   const width = 800; const height = 1100; const data = Buffer.alloc(width * height * 4, 255);
   for (let y = 90; y < height - 80; y += 80) for (let x = 70; x < width - 70; x += 1) {
     const offset = (y * width + x) * 4; data[offset] = 60; data[offset + 1] = 70; data[offset + 2] = 75;
   }
   const ink = (x0, y0, x1, y1) => { for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) { const offset = (y * width + x) * 4; data[offset] = data[offset + 1] = data[offset + 2] = 25; } };
   ink(520, 292, 680, 295); ink(598, 262, 601, 322); // a printed figure: axes between the ruled lines
-  return jpeg.encode({ data, width, height }, 82).data;
+  return jpeg.encode({ data, width, height }, quality).data;
 }
 
 function startMockModel(port) {
@@ -580,7 +581,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const versions=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}});
     assert.equal(versions.response.status,200);assert.equal(versions.payload.submission.version,2);
     const secondId=versions.payload.submission.id;
-    await submitPages(base,teacherOne,secondId,[await uploadPage(base,teacherOne,secondId,bytes)]);
+    // The same photo handed in again would not count as another mistake, so the new version is a new photo.
+    await submitPages(base,teacherOne,secondId,[await uploadPage(base,teacherOne,secondId,testJpeg(81))]);
     const secondResult=await waitForSubmission(base,teacherOne,secondId,["published"],worker);
     let d3entry=(await jsonRequest(base,`/api/students/${studentOneId}/wrong-questions`,{cookie:teacherOne})).payload.entries.find(e=>e.assignmentId===directAssignmentId&&e.question.stem.includes("3+3"));
     assert.equal(d3entry.mistakeCount,2);

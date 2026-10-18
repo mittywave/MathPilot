@@ -314,6 +314,9 @@ export type StudentReport = { id: string; studentId: string; periodStart: number
 /** archiveReason of a wrong question the teacher deleted. It waits in 历史记录 and can be restored; other archived entries follow grading. */
 export const WRONG_QUESTION_DELETED = "老师删除";
 
+/** 一道在学生错题本里、还没进题库的题：题库页可以搜到它，也可以把它加入题库（编号不变）。 */
+export type WrongQuestionCatalogItem = { question: Question; students: Array<{ id: string; name: string }>; mistakeCount: number; lastWrongAt: number };
+
 export type WrongQuestionEntry = {
   id: string;
   studentId: string;
