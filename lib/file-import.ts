@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { docxInferredQuestionType, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
+import { docxInferredQuestionType, docxPrintedQuestionId, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
 import { docxMathLatex } from "./docx-web-content";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
 import type { QuestionType } from "./types";
@@ -22,6 +22,8 @@ export type StructuredDocxQuestion = {
   analysis?: string;
   analysisDocxXml?: string[];
   analysisDocxAssets?: Record<string, string>;
+  // The ID MathPilot printed beside the question's number, when the Word came from it.
+  code?: string;
 };
 
 export type ImportPage = {
@@ -143,7 +145,10 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   let pictureId = 10000;
   const blocks = blockNodes.map((node) => {
     const picture = docxVmlPicturesToDrawing(new XMLSerializer().serializeToString(node), pictureId); pictureId += picture.pictures;
-    return { text: wordNodeText(node).trim(), xml: picture.xml, kind: node.localName as "p" | "tbl", overlays: picture.overlays };
+    const block = { text: wordNodeText(node).trim(), xml: picture.xml, kind: node.localName as "p" | "tbl", overlays: picture.overlays, printedId: "" };
+    // A Word printed by MathPilot has each question's ID after its number: it names the question and is not stem text.
+    const printed = block.kind === "p" ? docxPrintedQuestionId(block.text, block.xml) : null;
+    return printed ? { ...block, text: printed.text, xml: printed.xml, printedId: printed.id } : block;
   });
   const answerBlockStart = blocks.findIndex((block) => /(?:参考答案与试题解析|答案与解析|试题解析)/.test(block.text));
   const questionEnd = answerBlockStart < 0 ? blocks.length : answerBlockStart;
@@ -163,6 +168,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     const numberMatch = block.kind === "p" && !currentQuestion?.heading ? block.text.match(/^\s*(\d{1,3})(?:[．、]|\.(?!\d))\s*([\s\S]*)$/) : null;
     if (numberMatch && currentType) {
       currentQuestion = parsedQuestion(numberMatch[1], currentType, numberMatch[2].trim(), false, [block]);
+      if (block.printedId) currentQuestion.code = block.printedId;
       questions.push(currentQuestion); continue;
     }
     if (currentQuestion && (block.text || block.kind === "tbl" || /r:embed="[^"]+"/.test(block.xml))) currentQuestion.blocks.push(block);
@@ -248,24 +254,24 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     }
     if (!answers[question.questionNumber] && question.type === "解答题" && analyses[question.questionNumber]) answers[question.questionNumber] = "见解析";
   }
-  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets })) };
+  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets, ...(question.code ? { code: question.code } : {}) })) };
 }
 
 function waitForImages(root: HTMLElement) {
   return Promise.all(Array.from(root.querySelectorAll("img")).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => { image.onload = () => resolve(); image.onerror = () => resolve(); })));
 }
 
-// The browser draws a rendered Word page itself through an SVG foreignObject: text, Word equations (MathML) and
+// The browser draws a page itself through an SVG foreignObject: text, Word equations (MathML) and
 // pictures exactly as it shows them, with the page's own style sheets. html2canvas, the fallback, cannot paint
 // equations and sets Chinese text lower than the browser does. Throws when the browser will not draw it.
-async function drawPage(page: HTMLElement, scale: number) {
+export async function drawPage(page: HTMLElement, scale: number, wrapperClass = "docx-wrapper") {
   const box = page.getBoundingClientRect(), inherited = getComputedStyle(page.parentElement ?? page);
   const styles = Array.from(document.styleSheets).flatMap((sheet) => { try { return Array.from(sheet.cssRules, (rule) => rule.cssText); } catch { return []; } }).join("\n");
   const width = Math.ceil(box.width * scale), height = Math.ceil(box.height * scale);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" class="docx-wrapper" style="padding:0;margin:0;background:#fff;display:block;width:${box.width}px;transform:scale(${scale});transform-origin:0 0;font-family:${inherited.fontFamily.replace(/"/g, "'")};font-size:${inherited.fontSize};line-height:${inherited.lineHeight};color:${inherited.color}"><style>${styles.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</style>${new XMLSerializer().serializeToString(page)}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" class="${wrapperClass}" style="padding:0;margin:0;background:#fff;display:block;width:${box.width}px;transform:scale(${scale});transform-origin:0 0;font-family:${inherited.fontFamily.replace(/"/g, "'")};font-size:${inherited.fontSize};line-height:${inherited.lineHeight};color:${inherited.color}"><style>${styles.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</style>${new XMLSerializer().serializeToString(page)}</div></foreignObject></svg>`;
   const picture = new Image(); picture.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; await picture.decode();
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
-  const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法绘制 Word 页面");
+  const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法绘制页面");
   context.fillStyle = "#fff"; context.fillRect(0, 0, width, height); context.drawImage(picture, 0, 0);
   context.getImageData(0, 0, 1, 1); // a browser that taints such drawings refuses here, before any slicing
   return canvas;
@@ -373,6 +379,7 @@ export function structuredDocxQuestions(pages: ImportPage[]) {
       analysisDocxXml: item.analysisDocxXml ?? (byNumber ? page?.sourceAnalysisXml?.[item.questionNumber] : undefined),
       analysisDocxAssets: item.analysisDocxAssets ?? (byNumber ? page?.sourceAnalysisAssets?.[item.questionNumber] : undefined),
       contentImages: item.contentImages,
+      ...(item.code ? { code: item.code } : {}),
     };
   });
 }

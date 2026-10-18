@@ -1,45 +1,16 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { d1, migratedDatabase } from "./helpers/migrated-d1.mjs";
 import { loadSource } from "./load-source.mjs";
 
 // 同一道题在作业、错题本和题库里只用一个 ID：再做错同一道题，错题本里仍是一条，错的次数加一。
-const MIGRATIONS = new URL("../migrations/", import.meta.url);
-
-async function migrate(sqlite, until = "9999") {
-  for (const name of (await readdir(MIGRATIONS)).filter((file) => file.endsWith(".sql")).sort()) {
-    if (name >= until) break;
-    sqlite.exec(await readFile(new URL(name, MIGRATIONS), "utf8"));
-  }
-}
-
-function d1(sqlite) {
-  return {
-    prepare(sql) {
-      let args = [];
-      const statement = {
-        bind(...values) { args = values; return statement; },
-        async first() { return sqlite.prepare(sql).get(...args) ?? null; },
-        async all() { return { success: true, results: sqlite.prepare(sql).all(...args) }; },
-        async run() { const result = sqlite.prepare(sql).run(...args); return { success: true, meta: { changes: result.changes } }; },
-        execute() { const prepared = sqlite.prepare(sql); return { success: true, results: prepared.columns().length ? prepared.all(...args) : (prepared.run(...args), []) }; },
-      };
-      return statement;
-    },
-    async batch(statements) { sqlite.exec("BEGIN"); try { const results = statements.map((statement) => statement.execute()); sqlite.exec("COMMIT"); return results; } catch (error) { sqlite.exec("ROLLBACK"); throw error; } },
-  };
-}
-
 const user = { id: "u", email: "u@test", role: "admin" };
 const STEM_A = "如图，在▱ABCD中，对角线AC，BD相交于点O，过点O作MN⊥BD，分别交AD，BC于点M，N．求证：四边形BNDM是菱形．";
 // The same question read again from another photo: printed number, half-width punctuation and LaTeX.
 const STEM_A_AGAIN = "3. 如图,在$\\square ABCD$中,对角线$AC$,$BD$相交于点$O$,过点$O$作$MN \\perp BD$,分别交$AD$,$BC$于点$M$,$N$.求证:四边形$BNDM$是菱形.";
 
 async function setup() {
-  const sqlite = new DatabaseSync(":memory:");
-  sqlite.exec("PRAGMA foreign_keys=ON;");
-  await migrate(sqlite);
+  const sqlite = await migratedDatabase();
   sqlite.exec(`INSERT INTO users (id, email, password_hash, password_salt, password_iterations, role, created_at) VALUES ('u', 'u@test', 'h', 's', 1, 'admin', 0);
     INSERT INTO students (id, owner_user_id, name, class_name, notes, created_at, updated_at) VALUES ('s1', 'u', '小宇', '', '', 1, 1), ('s2', 'u', '小林', '', '', 1, 1);`);
   return sqlite;
@@ -81,7 +52,7 @@ test("the same question got wrong twice stays one wrong-book entry with one ID",
   assert.equal(entries[0].sourceQuestionId, "q1", "the first time it was got wrong names it");
   assert.equal(entries[0].question.id, "q1");
   assert.match(entries[0].question.code, /^\d{4,}$/);
-  assert.notEqual(entries[0].question.stem, STEM_A, "the entry shows the latest copy");
+  assert.equal(entries[0].question.stem, STEM_A, "the entry keeps the question as it first entered the book");
   assert.equal(sqlite.prepare("SELECT question_key FROM assignment_questions WHERE id = 'q3'").get().question_key, "q1");
   assert.equal(sqlite.prepare("SELECT question_key FROM assignment_questions WHERE id = 'q2'").get().question_key, "", "a question never got wrong gets no ID");
 
