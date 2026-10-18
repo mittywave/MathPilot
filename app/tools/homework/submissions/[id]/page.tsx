@@ -80,7 +80,7 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
     <aside className="error-reasons" aria-label={`${caption}的错误原因`}>{callouts.map(({ item, error, index }, position) =>
       <article id={`error-note-${item.id}-${index}`} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
         style={{ top: layout.tops[position] ?? 0, visibility: layout.tops[position] == null ? "hidden" : undefined }}>
-        <header><span className="grade-error-number">{item.questionNumber}({index + 1})</span><b>{homeworkQuestionLabel(item.questionNumber)} · 错误原因</b></header>
+        <header><span className="grade-error-number">{item.questionNumber}{error.part}</span><b>{homeworkQuestionLabel(item.questionNumber)} · 错误原因</b></header>
         <p><MathText text={error.reason || "这处标记还没有错因说明，可点击“分析错因”补全。"} /></p>
       </article>)}</aside>
     <div className="graded-page">
