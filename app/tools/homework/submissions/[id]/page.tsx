@@ -345,18 +345,27 @@ export default function TeacherSubmissionPage() {
     setActiveItemId(item.id);
     const card = document.getElementById(`grading-${item.id}`) as HTMLDetailsElement | null;
     if (openDetail && card) card.open = true;
-    requestAnimationFrame(() => {
-      if (window.matchMedia("(min-width:1001px)").matches) card?.closest(".review-evidence-layout")?.scrollIntoView({ block: "start", behavior: "instant" });
-      const marker = document.getElementById(`marker-${item.id}`);
+    requestAnimationFrame(async () => {
       const page = document.getElementById(`page-${item.pageId}`);
-      const note = document.getElementById(`error-note-${item.id}-0`);
-      for (const target of [marker ?? page, card]) {
-        const pane = target?.closest<HTMLElement>(".review-pages,.grading-list");
-        if (pane && target) {
-          const top = target === marker && note ? Math.min(target.getBoundingClientRect().top, note.getBoundingClientRect().top) : target.getBoundingClientRect().top;
-          pane.scrollTo({ top: pane.scrollTop + top - pane.getBoundingClientRect().top - 12, behavior: "instant" });
+      // Earlier pages determine this page's position; ignore an older selection if another question was clicked meanwhile.
+      const images = Array.from(document.querySelectorAll<HTMLImageElement>("#review-originals .graded-page>img"));
+      const last = images.findIndex(image => page?.contains(image));
+      await Promise.all(images.slice(0, last + 1).map(image => image.decode().catch(() => {})));
+      requestAnimationFrame(() => {
+        if (!card?.classList.contains("selected")) return;
+        if (window.matchMedia("(min-width:1001px)").matches) card.closest(".review-evidence-layout")?.scrollIntoView({ block: "start", behavior: "instant" });
+        const marker = document.getElementById(`marker-${item.id}`);
+        const notes = page?.querySelectorAll<HTMLElement>(`[id^="error-note-${item.id}-"]`) ?? [];
+        for (const target of [marker ?? page, card]) {
+          const pane = target?.closest<HTMLElement>(".review-pages,.grading-list");
+          if (pane && target) {
+            const offset = target === marker
+              ? Math.max(target.getBoundingClientRect().bottom, ...Array.from(notes, note => note.getBoundingClientRect().bottom)) - pane.getBoundingClientRect().top - pane.clientHeight + 12
+              : target.getBoundingClientRect().top - pane.getBoundingClientRect().top - 12;
+            pane.scrollTo({ top: pane.scrollTop + offset, behavior: "instant" });
+          }
         }
-      }
+      });
     });
   }
 
