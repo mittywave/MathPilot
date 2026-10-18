@@ -85,7 +85,7 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
       <article id={`error-note-${item.id}-${index}`} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
         style={{ top: layout.tops[position] ?? 0, visibility: layout.tops[position] == null ? "hidden" : undefined }}>
         <header><span className="grade-error-number">{item.questionNumber}{error.part}</span><b>错误原因</b></header>
-        <p><MathText text={error.reason || "无法从原图可靠确认这处标记的具体错因，请结合原卷和参考答案核对。"} /></p>
+        <p><MathText text={error.reason || "这处标记尚未补全错误原因。"} /></p>
       </article>)}</aside>
     <div className="graded-page">
       {/* eslint-disable-next-line @next/next/no-img-element -- The original page must preserve its exact image coordinates. */}

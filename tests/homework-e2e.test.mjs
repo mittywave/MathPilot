@@ -456,16 +456,16 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.match(d1.bbox.errors[0].reason,/移项时应改变符号/,"automatic grading keeps the explanation attached to its mark");
     const beforeLocations=d1Rows(stateDir,"SELECT id,verdict,score,student_answer,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]);
     const beforeOccurrences=d1Rows(stateDir,"SELECT grading_item_id,submission_id,active,created_at FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
-    // Simulate an old result with no explanation: publishing fills only that gap.
+    // Historical results may have a precise circle without a reason, or no local marks at all.
     command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',
-      `UPDATE grading_items SET bbox_json=json_remove(bbox_json,'$.errors'),feedback='' WHERE id IN ('${d1.id}','${directResult.gradingItems.find(i=>i.questionNumber==="D2").id}')`]);
+      `UPDATE grading_items SET bbox_json=CASE WHEN id='${d1.id}' THEN json_remove(bbox_json,'$.errors[0].reason','$.errors[0].part') ELSE json_remove(bbox_json,'$.errors') END,feedback='' WHERE id IN ('${d1.id}','${directResult.gradingItems.find(i=>i.questionNumber==="D2").id}')`]);
     const beforeAutomatic=mock.state.errorLocationNumbers.length;
     assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"publish"}})).response.status,404);
     mock.state.invalidErrorLocation="D1";
     const failedAnalysis=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
     assert.equal(failedAnalysis.response.status,500,"a wrong question number fails the analysis contract");
     const partialAnalysis=(await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne})).payload.submission;
-    assert.equal(partialAnalysis.gradingItems.find(i=>i.id===d1.id).bbox.errors,undefined);
+    assert.equal(partialAnalysis.gradingItems.find(i=>i.id===d1.id).bbox.errors[0].reason,undefined,"a failed analysis preserves the historical circle without inventing an explanation");
     assert.match(partialAnalysis.gradingItems.find(i=>i.questionNumber==="D2").bbox.errors[0].reason,/定理的前提/,"another successful batch is saved even when one analysis fails");
     mock.state.invalidErrorLocation="";
     const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"publish"}});
