@@ -1135,6 +1135,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .tile-mark.incorrect,.verdict-tally .incorrect,.tally-bar .incorrect,.assigned-day li.incorrect { --tone:var(--danger); }
 .verdict-tally .corrected,.tally-bar .corrected,.assigned-day li.corrected { --tone:var(--sky); }
 .tile-mark.pending,.verdict-tally .pending,.tally-bar .pending { --tone:var(--info); }
+.verdict-tally .missing { --tone:#fff; }
 .tile-mark { background:var(--tone); }
 .live-results { display:grid; gap:16px; min-width:0; }
 .live-results h3 { margin:0; color:var(--muted); font-size:13px; font-weight:500; }
@@ -1143,8 +1144,9 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .tally-bar { display:flex; height:8px; overflow:hidden; border-radius:8px; background:var(--surface-soft); }
 .tally-bar i { height:100%; background:var(--tone); transition:width .6s ease; }
 .tally-bar i+i { box-shadow:-2px 0 0 var(--surface); }
+.tally-bar .missing,.verdict-tally .missing dt::before { box-shadow:inset 0 0 0 1px var(--line); }
 .verdict-tally dl { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:0; }
-.verdict-tally.school dl { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.verdict-tally.school dl { grid-template-columns:none; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); }
 .verdict-tally>small { color:var(--muted); font-size:12px; }
 .verdict-tally dl>div { min-width:0; }
 .verdict-tally dt { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; white-space:nowrap; }
@@ -1205,7 +1207,6 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .assigned-correct:disabled,.assigned-upload:disabled { color:var(--muted); background:var(--surface-soft); opacity:.6; cursor:default; }
 .assigned-correct.incorrect { border-color:color-mix(in srgb,var(--danger) 30%,var(--line)); background:color-mix(in srgb,var(--danger) 12%,var(--danger-soft)); color:var(--danger); font-weight:600; }
 .assigned-correct.correct { border-color:color-mix(in srgb,var(--success) 30%,var(--line)); background:color-mix(in srgb,var(--success) 12%,var(--success-soft)); color:color-mix(in srgb,var(--success) 70%,var(--ink)); opacity:1; font-weight:600; }
-.assigned-correction-note { margin:12px 0 0; color:var(--muted); font-size:12px; }
 .assigned-uploads { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); font-size:12.5px; }
 .assigned-uploads b { color:var(--ink); }
 .assigned-uploads a { color:var(--green); text-decoration:none; }
