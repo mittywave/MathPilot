@@ -107,6 +107,7 @@ export default function Home() {
   const [entryDraft, setEntryDraft] = useState<Question | null>(null);
   const [categoryDialog, setCategoryDialog] = useState<"new" | "manage" | "trash" | null>(null);
   const [trashQuestions, setTrashQuestions] = useState<Array<Question & { deletedAt: number }> | null>(null);
+  const [restoringIds, setRestoringIds] = useState<string[]>([]);
   const [categoryName, setCategoryName] = useState("");
   const [categoryParent, setCategoryParent] = useState<string>("");
   const [isExporting, setIsExporting] = useState(false);
@@ -673,6 +674,14 @@ export default function Home() {
     } catch (error) { show({ text: pageLocale === "en" ? `Restored ${alevelQuestionCount(total, pageLocale)}, but the list could not be refreshed. ${error instanceof Error ? error.message : "Please retry."}` : `已恢复 ${total} 道题，但列表读取失败：${error instanceof Error ? error.message : "请重试"}`, tone: "error", action: { label: pageCopy.retry, run: () => restoreQuestions(failed, total) } }); }
   }
 
+  // A question can be restored once; a second click while the first request runs would come back 404 and report a failure.
+  async function restoreTrashQuestion(id: string) {
+    if (restoringIds.includes(id)) return;
+    setRestoringIds(current => [...current, id]);
+    try { await restoreQuestions([id]); }
+    finally { setRestoringIds(current => current.filter(item => item !== id)); }
+  }
+
   async function deleteCategory(category: Category) {
     const categoryIds = descendantsOf(category.id); const questionIds = questions.filter((item) => categoryIds.includes(item.categoryId)).map((item) => item.id);
     if (!await confirm({ title: `删除分类「${category.name}」`, body: "分类与子分类无法恢复，题目可从回收站找回。", items: [`${categoryIds.length} 个分类（含当前分类）`, `${questionIds.length} 道题移入回收站`], confirmLabel: "删除分类", danger: true })) return;
@@ -911,7 +920,7 @@ export default function Home() {
           <label className="field">上级分类<select value={categoryParent || activeModule.id} onChange={(event) => setCategoryParent(event.target.value)}><option value={activeModule.id}>{activeModule.name}（模块根目录）</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
           <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div>
         </> : categoryDialog === "trash" ? <>
-          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{item.code && `ID ${item.code} · `}{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button onClick={() => restoreQuestion(item)}>恢复</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
+          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{item.code && `ID ${item.code} · `}{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button disabled={restoringIds.includes(item.id)} onClick={() => restoreTrashQuestion(item.id)}>{restoringIds.includes(item.id) ? "恢复中…" : "恢复"}</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
           <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog("manage")}>返回</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
         </> : <>
           <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>
