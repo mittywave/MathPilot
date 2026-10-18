@@ -127,3 +127,106 @@ test("an uploaded question whose paper printed its ID is filed under that questi
   assert.equal(keyOf("a3-q1"), "a3-q1");
   assert.equal((await book.readWrongQuestions("s1", user)).length, 3);
 });
+
+const CALC = "计算：$(-\\frac{3}{4}-\\frac{5}{9}+\\frac{7}{12})\\div\\frac{1}{36}$";
+const OPEN = "已知 $a+b=5$，$ab=3$，求 $a^2+b^2$ 与 $(a-b)^2$ 的值，并说明理由。";
+const WRONG = "解方程：$3(x-1)-2(2x+1)=4x-17$，并写出检验过程。";
+
+// A model that solves and checks whatever it is asked to, recording which questions it was asked about.
+function fakeModel(calls) {
+  return async (url, init) => {
+    assert.ok(String(url).startsWith("https://printed-id.test.invalid/"), "never call a real provider in this test");
+    const body = JSON.parse(init.body), name = body.text.format.name;
+    const numbers = [...new Set(Array.from(body.input[0].content[0].text.matchAll(/"question_number":"([^"]+)"/g), (match) => match[1]))];
+    calls.push({ name, numbers });
+    const result = name === "completed_homework_reference" ? { answers: numbers.map((number) => ({ question_number: number, answer: `模型解出的${number}`, analysis: "", source: "agent" })) }
+      : { results: numbers.map((number) => ({ question_number: number, verified: true, reason: "已独立核验参考答案" })) };
+    return Response.json({ output_text: JSON.stringify(result) });
+  };
+}
+
+test("an uploaded question read beside its printed ID is graded with that question and its own answer; only the rest are solved", async () => {
+  const { sqlite, code } = await setup();
+  const library = (row, id, stem, answer) => sqlite.prepare(`INSERT INTO library_questions_v2 (row_id, source_id, library_id, publication_id, module_source_id, payload_json, content_hash, created_at, updated_at)
+    VALUES (?, ?, 'public', 'legacy', 'm', ?, ?, 1, 1)`).run(row, id, JSON.stringify({ id, categoryId: "m", type: "解答题", difficulty: "中等", stem, options: [], answer, analysis: "", source: "题库", tags: [], createdByEmail: "author@test" }), row);
+  library("r2", "lib-calc", CALC, "$-26$");
+  library("r3", "lib-open", OPEN, "见解析");
+  const codeOf = (id) => String(sqlite.prepare("SELECT number FROM question_codes WHERE question_id = ?").get(id).number);
+  const env = { ...process.env }, fetch = globalThis.fetch, calls = [];
+  // The legacy single-provider route, answered by the fake model above.
+  sqlite.exec("DELETE FROM ai_routing_settings");
+  Object.assign(process.env, { OPENAI_API_KEY: "synthetic-test-key", OPENAI_BASE_URL: "https://printed-id.test.invalid", OPENAI_API_MODE: "responses", HOMEWORK_GRADING_MODEL: "synthetic-model" });
+  globalThis.fetch = fakeModel(calls);
+  try {
+    const bindings = { DB: d1(sqlite) };
+    const { syncSubmissionWrongBook } = await loadSource("lib/server/homework-wrong-book.ts", bindings);
+    const { prepareCompletedHomework } = await loadSource("lib/server/completed-homework.ts", bindings);
+    const { coverageFingerprint } = await loadSource("lib/server/homework-page-coverage.ts", bindings);
+    const book = await loadSource("lib/server/student-wrong-book.ts", bindings);
+    // A question only in a wrong book: got wrong earlier on a verified reference, so it has an ID and that answer.
+    const earlier = upload(sqlite, "w1", 5, [{ number: "1-1", stem: WRONG }]);
+    sqlite.exec("UPDATE assignment_questions SET answer='x=2',reference_source='agent',reference_verified=1,reference_evidence='已独立核验参考答案' WHERE id='w1-q0'");
+    await syncSubmissionWrongBook(earlier, user);
+    const wrongCode = codeOf("w1-q0");
+
+    // A printed paper handed in as a new upload, its one page already read.
+    sqlite.exec(`INSERT INTO homework_assignments (id, owner_user_id, title, status, created_at, updated_at) VALUES ('p', 'u', '打印的卷子', 'published', 10, 10);
+      INSERT INTO homework_submissions (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, created_at, updated_at) VALUES ('sub-p', 'p', 's1', 1, 'processing', 'teacher', 'u', 10, 10);
+      INSERT INTO homework_assets (id, owner_user_id, r2_key, content_type, byte_size, content_hash, created_at) VALUES ('o-p', 'u', 'k-p', 'image/jpeg', 1, 'photo-p', 10), ('pp', 'u', 'kp', 'image/jpeg', 1, 'pp', 10);
+      INSERT INTO submission_pages (id, submission_id, original_asset_id, processed_asset_id, page_order, created_at) VALUES ('page-p', 'sub-p', 'o-p', 'pp', 0, 10);`);
+    const read = (number, printed, stem) => ({ question_number: number, page_numbers: [1], type: "解答题", stem, options: [], student_answer: "答", answer_state: "readable", question_complete: true,
+      bbox: { x: 10, y: 10, width: 500, height: 80 }, knowledge_tags: [], capability_keys: [], figures: [], figure_notes: "", teacher_mark: "none", max_score: null, ...(printed ? { printed_id: printed } : {}) });
+    const questions = [
+      read("1-1", codeOf("lib-calc"), `1. ${CALC.replace("计算：", "计算")}`),
+      read("1-2", codeOf("lib-open"), OPEN),
+      read("1-3(1)", code, COMMON + PART_1), read("1-3(2)", code, COMMON + PART_2),
+      read("1-4", codeOf("lib-calc"), CALC.replace("\\frac{1}{36}", "\\frac{1}{72}")),
+      read("1-5", "", "计算：$(-2)^3\\times\\frac{1}{4}-|-5|+3^2$，写出过程。"),
+      read("1-6", wrongCode, WRONG),
+    ];
+    const fingerprint = await coverageFingerprint([{ id: "page-p", page_order: 0, processed_asset_id: "pp", quality_json: "{}" }], 0);
+    sqlite.prepare("INSERT INTO submission_page_extractions (submission_id, page_id, processed_asset_id, fingerprint, status, result_json, error, updated_at) VALUES ('sub-p', 'page-p', 'pp', ?, 'complete', ?, '', 10)")
+      .run(fingerprint, JSON.stringify({ pageNumber: 1, kind: "questions", reason: "", questions }));
+    const graded = [];
+    await prepareCompletedHomework("sub-p", "p", 1, async (ids) => { graded.push(...ids); });
+    const row = (number) => sqlite.prepare("SELECT * FROM assignment_questions WHERE assignment_id = 'p' AND question_number = ?").get(number);
+    const asked = calls.filter((call) => call.name === "completed_homework_reference").flatMap((call) => call.numbers).sort();
+    assert.deepEqual(asked, ["1-2", "1-3(1)", "1-3(2)", "1-4", "1-5"], "a question known by its printed ID, with an answer, is not solved");
+    assert.deepEqual(calls.filter((call) => call.name === "completed_homework_verification").flatMap((call) => call.numbers).sort(), asked, "nor checked again");
+    assert.deepEqual(graded.sort(), questions.map((q) => row(q.question_number).id).sort(), "every question is graded");
+
+    const calc = row("1-1");
+    assert.equal(calc.stem, CALC, "graded as the library has it, not as read from the photo");
+    assert.deepEqual([calc.answer, calc.reference_source, calc.reference_verified, calc.reference_evidence], ["$-26$", "provided", 1, "题库原题答案"]);
+    assert.equal(JSON.parse(calc.source_json).id, "lib-calc");
+    assert.equal("createdByEmail" in JSON.parse(calc.source_json), false, "the library record's own fields stay out of the homework");
+    assert.equal(JSON.parse(calc.input_evidence_json).printed_id, codeOf("lib-calc"));
+    const open = row("1-2");
+    assert.deepEqual([open.stem, JSON.parse(open.source_json).id], [OPEN, "lib-open"], "a library question without an answer is still that question");
+    assert.deepEqual([open.answer, open.reference_source, open.reference_verified], ["模型解出的1-2", "agent", 1], "and is solved as before");
+    for (const number of ["1-3(1)", "1-3(2)", "1-4", "1-5"]) assert.deepEqual([row(number).source_json, row(number).answer], ["", `模型解出的${number}`], `${number} is read and solved on its own`);
+    assert.equal(row("1-4").stem, questions[4].stem, "a misread ID keeps the question as read");
+    const wrong = row("1-6");
+    assert.deepEqual([wrong.stem, wrong.answer, wrong.reference_source, wrong.reference_verified, JSON.parse(wrong.source_json).id], [WRONG, "x=2", "agent", 1, "w1-q0"],
+      "a wrong-book question is graded with the answer it was verified with before");
+
+    // Processing again (a retry, or the teacher reprocessing) solves nothing again, and keeps an answer the teacher gave.
+    sqlite.exec(`UPDATE assignment_questions SET answer='-26',reference_source='provided',reference_evidence='教师补充并确认：化成整数' WHERE id='${calc.id}'`);
+    calls.length = 0;
+    await prepareCompletedHomework("sub-p", "p", 1, async () => {});
+    assert.deepEqual(calls, []);
+    assert.deepEqual([row("1-1").answer, row("1-1").reference_evidence], ["-26", "教师补充并确认：化成整数"]);
+
+    // Got wrong, it is filed under the library question, shown as the library has it.
+    sqlite.prepare("INSERT INTO grading_items (id, submission_id, assignment_question_id, verdict, requires_review, page_id, created_at, updated_at) VALUES ('g-calc', 'sub-p', ?, 'incorrect', 0, 'page-p', 20, 20)").run(calc.id);
+    await syncSubmissionWrongBook({ id: "sub-p", assignmentId: "p", studentId: "s1", assignmentTitle: "打印的卷子", pages: [],
+      gradingItems: [{ id: "g-calc", assignmentQuestionId: calc.id, questionNumber: "1-1", verdict: "incorrect", requiresReview: false, referenceVerified: true, studentAnswer: "答", feedback: "错", pageId: "page-p", bbox: null, createdAt: 20 }] }, user);
+    assert.equal(row("1-1").question_key, "lib-calc");
+    const entry = (await book.readWrongQuestions("s1", user)).find((item) => item.question.id === "lib-calc");
+    assert.equal(entry.question.stem, CALC);
+  } finally {
+    globalThis.fetch = fetch;
+    for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key];
+    Object.assign(process.env, env);
+  }
+});

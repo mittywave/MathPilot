@@ -1,5 +1,6 @@
 import { WRONG_QUESTION_DELETED, type AssignmentQuestion, type AuthUser, type HomeworkSubmission, type Question, type WrongQuestionEntry } from '../types';
-import { homeworkDb, readAssignmentQuestions } from './homework';
+import type { CompletedQuestion } from '../completed-homework-contract';
+import { givenQuestion, hasReference, homeworkDb, readAssignmentQuestions } from './homework';
 import { readLibrary, teacherNamespaceId } from './library';
 import { assignmentQuestionToQuestion } from '../question-content';
 import { homeworkAssetBytes, storeHomeworkAsset } from './homework-assets';
@@ -27,6 +28,7 @@ async function knownQuestions(user: AuthUser) {
   for (const row of wrong.results as Array<Record<string,unknown>>) matcher.add(String(row.source_question_id), { stem: String(row.stem ?? ''), options: parseOptions(row.options) });
   return { matcher, library };
 }
+type Known = Awaited<ReturnType<typeof knownQuestions>>;
 
 function parseOptions(value: unknown) {
   try { const options = JSON.parse(String(value ?? '[]')); return Array.isArray(options) ? options.map(String) : []; } catch { return []; }
@@ -49,6 +51,55 @@ async function codedIds(ids: string[]) {
   const rows = await homeworkDb().prepare('SELECT question_id FROM question_codes WHERE question_id IN (SELECT value FROM json_each(?))')
     .bind(JSON.stringify(ids)).all<{ question_id: string }>();
   return new Set<string>((rows.results as Array<{ question_id: string }>).map((row) => row.question_id));
+}
+
+// A school sub-question (5-3(2)) is read on its own; the ID beside it names its whole question.
+const isSubQuestion = (number: string) => /\([^()]+\)$/.test(number);
+
+// The question a printed ID names, if that ID is this teacher's question and the question read from the paper is it:
+// a digit misread from a photo must not file a mistake under, or grade it against, another question.
+async function printedKey(printed: string, question: QuestionText, part: boolean, matcher: Matcher) {
+  if (!/^\d{1,7}$/.test(printed)) return null;
+  const row = await homeworkDb().prepare('SELECT question_id FROM question_codes WHERE number=?').bind(Number(printed)).first<{ question_id: string }>();
+  return row && matcher.confirms(row.question_id, question, part) ? row.question_id : null;
+}
+
+// A known question's own content: the library's copy, else its wrong-book copy (this student's, else the latest).
+async function knownQuestion(known: Known, user: AuthUser, key: string, studentId: string): Promise<Question | null> {
+  const library = known.library.get(key);
+  if (library) return library;
+  const row = await homeworkDb().prepare('SELECT question_snapshot_json FROM student_wrong_questions WHERE owner_user_id=? AND source_question_id=? ORDER BY student_id=? DESC,updated_at DESC LIMIT 1')
+    .bind(user.id, key, studentId).first<{ question_snapshot_json: string }>();
+  return row ? JSON.parse(row.question_snapshot_json) as Question : null;
+}
+
+// What a known question is graded with: its own answer, as when it is handed out. A question only in wrong books has
+// its copy's answer only when that is a reference already verified for it. Without one, it is solved as any other.
+async function knownReference(user: AuthUser, key: string, question: Question, inLibrary: boolean) {
+  if (!hasReference(question)) return null;
+  const reference = { answer: String(question.answer ?? ''), analysis: String(question.analysis ?? '') };
+  if (inLibrary) return { ...reference, source: 'provided', evidence: '题库原题答案' };
+  const row = await homeworkDb().prepare(`SELECT q.reference_source,q.reference_evidence FROM assignment_questions q JOIN homework_assignments a ON a.id=q.assignment_id
+    WHERE a.owner_user_id=? AND q.question_key=? AND q.reference_verified=1 AND q.answer=? ORDER BY q.updated_at DESC LIMIT 1`)
+    .bind(user.id, key, reference.answer).first<{ reference_source: string; reference_evidence: string }>();
+  return row ? { ...reference, source: row.reference_source, evidence: row.reference_evidence } : null;
+}
+
+/**
+ * The uploaded questions, by number, that were read whole beside a printed ID naming them: each is that question handed
+ * in on paper, with its own answer when it has one. A sub-question is read and solved on its own, as before.
+ */
+export async function printedQuestions(user: AuthUser, studentId: string, questions: CompletedQuestion[]) {
+  const found = new Map<string, { question: Question; reference: Awaited<ReturnType<typeof knownReference>> }>();
+  const whole = questions.filter((question) => question.printed_id && !isSubQuestion(question.question_number));
+  if (!whole.length) return found;
+  const known = await knownQuestions(user);
+  for (const read of whole) {
+    const key = await printedKey(read.printed_id!, read, false, known.matcher);
+    const question = key ? await knownQuestion(known, user, key, studentId) : null;
+    if (key && question) found.set(read.question_number, { question: givenQuestion({ ...question, id: key }), reference: await knownReference(user, key, question, known.library.has(key)) });
+  }
+  return found;
 }
 
 /**
@@ -123,36 +174,19 @@ export async function syncSubmissionWrongBook(submission: HomeworkSubmission, us
     .bind(submission.assignmentId).all<StoredRow>();
   const storedKeys = new Map<string, string>((storedRows.results as StoredRow[]).map((row) => [row.id, row.question_key]));
   const printedIds = new Map<string, string>((storedRows.results as StoredRow[]).flatMap((row) => row.printed_id ? [[row.id, String(row.printed_id)] as [string, string]] : []));
-  let context: Awaited<ReturnType<typeof knownQuestions>> | null = null, known: Set<string> | null = null;
-  // The question a printed ID names, if that ID is this teacher's question and the question read from the paper is it:
-  // a digit misread from a photo must not file the mistake under another question.
-  async function printedQuestion(question: AssignmentQuestion, matcher: Matcher) {
-    const printed = printedIds.get(question.id) ?? (typeof question.source?.code === 'string' ? question.source.code : '');
-    if (!/^\d{1,7}$/.test(printed)) return null;
-    const row = await db.prepare('SELECT question_id FROM question_codes WHERE number=?').bind(Number(printed)).first<{ question_id: string }>();
-    // A school sub-question (5-3(2)) is read on its own; the ID beside it names its whole question.
-    return row && matcher.confirms(row.question_id, question, /\([^()]+\)$/.test(question.questionNumber)) ? row.question_id : null;
-  }
+  let context: Known | null = null, known: Set<string> | null = null;
   // A question gets its ID the first time it is got wrong; it keeps it through later corrections and re-gradings.
   async function questionKey(question: AssignmentQuestion) {
     const stored = storedKeys.get(question.id);
     if (stored) return stored;
     known ??= await codedIds(questions.flatMap((item: AssignmentQuestion) => typeof item.source?.id === 'string' ? [item.source.id] : []));
     context ??= await knownQuestions(user);
-    const key = resolveQuestionKey(question, known, context.matcher, await printedQuestion(question, context.matcher));
+    const printed = printedIds.get(question.id) ?? (typeof question.source?.code === 'string' ? question.source.code : '');
+    const key = resolveQuestionKey(question, known, context.matcher, await printedKey(printed, question, isSubQuestion(question.questionNumber), context.matcher));
     storedKeys.set(question.id, key);
     await db.batch([db.prepare('UPDATE assignment_questions SET question_key=? WHERE id=?').bind(key, question.id),
       db.prepare('UPDATE student_wrong_occurrences SET question_key=? WHERE assignment_question_id=? AND owner_user_id=?').bind(key, question.id, user.id)]);
     return key;
-  }
-  // A known question's own content: the library's copy, else its wrong-book copy (this student's, else the latest).
-  async function knownQuestion(key: string): Promise<Question | null> {
-    context ??= await knownQuestions(user);
-    const library = context.library.get(key);
-    if (library) return library;
-    const row = await db.prepare('SELECT question_snapshot_json FROM student_wrong_questions WHERE owner_user_id=? AND source_question_id=? ORDER BY student_id=? DESC,updated_at DESC LIMIT 1')
-      .bind(user.id, key, submission.studentId).first<{ question_snapshot_json: string }>();
-    return row ? JSON.parse(row.question_snapshot_json) as Question : null;
   }
   // A corrected page inventory can withdraw misidentified questions. Keep their
   // evidence/history, but never leave them active just because the new loop omits them.
@@ -176,7 +210,7 @@ export async function syncSubmissionWrongBook(submission: HomeworkSubmission, us
     const page = submission.pages.find(p => p.id === item.pageId);
     // An assigned question enters the book as it was handed out (library formatting, pictures and analysis intact); an
     // uploaded one that is a known question as that question, not as read from the photo.
-    const canonical = !template.source && key && key !== template.id ? await knownQuestion(key) : null;
+    const canonical = !template.source && key && key !== template.id ? await knownQuestion(context ??= await knownQuestions(user), user, key, submission.studentId) : null;
     const question = canonical ? { ...canonical, id: key, originalImage: page?.originalUrl, updatedAt: Date.now() }
       : template.source ? { ...template.source, id: key || template.id, originalImage: page?.originalUrl, createdAt: template.createdAt, updatedAt: Date.now() }
       : { ...assignmentQuestionToQuestion(template,{title:submission.assignmentTitle,createdAt:template.createdAt,updatedAt:Date.now(),originalImage:page?.originalUrl}), id: key || template.id };

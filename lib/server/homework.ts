@@ -347,6 +347,12 @@ const ASSIGNED_OUTPUTS = { wrongBook: true, report: false, profile: true };
 // Fields that belong to a library record or an account, not to the question a student is given.
 const RECORD_FIELDS = ["canEdit", "createdBy", "createdByEmail", "moduleId", "categoryId", "optimizedAt", "recognitionDurationMs", "diagramReconstructionDurationMs", "importFileName"] as const;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
+/** The question as a student is given it: the record's content, without those fields. */
+export function givenQuestion(question: Question) {
+  const copy: Record<string, unknown> = { ...question };
+  for (const field of RECORD_FIELDS) delete copy[field];
+  return copy as Question;
+}
 
 function assignedGroups(value: unknown, count: number): HomeworkSheetGroup[] {
   const groups = (Array.isArray(value) ? value : []).map((group) => ({ title: text((group as { title?: unknown })?.title, 60), size: Math.floor(Number((group as { size?: unknown })?.size) || 0) }))
@@ -368,7 +374,7 @@ function testedTopics(analysis: string) {
 }
 
 // A question has a reference when its answer says more than 见解析, or an analysis holds the working.
-function hasReference(question: Pick<Question, "answer" | "analysis">) {
+export function hasReference(question: Pick<Question, "answer" | "analysis">) {
   const answer = String(question.answer ?? "").trim();
   return Boolean(answer && answer !== "见解析" || String(question.analysis ?? "").trim());
 }
@@ -400,10 +406,9 @@ export async function createAssignedHomework(input: { studentIds?: unknown; titl
   const questions = [];
   for (const item of raw) {
     const fromLibrary = library.get(String(item.id ?? ""));
-    const copy: Record<string, unknown> = { ...(fromLibrary ?? item) };
-    for (const field of RECORD_FIELDS) delete copy[field];
+    const copy = givenQuestion(fromLibrary ?? item);
     if (new TextEncoder().encode(JSON.stringify(copy)).byteLength > MAX_SOURCE_BYTES) throw responseError("有一道题的内容过大，无法布置", 413);
-    const source = fromLibrary ? copy as Question : await storeTeacherQuestionMedia(copy as Question, user);
+    const source = fromLibrary ? copy : await storeTeacherQuestionMedia(copy, user);
     const type = QUESTION_TYPES.includes(source.type) ? source.type : "解答题";
     const stem = text(source.stem, 100_000), answer = text(source.answer, 100_000), analysis = text(source.analysis, 100_000);
     const tags = Array.isArray(source.tags) ? source.tags.map((tag) => text(tag, 120)).filter(Boolean) : [];

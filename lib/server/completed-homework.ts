@@ -18,7 +18,7 @@ async function hash(value:unknown){return [...new Uint8Array(await crypto.subtle
 
 export async function prepareCompletedHomework(submissionId:string,assignmentId:string,upperAttempt:number,onReady:(questionIds:string[])=>Promise<void>) {
   const db=homeworkDb();
-  const submission=await db.prepare('SELECT reprocess_question_ids_json,published_at FROM homework_submissions WHERE id=?').bind(submissionId).first<{reprocess_question_ids_json:string;published_at:number|null}>();
+  const submission=await db.prepare('SELECT student_id,reprocess_question_ids_json,published_at FROM homework_submissions WHERE id=?').bind(submissionId).first<{student_id:string;reprocess_question_ids_json:string;published_at:number|null}>();
   const pendingIds=JSON.parse(submission?.reprocess_question_ids_json??'[]') as string[];
   const pageResult=await db.prepare('SELECT id,page_order,processed_asset_id,quality_json FROM submission_pages WHERE submission_id=? ORDER BY page_order').bind(submissionId).all<ExtractionPage>();
   const pages=pageResult.results as ExtractionPage[];
@@ -114,13 +114,22 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   if(!questions.length)invalid(new Error('上传的页面里没有找到本次需要处理的题目，请核对题号和原件'));
   const ids=new Map(questions.map(q=>[q.question_number,recordId(q.question_number)??crypto.randomUUID()]));
   if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
+  // A question read beside a printed ID naming it is that question, handed in on paper: it keeps that question's content,
+  // as an assigned one does, and only where and how it was answered comes from the page.
+  const known=await (await import('./homework-wrong-book')).printedQuestions({id:String(assignment?.owner_user_id),email:'',role:'member'},String(submission?.student_id),sheet?[]:questions);
+  if(known.size)questions=questions.map(q=>{const question=known.get(q.question_number)?.question;return question?{...q,type:question.type,stem:question.stem,options:question.options??[],question_complete:true}:q;});
   const now=Date.now();
   // An assigned question already has its row, content and place on the sheet; only where it was answered changes.
   if(sheet)for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map(q=>db.prepare('UPDATE assignment_questions SET page_number=?,bbox_json=?,input_evidence_json=?,updated_at=? WHERE id=? AND assignment_id=?')
     .bind(q.page_numbers[0],q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q),now,ids.get(q.question_number),assignmentId)));
-  else for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map((q,index)=>db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,knowledge_tags_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,input_evidence_json)
-      VALUES(?,?,?,?,?,?,?,'','',?,0,'[]',?,?,?,?,?,'unresolved',0,?) ON CONFLICT(id) DO UPDATE SET question_number=excluded.question_number,${pendingIds.length?'':'sort_order=excluded.sort_order,'}stem=excluded.stem,options_json=excluded.options_json,type=excluded.type,page_number=excluded.page_number,bbox_json=excluded.bbox_json,input_evidence_json=excluded.input_evidence_json,updated_at=excluded.updated_at`)
-      .bind(ids.get(q.question_number),assignmentId,q.question_number,q.page_numbers[0],q.type,q.stem,JSON.stringify(q.options),q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q.knowledge_tags),JSON.stringify(q.capability_keys),start+index,now,now,JSON.stringify(q))));
+  else for(let start=0;start<questions.length;start+=40)await db.batch(questions.slice(start,start+40).map((q,index)=>db.prepare(`INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,options_json,answer,analysis,bbox_json,confidence,warnings_json,knowledge_tags_json,capability_keys_json,sort_order,created_at,updated_at,reference_source,reference_verified,input_evidence_json,source_json)
+      VALUES(?,?,?,?,?,?,?,'','',?,0,'[]',?,?,?,?,?,'unresolved',0,?,?) ON CONFLICT(id) DO UPDATE SET question_number=excluded.question_number,${pendingIds.length?'':'sort_order=excluded.sort_order,'}stem=excluded.stem,options_json=excluded.options_json,type=excluded.type,page_number=excluded.page_number,bbox_json=excluded.bbox_json,input_evidence_json=excluded.input_evidence_json,source_json=excluded.source_json,updated_at=excluded.updated_at`)
+      .bind(ids.get(q.question_number),assignmentId,q.question_number,q.page_numbers[0],q.type,q.stem,JSON.stringify(q.options),q.bbox?JSON.stringify(q.bbox):null,JSON.stringify(q.knowledge_tags),JSON.stringify(q.capability_keys),start+index,now,now,JSON.stringify(q),known.has(q.question_number)?JSON.stringify(known.get(q.question_number)!.question):'')));
+  // Its own answer is its reference, as when it is handed out, unless the teacher has since given another. One without
+  // an answer is solved below like any other question.
+  const answered=[...known].flatMap(([number,{reference}])=>reference?[{number,reference}]:[]);
+  if(answered.length)await db.batch(answered.map(({number,reference})=>db.prepare("UPDATE assignment_questions SET answer=?,analysis=?,reference_source=?,reference_verified=1,reference_evidence=?,reference_fingerprint='',updated_at=? WHERE id=? AND assignment_id=? AND reference_evidence NOT LIKE '教师补充并确认%'")
+    .bind(reference.answer,reference.analysis,reference.source,reference.evidence,now,ids.get(number),assignmentId)));
   // These verdicts need no model request and must not wait behind slow reference batches.
   for(const q of questions.filter(q=>!q.question_complete))await db.prepare("UPDATE assignment_questions SET reference_verified=0,reference_source='unresolved',reference_evidence='题意不完整或页面无法辨认',reference_fingerprint='' WHERE id=? AND assignment_id=?").bind(ids.get(q.question_number),assignmentId).run();
   await onReady(questions.filter(q=>!q.question_complete||(q.teacher_mark??'none')!=='none').map(q=>ids.get(q.question_number)!));
@@ -146,7 +155,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
     const key=await hash({contract:'reference-batch-v1',stem:q.stem,type:q.type,options:q.options,figure_notes:q.figure_notes||undefined,referenceIds,...(curriculum==='international'?{curriculum,max_score:q.max_score}:{})});keys.set(q.question_number,key);
     const old=oldByNumber.get(q.question_number);
     // An assigned question's own answer is its reference; only one handed out without an answer is solved here.
-    if(old?.reference_fingerprint===key || old?.reference_evidence.startsWith('教师补充并确认') || (old?.source_json && Number(old.reference_verified)===1))ready.push(q);
+    if(known.get(q.question_number)?.reference || old?.reference_fingerprint===key || old?.reference_evidence.startsWith('教师补充并确认') || (old?.source_json && Number(old.reference_verified)===1))ready.push(q);
     else pendingReferences.push(q);
   }
   // Each slot owns its entire solve → verify → grade chain, so stages together never exceed four requests.
