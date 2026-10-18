@@ -406,7 +406,7 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 /* Scanner and grading review */
 .review-summary {margin:0;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:24px 32px; }
 .review-status { display:inline-flex; align-items:center; gap:8px; color:var(--green); font-size:13px; font-weight:600; letter-spacing:.04em; }
-.review-status.processing::before,.review-status.submitted::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--green); animation:live-pulse 1.6s ease-in-out infinite; }
+.review-status.processing::before,.review-status.submitted::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; animation:live-pulse 1.6s ease-in-out infinite; }
 .review-status.failed { color:var(--danger); }
 .review-summary h1 {margin:8px 0;font:700 26px/1.4 "Songti SC",serif;overflow-wrap:anywhere; }
 .review-summary p { margin:0; color:var(--muted); font-size:14px; }
@@ -430,6 +430,7 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .review-overview .review-summary h1 { order:-1; max-width:100%; margin:0; font-size:24px; }
 .review-overview .review-summary p { flex-basis:100%; font-size:13px; line-height:1.6; }
 .review-overview .review-status { padding:4px 8px; border-radius:5px; background:var(--green-soft); font-size:12px; }
+.review-overview .review-status.processing { color:var(--amber); background:var(--amber-soft); }
 .review-overview .review-outputs { flex:none; margin-left:0; padding:0; border:0; background:transparent; }
 .review-overview>.assigned-sheet { max-width:none; margin:0; padding:0 24px 18px; border:0; border-radius:0; background:transparent; }
 .review-overview>.assigned-sheet>header { padding-top:12px; border-top:1px solid var(--line); margin-bottom:10px; }
