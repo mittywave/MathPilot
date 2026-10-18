@@ -113,7 +113,8 @@ ${reference}
 评分原则：接受数学等价的表达和有效的替代解法，不因未照抄标准路线、符号写法或排版不同而判错；标准解析写得过窄时，独立核验学生方法的数学有效性。区分“应扣分”和“建议更规范”，后者不扣分、不降低结论。精度、单位和过程要求按题目实际要求判定。
 score：有满分的题按步骤给分，0 到满分，可用 0.5 分；方法正确但计算或结论有误时保留方法分；前一步出错后，后续步骤方法正确的照常给分，同一错误不重复扣分；没有满分的题 score 返回 null。score 等于满分时结论为 correct，为 0 时为 incorrect，介于两者之间为 partial。
 feedback：有失分时用两三句写清“哪一步错或缺了什么（有满分时写失几分）→ 涉及的知识点或解题步骤 → 学生可以照做的订正动作”；知识方法已经体现、只是答案未写完整时，明确这样说，不编造知识漏洞。满分题 feedback 留空，不强行找问题。${FEEDBACK_LIMITS}
-error_type 可用“审题、概念、计算、步骤、表达、漏答、字迹不清”等；没有错误则留空。capability_keys 只能选 skill:calculation、skill:concept、skill:reasoning、skill:modeling、skill:expression。`;
+error_type 可用“审题、概念、计算、步骤、表达、漏答、字迹不清”等；没有错误则留空。capability_keys 只能选 skill:calculation、skill:concept、skill:reasoning、skill:modeling、skill:expression。
+${mathOutputRequirements.join("\n")}`;
 }
 
 // IGCSE / A Level: each item is one sub-part graded point by point against its mark scheme.
