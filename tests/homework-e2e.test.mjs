@@ -173,8 +173,8 @@ function startMockModel(port) {
     if (prompt.startsWith("你是数学作业错处定位助手")) {
       const references = JSON.parse(prompt.split("\n")[1]);
       const results = references.map(item => ({ question_number:item.question_number,bbox:{...item.bbox,errors:[
-        {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2},
-        {x:0,y:0,width:30,height:30},
+        {x:item.bbox.x+item.bbox.width*.6,y:item.bbox.y+item.bbox.height*.2,width:item.bbox.width*.25,height:item.bbox.height*.2,reason:"这一步没有满足定理的前提，先补齐对应条件再下结论。"},
+        {x:0,y:0,width:30,height:30,reason:"框外的标记不应被保留"},
       ]} }));
       response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({results})}));return;
     }
@@ -327,7 +327,7 @@ function startMockModel(port) {
       error_type: number === "D2" ? "步骤" : "计算", confidence: .98,
       step_analysis: number === "D2" ? ["正确写出了部分移项过程", "缺少最终验算"] : [], evidence_summary: "学生作答与参考答案不同",
       capability_keys: ["skill:calculation"], bbox: { x: 90, y: 120 + index * 280, width: 760, height: 190,
-        errors:[{x:600,y:140+index*280,width:140,height:45}] }, warnings: [],
+        errors:[{x:600,y:140+index*280,width:140,height:45,reason:"此处结果与参考答案不同，移项时应改变符号。"}] }, warnings: [],
     }));
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ output_text: JSON.stringify({ results }) }));
   });
@@ -451,12 +451,14 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.ok(d1Rows(stateDir,"SELECT w.source_library_id AS library, s.owner_user_id AS owner FROM student_wrong_questions w JOIN students s ON s.id=w.student_id WHERE w.assignment_id=?",[directAssignmentId]).every(row=>row.library===`personal:${row.owner}`));
     const d1=directResult.gradingItems.find(i=>i.questionNumber==="D1");
     assert.equal(d1.bbox.errors.length,1,"automatic grading persists a precise mark alongside the answer box");
+    assert.match(d1.bbox.errors[0].reason,/移项时应改变符号/,"automatic grading keeps the explanation attached to its mark");
     const beforeLocations=d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]);
     const beforeOccurrences=d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]);
     assert.equal((await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherTwo,method:"PUT",body:{action:"locate-errors"}})).response.status,404);
     const located=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"locate-errors"}});
     assert.equal(located.response.status,200,JSON.stringify(located.payload));
     assert.equal(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors.length,1,"out-of-box candidate marks are rejected");
+    assert.match(located.payload.submission.gradingItems.find(i=>i.id===d1.id).bbox.errors[0].reason,/定理的前提/,"historical marking gains a specific reason without regrading");
     assert.deepEqual(d1Rows(stateDir,"SELECT id,verdict,score,student_answer,feedback,updated_at,wrong_book_applied_at FROM grading_items WHERE submission_id=? ORDER BY id",[directId]),beforeLocations);
     assert.deepEqual(d1Rows(stateDir,"SELECT * FROM student_wrong_occurrences WHERE submission_id=? ORDER BY grading_item_id",[directId]),beforeOccurrences);
     const correctedDirect=await jsonRequest(base,`/api/submissions/${directId}`,{cookie:teacherOne,method:"PUT",body:{action:"correct",items:[{id:d1.id,verdict:"partial",feedback:"教师确认部分正确"}]}});
