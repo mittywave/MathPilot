@@ -72,27 +72,41 @@ async function studentDigest(user: AuthUser, student: { id: string; notes: strin
   if (weakest.length) lead.push(`批改出来的知识点正确率（从低到高）：${weakest.map((row) => `${row.label} 对 ${row.correct}/${row.total}`).join("；")}`);
   const [types, items, evidence, reports] = await Promise.all([
     db().prepare(`SELECT g.error_type AS type, COUNT(*) AS count FROM grading_items g JOIN homework_submissions s ON s.id = g.submission_id
-      WHERE s.student_id = ? AND g.verdict IN ('incorrect', 'partial') AND g.error_type <> '' GROUP BY g.error_type ORDER BY count DESC LIMIT 12`).bind(student.id).all<{ type: string; count: number }>(),
-    db().prepare(`SELECT g.error_type, g.feedback, g.step_analysis_json, q.stem FROM grading_items g JOIN homework_submissions s ON s.id = g.submission_id
-      JOIN assignment_questions q ON q.id = g.assignment_question_id
-      WHERE s.student_id = ? AND g.verdict IN ('incorrect', 'partial') ORDER BY COALESCE(s.submitted_at, s.created_at) DESC LIMIT 60`).bind(student.id)
-      .all<{ error_type: string; feedback: string; step_analysis_json: string; stem: string }>(),
+      JOIN homework_assignments a ON a.id = s.assignment_id
+      WHERE s.student_id = ? AND a.owner_user_id = ? AND s.status = 'published' AND g.requires_review = 0
+        AND g.verdict IN ('incorrect', 'partial') AND g.error_type <> '' GROUP BY g.error_type ORDER BY count DESC LIMIT 12`).bind(student.id, user.id).all<{ type: string; count: number }>(),
+    db().prepare(`SELECT g.feedback, g.step_analysis_json, g.bbox_json, g.student_answer, q.stem, q.question_number, a.title, s.version
+      FROM grading_items g JOIN homework_submissions s ON s.id = g.submission_id
+      JOIN assignment_questions q ON q.id = g.assignment_question_id JOIN homework_assignments a ON a.id = s.assignment_id
+      WHERE s.student_id = ? AND a.owner_user_id = ? AND s.status = 'published' AND g.requires_review = 0
+        AND g.verdict IN ('incorrect', 'partial')
+      ORDER BY COALESCE(s.submitted_at, s.created_at) DESC, q.sort_order LIMIT 60`).bind(student.id, user.id)
+      .all<{ feedback: string; step_analysis_json: string; bbox_json: string; student_answer: string; stem: string; question_number: string; title: string; version: number }>(),
     db().prepare(`SELECT capability_label AS label, COUNT(*) AS count, MAX(diagnosis) AS diagnosis FROM student_capability_evidence
       WHERE student_id = ? AND owner_user_id = ? AND verdict <> 'correct' GROUP BY capability_label ORDER BY count DESC LIMIT 10`).bind(student.id, user.id).all<{ label: string; count: number; diagnosis: string }>(),
     db().prepare(`SELECT r.gaps_json FROM submission_reports r JOIN homework_submissions s ON s.id = r.submission_id
-      WHERE s.student_id = ? AND r.owner_user_id = ? ORDER BY r.updated_at DESC LIMIT 3`).bind(student.id, user.id).all<{ gaps_json: string }>(),
+      WHERE s.student_id = ? AND r.owner_user_id = ? AND s.status = 'published' ORDER BY r.updated_at DESC LIMIT 3`).bind(student.id, user.id).all<{ gaps_json: string }>(),
   ]);
   const lines: string[] = [];
-  if (student.notes.trim()) lines.push(`老师备注：${student.notes.trim()}`);
+  if (student.notes.trim()) lines.push(`老师备注：${text(student.notes, 600)}`);
   lines.push(...lead);
   if (types.results.length) lines.push(`错误类型统计：${types.results.map((row: { type: string; count: number }) => `${row.type} ${row.count} 次`).join("，")}`);
   const gaps = reports.results.flatMap((row: { gaps_json: string }) => jsonList(row.gaps_json).map((gap) => text(record(gap).title, 60))).filter(Boolean);
   if (gaps.length) lines.push(`作业报告里的薄弱点：${[...new Set(gaps)].join("；")}`);
   if (evidence.results.length) lines.push(`能力诊断：${evidence.results.map((row: { label: string; count: number; diagnosis: string }) => `${row.label}（${row.count} 次${row.diagnosis ? `，${text(row.diagnosis, 80)}` : ""}）`).join("；")}`);
-  if (items.results.length) lines.push("最近答错或部分答错的题：");
+  if (items.results.length) lines.push("已发布批改中的历史错因（含局部红圈原文；未作答只说明缺少证据，不据此推断不会）：");
   for (const item of items.results) {
-    const steps = jsonList(item.step_analysis_json).slice(0, 2).map((step) => text(step, 100)).filter(Boolean).join("；");
-    lines.push(`- [${item.error_type || "未分类"}] ${text(item.feedback, 160)}${steps ? `｜步骤：${steps}` : ""}｜题：${text(item.stem.replace(/\s+/g, " "), 80)}`);
+    let errors: unknown[] = [];
+    try { const box = record(JSON.parse(item.bbox_json)); if (Array.isArray(box.errors)) errors = box.errors; } catch { /* Older results may have no box. */ }
+    const causes = [...new Set([
+      ...errors.map((error) => text(record(error).reason, 320)), text(item.feedback, 320),
+      ...jsonList(item.step_analysis_json).slice(0, 2).map((step) => text(step, 160)),
+    ].filter(Boolean))];
+    const source = `《${text(item.title.replace(/\s+/g, " "), 60)}》第${item.question_number}题（第${item.version}次上传）`;
+    for (const cause of causes.slice(0, 3)) {
+      const unanswered = /^(?:(?:该|此)题)?未作答/.test(cause);
+      lines.push(`- ${unanswered ? "未作答记录（待确认）：" : ""}${source}：${cause.replace(/\s*\n\s*/g, " ")}｜学生原答：${text(item.student_answer.replace(/\s+/g, " "), 100)}｜原题：${text(item.stem.replace(/\s+/g, " "), 120)}`);
+    }
   }
   let digest = "";
   for (const line of lines) { if (digest.length + line.length > DIGEST_LIMIT) break; digest += `${line}\n`; }
@@ -135,7 +149,7 @@ export async function generateSmartPaper(user: AuthUser, raw: unknown, signal?: 
 
   const reading = await callModel(buildSmartPaperBriefPrompt({ request, instruction: current ? instruction : undefined, current: current?.brief, studentName: student?.name, digest, outline }),
     smartPaperBriefSchema, "smart_paper_brief", signal);
-  const { brief, findings } = normalizeSmartPaperBriefResult(reading, new Set(outline.map((item) => item.id)));
+  const { brief, findings } = normalizeSmartPaperBriefResult(reading, new Set(outline.map((item) => item.id)), digest);
   if (!brief.categoryIds.length) throw responseError("没能在题库目录里找到对应的内容范围，请在要求里写明是哪部分内容", 422);
 
   const scope = new Set(brief.categoryIds.flatMap((id) => categoryDescendants(library.categories, id)));
@@ -159,7 +173,7 @@ export async function generateSmartPaper(user: AuthUser, raw: unknown, signal?: 
   const byId = new Map(candidates.map((item) => [item.id, item]));
   const previous = current?.groups.map((group) => ({ theme: group.theme, codes: group.items.flatMap((item) => byId.get(item.id)?.code ?? []) }));
 
-  const selection = await callModel(buildSmartPaperSelectPrompt({ request, brief, candidates, current: previous, instruction }), smartPaperSelectSchema, "smart_paper_select", signal);
+  const selection = await callModel(buildSmartPaperSelectPrompt({ request, brief, findings, digest, candidates, current: previous, instruction }), smartPaperSelectSchema, "smart_paper_select", signal);
   const plan = assembleSmartPaperPlan({ request, studentId: student?.id ?? null, brief, findings, avoided: inScope.length - open.length, selection, candidates });
   return { plan, exclude: [...met].filter((id) => !keep.has(id)) };
 }

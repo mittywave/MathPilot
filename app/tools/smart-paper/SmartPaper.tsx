@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "../../components/SiteHeader";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
+import { MathText } from "../../components/MathText";
 import { authorizeDownload, createSmartPaperRecord, fetchLibrary, fetchMe, fetchStudents, fetchTypesetRecords, generateSmartPaper, updateTypesetRecord } from "../../../lib/api-client";
 import { categoryDescendants, categoryPath } from "../../../lib/library-tree";
 import { focusFeatures, normalizeSmartPaperPlan, planDays, planQuestionIds, questionComplexity, questionFeatures } from "../../../lib/smart-paper-contract";
@@ -130,7 +131,7 @@ export default function SmartPaper() {
     if (!item || !question) return;
     const spare = bestSpare(item.focus, questionComplexity(question.stem), questionFeatures(question.stem));
     if (!spare) { setError("范围内没有可换的题了"); return; }
-    editDay(dayIndex, (items) => items.map((entry, index) => (index === itemIndex ? { id: spare.id, focus: item.focus, reason: "老师换题：同一侧重点、繁度相近" } : entry)));
+    editDay(dayIndex, (items) => items.map((entry, index) => (index === itemIndex ? { id: spare.id, focus: item.focus, reason: studentId ? "一般巩固（老师换题）：侧重点、繁度相近，未核对具体历史错因" : "老师换题：同一侧重点、繁度相近" } : entry)));
   }
   function add(dayIndex: number) {
     const day = plan?.groups[dayIndex]; if (!day) return;
@@ -139,7 +140,7 @@ export default function SmartPaper() {
     const level = questions.length ? questions.reduce((sum, question) => sum + questionComplexity(question.stem), 0) / questions.length : 2;
     const spare = bestSpare(focus, level, []);
     if (!spare) { setError("范围内没有可加的题了"); return; }
-    editDay(dayIndex, (items) => [...items, { id: spare.id, focus, reason: "老师加题" }]);
+    editDay(dayIndex, (items) => [...items, { id: spare.id, focus, reason: studentId ? "一般巩固（老师加题）：未核对具体历史错因" : "老师加题" }]);
   }
   const move = (dayIndex: number, itemIndex: number, step: -1 | 1) => editDay(dayIndex, (items) => {
     const next = [...items]; const target = itemIndex + step;
@@ -190,7 +191,7 @@ export default function SmartPaper() {
             <option value="">不针对某位学生</option>
             {students.map((item) => <option key={item.id} value={item.id}>{item.name}{item.className ? `（${item.className}）` : ""}</option>)}
           </select>
-          <small>{student ? "会读这位学生的课后反馈、批改出的知识点正确率和错题，并避开做过、布置过的题。" : "选择学生后，会按该学生的档案挑题。"}</small>
+          <small>{student ? "会参考课后反馈、知识点正确率和具体错因；每题说明对应的历史错误或一般巩固，并避开做过、布置过的题。" : "选择学生后，会按该学生的档案挑题。"}</small>
         </label>
         <label className="smart-paper-field"><span>要出什么样的练习</span>
           <textarea rows={5} value={request} disabled={Boolean(busy)} placeholder={EXAMPLE} onChange={(event) => setRequest(event.target.value)} />
@@ -202,8 +203,8 @@ export default function SmartPaper() {
             <dt>题量</dt><dd>{plan.brief.days} 天 × 每天 {plan.brief.perDay} 题{plan.brief.questionTypes.length ? ` · ${plan.brief.questionTypes.join("、")}` : ""}</dd>
             {plan.brief.difficulty && <><dt>难度</dt><dd>{plan.brief.difficulty}</dd></>}
           </dl>
-          {!!plan.brief.focus.length && <><h4>侧重点</h4><ul>{plan.brief.focus.map((focus) => <li key={focus.label}><b>{focus.label}</b>{focus.description && <small>{focus.description}</small>}</li>)}</ul></>}
-          {!!plan.findings.length && <><h4>学生档案要点</h4><ul>{plan.findings.map((finding) => <li key={finding.label}><b>{finding.label}</b>{finding.evidence && <small>{finding.evidence}</small>}</li>)}</ul></>}
+          {!!plan.brief.focus.length && <><h4>侧重点</h4><ul>{plan.brief.focus.map((focus) => <li key={focus.label}><b>{focus.label}</b>{focus.description && <small><MathText text={focus.description} /></small>}</li>)}</ul></>}
+          {!!plan.findings.length && <><h4>学生档案要点</h4><ul>{plan.findings.map((finding) => <li key={finding.label}><b>{finding.label}</b>{finding.evidence && <small>{finding.evidence.split(/(《[^》]+》第[^：]+题（第\d+次上传）：)/u).map((part, index) => index % 2 ? part : <MathText key={index} text={part} />)}</small>}</li>)}</ul></>}
           {plan.avoided > 0 && <p className="smart-paper-note">已避开这位学生做过或练过的 {plan.avoided} 道题。</p>}
           <label className="smart-paper-field"><span>用一句话调整</span>
             <textarea rows={2} value={instruction} disabled={Boolean(busy)} placeholder="例如：第 3 天难一点；每天加两道分数题" onChange={(event) => setInstruction(event.target.value)} />
@@ -242,7 +243,7 @@ export default function SmartPaper() {
                 {question?.code && <span>ID {question.code}</span>}
                 {question && <span>繁度 {questionComplexity(question.stem)}</span>}
                 {item.focus && <em>{item.focus}</em>}
-                <small>{item.reason}</small>
+                <small>{item.reason.split(/(《[^》]+》第[^：]+题（第\d+次上传）：)/u).map((part, index) => index % 2 ? part : <MathText key={index} text={part} />)}</small>
                 <PaperMoreMenu label={`${group.title}第 ${itemIndex + 1} 题的操作`}>
                   <button type="button" onClick={() => swap(dayIndex, itemIndex)}>换一道</button>
                   <button type="button" disabled={itemIndex === 0} onClick={() => move(dayIndex, itemIndex, -1)}>上移</button>
