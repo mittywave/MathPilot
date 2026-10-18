@@ -21,6 +21,36 @@ function verdictLabel(item: GradingItem, international: boolean) {
   return item.maxScore != null && item.score != null ? `${label} · ${item.score}/${item.maxScore} 分` : label;
 }
 
+/** The same measured layout places notes and connectors on screen and in the PDF. */
+function gradedPageLayout(element: HTMLElement) {
+  const image = element.querySelector(".graded-page>img");
+  if (!image) return;
+  const bounds = element.getBoundingClientRect(), imageBounds = image.getBoundingClientRect();
+  const notes = Array.from(element.querySelectorAll<HTMLElement>(".error-callout"), note => ({
+    note: note.getBoundingClientRect(), mark: element.querySelector(`#${CSS.escape(note.dataset.markerId!)}`)?.getBoundingClientRect(),
+  }));
+  if (!imageBounds.height || notes.some(({ mark }) => !mark)) return;
+  const height = Math.ceil(Math.max(imageBounds.height, notes.reduce((sum, { note }) => sum + note.height + 12, 12)));
+  let bottom = 12;
+  const tops = notes.map(({ note, mark }) => {
+    const top = Math.max(bottom, mark!.top - bounds.top + mark!.height / 2 - note.height / 2);
+    bottom = top + note.height + 12;
+    return top;
+  });
+  bottom = height - 12;
+  for (let index = notes.length - 1; index >= 0; index--) {
+    tops[index] = Math.round(Math.min(tops[index], bottom - notes[index].note.height));
+    bottom = tops[index] - 12;
+  }
+  const paths = notes.map(({ note, mark }, index) => {
+    const x = note.right - bounds.left, y = tops[index] + note.height / 2;
+    const targetX = mark!.left - bounds.left - 3, targetY = mark!.top - bounds.top + mark!.height / 2;
+    const elbow = imageBounds.left - bounds.left - 12;
+    return `M ${x.toFixed(1)} ${y.toFixed(1)} H ${elbow.toFixed(1)} V ${targetY.toFixed(1)} H ${targetX.toFixed(1)}`;
+  });
+  return { height, tops, paths };
+}
+
 /** Keep each explanation beside its source page and measure its connector after text and images have laid out. */
 function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, international, onFocus }: {
   page: HomeworkSubmission["pages"][number]; items: GradingItem[]; caption: string; studentName: string;
@@ -41,47 +71,19 @@ function GradedHomeworkPage({ page, items, caption, studentName, activeItemId, i
     if (!element) return;
     let animation = 0;
     const measure = () => {
-      const image = element.querySelector(".graded-page>img");
-      if (!image) return;
-      const bounds = element.getBoundingClientRect(), imageBounds = image.getBoundingClientRect();
-      const notes = callouts.map(({ item, index, markerId }) => ({
-        note: document.getElementById(`error-note-${item.id}-${index}`)?.getBoundingClientRect(),
-        mark: document.getElementById(markerId)?.getBoundingClientRect(),
-      }));
-      if (!imageBounds.height || notes.some(({ note, mark }) => !note || !mark)) return;
-      const height = Math.ceil(Math.max(imageBounds.height, notes.reduce((sum, { note }) => sum + note!.height + 12, 12)));
-      let bottom = 12;
-      const tops = notes.map(({ note, mark }) => {
-        const top = Math.max(bottom, mark!.top - bounds.top + mark!.height / 2 - note!.height / 2);
-        bottom = top + note!.height + 12;
-        return top;
-      });
-      bottom = height - 12;
-      for (let index = notes.length - 1; index >= 0; index--) {
-        tops[index] = Math.round(Math.min(tops[index], bottom - notes[index].note!.height));
-        bottom = tops[index] - 12;
-      }
-      const paths = notes.map(({ note, mark }, index) => {
-        const x = note!.right - bounds.left, y = tops[index] + note!.height / 2;
-        const targetX = mark!.left - bounds.left - 3, targetY = mark!.top - bounds.top + mark!.height / 2;
-        const elbow = imageBounds.left - bounds.left - 12;
-        return `M ${x.toFixed(1)} ${y.toFixed(1)} H ${elbow.toFixed(1)} V ${targetY.toFixed(1)} H ${targetX.toFixed(1)}`;
-      });
-      const next = { height, tops, paths };
-      setLayout(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+      const next = gradedPageLayout(element);
+      if (next) setLayout(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
     };
     const observer = new ResizeObserver(() => { cancelAnimationFrame(animation); animation = requestAnimationFrame(measure); });
     observer.observe(element);
     element.querySelectorAll(".graded-page>img,.error-callout").forEach(node => observer.observe(node));
     measure();
     return () => { observer.disconnect(); cancelAnimationFrame(animation); };
-    // The notes are derived entirely from this page's items; resizing is observed above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
   return <figure id={`page-${page.id}`}><div ref={frame} className="annotated-homework-page" style={{ minHeight: layout.height || undefined }}>
-    <aside className="error-reasons" aria-label={`${caption}的错误原因`}>{callouts.map(({ item, error, index }, position) =>
-      <article id={`error-note-${item.id}-${index}`} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
+    <aside className="error-reasons" aria-label={`${caption}的错误原因`}>{callouts.map(({ item, error, index, markerId }, position) =>
+      <article id={`error-note-${item.id}-${index}`} data-marker-id={markerId} key={`${item.id}-${index}`} className={`error-callout${activeItemId === item.id ? " selected" : ""}`}
         style={{ top: layout.tops[position] ?? 0, visibility: layout.tops[position] == null ? "hidden" : undefined }}>
         <header><span className="grade-error-number">{item.questionNumber}{error.part}</span><b>错误原因</b></header>
         <p><MathText text={error.reason || "这处标记尚未补全错误原因。"} /></p>
@@ -480,6 +482,97 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
+  async function exportGrading() {
+    if (!submission || busy || editingId) return;
+    const figures = Array.from(document.querySelectorAll<HTMLElement>("#review-originals>figure"));
+    if (!figures.length) return;
+    setBusy(true); setMessage({ text: "正在导出批改 PDF…", tone: "success" });
+    try {
+      const [{ drawPage }, { fileToDataUrl }, { compileLatexPdf, latexCompilerStatus }] = await Promise.all([
+        import("../../../../../lib/file-import"), import("../../../../../lib/image-tools"), import("../../../../../lib/handout-latex-files"),
+      ]);
+      if (!(await latexCompilerStatus()).available) throw new Error("当前服务无法生成 PDF，请使用本地 MathPilot 导出。");
+      await Promise.all(figures.flatMap(figure => Array.from(figure.querySelectorAll("img"), async image => {
+        try { await image.decode(); } catch { throw new Error("原卷图片读取失败，请刷新页面后重试导出"); }
+      })));
+      await document.fonts.ready;
+      // SVG snapshots cannot load external fonts. Embed the same KaTeX faces already used by the notes.
+      const loadedFonts = new Set(Array.from(document.fonts).filter(font => font.status === "loaded").map(font => font.family.replaceAll('"', "")));
+      const fontRules = Array.from(document.styleSheets).flatMap(sheet => {
+        try { return Array.from(sheet.cssRules).filter((rule): rule is CSSFontFaceRule => rule instanceof CSSFontFaceRule && loadedFonts.has(rule.style.fontFamily.replaceAll('"', "")) && /KaTeX/.test(rule.style.fontFamily)); }
+        catch { return []; }
+      });
+      const fonts = (await Promise.all(fontRules.map(async rule => {
+        const source = /url\(["']?([^"')]+)/.exec(rule.style.getPropertyValue("src"))?.[1];
+        if (!source) throw new Error("公式字体读取失败，请刷新页面后重试导出");
+        const response = await fetch(new URL(source, rule.parentStyleSheet?.href || document.baseURI));
+        if (!response.ok) throw new Error("公式字体读取失败，请刷新页面后重试导出");
+        const blob = await response.blob();
+        const data = await fileToDataUrl(new File([blob], "font", { type: blob.type }));
+        return `@font-face{font-family:${rule.style.fontFamily};font-style:${rule.style.fontStyle};font-weight:${rule.style.fontWeight};src:url("${data}")}`;
+      }))).join("\n");
+      // Let the existing page component finish measuring notes and connectors, including off-screen pages.
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const files: Record<string, Uint8Array> = {};
+      const pages: string[] = [];
+      for (const [index, figure] of figures.entries()) {
+        setMessage({ text: `正在导出批改 PDF（${index + 1}/${figures.length} 页）…`, tone: "success" });
+        const width = 800;
+        // A fixed print width keeps notes readable on A4 regardless of the viewport, splitter or zoom.
+        const host = document.createElement("div"); host.className = "review-shell review-pages"; host.setAttribute("aria-hidden", "true");
+        host.inert = true;
+        Object.assign(host.style, { position: "fixed", left: "-12000px", top: "0", width: `${width}px`, maxWidth: "none", display: "block", margin: "0", padding: "0", color: "#24352f" });
+        const clone = figure.cloneNode(true) as HTMLElement;
+        Object.assign(clone.style, { width: `${width}px`, margin: "0" });
+        for (const [name, value] of Object.entries({ "--page": "#f5f7f4", "--surface": "#fff", "--ink": "#24352f", "--muted": "#61706a", "--line": "#e4e9e6", "--danger-soft": "#fff0e8", "--danger": "#a34f39" })) clone.style.setProperty(name, value);
+        clone.querySelectorAll(".selected").forEach(node => node.classList.remove("selected"));
+        clone.querySelectorAll(".katex-mathml").forEach(node => node.remove());
+        // Browser SVG snapshots otherwise paint horizontal scrollbars over radical formulas.
+        clone.querySelectorAll<HTMLElement>(".math-formula").forEach(formula => { formula.style.overflow = "visible"; });
+        clone.querySelectorAll(".grade-marker").forEach(node => node.setAttribute("aria-pressed", "false"));
+        clone.querySelectorAll<SVGElement>(".error-connectors").forEach(svg => { svg.style.color = "#c44e43"; });
+        for (const image of clone.querySelectorAll("img")) {
+          const response = await fetch(image.src);
+          if (!response.ok) throw new Error("原卷图片读取失败，请刷新页面后重试导出");
+          const blob = await response.blob();
+          image.src = await fileToDataUrl(new File([blob], "page", { type: blob.type }));
+          await image.decode();
+        }
+        const caption = clone.querySelector("figcaption");
+        if (caption) caption.textContent = `${submission.studentName} · ${titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · ${caption.textContent}`;
+        const style = document.createElement("style"); style.textContent = fonts; clone.prepend(style);
+        host.appendChild(clone); document.body.appendChild(host);
+        let canvas: HTMLCanvasElement;
+        try {
+          const frame = clone.querySelector<HTMLElement>(".annotated-homework-page")!;
+          const layout = gradedPageLayout(frame);
+          if (!layout) throw new Error("原卷批注尚未准备好，请刷新页面后重试导出");
+          frame.style.minHeight = `${layout.height}px`;
+          frame.querySelectorAll<HTMLElement>(".error-callout").forEach((note, index) => { note.style.top = `${layout.tops[index]}px`; note.style.visibility = "visible"; });
+          frame.querySelectorAll(".error-connectors>path").forEach((path, index) => path.setAttribute("d", layout.paths[index]));
+          canvas = await drawPage(clone, 3, host.className);
+        }
+        finally { host.remove(); }
+        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error("原卷页面生成失败，请重试导出")), "image/jpeg", .95));
+        const name = `page-${index + 1}.jpg`;
+        files[name] = new Uint8Array(await blob.arrayBuffer());
+        pages.push(`\\noindent\\includegraphics[width=\\linewidth,height=.99\\textheight,keepaspectratio]{${name}}`);
+        canvas.width = 0; canvas.height = 0;
+      }
+      const main = "grading.tex";
+      files[main] = new TextEncoder().encode([
+        "\\documentclass{article}", "\\usepackage[a4paper,margin=5mm]{geometry}", "\\usepackage{graphicx}",
+        "\\pagestyle{empty}", "\\setlength{\\parindent}{0pt}", "\\begin{document}", pages.join("\n\\newpage\n"), "\\end{document}",
+      ].join("\n"));
+      const { pdf } = await compileLatexPdf({ main, files, missingFigures: 0 });
+      const scope = dayTask ? dayTask.title || `第${selectedDay! + 1}天` : `第${submission.version}次上传`;
+      const name = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-${scope}-批改.pdf`.replace(/[\\/:*?"<>|]/g, "_");
+      saveBlob(pdf, name);
+      setMessage({ text: `已导出批改 PDF，共 ${figures.length} 页，包含原卷、批改标记和错误原因`, tone: "success" });
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "批改导出失败，请重试", tone: "error" }); }
+    finally { setBusy(false); }
+  }
+
   if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
   if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
@@ -511,6 +604,9 @@ export default function TeacherSubmissionPage() {
   let dayEnd = 0;
   const uploadDay = !correctionQuestions.length && scoped.length ? assigned!.days.find((entry) => (dayEnd += entry.size) > assigned!.questions.indexOf(scoped[0])) : undefined;
   const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
+  const canExportGrading = !!evidencePages.length && !!evidenceItems.length && (Boolean(dayTask) || ["review_required", "ready", "published"].includes(submission.status));
+  const gradingExport = <button type="button" disabled={busy || !!editingId || !canExportGrading} onClick={() => void exportGrading()}
+    title={editingId ? "请先保存或取消判定修正" : canExportGrading ? `导出下方原卷标记的全部 ${evidencePages.length} 页，包含批改痕迹和错误原因（PDF）` : "当前暂无可导出的原卷批改"}>导出批改</button>;
   const overview = <><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1>{submission.submittedAt != null && <p>提交日期：{new Date(submission.submittedAt).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }).replaceAll("/", ".")}</p>}</div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
       {!assigned && <div className="review-outputs" role="group" aria-label="这份作业写到了哪里">
@@ -525,7 +621,7 @@ export default function TeacherSubmissionPage() {
     {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
     <section className="homework-panel review-overview" aria-label="作业概览">
 
-    {assigned ? <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} onExport={(questions, kind, includeAnalysis) => void exportHomework(questions, kind, includeAnalysis)}
+    {assigned ? <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} actions={gradingExport} onExport={(questions, kind, includeAnalysis) => void exportHomework(questions, kind, includeAnalysis)}
       onDay={(day) => { setSelectedDay(day); setEditingId(""); setActiveItemId(""); requestAnimationFrame(() => document.getElementById("day-results")?.scrollIntoView({ block: "start", behavior: "instant" })); }}
       onContinue={() => void newVersion({}, "继续上传这份作业")}
       onCorrect={(day) => void newVersion({ correctionDay: day }, assigned.days.length > 1 ? `订正第 ${day + 1} 天的错题` : "订正错题")}
@@ -535,7 +631,7 @@ export default function TeacherSubmissionPage() {
         if (!item) return;
         if (!evidenceItems.includes(item)) { setSelectedDay(null); requestAnimationFrame(() => focusEvidence(item, true)); }
         else focusEvidence(item, true);
-      }}>{overview}</AssignedHomeworkSheet> : <section className="review-summary">{overview}</section>}
+      }}>{overview}</AssignedHomeworkSheet> : <section className="review-summary">{overview}<div className="assigned-sheet-actions">{gradingExport}</div></section>}
     </section>
     {dayTask && <section className="assigned-sheet" id="day-results" aria-label="当天提交与批改">
       <header><div><h2>{dayTask.title || `第 ${selectedDay! + 1} 天`} · 提交与批改</h2><p>{dayNote(dayTask)} · 共 {dayTask.size} 道题</p></div>

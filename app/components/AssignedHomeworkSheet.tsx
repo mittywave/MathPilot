@@ -70,10 +70,10 @@ export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [uplo
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport, children }: {
+export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport, actions, children }: {
   submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
   selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[], kind: "word" | "pdf", includeAnalysis?: boolean) => void;
-  children?: ReactNode;
+  actions?: ReactNode; children?: ReactNode;
 }) {
   const { assigned } = submission;
   const [showOriginals, setShowOriginals] = useState(false);
@@ -114,6 +114,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
             <option value="" disabled>{label}</option><option value="pdf">PDF</option><option value="word">Word</option>
           </select>;
         })}
+        {actions}
       </div>
     </section>
     <section className="assigned-sheet" aria-label="整份作业">

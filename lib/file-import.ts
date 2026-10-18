@@ -255,17 +255,17 @@ function waitForImages(root: HTMLElement) {
   return Promise.all(Array.from(root.querySelectorAll("img")).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => { image.onload = () => resolve(); image.onerror = () => resolve(); })));
 }
 
-// The browser draws a rendered Word page itself through an SVG foreignObject: text, Word equations (MathML) and
+// The browser draws a page itself through an SVG foreignObject: text, Word equations (MathML) and
 // pictures exactly as it shows them, with the page's own style sheets. html2canvas, the fallback, cannot paint
 // equations and sets Chinese text lower than the browser does. Throws when the browser will not draw it.
-async function drawPage(page: HTMLElement, scale: number) {
+export async function drawPage(page: HTMLElement, scale: number, wrapperClass = "docx-wrapper") {
   const box = page.getBoundingClientRect(), inherited = getComputedStyle(page.parentElement ?? page);
   const styles = Array.from(document.styleSheets).flatMap((sheet) => { try { return Array.from(sheet.cssRules, (rule) => rule.cssText); } catch { return []; } }).join("\n");
   const width = Math.ceil(box.width * scale), height = Math.ceil(box.height * scale);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" class="docx-wrapper" style="padding:0;margin:0;background:#fff;display:block;width:${box.width}px;transform:scale(${scale});transform-origin:0 0;font-family:${inherited.fontFamily.replace(/"/g, "'")};font-size:${inherited.fontSize};line-height:${inherited.lineHeight};color:${inherited.color}"><style>${styles.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</style>${new XMLSerializer().serializeToString(page)}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" class="${wrapperClass}" style="padding:0;margin:0;background:#fff;display:block;width:${box.width}px;transform:scale(${scale});transform-origin:0 0;font-family:${inherited.fontFamily.replace(/"/g, "'")};font-size:${inherited.fontSize};line-height:${inherited.lineHeight};color:${inherited.color}"><style>${styles.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</style>${new XMLSerializer().serializeToString(page)}</div></foreignObject></svg>`;
   const picture = new Image(); picture.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`; await picture.decode();
   const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
-  const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法绘制 Word 页面");
+  const context = canvas.getContext("2d", { alpha: false }); if (!context) throw new Error("无法绘制页面");
   context.fillStyle = "#fff"; context.fillRect(0, 0, width, height); context.drawImage(picture, 0, 0);
   context.getImageData(0, 0, 1, 1); // a browser that taints such drawings refuses here, before any slicing
   return canvas;
