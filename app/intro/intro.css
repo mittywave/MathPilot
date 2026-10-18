@@ -1,0 +1,75 @@
+/* MathPilot product page (/intro). Colours follow the hero's light/dark switch through data-mode. */
+html:has(.mp-intro) { scroll-behavior:smooth; }
+html:has(.mp-intro[data-mode="light"]), html:has(.mp-intro[data-mode="light"]) body { background:#EBE9E5; }
+html:has(.mp-intro[data-mode="dark"]), html:has(.mp-intro[data-mode="dark"]) body { background:#111110; }
+
+.mp-intro { --bg:#EBE9E5; --fg:#151514; --acc:#3E5E4C;
+  --line:color-mix(in srgb, var(--fg) 14%, transparent); --soft:color-mix(in srgb, var(--fg) 68%, var(--bg));
+  /* the MathPilot wordmark reads these app tokens */
+  --ink:var(--fg); --green:var(--acc); --muted:color-mix(in srgb, var(--fg) 55%, var(--bg));
+  --sans:"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif;
+  min-height:100vh; background:var(--bg); color:var(--fg); font-family:var(--sans); -webkit-font-smoothing:antialiased;
+  transition:background-color .6s ease, color .6s ease; }
+.mp-intro[data-mode="dark"] { --bg:#111110; --fg:#F1EFEA; --acc:#9DBFAA; }
+
+/* Hero: Chinese copy needs upright accents and more leading than the Latin original. */
+.mp-intro .sh-h1 { line-height:1.1; letter-spacing:-.01em; }
+.mp-intro .sh-accent { font-style:normal; letter-spacing:0; }
+.mp-intro .sh-body { line-height:1.75; letter-spacing:0; }
+.mp-intro .sh-link, .mp-intro .sh-navcta { font-size:14px; letter-spacing:.02em; }
+.mp-intro .sh-backdrop { font-family:var(--serif); font-weight:400; letter-spacing:0; }
+.mp-intro .sh-brand { display:block; transform:translateY(3px); } /* the wordmark's arrow hangs below the letters */
+.mp-intro .sh-brand .brand-word { height:28px; }
+
+.mp-section { padding:clamp(96px,10vw,160px) clamp(20px,3.2vw,48px); border-top:1px solid var(--line); }
+.mp-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2.4fr); gap:clamp(24px,4vw,72px); align-items:start; margin-bottom:clamp(48px,5vw,88px); }
+.mp-kicker { display:flex; align-items:center; gap:12px; margin:14px 0 0; font-size:12px; letter-spacing:.14em; color:var(--soft); }
+.mp-kicker::before { content:""; width:28px; height:1px; background:currentColor; opacity:.7; }
+.mp-head h2, .mp-closing h2 { margin:0; font-weight:500; font-size:clamp(36px,4.4vw,68px); line-height:1.18; letter-spacing:-.01em; text-wrap:balance; }
+.mp-section em, .mp-closing em { font-family:var(--serif); font-style:normal; font-weight:400; color:var(--acc); }
+.mp-lead { max-width:620px; margin:24px 0 0; font-size:17px; line-height:1.8; color:var(--soft); text-wrap:balance; }
+
+.mp-loop { position:relative; max-width:1240px; margin:0 auto; aspect-ratio:1200 / 620; }
+.mp-loop svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.mp-loop-glyph { font-family:var(--serif); font-size:120px; fill:currentColor; opacity:.07; text-anchor:middle; dominant-baseline:central; }
+.mp-loop-line { fill:none; stroke:currentColor; stroke-width:1.2; opacity:.5; }
+.mp-loop-leader { stroke:currentColor; stroke-width:1; stroke-dasharray:3 5; opacity:.45; }
+.mp-loop-node { fill:var(--bg); stroke:currentColor; stroke-width:1.4; }
+.mp-loop-cross, .mp-loop-runner { fill:var(--acc); }
+.mp-steps { margin:0; padding:0; list-style:none; }
+.mp-step { position:absolute; display:flex; flex-direction:column; gap:4px; width:16%; }
+.mp-step.is-above { align-items:center; text-align:center; transform:translate(-50%, calc(-100% - 22px)); }
+.mp-step.is-below { align-items:center; text-align:center; transform:translate(-50%, 22px); }
+.mp-step.is-left { align-items:flex-end; text-align:right; transform:translate(calc(-100% - 26px), -50%); }
+.mp-step.is-right { align-items:flex-start; text-align:left; transform:translate(26px, -50%); }
+.mp-step.is-center { align-items:center; width:20%; text-align:center; transform:translate(-50%, 0); }
+.mp-step-no { font-family:var(--serif); font-size:14px; color:var(--acc); }
+.mp-step strong { font-size:20px; font-weight:600; letter-spacing:.02em; }
+.mp-step-text { font-size:13.5px; line-height:1.65; color:var(--soft); text-wrap:balance; }
+
+.mp-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:clamp(40px,4vw,64px) clamp(24px,3vw,56px); margin:0; padding:0; list-style:none; }
+.mp-cell { padding-top:22px; border-top:1px solid var(--line); }
+.mp-cell-no { font-family:var(--serif); font-size:15px; color:var(--acc); }
+.mp-cell h3 { margin:14px 0 10px; font-size:24px; font-weight:500; letter-spacing:.01em; }
+.mp-cell p { max-width:400px; margin:0; font-size:15px; line-height:1.8; color:var(--soft); text-wrap:pretty; }
+
+.mp-closing { display:flex; flex-direction:column; align-items:center; gap:40px; padding:clamp(120px,12vw,200px) clamp(20px,3.2vw,48px); border-top:1px solid var(--line); text-align:center; }
+.mp-closing h2 { font-size:clamp(44px,6vw,96px); }
+.mp-btn { display:inline-flex; align-items:center; gap:10px; height:48px; padding:0 24px; border-radius:999px; background:var(--fg); color:var(--bg);
+  font-size:15px; font-weight:500; text-decoration:none; transition:transform .3s cubic-bezier(.2,.7,.2,1); }
+.mp-btn:hover { transform:translateY(-1px); }
+.mp-btn svg { transition:transform .3s cubic-bezier(.2,.7,.2,1); }
+.mp-btn:hover svg { transform:translateX(3px); }
+.mp-btn:focus-visible { outline:2px solid var(--fg); outline-offset:4px; }
+.mp-foot { display:flex; align-items:center; gap:24px; padding:28px clamp(20px,3.2vw,48px) 36px; border-top:1px solid var(--line); font-size:13px; color:var(--soft); }
+.mp-foot .brand-word { height:24px; color:var(--fg); }
+.mp-foot span:last-child { margin-left:auto; }
+
+.mp-intro[data-reveal="on"] .mp-reveal { opacity:0; transform:translateY(18px); transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1); }
+.mp-intro[data-reveal="on"] .mp-reveal.is-in { opacity:1; transform:none; }
+@media (prefers-reduced-motion:reduce) {
+  html:has(.mp-intro) { scroll-behavior:auto; }
+  .mp-intro[data-reveal="on"] .mp-reveal { opacity:1; transform:none; transition:none; }
+  .mp-loop-runner { display:none; }
+}

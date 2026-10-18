@@ -1,0 +1,214 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>∞ 雕塑图</title>
+<!--
+  Source of public/intro-infinity-light.webp and public/intro-infinity-dark.webp, the hero sculpture on /intro.
+  Open this file in Chrome: it draws both variants (fixed seed, so the same picture every time) and offers each
+  as a download; put the downloads in public/ under the same names.
+-->
+<style>
+  body { margin:0; padding:24px; font:14px system-ui, sans-serif; background:#777; color:#fff; }
+  a { display:block; margin-bottom:24px; color:inherit; }
+  img { display:block; width:100%; max-width:1200px; margin-top:8px; }
+  .light img { background:#EBE9E5; } .dark img { background:#111110; }
+</style>
+<canvas id="c" hidden></canvas>
+<script>
+// Infinity sculpture: two twisted satin ribbons and a tube of loose filaments on a
+// lemniscate, lit in 3D; beads cling to the strands and the lobe tips fray into dust.
+// Transparent background.
+function render(variant) {
+  const W = 2400, H = 960, cx = W / 2, cy = H / 2 + 6, A = 860
+  const c = document.getElementById("c")
+  c.width = W; c.height = H
+  const g = c.getContext("2d")
+  g.clearRect(0, 0, W, H)
+
+  let seed = 11
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+  const gauss = () => { let u = 0; for (let i = 0; i < 4; i++) u += rnd(); return (u - 2) / 0.58 }
+
+  const dark = variant === "dark"
+  const stops = dark
+    ? [[92, 87, 80], [150, 143, 131], [210, 201, 184], [252, 250, 245]]
+    : [[56, 51, 45], [128, 120, 108], [200, 189, 168], [253, 251, 247]]
+  const cool = dark ? [176, 186, 188] : [126, 136, 140]
+  function metal(v, coolMix) {
+    v = Math.max(0, Math.min(1, v))
+    const s = v * 3, i = Math.min(2, Math.floor(s)), f = s - i
+    const a = stops[i], b = stops[i + 1]
+    return [0, 1, 2].map((k) => {
+      const x = a[k] + (b[k] - a[k]) * f
+      return Math.round(x + (cool[k] - x) * coolMix * Math.sin(v * Math.PI) * 0.55)
+    })
+  }
+
+  const norm = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l) }
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+  const L = norm([-0.35, -0.6, 0.9]) // screen y points down: light from the upper left, in front
+  const Hv = norm([L[0], L[1], L[2] + 1])
+  function shade(N, T, occl) {
+    if (dot(N, [0, 0, 1]) < 0) N = N.map((x) => -x)
+    const diff = Math.max(0, dot(N, L))
+    const spec = Math.pow(Math.max(0, dot(N, Hv)), 14)
+    const th = dot(T, Hv)
+    const aniso = Math.pow(Math.max(0, 1 - th * th), 40) // brushed-metal sheen along the strand
+    return (0.1 + diff * 0.66 + spec * 0.5 + aniso * 0.26) * occl
+  }
+
+  // lemniscate of Bernoulli, t = 0 at the right tip
+  const P = (t) => {
+    const s = Math.sin(t), d = 1 + s * s
+    return [A * Math.cos(t) / d, A * s * Math.cos(t) / d * 1.12]
+  }
+  const STEPS = 1400
+  const pts = [], nrm = [], tan = [], outer = [], bz = [], wid = []
+  for (let j = 0; j <= STEPS; j++) {
+    const t = (j / STEPS) * Math.PI * 2
+    const p = P(t), q = P(t + 0.001)
+    const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy)
+    pts.push(p); tan.push([dx / l, dy / l, 0]); nrm.push([-dy / l, dx / l, 0])
+    // 0 in the body → 1 at the tips; the left tip dissolves more than the right
+    const o = Math.max(0, (Math.abs(p[0]) / A - 0.6) / 0.4)
+    outer.push(Math.min(1, o * (p[0] < 0 ? 1.15 : 0.85)))
+    bz.push(Math.sin(t) * 130)
+    const cs = Math.cos(t)
+    wid.push(34 + 74 * cs * cs)
+  }
+
+  const items = []
+  const seg = (z, x0, y0, x1, y1, rgb, a, lw) =>
+    items.push({ z, draw: () => {
+      g.strokeStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`; g.lineWidth = lw
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke()
+    } })
+  const dotItem = (z, x, y, r, rgb, a) =>
+    items.push({ z, draw: () => {
+      g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill()
+    } })
+  const occlusion = (j, z) => 0.7 + 0.3 * Math.max(0, Math.min(1, (z + 170) / 300))
+
+  const ends = [] // where strands fray off, to seed dust
+
+  // kind: "ribbon" (band b across a twisting satin band) or "tube" (strand on a tube surface at angle th0)
+  function strand(kind, b, phase, twists, amp, lw, alpha, coolMix) {
+    const fray = rnd() < 0.55 ? 2 : 0.4 + rnd() * 0.6 // some strands end at different points near the tips
+    const scatterDir = gauss(), scatterF = 1 + rnd() * 3, scatterP = rnd() * 6.28
+    let prev = null
+    for (let j = 0; j <= STEPS; j++) {
+      const t = (j / STEPS) * Math.PI * 2
+      const o = outer[j]
+      if (o > fray) {
+        if (prev && rnd() < 0.9) ends.push([prev[0], prev[1], j])
+        prev = null
+        continue
+      }
+      const th = phase + twists * t
+      const n = nrm[j], T = tan[j]
+      const w = wid[j] * amp * (1 + o * 0.5)
+      let off, dz, N
+      if (kind === "ribbon") {
+        off = b * w * Math.cos(th); dz = b * w * Math.sin(th)
+        N = [-n[0] * Math.sin(th), -n[1] * Math.sin(th), Math.cos(th)]
+      } else {
+        off = w * Math.cos(th); dz = w * Math.sin(th)
+        N = [n[0] * Math.cos(th), n[1] * Math.sin(th) * 0 + n[1] * Math.cos(th), Math.sin(th)]
+      }
+      // fraying: strands drift apart towards the tips
+      off += o * o * 34 * (scatterDir + 0.6 * Math.sin(scatterP + t * scatterF * 6))
+      const x = cx + pts[j][0] + n[0] * off
+      const y = cy + pts[j][1] + n[1] * off
+      const z = bz[j] + dz
+      if (prev) {
+        const v = shade(N, T, occlusion(j, z))
+        const a = alpha * (1 - 0.55 * o)
+        seg(z, prev[0], prev[1], x, y, metal(v, coolMix), a, lw)
+      }
+      prev = [x, y]
+    }
+  }
+
+  // two satin ribbons a quarter-turn apart
+  for (const [ph, tw] of [[0.3, 2.5], [0.3 + Math.PI / 2, 3]]) {
+    const n = 230
+    for (let i = 0; i < n; i++) {
+      const b = (i / (n - 1)) * 2 - 1 + gauss() * 0.01
+      strand("ribbon", b * 0.92, ph, tw, 0.78, 0.9 + rnd() * 0.9, 0.62 + rnd() * 0.3, rnd() * 0.5)
+    }
+  }
+  // a looser tube of filaments around them
+  for (let i = 0; i < 200; i++)
+    strand("tube", 0, rnd() * 6.283, 1 + Math.floor(rnd() * 3), 0.55 + Math.abs(gauss()) * 0.3, 0.45 + rnd() * 0.6, 0.25 + rnd() * 0.3, 0.3 + rnd() * 0.6)
+  // long hairline wisps arcing away from the form
+  for (let i = 0; i < 14; i++)
+    strand("tube", 0, rnd() * 6.283, 1, 1.2 + rnd() * 0.7, 0.45 + rnd() * 0.35, 0.16 + rnd() * 0.16, 0.4)
+
+  // beads: pearl-like spheres clinging to the strands, thicker where the form frays
+  function bead(x, y, z, r) {
+    items.push({ z, draw: () => {
+      const gr = g.createRadialGradient(x - r * 0.38, y - r * 0.45, r * 0.04, x, y, r)
+      gr.addColorStop(0, `rgb(${metal(1, 0)})`)
+      gr.addColorStop(0.35, `rgb(${metal(0.66, 0.2)})`)
+      gr.addColorStop(0.85, `rgb(${metal(0.24, 0.5)})`)
+      gr.addColorStop(1, `rgb(${metal(0.36, 0.4)})`)
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill()
+    } })
+  }
+  for (let i = 0; i < 1600; i++) {
+    const j = Math.floor(rnd() * STEPS)
+    const o = outer[j]
+    if (rnd() > 0.22 + o * 0.9) continue
+    const n = nrm[j]
+    const off = gauss() * wid[j] * (0.5 + o * 0.9)
+    const x = cx + pts[j][0] + n[0] * off + gauss() * o * 40
+    const y = cy + pts[j][1] + n[1] * off + gauss() * o * 26
+    const r = rnd() < 0.06 ? 7 + rnd() * 7 : 1.8 + Math.pow(rnd(), 1.6) * 4.5
+    bead(x, y, bz[j] + gauss() * 60 + 40, r)
+  }
+
+  // dust: fine grains around the body, a drifting cloud off each tip
+  const grain = (x, y, z, o) => {
+    const r = 0.55 + Math.pow(rnd(), 3.2) * 2.6
+    const rgb = metal(0.12 + rnd() * 0.8, rnd() * 0.6)
+    dotItem(z, x, y, r, rgb, 0.4 + rnd() * 0.55)
+  }
+  for (let i = 0; i < 70000; i++) {
+    const j = Math.floor(rnd() * STEPS)
+    const o = outer[j]
+    if (rnd() > 0.035 + o * o * 0.95) continue
+    const n = nrm[j]
+    const side = Math.sign(pts[j][0])
+    const drift = Math.pow(rnd(), 2) * o * 300
+    const spread = wid[j] * (0.55 + o * 1.1)
+    const x = cx + pts[j][0] + n[0] * gauss() * spread + side * drift
+    const y = cy + pts[j][1] + n[1] * gauss() * spread + gauss() * drift * 0.3
+    grain(x, y, bz[j] + gauss() * 80, o)
+  }
+  // trails where strands end
+  for (const [x0, y0, j] of ends) {
+    const side = Math.sign(pts[j][0])
+    const k = 3 + Math.floor(rnd() * 8)
+    for (let m = 0; m < k; m++) {
+      const d = Math.pow(rnd(), 1.5) * 160
+      grain(x0 + side * d + gauss() * 8, y0 + gauss() * (6 + d * 0.25), bz[j] + gauss() * 40, 1)
+    }
+  }
+
+  items.sort((a, b) => a.z - b.z)
+  g.lineCap = "round"
+  for (const it of items) it.draw()
+  return c.toDataURL("image/webp", 0.86)
+}
+
+for (const variant of ["light", "dark"]) {
+  const link = document.createElement("a")
+  link.className = variant
+  link.download = `intro-infinity-${variant}.webp`
+  link.href = render(variant)
+  link.textContent = `下载 intro-infinity-${variant}.webp`
+  const preview = new Image()
+  preview.src = link.href
+  link.append(preview)
+  document.body.append(link)
+}
+</script>
