@@ -94,11 +94,11 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     return (mistakes > 0 || group.state === "done") && <button key={index} type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || Boolean(wait)} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
       title={allCorrect ? correctionLabel === "已订正" ? "这一天的错题已全部订正正确" : "这一天的题目全部正确，无需订正" : !mistakes ? "请先核实待处理题目" : wait || `上传这一天 ${mistakes} 道错题的订正照片或 PDF`}>{correctionLabel}{allCorrect && <span aria-hidden="true"> ✅</span>}</button>;
   });
+  const originalToggle = <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>;
   return <>
     <section className="review-summary">
       {children}
       <div className="assigned-sheet-actions">
-        <button type="button" aria-expanded={showOriginals} aria-controls="assigned-originals" onClick={() => setShowOriginals((shown) => !shown)}>{showOriginals ? "收起原题" : "查看原题"}</button>
         {[false, true].map((includeAnalysis) => {
           const label = includeAnalysis ? "导出解析" : "导出错题";
           const questions = (includeAnalysis ? assigned.questions : mistakes).map((item) => item.question);
@@ -118,7 +118,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       </div>
     </section>
     <section className="assigned-sheet" aria-label="整份作业">
-    {several && nextUpload && <header><div className="assigned-sheet-actions">{nextUpload}</div></header>}
+    {several && <header><div className="assigned-sheet-actions">{originalToggle}{nextUpload}</div></header>}
     {days.map((group, index) => {
       const note = dayNote(group);
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
@@ -138,7 +138,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
         {/* A day not handed in yet is uploaded on its own; corrections only make sense for what has been handed in. */}
         {several && group.state !== "done" && <button type="button" className="assigned-upload" disabled={busy || Boolean(wait)} onClick={() => onUpload(index)} aria-label={`${group.title || dayName}上传这天`}
           title={wait || `上传${dayName}还没交的 ${group.size - group.done} 道题的照片或 PDF，只批改这几道`}>上传这天</button>}
-        {several ? corrections[index] : <div className="assigned-sheet-actions">{nextUpload}{corrections[index]}</div>}
+        {several ? corrections[index] : <div className="assigned-sheet-actions">{nextUpload}{originalToggle}{corrections[index]}</div>}
       </div>;
     })}
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id
