@@ -39,6 +39,8 @@ npm install
 npm run dev
 ```
 
+日常服务的 Vite 依赖缓存保存在 `node_modules/.vite/serve`，构建使用 `node_modules/.vite/build`；通过 `STUDIO_TEST_STATE` 启动的隔离预览使用该状态目录下的 `node_modules/.vite/serve`。这样预览或构建重建缓存时，不会覆盖 3001 正在使用的依赖，避免“新建试题”等按需加载入口因旧缓存引用失效而报错。
+
 本地注册和发布需要在未提交的 `.env.local` 或 `.dev.vars` 中配置：
 
 ```text

@@ -1,6 +1,7 @@
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { join } from "node:path";
 import hostingConfig from "./.openai/hosting.json";
 import { cdnAdapter } from "@vinext/cloudflare/cache/cdn-adapter";
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -12,7 +13,7 @@ import { lanSharePlugin, localNetworkName } from "./scripts/lan-share.mjs";
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   await preparePdfWorker();
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -23,6 +24,8 @@ export default defineConfig(async () => {
   // Colleagues may open the site by this Mac's Bonjour name (共享办公), which survives IP changes.
   const networkName = localNetworkName();
   return {
+    // Preview dependency rebundling must not replace chunks used by the live dev server.
+    cacheDir: join(process.env.STUDIO_TEST_STATE ?? ".", "node_modules", ".vite", command),
     server: {
       allowedHosts: [networkName],
       ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
