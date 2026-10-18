@@ -4,6 +4,17 @@ import { loadSource } from './load-source.mjs';
 import { finalizeHomeworkVerdict } from '../lib/homework-grading-rules.mjs';
 const {normalizeCompletedQuestions,completedReferencePrompt,completedVerificationPrompt,normalizeCompletedReferences,normalizeCompletedVerification}=await loadSource('lib/completed-homework-contract.ts');
 const base={question_number:'1',page_numbers:[1,2],type:'解答题',stem:'题目跨页',options:[],student_answer:'PRIVATE STUDENT ANSWER',answer_state:'readable',question_complete:true,bbox:{x:20,y:30,width:400,height:300},knowledge_tags:[],capability_keys:[]};
+test('grading requires a fully reduced final fraction without confusing it with a wrong intermediate equality',async()=>{
+ const {buildHomeworkGradingPrompt,FINAL_FRACTION_RULE}=await loadSource('lib/homework-grading-contract.ts');
+ const prompt=buildHomeworkGradingPrompt(1,[{questionNumber:'25(3)',type:'解答题',stem:'求未知数：2.5x÷2=1',answer:'0.8',analysis:'',maxScore:null}]);
+ assert.ok(prompt.includes(FINAL_FRACTION_RULE));
+ assert.match(prompt,/分子分母均为整数、分母为正且二者互质/);
+ assert.match(prompt,/2\/2\.5[\s\S]*4\/5/);
+ assert.match(prompt,/只判对错的作业按错误处理/);
+ assert.match(prompt,/不把正确的中间等式说成计算或等式变形错误/);
+ assert.match(prompt,/不能先替学生约分或改写后再判/);
+ assert.match(prompt,/题目明确要求小数、百分数、近似值或特定精度时遵从题意/);
+});
 test('mistake coordinates preserve the whole answer box and reject uncertain, duplicate and out-of-box marks',async()=>{
  const {normalizeHomeworkGrading}=await loadSource('lib/homework-grading-contract.ts');
  const outer={x:100,y:200,width:700,height:500};

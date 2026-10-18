@@ -95,7 +95,7 @@ test("day captions keep first-attempt marks after every mistake is corrected", a
 test("normalizes objective homework answers conservatively", () => {
   assert.equal(normalizeHomeworkAnswer("答案：Ａ，C。"), "AC");
   assert.equal(normalizeHomeworkAnswer("✓"), "正确");
-  assert.equal(isSimpleObjectiveAnswer("填空题", "-2.5"), true);
+  assert.equal(isSimpleObjectiveAnswer("填空题", "-2.5"), false, "a decimal reference needs value and final-form checks");
   assert.equal(isSimpleObjectiveAnswer("填空题", "$5$"),true);
   assert.equal(normalizeHomeworkAnswer("$5$"),"5");
   assert.equal(isSimpleObjectiveAnswer("填空题", "x²-1"), false);
@@ -107,6 +107,23 @@ test("auto-finalizes readable objective and subjective answers without confidenc
   assert.deepEqual(finalizeHomeworkVerdict({ type: "解答题", standardAnswer: "见解析", studentAnswer: "过程", modelVerdict: "partial", confidence: .61, warnings: [], threshold: .9 }), { verdict: "partial", score: null, requiresReview: false, confidence: .61 });
   assert.equal(finalizeHomeworkVerdict({ type: "填空题", standardAnswer: "x²-1", studentAnswer: "x²-1", modelVerdict: "correct", confidence: .52, warnings: [], threshold: .9 }).verdict, "correct");
   assert.equal(finalizeHomeworkVerdict({ type: "解答题", standardAnswer: "见解析", studentAnswer: "", modelVerdict: "incorrect", confidence: .8, warnings: [], threshold: .9 }).verdict, "unreadable");
+});
+
+test("decimal references retain the model's reduced-fraction and final-form judgement", () => {
+  const grade = (standardAnswer, studentAnswer, modelVerdict) => finalizeHomeworkVerdict({
+    type: "填空题", standardAnswer, studentAnswer, modelVerdict, confidence: .95,
+  });
+  for (const [reference, answer] of [["0.8", "$\\frac{4}{5}$"], ["0.5", "1/2"], ["-2.5", "-5/2"]]) {
+    assert.equal(grade(reference, answer, "correct").verdict, "correct", "a reduced fraction can match a decimal reference");
+  }
+  for (const [reference, answer] of [["0.8", "2/2.5"], ["0.5", "2/4"], ["0.8", "0.8"], ["2/4", "2/4"]]) {
+    assert.equal(grade(reference, answer, "incorrect").verdict, "incorrect", "equal values or strings cannot override an unfinished final answer");
+  }
+  assert.equal(grade("0.8", "0.8", "correct").verdict, "correct", "an explicit decimal/precision requirement is still judged by the model");
+  assert.equal(grade("5", "5", "incorrect").verdict, "correct", "plain integer comparisons remain deterministic");
+  const methodMarks = finalizeHomeworkVerdict({ type: "解答题", standardAnswer: "0.8", studentAnswer: "2/2.5",
+    modelVerdict: "partial", modelScore: 2, maxScore: 3, confidence: .95, curriculum: "international" });
+  assert.deepEqual([methodMarks.verdict, methodMarks.score], ["partial", 2], "an unfinished final fraction does not erase earned method marks");
 });
 
 test("scores follow printed marks and stay consistent with the verdict", () => {
