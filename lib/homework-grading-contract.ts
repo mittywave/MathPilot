@@ -17,7 +17,7 @@ const box = { anyOf: [{ type: "null" }, { type: "object", additionalProperties: 
   ...coordinates, errors: { type: "array", maxItems: 8, items: { type: "object", additionalProperties: false, properties: { ...coordinates, reason: { type: "string" }, part: { type: "string" } }, required: ["x", "y", "width", "height", "reason", "part"] } },
 }, required: ["x", "y", "width", "height", "errors"] }] };
 
-export const homeworkErrorLocationSchema: Record<string, unknown> = {
+export const homeworkErrorLocationSchema = {
   type: "object", additionalProperties: false, properties: {
     results: { type: "array", items: { type: "object", additionalProperties: false, properties: {
       question_number: { type: "string" }, bbox: box, feedback: { type: "string" },
