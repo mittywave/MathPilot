@@ -451,7 +451,7 @@ export type GradingItem = {
   confidence: number;
   bbox: { x: number; y: number; width: number; height: number;
     /** Confirmed mistakes on this same page, in page coordinates; the outer box still covers the whole answer. */
-    errors?: Array<{ x: number; y: number; width: number; height: number }>;
+    errors?: Array<{ x: number; y: number; width: number; height: number; reason?: string }>;
   } | null;
   requiresReview: boolean;
   reviewedAt: number | null;

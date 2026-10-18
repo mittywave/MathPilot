@@ -17,6 +17,18 @@ test('mistake coordinates preserve the whole answer box and reject uncertain, du
  assert.deepEqual(normalize({bbox:{...outer,errors:[{...right,x:-1}]}}).bbox,outer,'invalid local coordinates never move the outer frame');
  assert.equal(normalize({bbox:null}).bbox,null);
 });
+test('each reason stays with its validated mark and old coordinate-only marks remain readable',async()=>{
+ const {normalizeHomeworkGrading}=await loadSource('lib/homework-grading-contract.ts');
+ const outer={x:100,y:200,width:700,height:500};
+ const first={x:150,y:250,width:120,height:40},second={x:400,y:550,width:150,height:50};
+ const normalize=errors=>normalizeHomeworkGrading({results:[{question_number:'3',verdict:'incorrect',bbox:{...outer,errors}}]})[0].bbox.errors;
+ assert.deepEqual(normalize([{...first,reason:'  由对角线互相平分只能先得平行四边形，还须使用对角线垂直。  '},{...second,reason:42}]),[
+  {...first,reason:'由对角线互相平分只能先得平行四边形，还须使用对角线垂直。'},second,
+ ]);
+ assert.deepEqual(normalize([{...first,x:0,reason:'错误坐标的解释不得附在别处'}, {...second,reason:'缺少公共边条件'}]),[{...second,reason:'缺少公共边条件'}]);
+ assert.deepEqual(normalize([first,{...first,reason:'重复标记'}]),[first]);
+ assert.equal(normalize([{...first,reason:'字'.repeat(1300)}])[0].reason.length,1200);
+});
 test('cross-page transcription retains page attribution and rejects duplicate question numbers or invalid pages',()=>{
  const questions=normalizeCompletedQuestions({questions:[base]},2);assert.deepEqual(questions[0].page_numbers,[1,2]);
  assert.throws(()=>normalizeCompletedQuestions({questions:[base,base]},2),/重复/);
