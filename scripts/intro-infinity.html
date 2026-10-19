@@ -2,9 +2,10 @@
 <meta charset="utf-8">
 <title>∞ 雕塑图</title>
 <!--
-  Source of public/intro-infinity-light.webp and public/intro-infinity-dark.webp, the hero sculpture on /intro.
+  Source of public/intro/infinity-light.webp and public/intro/infinity-dark.webp, the sculpture on /intro.
   Open this file in Chrome: it draws both variants (fixed seed, so the same picture every time) and offers each
-  as a download; put the downloads in public/ under the same names.
+  as a download; put the downloads in public/intro/ under the same names. The page bends the ∞ along its centre
+  line (RIBBON in app/intro/page.tsx): change the curve or the ribbon widths here and there together.
 -->
 <style>
   body { margin:0; padding:24px; font:14px system-ui, sans-serif; background:#777; color:#fff; }
@@ -203,9 +204,9 @@ function render(variant) {
 for (const variant of ["light", "dark"]) {
   const link = document.createElement("a")
   link.className = variant
-  link.download = `intro-infinity-${variant}.webp`
+  link.download = `infinity-${variant}.webp`
   link.href = render(variant)
-  link.textContent = `下载 intro-infinity-${variant}.webp`
+  link.textContent = `下载 infinity-${variant}.webp`
   const preview = new Image()
   preview.src = link.href
   link.append(preview)

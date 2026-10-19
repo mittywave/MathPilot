@@ -1,15 +1,46 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- vinext beta currently breaks next/link RSC prefetch on client-only pages */
 import { useEffect, useRef, useState } from "react";
-import SculptureHero from "../components/LiquidSculptureHero";
+import SculptureHero, { type Rect, type SculptureMorph, type SculptureShape } from "../components/LiquidSculptureHero";
+import TiltedGridHero, { arc, CAMERA, MAX_WIDTH } from "../components/TiltedGridHero";
 import { BrandWordmark } from "../components/SiteHeader";
 import "./intro.css";
 
-// MathPilot product page. The hero is the liquid particle sculpture, here the ∞ of the tab icon (the images come from
-// scripts/intro-infinity.html); the sections below follow the hero's light/dark switch.
+// MathPilot product page. The hero is the liquid particle sculpture, the ∞ of the tab icon (the pictures come from
+// scripts/intro-infinity.html). It follows the page down: it opens into the rails of the feature row, closes again as
+// the track of the loop, and lands whole above the last words. The sections follow the hero's light/dark switch.
 
 const SANS = '"Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
 const SERIF = '"Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif';
+const picture = (mode: "light" | "dark") => `/intro/infinity-${mode}.webp`;
+
+// The ∞ as scripts/intro-infinity.html draws it in the 2400 × 960 picture: a lemniscate stretched 1.12× in height,
+// its ribbons reaching 0.72·(34 + 74·cos²t) px either side of the line. The sculpture bends the ∞ along it.
+const RIBBON = {
+  at: (t: number): [number, number] => {
+    const s = Math.sin(t), d = 1 + s * s;
+    return [1200 + 860 * Math.cos(t) / d, 486 + 1.12 * 860 * s * Math.cos(t) / d];
+  },
+  halfWidth: (t: number) => 0.72 * (34 + 74 * Math.cos(t) ** 2),
+};
+
+// The feature row: screens of the app (taken on an anonymised copy), each card labelled. The row is decoration, so the
+// same names and lines are listed for screen readers.
+const FEATURES = [
+  { file: "transcribe", name: "文件转录", text: "题目或答案的照片、PDF，转成可编辑的 Word。" },
+  { file: "library", name: "共享题库", text: "按模块整理题目，公式和图形原样排好。" },
+  { file: "basket", name: "组卷篮", text: "从题库勾选题目、排好顺序，生成 Word 或 PDF。" },
+  { file: "typeset", name: "快速排版", text: "一份练习，排成学生版、附答案版或教师版。" },
+  { file: "handout", name: "讲义编撰", text: "所见即所得地写讲义，讲义、小测和作业放在一起。" },
+  { file: "graph", name: "知识图谱", text: "知识点按年级排列，连线标出学习先后。" },
+  { file: "grading", name: "作业批改", text: "上传作业照片或 PDF，按题号对上原题和答案。" },
+  { file: "profile", name: "学生档案", text: "按知识点和五项能力定档，错题进入错题本。" },
+  { file: "report", name: "学情报告", text: "汇总一段时间的作业和课后反馈，写成报告。" },
+  { file: "smart", name: "智能组卷", text: "说一句要什么练习，按学生档案挑题、按天排好。" },
+];
+const CARDS = FEATURES.map((feature) => ({ src: `/intro/${feature.file}.webp`, alt: feature.name }));
+// the row's geometry, shared with the rails the ∞ opens into
+const ROW = { tile: 30, aspect: 16 / 9, axis: 60, curve: 80, fade: 12 };
 
 // The teaching loop drawn on a lemniscate: the left lobe is 教, the right lobe is 学, and they cross at 学情报告.
 const LOOP = { w: 1200, h: 620, cx: 600, cy: 300, a: 400 };
@@ -34,20 +65,23 @@ const STEPS: { t: number; place: "above" | "below" | "left" | "right"; name: str
   { t: PEAK, place: "below", name: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
 ];
 
-const FEATURES = [
-  { name: "共享题库", text: "按模块和分类整理题目，题干、答案、解析放在一起；勾进组卷篮，一键生成 Word。" },
-  { name: "讲义编撰", text: "所见即所得地写讲义，公式和图形直接排进 PDF；分页时标题不落单，题目不拆页。" },
-  { name: "知识图谱", text: "课程大纲和知识点连成一张图，每节课的讲义、小测和作业都有自己的位置。" },
-  { name: "学生档案", text: "每个学生一份档案：布置过的作业、错题本、定档和学情报告都在这里。" },
-  { name: "作业批改", text: "上传学生拍好的作业照片或 PDF，自动批改，可以写入错题本和定档。" },
-  { name: "文件转录", text: "把题目或答案的照片、PDF 转成可编辑的 Word：只放原题得到题目，加上答案得到解析。" },
-];
-
 const DEPLOY = [
   { name: "局域网共享", text: "一台 Mac 就是服务器。同事在同一个网络里用浏览器打开，共用一套题库和讲义。" },
   { name: "账号与权限", text: "用邀请码给同事开账号；删除这类操作只有管理员能做。" },
   { name: "AI 按需接入", text: "在 AI 配置里接入模型服务；不接也能人工录题、浏览题库、生成 Word。" },
 ];
+
+// The ∞'s way down the page, one leg per pair of shapes: it changes over the stretch of scroll from `start` to `end`
+// (shares of the way between the two places where they are whole) and fades by `dip` halfway, where it passes text.
+const LEGS = [
+  { start: 0.06, end: 1, dip: 0.25 }, // the hero's ∞ opens into the rails of the feature row
+  { start: 0.25, end: 0.95, dip: 0.3 }, // the rails close into the track of the loop
+  { start: 0.12, end: 0.92, dip: 0.6 }, // the track grows back into the ∞ above the last words
+];
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
 
 const number = (index: number) => String(index + 1).padStart(2, "0");
 
@@ -60,6 +94,12 @@ function Arrow() {
 export default function IntroPage() {
   const [mode, setMode] = useState<"light" | "dark">("light");
   const root = useRef<HTMLDivElement>(null);
+  const row = useRef<HTMLElement>(null);
+  const loop = useRef<HTMLDivElement>(null);
+  const loopLine = useRef<SVGPathElement>(null);
+  const closing = useRef<HTMLElement>(null);
+  const closingArt = useRef<HTMLImageElement>(null);
+  const scrolled = useRef(-1);
   // Sections rise in as they scroll into view; without script they are simply shown.
   useEffect(() => {
     const page = root.current;
@@ -72,13 +112,48 @@ export default function IntroPage() {
     return () => observer.disconnect();
   }, []);
 
+  // Asked by the sculpture every frame: which two shapes it is between, and how far along.
+  const scrollForms = (hero: Rect, view: { w: number; h: number }, dt: number): SculptureMorph => {
+    const still: SculptureShape = { kind: "image", rect: hero };
+    if (!row.current || !loop.current || !closing.current || !closingArt.current) return { from: still, to: still, mix: 0 };
+    // the shape trails the scroll a little, so even a flick of the wheel pours rather than jumps
+    const y = window.scrollY;
+    const eased = scrolled.current < 0 ? y : scrolled.current + (y - scrolled.current) * (1 - Math.pow(0.84, dt));
+    const moving = Math.abs(y - eased) > 0.5;
+    scrolled.current = moving ? eased : y;
+    const band = row.current.getBoundingClientRect(), track = loop.current.getBoundingClientRect();
+    const art = closingArt.current.getBoundingClientRect(), end = closing.current.getBoundingClientRect();
+    const tile = Math.min(ROW.tile / 100 * band.height, MAX_WIDTH / 100 * band.width / ROW.aspect);
+    const bend = ROW.curve * Math.PI / 180;
+    const k = track.width / LOOP.w;
+    const shapes: SculptureShape[] = [
+      still,
+      {
+        kind: "rails", cx: band.left + band.width / 2, axis: band.top + ROW.axis / 100 * band.height, radius: band.width * arc(bend),
+        camera: CAMERA, top: -tile * 0.64, bottom: tile * 0.64, halfWidth: tile * 0.045, edge: bend * 1.04,
+        left: band.left, right: band.right, fade: ROW.fade / 100 * band.width,
+      },
+      { kind: "lemniscate", cx: track.left + LOOP.cx * k, cy: track.top + LOOP.cy * k, a: LOOP.a * k, yScale: 1, halfWidth: 6 * k },
+      { kind: "image", rect: { x: art.left, y: art.top, w: art.width, h: art.height } },
+    ];
+    // where each shape is whole: the page top, the row filling the screen, the loop in the middle, the last screen
+    const stops = [0, y + band.top, y + track.top + track.height / 2 - view.h / 2, y + end.top];
+    let leg = 0;
+    while (leg < LEGS.length - 1 && scrolled.current >= stops[leg + 1]) leg++;
+    const along = Math.min(1, Math.max(0, (scrolled.current - stops[leg]) / Math.max(1, stops[leg + 1] - stops[leg])));
+    const mix = smoothstep(LEGS[leg].start, LEGS[leg].end, along);
+    // the drawn loop gives way while the metal lies on it
+    loopLine.current?.style.setProperty("--ribbon", String(leg === 1 ? mix : leg === 2 ? 1 - mix : 0));
+    return { from: shapes[leg], to: shapes[leg + 1], mix, alpha: 1 - LEGS[leg].dip * Math.sin(Math.PI * mix), moving };
+  };
+
   return <div ref={root} className="mp-intro" data-mode={mode}>
     <SculptureHero
-      src="/intro-infinity-light.webp" darkSrc="/intro-infinity-dark.webp"
-      mobileSrc="/intro-infinity-light.webp" mobileDarkSrc="/intro-infinity-dark.webp"
+      src={picture("light")} darkSrc={picture("dark")}
+      mobileSrc={picture("light")} mobileDarkSrc={picture("dark")}
       imageAlt="金属丝带与微粒组成的无穷符号 ∞"
       brand={<BrandWordmark />}
-      navLinks={[{ label: "闭环", href: "#loop" }, { label: "功能", href: "#features" }, { label: "部署", href: "#deploy" }]}
+      navLinks={[{ label: "功能", href: "#features" }, { label: "闭环", href: "#loop" }, { label: "部署", href: "#deploy" }]}
       navCta={{ label: "进入工作台", href: "/" }}
       eyebrow="MathPilot — 数学教研工作台"
       headline={"教与学，\n循环不息。"}
@@ -90,6 +165,8 @@ export default function IntroPage() {
       hintTouch="触碰这道 ∞"
       backdropText="教学"
       sculptureScale={0.86}
+      scrollForms={scrollForms}
+      ribbon={RIBBON}
       theme={mode}
       onThemeChange={setMode}
       accentColor={mode === "dark" ? "#9DBFAA" : "#3E5E4C"}
@@ -99,19 +176,32 @@ export default function IntroPage() {
       loadFonts={false}
     />
 
+    <section ref={row} id="features" className="mp-showcase">
+      <TiltedGridHero className="mp-row" images={CARDS} speed={4} tileHeight={ROW.tile} aspectRatio={ROW.aspect} gap={6}
+        axis={ROW.axis} curve={ROW.curve} fade={ROW.fade}>
+        <header className="mp-head mp-reveal">
+          <p className="mp-kicker">01 功能</p>
+          <div><h2>一个工作台，<br /><em>装下数学教研的日常。</em></h2></div>
+        </header>
+        <ul className="mp-hidden">
+          {FEATURES.map((feature) => <li key={feature.file}>{feature.name}：{feature.text}</li>)}
+        </ul>
+      </TiltedGridHero>
+    </section>
+
     <section id="loop" className="mp-section">
       <header className="mp-head mp-reveal">
-        <p className="mp-kicker">01 闭环</p>
+        <p className="mp-kicker">02 闭环</p>
         <div>
           <h2>左边是教，<em>右边是学。</em></h2>
           <p className="mp-lead">两个环在学情报告处相交：<br />学生做过的每一道题，都会带着批改结果回到下一轮备课。</p>
         </div>
       </header>
-      <div className="mp-loop mp-reveal">
+      <div ref={loop} className="mp-loop mp-reveal">
         <svg viewBox={`0 0 ${LOOP.w} ${LOOP.h}`} aria-hidden="true">
           <text className="mp-loop-glyph" x={LOOP.cx - LOOP.a * 0.58} y={LOOP.cy}>教</text>
           <text className="mp-loop-glyph" x={LOOP.cx + LOOP.a * 0.58} y={LOOP.cy}>学</text>
-          <path className="mp-loop-line" d={LOOP_PATH} />
+          <path ref={loopLine} className="mp-loop-line" d={LOOP_PATH} />
           <line className="mp-loop-leader" x1={LOOP.cx} y1={LOOP.cy + 18} x2={LOOP.cx} y2={REPORT_Y - 14} />
           {STEPS.map((step) => { const [x, y] = onLoop(step.t); return <circle key={step.name} className="mp-loop-node" cx={x} cy={y} r={7} />; })}
           <circle className="mp-loop-cross" cx={LOOP.cx} cy={LOOP.cy} r={9} />
@@ -131,18 +221,6 @@ export default function IntroPage() {
       </div>
     </section>
 
-    <section id="features" className="mp-section">
-      <header className="mp-head mp-reveal">
-        <p className="mp-kicker">02 功能</p>
-        <div><h2>一个工作台，<br /><em>装下数学教研的日常。</em></h2></div>
-      </header>
-      <ol className="mp-grid">
-        {FEATURES.map((feature, index) => <li key={feature.name} className="mp-cell mp-reveal" style={{ transitionDelay: `${(index % 3) * 90}ms` }}>
-          <span className="mp-cell-no">{number(index)}</span><h3>{feature.name}</h3><p>{feature.text}</p>
-        </li>)}
-      </ol>
-    </section>
-
     <section id="deploy" className="mp-section">
       <header className="mp-head mp-reveal">
         <p className="mp-kicker">03 部署</p>
@@ -155,7 +233,10 @@ export default function IntroPage() {
       </ol>
     </section>
 
-    <section className="mp-closing">
+    <section ref={closing} className="mp-closing">
+      {/* the sculpture comes to rest here; without WebGL this picture stands in for it */}
+      {/* eslint-disable-next-line @next/next/no-img-element -- a stand-in the canvas draws over at the same place */}
+      <img ref={closingArt} className="mp-closing-art" src={picture(mode)} alt="" />
       <h2 className="mp-reveal">从下一份作业<em>开始。</em></h2>
       <a className="mp-btn" href="/">进入工作台<Arrow /></a>
     </section>

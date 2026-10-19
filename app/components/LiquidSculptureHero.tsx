@@ -8,8 +8,9 @@
  * its own pixels. The cursor turns the material liquid; it settles back into
  * the crisp image. Without WebGL2 the static image is shown.
  *
- * Taken from 21st.dev as published, with two local changes: `brand` accepts a node (the MathPilot
- * wordmark) and `onThemeChange` lets the rest of the page follow the theme switch.
+ * Taken from 21st.dev as published, with local changes: `brand` accepts a node (the MathPilot
+ * wordmark), `onThemeChange` lets the rest of the page follow the theme switch, and `scrollForms`
+ * keeps the sculpture on screen while the page scrolls, bent into other shapes along its ribbon.
  */
 
 import * as React from "react"
@@ -18,7 +19,46 @@ import * as React from "react"
    Engine (WebGL2 GPGPU particles)
    ──────────────────────────────────────────────────────────────────── */
 
-type Rect = { x: number; y: number; w: number; h: number }
+export type Rect = { x: number; y: number; w: number; h: number }
+
+/** A shape the sculpture can take, in viewport px. "image" is the picture itself. The others bend the material along
+ *  the sculpture's centre line (`ribbon`): a thin lemniscate, or two rails on the cylinder of a curved row, where the ∞
+ *  opens at its crossing and its upper arcs become the top rail, its lower arcs the bottom one. */
+export type SculptureShape =
+  | { kind: "image"; rect: Rect }
+  | { kind: "lemniscate"; cx: number; cy: number; a: number; yScale: number; halfWidth: number }
+  | {
+      kind: "rails"
+      /** the row's centre x and axis y, the cylinder radius, and the camera distance in radii */
+      cx: number
+      axis: number
+      radius: number
+      camera: number
+      /** each rail's offset from the axis (the top one negative) and half width, and how far round (radians) they reach */
+      top: number
+      bottom: number
+      halfWidth: number
+      edge: number
+      /** the rails fade out over `fade` px inside left … right */
+      left: number
+      right: number
+      fade: number
+    }
+
+/** The sculpture between two shapes: `mix` 0 is `from`, 1 is `to`. `moving` keeps the animation running. */
+export interface SculptureMorph {
+  from: SculptureShape
+  to: SculptureShape
+  mix: number
+  alpha?: number
+  moving?: boolean
+}
+
+/** The sculpture's centre line in its image, t ∈ [0, 2π) in image px, and how far the ribbon reaches either side. */
+export interface SculptureRibbon {
+  at: (t: number) => [number, number]
+  halfWidth: (t: number) => number
+}
 
 interface EngineOptions {
   interactive: boolean
@@ -90,6 +130,78 @@ float energyAt(vec2 rectPx, vec2 mouse, float radius, float presence, float wake
 }
 `
 
+/* Shapes: where a grain sits in shape A and in shape B, and how far it has travelled between them. Every grain knows
+   its place along the centre line (uRib: t, its offset in half ribbon widths, how much material it stands for), so each
+   shape keeps the strands in order. Kinds: 0 the picture, 1 a thin lemniscate, 2 the rails of a curved row. */
+const SHAPES = `
+uniform sampler2D uRib;
+uniform int uKindA;
+uniform int uKindB;
+uniform vec4 uA0;
+uniform vec4 uA1;
+uniform vec4 uA2;
+uniform vec4 uB0;
+uniform vec4 uB1;
+uniform vec4 uB2;
+uniform float uMix;
+uniform float uStagger;
+uniform float uSwirl;
+const float PI = 3.14159265;
+vec2 lemni(float t, vec4 p){ float s = sin(t), c = cos(t), d = 1.0 + s*s; return p.xy + p.z*vec2(c/d, p.w*s*c/d); }
+// loose fibres and dust, beyond the ribbon's edge, are drawn in close to the thin shapes
+float tighten(float n){ float a = abs(n); return a <= 1.0 ? n : sign(n)*(1.0 + (a - 1.0)*0.3); }
+// xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
+vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec4 p2, vec2 uv, vec4 rib){
+  if(kind == 0) return vec4(p0.xy + uv*p0.zw, 1.0, 1.0);
+  float t = rib.x;
+  float n = tighten(rib.y);
+  if(kind == 1){
+    vec2 tg = lemni(t + 0.002, p0) - lemni(t - 0.002, p0);
+    float c = cos(t);
+    return vec4(lemni(t, p0) + normalize(vec2(-tg.y, tg.x))*n*p1.x*(0.4 + 0.6*c*c), 1.0, rib.z);
+  }
+  // rails: u runs over the four arcs; xi is the place along a rail, -1 at the left end, 0 where the crossing opened
+  float u = mod(t + PI*0.5, 2.0*PI) - PI*0.5;
+  float xi; float dir; float top;
+  if(u < 0.0){ xi = u/(PI*0.5) + 1.0; dir = 1.0; top = 1.0; }
+  else if(u < PI*0.5){ xi = 1.0 - u/(PI*0.5); dir = -1.0; top = 0.0; }
+  else if(u < PI){ xi = (PI*0.5 - u)/(PI*0.5); dir = -1.0; top = 1.0; }
+  else { xi = (u - PI)/(PI*0.5) - 1.0; dir = 1.0; top = 0.0; }
+  // the two halves of a rail reach a little past the middle into each other, so no seam shows where they meet
+  float th = (xi*1.012 - 0.012*sign(xi))*p1.w;
+  float k = p0.w - 1.0 + cos(th);
+  float s = p0.w/k;
+  float ds = p0.w*sin(th)/(k*k);
+  float y = top > 0.5 ? p1.x : p1.y;
+  vec2 pos = vec2(p0.x + p0.z*sin(th)*s, p0.y + y*s);
+  vec2 tg = vec2(p0.z*(cos(th)*s + sin(th)*ds), y*ds)*dir;
+  pos += normalize(vec2(-tg.y, tg.x))*n*p1.z*s;
+  float a = smoothstep(p2.x, p2.x + p2.z, pos.x)*(1.0 - smoothstep(p2.y - p2.z, p2.y, pos.x));
+  return vec4(pos, a, rib.z);
+}
+// the lobe tips lead and the crossing follows; grains next to each other keep together, so the ribbon stays a ribbon
+float travel(float t, float sd){
+  float delay = ((1.0 - abs(cos(t)))*0.96 + sd*0.04)*uStagger;
+  float e = clamp((uMix - delay)/max(1.0 - uStagger, 0.001), 0.0, 1.0);
+  return e*e*e*(e*(e*6.0 - 15.0) + 10.0);
+}
+vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
+  vec4 a = shapeAt(uKindA, uA0, uA1, uA2, hm.xy, rib);
+  vec4 b = shapeAt(uKindB, uB0, uB1, uB2, hm.xy, rib);
+  e = travel(rib.x, hm.z);
+  vec2 p = mix(a.xy, b.xy, e);
+  // on the way the material billows, like liquid poured from one mould into the next
+  float w = sin(PI*e)*uSwirl;
+  if(w > 0.01){
+    vec2 q = mix(a.xy, b.xy, 0.5)*0.0035;
+    p += (vec2(vnoise(q), vnoise(q + 17.3)) - 0.5)*w*2.0 + (vec2(hash(hm.xy*91.0), hash(hm.yx*57.0)) - 0.5)*w*0.12;
+  }
+  alpha = mix(a.z, b.z, e);
+  size = mix(a.w, b.w, e);
+  return p;
+}
+`
+
 const QUAD_VS = `#version 300 es
 layout(location=0) in vec2 aPos;
 out vec2 vUv;
@@ -132,14 +244,14 @@ void main(){
 }
 `
 
-/* GPGPU step: state = (offset.xy, velocity.xy) in rect CSS px. */
+/* GPGPU step: state = (offset.xy, velocity.xy) in CSS px, around the grain's place in the current shape. */
 const SIM_FS = `#version 300 es
 precision highp float;
 out vec4 o;
 uniform sampler2D uState;
 uniform sampler2D uHome;
 uniform sampler2D uFlow;
-uniform vec2 uSize;
+uniform vec2 uRes;
 uniform vec2 uMouse;
 uniform float uRadius;
 uniform float uPresence;
@@ -151,6 +263,7 @@ uniform float uTime;
 uniform float uDt;
 uniform float uIntro;
 ${NOISE}
+${SHAPES}
 vec2 curl(vec2 p){
   const float e = 0.35;
   float a = vnoise(p+vec2(0.0,e)) - vnoise(p-vec2(0.0,e));
@@ -167,8 +280,9 @@ void main(){
   float sd = hm.z;
   float light = 0.45 + sd*1.1;
 
-  vec2 p = hm.xy*uSize + off;
-  vec4 fl = texture(uFlow, clamp(p/uSize, 0.0, 1.0));
+  float shown, moved, grain;
+  vec2 p = homeAt(hm, texelFetch(uRib, ij, 0), shown, moved, grain) + off;
+  vec4 fl = texture(uFlow, clamp(p/uRes, 0.0, 1.0));
   vec2 wake = (fl.rg*255.0-128.0)/127.0;
   float pr = fl.b;
 
@@ -209,17 +323,19 @@ uniform sampler2D uHome;
 uniform sampler2D uCol;
 uniform sampler2D uFlow;
 uniform int uTexW;
-uniform vec4 uRect;
 uniform vec2 uRes;
 uniform vec2 uMouse;
 uniform float uRadius;
 uniform float uPresence;
-uniform float uDot;
+uniform float uDotA;
+uniform float uDotB;
 uniform float uTime;
 uniform float uAmbient;
 uniform float uStreak;
 uniform float uIntroVis;
 uniform float uRest;
+uniform float uMorphVis;
+uniform float uAlpha;
 uniform vec3 uTint;
 out vec2 vLocal;
 out float vHalfLen;
@@ -228,26 +344,30 @@ out vec3 vCol;
 out float vA;
 ${NOISE}
 ${ENERGY}
+${SHAPES}
 void main(){
   int id = gl_InstanceID;
   ivec2 ij = ivec2(id % uTexW, id / uTexW);
   vec4 hm = texelFetch(uHome, ij, 0);
   vec4 st = texelFetch(uState, ij, 0);
   vec4 cl = texelFetch(uCol, ij, 0);
+  float shown, moved, grain;
+  vec2 home = homeAt(hm, texelFetch(uRib, ij, 0), shown, moved, grain);
 
-  float wakeE = texture(uFlow, hm.xy).b;
-  float E = energyAt(hm.xy*uRect.zw, uMouse, uRadius, uPresence, wakeE);
+  float wakeE = texture(uFlow, clamp(home/uRes, 0.0, 1.0)).b;
+  float E = energyAt(home, uMouse, uRadius, uPresence, wakeE);
   float lift = smoothstep(0.35, 2.5, length(st.xy));
-  float a = max(max(E, lift), max(uRest, 1.0-uIntroVis));
+  // between two shapes (uMorphVis) every grain is drawn; in the picture only the disturbed ones
+  float a = max(max(E, lift), max(max(uRest, 1.0-uIntroVis), uMorphVis))*shown*uAlpha;
   if(a < 0.01 || hm.w <= 0.0){ gl_Position = vec4(2.0,2.0,2.0,1.0); return; }
 
-  vec2 base = uRect.xy + hm.xy*uRect.zw + st.xy;
+  vec2 base = home + st.xy;
   base -= ambientField(hm.xy, uTime)*10.0*uAmbient;
 
   vec2 v = st.zw;
   float sp = length(v);
   vec2 dir = sp > 0.001 ? v/sp : vec2(1.0,0.0);
-  float r = uDot*hm.w*0.5;
+  float r = mix(uDotA, uDotB, moved)*hm.w*0.5*grain;
   float len = min(sp*1.25, 18.0)*uStreak;
   vec2 lc = aCorner*vec2(r + len*0.5 + 1.0, r + 1.0);
   vec2 center = base - dir*len*0.5;
@@ -310,16 +430,20 @@ uniform float uAmbient;
 uniform float uIntroVis;
 uniform float uRest;
 uniform float uAlphaMode;
+uniform float uShow;
+uniform float uAlpha;
 ${NOISE}
 ${ENERGY}
 void main(){
+  // the picture shows only while the sculpture is in its own shape
+  if(uShow <= 0.0){ o = vec4(0.0); return; }
   vec2 px = vec2(gl_FragCoord.x, uRes.y*uDpr - gl_FragCoord.y)/uDpr;
   vec2 size = uRect.zw;
   vec2 uv = (px-uRect.xy)/size;
   if(uv.x < -0.05 || uv.x > 1.05 || uv.y < -0.12 || uv.y > 1.12){ o = vec4(0.0); return; }
-  vec4 fl = texture(uFlow, clamp(uv,0.0,1.0));
+  vec4 fl = texture(uFlow, clamp(px/uRes,0.0,1.0));
   vec2 vel = (fl.rg*255.0-128.0)/127.0;
-  vec2 rp = uv*size;
+  vec2 rp = px;
   vec2 toM = rp - uMouse;
   float fall = exp(-dot(toM,toM)/(uRadius*uRadius))*uPresence;
   vec2 disp = -toM*0.22*uStrength*fall - vel*10.0*uStrength;
@@ -332,10 +456,10 @@ void main(){
   float key = uAlphaMode > 0.5 ? tx.a : smoothstep(0.012, 0.05, length(col-uImgBg));
   float k = key*e.x*e.y;
   float E = energyAt(rp, uMouse, uRadius, uPresence, fl.b);
-  float show = (1.0 - max(E, uRest))*uIntroVis;
+  float show = (1.0 - max(E, uRest))*uIntroVis*uShow;
   vec3 mat = uAlphaMode > 0.5 ? col : col*(uBg/max(uImgBg, vec3(0.001)));
   // premultiplied: empty areas stay transparent so the page (and the backdrop word) shows through
-  float A = k*show;
+  float A = k*show*uAlpha;
   o = vec4(mat*A, A);
 }
 `
@@ -380,10 +504,111 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string): Prog {
 const TEX_W = 1024
 const SETTLE_FRAMES = 270
 
+/** Where every grain sits along the sculpture's centre line, 4 floats each: t, its offset in half widths of the ribbon
+ *  as drawn there, and how big it is drawn in the bent shapes (bigger where the line has few grains, as where two of
+ *  its passes share the grains of their crossing). */
+function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, ih: number, ribbon: SculptureRibbon) {
+  const out = new Float32Array(size * 4)
+  const M = 1024
+  const cx = new Float32Array(M), cy = new Float32Array(M), nx = new Float32Array(M), ny = new Float32Array(M)
+  const hw = new Float32Array(M)
+  for (let j = 0; j < M; j++) {
+    const t = (j / M) * Math.PI * 2
+    const [x, y] = ribbon.at(t)
+    const [x1, y1] = ribbon.at(t + 1e-3)
+    const [x0, y0] = ribbon.at(t - 1e-3)
+    const l = Math.hypot(x1 - x0, y1 - y0) || 1
+    cx[j] = x
+    cy[j] = y
+    nx[j] = -(y1 - y0) / l
+    ny[j] = (x1 - x0) / l
+    hw[j] = Math.max(1, ribbon.halfWidth(t))
+  }
+  // the nearest sample for a coarse grid of cells, then a local search around it for each grain
+  const G = 24, gx = Math.ceil(iw / G), gy = Math.ceil(ih / G)
+  const cell = new Int32Array(gx * gy)
+  for (let b = 0; b < gy; b++)
+    for (let a = 0; a < gx; a++) {
+      const px = (a + 0.5) * G, py = (b + 0.5) * G
+      let best = 0, bd = Infinity
+      for (let j = 0; j < M; j++) {
+        const d = (cx[j] - px) ** 2 + (cy[j] - py) ** 2
+        if (d < bd) { bd = d; best = j }
+      }
+      cell[b * gx + a] = best
+    }
+  const nearest = (px: number, py: number, around: number) => {
+    let best = around, bd = Infinity
+    for (let k = -64; k <= 64; k++) {
+      const j = (around + k + M) % M
+      const d = (cx[j] - px) ** 2 + (cy[j] - py) ** 2
+      if (d < bd) { bd = d; best = j }
+    }
+    return [best, Math.sqrt(bd)] as const
+  }
+  const B = 360
+  const bin = new Int16Array(n)
+  const spread: number[][] = Array.from({ length: B }, () => [])
+  for (let i = 0; i < n; i++) {
+    const px = home[i * 4] * iw, py = home[i * 4 + 1] * ih
+    const j0 = cell[Math.min(gy - 1, Math.floor(py / G)) * gx + Math.min(gx - 1, Math.floor(px / G))]
+    const [near, nd] = nearest(px, py, j0)
+    // where the line crosses itself a grain lies on both passes: the nearer one would pull every grain there towards
+    // its middle, so half of them (by their random value) go to the other pass
+    const [alt, ad] = nearest(px, py, (j0 + M / 2) % M)
+    const best = nd < hw[near] && ad < hw[alt] && home[i * 4 + 2] < 0.5 ? alt : near
+    // between samples: project onto the segment the grain lies along, so t runs smoothly and shapes show no combing
+    const qx = px - cx[best], qy = py - cy[best]
+    const jn = (best + 1) % M, jp = (best - 1 + M) % M
+    const ex = cx[jn] - cx[best], ey = cy[jn] - cy[best]
+    let f = (qx * ex + qy * ey) / (ex * ex + ey * ey || 1)
+    if (f < 0) {
+      const fx = cx[jp] - cx[best], fy = cy[jp] - cy[best]
+      f = -Math.min(1, Math.max(0, (qx * fx + qy * fy) / (fx * fx + fy * fy || 1)))
+    } else f = Math.min(1, f)
+    const u = ((best + f + M) % M) / M
+    const off = qx * nx[best] + qy * ny[best]
+    bin[i] = Math.min(B - 1, Math.floor(u * B))
+    if (Math.abs(off) < 2 * hw[best]) spread[bin[i]].push(Math.abs(off))
+    out[i * 4] = u * Math.PI * 2
+    out[i * 4 + 1] = off
+  }
+  // The ribbon as drawn twists and frays, so its real width changes along the line: measure it (the offsets' 85th
+  // percentile, for an even spread across the width) and give offsets in that width, so the bent shapes come out as
+  // an even band. Stretches with fewer grains than their neighbours get bigger grains to close the gap.
+  const around = (values: number[], b: number, reach: number) =>
+    Array.from({ length: 2 * reach + 1 }, (_, k) => values[(b + k - reach + B) % B])
+  const raw = spread.map((list, b) => {
+    if (list.length < 12) return hw[Math.floor((b / B) * M)]
+    list.sort((a, c) => a - c)
+    return Math.max(1, list[Math.floor(list.length * 0.85)] / 0.85)
+  })
+  const width = raw.map((_, b) => around(raw, b, 1).reduce((a, c) => a + c) / 3)
+  const counts = spread.map((list) => list.length)
+  const grain = counts.map((c, b) => {
+    const usual = around(counts, b, 8).sort((a, d) => a - d)[8]
+    return clamp(Math.sqrt(usual / Math.max(1, c)), 1, 1.8)
+  })
+  for (let i = 0; i < n; i++) {
+    out[i * 4 + 1] /= width[bin[i]]
+    out[i * 4 + 2] = grain[bin[i]]
+  }
+  return out
+}
+
+const smooth = (a: number, b: number, x: number) => {
+  const t = clamp((x - a) / (b - a), 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
 class LiquidEngine {
   lastImage: HTMLImageElement | null = null
   /** Called once, after the first frame has actually been drawn. */
   onFirstFrame: (() => void) | null = null
+  /** The shape to draw, asked every frame (dt in 60 fps frames). Without it the picture stays at `rect`. */
+  morph: ((dt: number) => SculptureMorph) | null = null
+  /** The sculpture's centre line, for the bent shapes. */
+  ribbon: SculptureRibbon | null = null
 
   private canvas: HTMLCanvasElement
   private gl: WebGL2RenderingContext
@@ -409,6 +634,8 @@ class LiquidEngine {
 
   private homeTex: WebGLTexture | null = null
   private colTex: WebGLTexture | null = null
+  private ribTex: WebGLTexture | null = null
+  private shape: SculptureMorph | null = null
   private stateTex: WebGLTexture[] = []
   private stateFb: WebGLFramebuffer[] = []
   private stateIdx = 0
@@ -561,11 +788,6 @@ class LiquidEngine {
     const gl = this.gl
     this.lastImage = img
     this.aspect = img.naturalWidth / img.naturalHeight || 2.5
-    this.flowH = Math.max(32, Math.round(this.flowW / this.aspect))
-    for (const t of this.flowTex) {
-      gl.bindTexture(gl.TEXTURE_2D, t)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.flowW, this.flowH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
-    }
     this.clearFlow()
     if (this.imgTex) gl.deleteTexture(this.imgTex)
     this.imgTex = gl.createTexture()
@@ -651,13 +873,17 @@ class LiquidEngine {
     homeArr.set(home)
     const colArr = new Uint8Array(total * 4)
     colArr.set(col)
+    const ribArr = this.ribbon
+      ? ribbonCoords(homeArr, n, total, img.naturalWidth, img.naturalHeight, this.ribbon)
+      : new Float32Array(total * 4)
 
-    for (const t of [this.homeTex, this.colTex, ...this.stateTex]) if (t) gl.deleteTexture(t)
+    for (const t of [this.homeTex, this.colTex, this.ribTex, ...this.stateTex]) if (t) gl.deleteTexture(t)
     for (const f of this.stateFb) gl.deleteFramebuffer(f)
     this.stateTex = []
     this.stateFb = []
     this.homeTex = this.makeTex(gl.RGBA32F, TEX_W, this.texH, gl.RGBA, gl.FLOAT, homeArr, gl.NEAREST)
     this.colTex = this.makeTex(gl.RGBA8, TEX_W, this.texH, gl.RGBA, gl.UNSIGNED_BYTE, colArr, gl.NEAREST)
+    this.ribTex = this.makeTex(gl.RGBA32F, TEX_W, this.texH, gl.RGBA, gl.FLOAT, ribArr, gl.NEAREST)
     for (let i = 0; i < 2; i++) {
       const t = this.makeTex(this.stateFormat.internal, TEX_W, this.texH, gl.RGBA, this.stateFormat.type, null, gl.NEAREST)
       const fb = gl.createFramebuffer()!
@@ -715,6 +941,17 @@ class LiquidEngine {
     this.cssW = Math.max(1, cssW)
     this.cssH = Math.max(1, cssH)
     this.rect = rect
+    // the cursor's wake covers the whole canvas
+    const flowH = Math.max(32, Math.round((this.flowW * this.cssH) / this.cssW))
+    if (flowH !== this.flowH && !this.lost && !this.destroyed) {
+      this.flowH = flowH
+      const gl = this.gl
+      for (const t of this.flowTex) {
+        gl.bindTexture(gl.TEXTURE_2D, t)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.flowW, this.flowH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      }
+      this.clearFlow()
+    }
     let dpr = Math.min(window.devicePixelRatio || 1, this.lowPower ? 1.5 : 2)
     const px = this.cssW * this.cssH * dpr * dpr
     if (px > 4.5e6) dpr = Math.max(1, Math.sqrt(4.5e6 / (this.cssW * this.cssH)))
@@ -756,6 +993,50 @@ class LiquidEngine {
       this.touchRelease = 0
     }
     this.wake()
+  }
+
+  /** The page moved: draw the sculpture where it now belongs. */
+  refresh() {
+    this.wake()
+  }
+
+  private readMorph(dt: number): SculptureMorph {
+    const still: SculptureShape = { kind: "image", rect: this.rect }
+    this.shape = this.morph?.(dt) ?? { from: still, to: still, mix: 0 }
+    return this.shape
+  }
+
+  // grains are as big as the shape's own grid: the picture's, finer on the thin shapes
+  private dotFor(s: SculptureShape) {
+    const span = s.kind === "image" ? s.rect.w : s.kind === "lemniscate" ? s.a * 2.1 : (s.right - s.left) * 0.85
+    return (span / this.gridW) * 1.45 * clamp(this.opts.dotSize, 0.2, 3)
+  }
+
+  private shapeUniforms(P: Prog, m: SculptureMorph) {
+    const gl = this.gl
+    const rm = this.opts.reducedMotion
+    for (const [slot, s] of [["A", m.from], ["B", m.to]] as const) {
+      let kind = 0
+      let p0 = [0, 0, 0, 0], p1 = [0, 0, 0, 0], p2 = [0, 0, 0, 0]
+      if (s.kind === "image") p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
+      else if (s.kind === "lemniscate") {
+        kind = 1
+        p0 = [s.cx, s.cy, s.a, s.yScale]
+        p1 = [s.halfWidth, 0, 0, 0]
+      } else {
+        kind = 2
+        p0 = [s.cx, s.axis, s.radius, s.camera]
+        p1 = [s.top, s.bottom, s.halfWidth, s.edge]
+        p2 = [s.left, s.right, s.fade, 0]
+      }
+      gl.uniform1i(P.u["uKind" + slot], kind)
+      gl.uniform4fv(P.u[`u${slot}0`], p0)
+      gl.uniform4fv(P.u[`u${slot}1`], p1)
+      gl.uniform4fv(P.u[`u${slot}2`], p2)
+    }
+    gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
+    gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
+    gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
   }
 
   private wake() {
@@ -809,11 +1090,12 @@ class LiquidEngine {
     this.flowing += (this.presenceTarget - this.flowing) * (1 - Math.pow(1 - fk, dt))
     if (this.flowing < 0.002 && this.presenceTarget === 0) this.flowing = 0
     if (this.introT < 1) this.introT = Math.min(1, this.introT + Math.min(rawMs, 100) / 3200)
+    const moving = !!this.readMorph(dt).moving
 
     const interacting = this.presence > 0.001 || this.burst > 0
     // settle is counted in simulated frames, so slow devices never snap mid-return
     this.settle = interacting ? 0 : this.settle + dt
-    const active = interacting || this.settle < SETTLE_FRAMES || this.introT < 1
+    const active = interacting || moving || this.settle < SETTLE_FRAMES || this.introT < 1
 
     if (!active) {
       if (this.flowDirty) this.clearFlow()
@@ -863,10 +1145,9 @@ class LiquidEngine {
     gl.bindTexture(gl.TEXTURE_2D, this.flowTex[this.flowIdx])
     gl.uniform1i(P.u.uPrev, 0)
     gl.uniform2f(P.u.uTexel, 1 / this.flowW, 1 / this.flowH)
-    const r = this.rect
-    gl.uniform2f(P.u.uMouse, (this.mouse.x - r.x) / r.w, (this.mouse.y - r.y) / r.h)
+    gl.uniform2f(P.u.uMouse, this.mouse.x / this.cssW, this.mouse.y / this.cssH)
     gl.uniform2f(P.u.uVel, clamp(this.mvel.x / 40, -1, 1), clamp(this.mvel.y / 40, -1, 1))
-    gl.uniform2f(P.u.uSize, r.w, r.h)
+    gl.uniform2f(P.u.uSize, this.cssW, this.cssH)
     gl.uniform1f(P.u.uRadius, this.radiusPx())
     gl.uniform1f(P.u.uPresence, Math.max(this.presence, this.burst))
     gl.uniform1f(P.u.uDecay, Math.pow(0.968, dt))
@@ -880,7 +1161,6 @@ class LiquidEngine {
     const gl = this.gl
     const P = this.pSim
     const o = this.opts
-    const r = this.rect
     const dst = 1 - this.stateIdx
     const intro = o.reducedMotion || !o.intro ? 0 : Math.pow(1 - this.introT, 2)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.stateFb[dst])
@@ -897,8 +1177,12 @@ class LiquidEngine {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, this.flowTex[this.flowIdx])
     gl.uniform1i(P.u.uFlow, 2)
-    gl.uniform2f(P.u.uSize, r.w, r.h)
-    gl.uniform2f(P.u.uMouse, this.mouse.x - r.x, this.mouse.y - r.y)
+    gl.activeTexture(gl.TEXTURE3)
+    gl.bindTexture(gl.TEXTURE_2D, this.ribTex)
+    gl.uniform1i(P.u.uRib, 3)
+    this.shapeUniforms(P, this.shape ?? this.readMorph(0))
+    gl.uniform2f(P.u.uRes, this.cssW, this.cssH)
+    gl.uniform2f(P.u.uMouse, this.mouse.x, this.mouse.y)
     gl.uniform1f(P.u.uRadius, this.radiusPx())
     gl.uniform1f(P.u.uPresence, Math.max(this.presence, this.burst))
     gl.uniform1f(P.u.uStrength, this.strength() * (1 + this.burst * 1.5))
@@ -917,7 +1201,14 @@ class LiquidEngine {
     if (!this.ready || this.lost || this.destroyed) return
     const gl = this.gl
     const o = this.opts
-    const r = this.rect
+    const m = this.shape ?? this.readMorph(0)
+    // the crisp picture belongs to the "image" shapes only; on the way between shapes the grains carry the sculpture
+    const showA = m.from.kind === "image" ? 1 - smooth(0, 0.04, m.mix) : 0
+    const showB = m.to.kind === "image" ? smooth(0.96, 1, m.mix) : 0
+    const pictured = showA >= showB ? m.from : m.to
+    const r = pictured.kind === "image" ? pictured.rect : this.rect
+    const morphVis = 1 - Math.max(showA, showB)
+    const alpha = clamp(m.alpha ?? 1, 0, 1)
     const rm = o.reducedMotion
     const introVis = rm || !o.intro ? 1 : Math.pow(this.introT, 2.2)
     const base = o.ambient && !rm ? clamp(o.ambientIntensity, 0, 2) : 0
@@ -927,8 +1218,8 @@ class LiquidEngine {
     const [ir, ig, ib] = this.imgBg
     const dpr = this.canvas.width / this.cssW
     const pres = Math.max(this.presence, this.burst)
-    const mx = this.mouse.x - r.x
-    const my = this.mouse.y - r.y
+    const mx = this.mouse.x
+    const my = this.mouse.y
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
@@ -957,10 +1248,12 @@ class LiquidEngine {
     gl.uniform1f(I.u.uIntroVis, introVis)
     gl.uniform1f(I.u.uRest, rest)
     gl.uniform1f(I.u.uAlphaMode, this.alphaMode ? 1 : 0)
+    gl.uniform1f(I.u.uShow, Math.max(showA, showB))
+    gl.uniform1f(I.u.uAlpha, alpha)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
     // particles are invisible at rest in "image" mode: skip them entirely
-    if (!this.n || (!this.stateDirty && rest === 0 && introVis >= 1)) return
+    if (!this.n || (!this.stateDirty && rest === 0 && introVis >= 1 && morphVis <= 0.001)) return
 
     const P = this.pPart
     gl.useProgram(P.p)
@@ -978,14 +1271,19 @@ class LiquidEngine {
     gl.activeTexture(gl.TEXTURE3)
     gl.bindTexture(gl.TEXTURE_2D, this.flowTex[this.flowIdx])
     gl.uniform1i(P.u.uFlow, 3)
+    gl.activeTexture(gl.TEXTURE4)
+    gl.bindTexture(gl.TEXTURE_2D, this.ribTex)
+    gl.uniform1i(P.u.uRib, 4)
+    this.shapeUniforms(P, m)
     gl.uniform1i(P.u.uTexW, TEX_W)
-    gl.uniform4f(P.u.uRect, r.x, r.y, r.w, r.h)
     gl.uniform2f(P.u.uRes, this.cssW, this.cssH)
     gl.uniform2f(P.u.uMouse, mx, my)
     gl.uniform1f(P.u.uRadius, this.radiusPx())
     gl.uniform1f(P.u.uPresence, pres)
-    const spacing = r.w / this.gridW
-    gl.uniform1f(P.u.uDot, spacing * 1.45 * clamp(o.dotSize, 0.2, 3))
+    gl.uniform1f(P.u.uDotA, this.dotFor(m.from))
+    gl.uniform1f(P.u.uDotB, this.dotFor(m.to))
+    gl.uniform1f(P.u.uMorphVis, morphVis)
+    gl.uniform1f(P.u.uAlpha, alpha)
     gl.uniform1f(P.u.uTime, this.time)
     gl.uniform1f(P.u.uAmbient, amb)
     gl.uniform1f(P.u.uStreak, (o.streaks ? 1 : 0) * (0.45 + 0.55 * introVis))
@@ -1006,7 +1304,7 @@ class LiquidEngine {
     if (!this.lost) {
       gl.deleteBuffer(this.quad)
       gl.deleteVertexArray(this.vao)
-      for (const t of [...this.flowTex, ...this.stateTex, this.imgTex, this.homeTex, this.colTex]) if (t) gl.deleteTexture(t)
+      for (const t of [...this.flowTex, ...this.stateTex, this.imgTex, this.homeTex, this.colTex, this.ribTex]) if (t) gl.deleteTexture(t)
       for (const f of [...this.flowFb, ...this.stateFb]) gl.deleteFramebuffer(f)
       for (const p of [this.pFlow, this.pSim, this.pPart, this.pImg]) if (p) gl.deleteProgram(p.p)
     }
@@ -1108,6 +1406,13 @@ export interface SculptureHeroProps {
   height?: string
   /** Giant faint word behind the sculpture. Empty to hide. */
   backdropText?: string
+  /**
+   * Keeps the canvas fixed to the viewport and asks every frame which shape to draw where, so the sculpture can follow
+   * the page. `hero` is where the picture sits in the hero at that moment, `dt` the frame time in 60 fps frames.
+   */
+  scrollForms?: (hero: Rect, view: { w: number; h: number }, dt: number) => SculptureMorph
+  /** The sculpture's centre line in the image, needed by the bent shapes. */
+  ribbon?: SculptureRibbon
   showCredit?: boolean
   className?: string
   style?: React.CSSProperties
@@ -1198,6 +1503,10 @@ const CSS = `
 .sh-root[data-gl="on"] .sh-fallback{opacity:0}
 .sh-root[data-swap="1"] .sh-canvas{opacity:0;transition-duration:.25s}
 .sh-root[data-swap="1"] .sh-fallback{opacity:0;transition-duration:.25s}
+.sh-fixed{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.sh-fixed[data-gl="on"] .sh-canvas{opacity:1}
+.sh-fixed[data-swap="1"] .sh-canvas{opacity:0;transition-duration:.25s}
+.sh-root.sh-follow{z-index:1;background:transparent}
 .sh-backdrop{position:absolute;left:50%;z-index:0;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;user-select:none;
   font-family:var(--sh-head);font-weight:600;letter-spacing:-.06em;line-height:.8;color:color-mix(in srgb,var(--sh-fg) 5%,transparent)}
 .sh-nav{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:24px;
@@ -1304,6 +1613,14 @@ function injectFonts() {
   document.head.appendChild(l)
 }
 
+/** Sets (or, without a value, clears) a state flag on the hero and on its fixed layer, which share the state styles. */
+function mark(root: HTMLElement, fixed: HTMLElement | null, key: string, value?: string) {
+  for (const el of fixed ? [root, fixed] : [root]) {
+    if (value === undefined) delete el.dataset[key]
+    else el.dataset[key] = value
+  }
+}
+
 function renderHeadline(text: string, accent: string) {
   const lines = text.split("\n")
   return lines.map((line, li) => {
@@ -1381,13 +1698,21 @@ export default function SculptureHero(props: SculptureHeroProps) {
     intro = false,
     height = "100svh",
     backdropText = "forma",
+    scrollForms,
+    ribbon,
     showCredit = true,
     className,
     style,
   } = props
 
+  const follow = !!scrollForms
   const rootRef = React.useRef<HTMLElement>(null)
   const stageRef = React.useRef<HTMLDivElement>(null)
+  const fixedRef = React.useRef<HTMLDivElement>(null)
+  const fixedStageRef = React.useRef<HTMLDivElement>(null)
+  const heroRect = React.useRef<Rect>({ x: 0, y: 0, w: 1, h: 1 })
+  const formsRef = React.useRef(scrollForms)
+  const ribbonRef = React.useRef(ribbon)
   const imgRef = React.useRef<HTMLImageElement>(null)
   const hintRef = React.useRef<HTMLDivElement>(null)
   const navRef = React.useRef<HTMLElement>(null)
@@ -1455,6 +1780,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
       y: sculptureY,
     }
     optsRef.current = engineOpts
+    formsRef.current = scrollForms
+    ribbonRef.current = ribbon
   })
 
   React.useEffect(() => {
@@ -1480,11 +1807,15 @@ export default function SculptureHero(props: SculptureHeroProps) {
     // a portrait sculpture on phones dissolves into the top of the copy
     if (mob && aspectRef.current < 1.3 && content) band.bottom += content.offsetHeight * 0.3
     const rect = computeRect(w, h, aspectRef.current, band, layout.current)
+    heroRect.current = rect
+    const fixed = fixedRef.current
     const bd = backdropRef.current
     if (bd) {
       const chars = Math.max(1, (bd.textContent || "").length)
       bd.style.fontSize = Math.min((band.bottom - band.top) * 0.95, (w * 0.92) / (chars * 0.56)) + "px"
       bd.style.top = (band.top + band.bottom) / 2 + "px"
+      // on the fixed layer the word still scrolls away with the hero
+      if (fixed) bd.style.translate = `0 ${root.getBoundingClientRect().top}px`
     }
     const img = imgRef.current
     if (img) {
@@ -1500,13 +1831,16 @@ export default function SculptureHero(props: SculptureHeroProps) {
       hintEl.style.left = clamp(rect.x + rect.w / 2, 80, w - 80) + "px"
       hintEl.style.top = Math.min(rect.y + rect.h * 0.95, band.bottom - 20) + "px"
     }
-    engineRef.current?.resize(w, h, rect)
+    if (fixed) engineRef.current?.resize(fixed.clientWidth, fixed.clientHeight, rect)
+    else engineRef.current?.resize(w, h, rect)
   }, [])
 
   // engine lifecycle (re-created only when the image changes)
   React.useEffect(() => {
     const root = rootRef.current
-    const stage = stageRef.current
+    // following the page, the canvas lives on a layer fixed to the viewport, behind the page's text
+    const fixed = fixedRef.current
+    const stage = fixed ? fixedStageRef.current : stageRef.current
     if (!root || !stage) return
     // a fresh canvas per engine: a released WebGL context can never be reused
     const canvas = document.createElement("canvas")
@@ -1517,11 +1851,20 @@ export default function SculptureHero(props: SculptureHeroProps) {
     setIsTouch(coarse.matches)
     let engine: LiquidEngine | null = null
     const fail = () => {
-      root.dataset.gl = "off"
+      mark(root, fixed, "gl", "off")
     }
     try {
       engine = new LiquidEngine(canvas, optsRef.current(mq.matches), fail)
       engineRef.current = engine
+      if (fixed)
+        engine.morph = (dt) => {
+          const b = root.getBoundingClientRect()
+          const r = heroRect.current
+          const hero = { x: r.x + b.left, y: r.y + b.top, w: r.w, h: r.h }
+          const still: SculptureShape = { kind: "image", rect: hero }
+          const view = { w: fixed.clientWidth, h: fixed.clientHeight }
+          return formsRef.current?.(hero, view, dt) ?? { from: still, to: still, mix: 0 }
+        }
     } catch {
       fail()
     }
@@ -1531,16 +1874,31 @@ export default function SculptureHero(props: SculptureHeroProps) {
     // the band moves when fonts load or the copy reflows
     if (navRef.current) ro.observe(navRef.current)
     if (contentRef.current) ro.observe(contentRef.current)
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) engine?.setVisible(e.isIntersecting && !document.hidden)
-    })
-    io.observe(root)
+    // a fixed canvas is always on screen; the hero's own rests while the hero is scrolled away
+    const io = fixed
+      ? null
+      : new IntersectionObserver((entries) => {
+          for (const e of entries) engine?.setVisible(e.isIntersecting && !document.hidden)
+        })
+    io?.observe(root)
     const onVis = () => engine?.setVisible(!document.hidden)
     document.addEventListener("visibilitychange", onVis)
     const onMq = () => engine?.setOptions({ reducedMotion: mq.matches })
     mq.addEventListener?.("change", onMq)
+    const onScroll = () => {
+      const bd = backdropRef.current
+      if (bd) bd.style.translate = `0 ${root.getBoundingClientRect().top}px`
+      engine?.refresh()
+    }
+    if (fixed) {
+      window.addEventListener("scroll", onScroll, { passive: true })
+      window.addEventListener("resize", relayout)
+    }
 
+    // on the fixed layer the whole page stirs the sculpture
+    const target = fixed ? document.documentElement : root
     const pos = (e: PointerEvent) => {
+      if (fixed) return [e.clientX, e.clientY] as const
       const b = root.getBoundingClientRect()
       return [e.clientX - b.left, e.clientY - b.top] as const
     }
@@ -1571,26 +1929,28 @@ export default function SculptureHero(props: SculptureHeroProps) {
       const [x, y] = pos(e)
       engine?.pointer("leave", x, y, e.pointerType === "touch")
     }
-    root.addEventListener("pointermove", onMove, { passive: true })
-    root.addEventListener("pointerdown", onDown, { passive: true })
-    root.addEventListener("pointerup", onUp, { passive: true })
-    root.addEventListener("pointercancel", onUp, { passive: true })
-    root.addEventListener("pointerleave", onLeave, { passive: true })
+    target.addEventListener("pointermove", onMove, { passive: true })
+    target.addEventListener("pointerdown", onDown, { passive: true })
+    target.addEventListener("pointerup", onUp, { passive: true })
+    target.addEventListener("pointercancel", onUp, { passive: true })
+    target.addEventListener("pointerleave", onLeave, { passive: true })
 
     return () => {
       ro.disconnect()
-      io.disconnect()
+      io?.disconnect()
       document.removeEventListener("visibilitychange", onVis)
       mq.removeEventListener?.("change", onMq)
-      root.removeEventListener("pointermove", onMove)
-      root.removeEventListener("pointerdown", onDown)
-      root.removeEventListener("pointerup", onUp)
-      root.removeEventListener("pointercancel", onUp)
-      root.removeEventListener("pointerleave", onLeave)
+      window.removeEventListener("scroll", onScroll)
+      window.removeEventListener("resize", relayout)
+      target.removeEventListener("pointermove", onMove)
+      target.removeEventListener("pointerdown", onDown)
+      target.removeEventListener("pointerup", onUp)
+      target.removeEventListener("pointercancel", onUp)
+      target.removeEventListener("pointerleave", onLeave)
       engine?.destroy()
       engineRef.current = null
       canvas.remove()
-      delete root.dataset.gl
+      mark(root, fixed, "gl")
     }
   }, [relayout])
 
@@ -1598,6 +1958,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
   // the canvas dips out while the static image covers the swap
   React.useEffect(() => {
     const root = rootRef.current
+    const fixed = fixedRef.current
     const engine = engineRef.current
     if (!root) return
     let cancelled = false
@@ -1605,7 +1966,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
     image.crossOrigin = "anonymous"
     image.decoding = "async"
     const swapping = root.dataset.gl === "on"
-    if (swapping) root.dataset.swap = "1"
+    if (swapping) mark(root, fixed, "swap", "1")
     image.onload = () => {
       if (cancelled) return
       aspectRef.current = image.naturalWidth / image.naturalHeight || aspectRef.current
@@ -1614,18 +1975,19 @@ export default function SculptureHero(props: SculptureHeroProps) {
         try {
           engine.onFirstFrame = () => {
             if (cancelled) return
-            root.dataset.gl = "on"
-            delete root.dataset.swap
+            mark(root, fixed, "gl", "on")
+            mark(root, fixed, "swap")
           }
+          engine.ribbon = ribbonRef.current ?? null
           engine.setImage(image)
           relayout()
         } catch {
-          root.dataset.gl = "off"
+          mark(root, fixed, "gl", "off")
         }
-      } else delete root.dataset.swap
+      } else mark(root, fixed, "swap")
     }
     image.onerror = () => {
-      delete root.dataset.swap
+      mark(root, fixed, "swap")
     }
     // let the fade-out start before the GPU upload
     const t = window.setTimeout(() => (image.src = activeSrc), swapping ? 280 : 0)
@@ -1660,98 +2022,111 @@ export default function SculptureHero(props: SculptureHeroProps) {
   } as React.CSSProperties
 
   const hintText = isTouch ? hintTouch : hint
+  const backdrop = backdropText ? (
+    <div ref={backdropRef} className="sh-backdrop" aria-hidden="true">
+      {backdropText}
+    </div>
+  ) : null
 
   return (
-    <section ref={rootRef} className={"sh-root" + (className ? " " + className : "")} style={{ ...vars, ...style }}>
-      <style>{CSS}</style>
-      {backdropText ? (
-        <div ref={backdropRef} className="sh-backdrop" aria-hidden="true">
-          {backdropText}
+    <>
+      {follow && (
+        <div ref={fixedRef} className="sh-fixed" style={vars} aria-hidden="true">
+          {backdrop}
+          <div ref={fixedStageRef} className="sh-stage" />
         </div>
-      ) : null}
-      <div ref={stageRef} className="sh-stage" aria-hidden="true">
-        {/* eslint-disable-next-line @next/next/no-img-element -- placed by hand over the canvas, which samples the same file */}
-        <img ref={imgRef} className="sh-fallback" src={activeSrc} alt="" crossOrigin="anonymous" draggable={false} />
-      </div>
-      <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{imageAlt}</span>
-
-      {showNav && (
-        <nav ref={navRef} className="sh-nav" aria-label="Primary">
-          <a className="sh-brand" href="#top">
-            {brand}
-          </a>
-          <ul className="sh-links">
-            {navLinks.map((l, i) => (
-              <li key={i}>
-                <a className="sh-link" href={l.href}>
-                  {l.label}
-                </a>
-              </li>
-            ))}
-            {themeToggle && (
-              <li className="sh-keep">
-                <button
-                  type="button"
-                  className="sh-theme"
-                  aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                  onClick={() => {
-                    const next = mode === "dark" ? "light" : "dark"
-                    setMode(next)
-                    onThemeChange?.(next)
-                  }}
-                >
-                  {mode === "dark" ? <SunIcon /> : <MoonIcon />}
-                </button>
-              </li>
-            )}
-            {navCta && navCta.label && (
-              <li className="sh-keep">
-                <a className="sh-navcta" href={navCta.href}>
-                  {navCta.label}
-                </a>
-              </li>
-            )}
-          </ul>
-        </nav>
       )}
-
-      {interactive && hintText ? (
-        <div ref={hintRef} className="sh-hint" aria-hidden="true">
-          {hintText}
+      <section
+        ref={rootRef}
+        className={"sh-root" + (follow ? " sh-follow" : "") + (className ? " " + className : "")}
+        style={{ ...vars, ...style }}
+      >
+        <style>{CSS}</style>
+        {follow ? null : backdrop}
+        <div ref={stageRef} className="sh-stage" aria-hidden="true">
+          {/* eslint-disable-next-line @next/next/no-img-element -- placed by hand over the canvas, which samples the same file */}
+          <img ref={imgRef} className="sh-fallback" src={activeSrc} alt="" crossOrigin="anonymous" draggable={false} />
         </div>
-      ) : null}
+        <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{imageAlt}</span>
 
-      <div className="sh-spacer" />
+        {showNav && (
+          <nav ref={navRef} className="sh-nav" aria-label="Primary">
+            <a className="sh-brand" href="#top">
+              {brand}
+            </a>
+            <ul className="sh-links">
+              {navLinks.map((l, i) => (
+                <li key={i}>
+                  <a className="sh-link" href={l.href}>
+                    {l.label}
+                  </a>
+                </li>
+              ))}
+              {themeToggle && (
+                <li className="sh-keep">
+                  <button
+                    type="button"
+                    className="sh-theme"
+                    aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                    onClick={() => {
+                      const next = mode === "dark" ? "light" : "dark"
+                      setMode(next)
+                      onThemeChange?.(next)
+                    }}
+                  >
+                    {mode === "dark" ? <SunIcon /> : <MoonIcon />}
+                  </button>
+                </li>
+              )}
+              {navCta && navCta.label && (
+                <li className="sh-keep">
+                  <a className="sh-navcta" href={navCta.href}>
+                    {navCta.label}
+                  </a>
+                </li>
+              )}
+            </ul>
+          </nav>
+        )}
 
-      <div ref={contentRef} className="sh-content">
-        <div>
-          {eyebrow ? <p className="sh-eyebrow">{eyebrow}</p> : null}
-          <h1 className="sh-h1">{renderHeadline(headline, headlineAccent)}</h1>
-        </div>
-        <div className="sh-aside">
-          {body ? <p className="sh-body">{body}</p> : null}
-          <div className="sh-ctas">
-            {primaryCta && primaryCta.label ? (
-              <a className="sh-btn" href={primaryCta.href}>
-                {primaryCta.label}
-                <Arrow />
-              </a>
-            ) : null}
-            {secondaryCta && secondaryCta.label ? (
-              <a className="sh-txt" href={secondaryCta.href}>
-                {secondaryCta.label}
-                <Arrow />
-              </a>
-            ) : null}
+        {interactive && hintText ? (
+          <div ref={hintRef} className="sh-hint" aria-hidden="true">
+            {hintText}
+          </div>
+        ) : null}
+
+        <div className="sh-spacer" />
+
+        <div ref={contentRef} className="sh-content">
+          <div>
+            {eyebrow ? <p className="sh-eyebrow">{eyebrow}</p> : null}
+            <h1 className="sh-h1">{renderHeadline(headline, headlineAccent)}</h1>
+          </div>
+          <div className="sh-aside">
+            {body ? <p className="sh-body">{body}</p> : null}
+            <div className="sh-ctas">
+              {primaryCta && primaryCta.label ? (
+                <a className="sh-btn" href={primaryCta.href}>
+                  {primaryCta.label}
+                  <Arrow />
+                </a>
+              ) : null}
+              {secondaryCta && secondaryCta.label ? (
+                <a className="sh-txt" href={secondaryCta.href}>
+                  {secondaryCta.label}
+                  <Arrow />
+                </a>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
 
-      {showCredit && (
-        <a className="sh-credit" href="https://guglielmogiannattasio.it" target="_blank" rel="noopener noreferrer">
-          by guglielmogiannattasio.it
-        </a>
-      )}
-    </section>
+        {showCredit && (
+          <a className="sh-credit" href="https://guglielmogiannattasio.it" target="_blank" rel="noopener noreferrer">
+            by guglielmogiannattasio.it
+          </a>
+        )}
+      </section>
+    </>
   )
 }
