@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, Fragment, lazy, memo, useCallback, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CategoryTree, type TreeLight } from "./components/CategoryTree";
 import { DocxContent } from "./components/DocxContent";
@@ -35,6 +35,7 @@ type ArchiveTab = "homework" | "profile" | "report" | "wrong";
 const ARCHIVE_TABS: Array<[ArchiveTab, string]> = [["homework", "作业"], ["profile", "定档"], ["report", "学情报告"], ["wrong", "错题本"]];
 const ARCHIVE_TAB_KEY = "student-archive-tab";
 const KNOWLEDGE_MAP_KEY = "library-knowledge-map";
+const LIBRARY_DIRECTORY_KEY = "library-directory";
 // The list shows 40 cards and adds 40 more before the reader reaches the end. Rendering a whole category at once
 // (计算专题 has 948 questions) rebuilds every card and formula on each click and makes the page lag.
 const LIBRARY_PAGE = 40;
@@ -152,6 +153,8 @@ export default function Home() {
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLDivElement>(null);
+  const [directoryOpen, setDirectoryOpen] = useState(true);
+  const [directoryMotion, setDirectoryMotion] = useState<"opening" | "closing" | null>(null);
   const [showWrongBook, setShowWrongBook] = useState(initialView === "wrong-book");
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentClasses, setStudentClasses] = useState<string[]>([]);
@@ -214,6 +217,7 @@ export default function Home() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try { setAlevelPageLocale(window.localStorage.getItem(ALEVEL_PAGE_LOCALE_KEY) === "en" ? "en" : "zh"); } catch { /* 本地存储不可用时保持中文默认值 */ }
+      try { setDirectoryOpen(window.localStorage.getItem(LIBRARY_DIRECTORY_KEY) !== "closed"); } catch { /* 本地存储不可用时保持目录展开 */ }
       const linked = new URLSearchParams(window.location.search).get("tab");
       let remembered: string | null = null;
       try { remembered = window.localStorage.getItem(ARCHIVE_TAB_KEY); } catch { /* 本地存储不可用时打开“作业” */ }
@@ -839,6 +843,7 @@ export default function Home() {
   const keepTypeset = useCallback((title: string, settings: TypesetSettings) => {
     setPaperTitle(title); setIncludeAnswers(settings.answers !== "none"); setTypesetKept({ ids: typesetIds, settings });
   }, [typesetIds]);
+  const directoryLabel = pageLocale === "en" ? `${directoryOpen ? "Collapse" : "Expand"} knowledge directory` : `${directoryOpen ? "收起" : "展开"}知识点目录`;
   if (typesetting) return <>{toastNode}<Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
     questions: selectedQuestions, title: paperTitle,
     groups: basketStructure.sections.length ? paperSections.filter((section) => section.questions.length).map((section) => ({ title: section.heading, size: section.questions.length })) : undefined,
@@ -855,17 +860,28 @@ export default function Home() {
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
         actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button>} />
 
-      <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : ""}`}>
-        {(!showSelected || showWrongBook) && <aside className="sidebar">
+      <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : !showWrongBook ? `library-workspace${directoryOpen ? "" : " directory-closed"}` : ""}`} data-directory-motion={directoryMotion ?? undefined}>
+        {(!showSelected || showWrongBook) && <aside className={`sidebar${showWrongBook ? "" : " library-sidebar"}`}>
           {showWrongBook ? <>
             <div className="sidebar-heading"><span className="eyebrow">班级{studentsLoading ? "" : ` · ${studentClasses.length}`}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
             <div className="class-list" aria-label="班级">{studentClasses.map((name) => <button key={name} className={`class-card${activeClassName === name ? " active" : ""}`} onClick={() => setActiveClassName(name)}><span>▦</span><b>{name}</b><small>{students.filter((student) => student.className === name).length} 人</small></button>)}</div>
             <div className="sidebar-heading"><span className="eyebrow">学生{studentsLoading ? "" : ` · ${students.length}`}</span><button className="icon-button" aria-label="新建学生档案" title="新建学生档案" onClick={() => openStudentDialog()}>＋</button></div>
             <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : !studentsLoading && <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
+          <button className="directory-toggle" title={directoryLabel} aria-label={directoryLabel} aria-expanded={directoryOpen} aria-controls="library-directory" onClick={() => {
+            const open = !directoryOpen;
+            setDirectoryOpen(open);
+            setDirectoryMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? null : open ? "opening" : "closing");
+            try { window.localStorage.setItem(LIBRARY_DIRECTORY_KEY, open ? "open" : "closed"); } catch { /* 本地存储不可用时仍可展开、收起 */ }
+          }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="directory-chevron" d="m16 9-3 3 3 3" /></svg><span className="directory-rail-label" aria-hidden="true">{pageLocale === "en" ? "Directory" : "知识目录"}</span></button>
+          <div id="library-directory" className="library-directory" inert={!directoryOpen} aria-hidden={!directoryOpen}>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button>}
+          </div>
+          {directoryMotion && <div key={directoryMotion} className="directory-glass" aria-hidden="true" onAnimationEnd={(event) => { if (event.animationName === "directory-glass-fade") setDirectoryMotion(null); }}>
+            {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ "--x": `${18 + (index * 37) % 76}%`, "--y": `${7 + index * 5}%`, "--size": `${4 + (index * 7) % 10}px`, "--drift": `${(index % 2 ? 1 : -1) * (12 + index % 5 * 5)}px`, "--delay": `${index % 4 * 24}ms`, "--turn": `${index * 31}deg` } as CSSProperties} />)}
+          </div>}
           </>}
         </aside>}
 
