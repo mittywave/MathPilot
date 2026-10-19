@@ -1,15 +1,20 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import SculptureHero, { type Rect, type SculptureMorph, type SculptureShape } from "../components/LiquidSculptureHero";
 import TiltedGridHero, { arc, CAMERA, MAX_WIDTH } from "../components/TiltedGridHero";
 import { BrandWordmark } from "../components/SiteHeader";
+import { LoginForm } from "../components/LoginForm";
 import { fetchMe, loginPath } from "../../lib/api-client";
+import FormulaSand from "./FormulaSand";
 import "./intro.css";
 
 // MathPilot product page, the site's home. The hero is the liquid particle sculpture, the ∞ of the tab icon (the
 // pictures come from scripts/intro-infinity.html). It follows the page down: it opens into the rails of the feature
 // row, closes again as the track of the loop, and lands whole above the last words. The sections follow the hero's
 // light/dark switch.
+//
+// 进入工作台 without an account stays on this page: the page gives way to the formulas that changed the world, made of
+// the same sand, and the ∞ gathers into the frame of the login window (/login is this page with the window open).
 
 const SANS = '"Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
 const SERIF = '"Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif';
@@ -84,6 +89,26 @@ const smoothstep = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+// The ∞ gathers into the login window, and scatters back into the page when it closes, over this long.
+const GATHER_MS = 1800;
+const SCATTER_MS = 1300;
+// the window's frame of sand, round the outside of its glass (.mp-login-card has the same corner radius)
+const FRAME = { radius: 26, halfWidth: 3.5, outset: 7, fill: 0.3 };
+type Gather = { from: number; to: number; start: number };
+// how far the ∞ has gathered into the window (0 … 1); a move starts on the first frame drawn after it was asked for
+const gatheredAt = (g: Gather, now: number) => {
+  if (g.start < 0) return g.from;
+  const t = Math.min(1, (now - g.start) / (g.to > g.from ? GATHER_MS : SCATTER_MS));
+  return g.from + (g.to - g.from) * t * t * (3 - 2 * t);
+};
+// 进入工作台 opens the library with its entrance (both side panels unfold once); a guest from here gets it too
+const WORKBENCH = "/library?from=intro";
+// only paths on this site, never back to the login page
+const nextOf = (value?: string | null) =>
+  value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") && !value.startsWith("/login") ? value : "/library";
+// the sculpture draws a new frame whenever the page moves
+const redraw = () => window.dispatchEvent(new Event("scroll"));
+
 const number = (index: number) => String(index + 1).padStart(2, "0");
 
 function Arrow() {
@@ -92,7 +117,8 @@ function Arrow() {
   </svg>;
 }
 
-export default function IntroPage() {
+/** The product page; with `login` (where to go once signed in) its login window is open from the start. */
+export default function IntroPage({ login: opened }: { login?: string }) {
   const [mode, setMode] = useState<"light" | "dark">("light");
   const root = useRef<HTMLDivElement>(null);
   const row = useRef<HTMLElement>(null);
@@ -101,11 +127,93 @@ export default function IntroPage() {
   const closing = useRef<HTMLElement>(null);
   const closingArt = useRef<HTMLImageElement>(null);
   const scrolled = useRef(-1);
-  // 进入工作台 opens the 题库; whoever is not signed in passes the login page first
-  const [workbench, setWorkbench] = useState(loginPath("/library?from=intro"));
-  useEffect(() => {
-    fetchMe().then(({ user }) => { if (user) setWorkbench("/library?from=intro"); }).catch(() => {});
+  // 进入工作台 opens the 题库; whoever is not signed in gets the login window first
+  const [workbench, setWorkbench] = useState(loginPath(WORKBENCH));
+  const initial = opened === undefined ? null : { next: nextOf(opened), leaving: false };
+  const [login, setLogin] = useState(initial);
+  const shown = useRef(initial);
+  const gather = useRef<Gather>({ from: 0, to: initial ? 1 : 0, start: -1 });
+  const glass = useRef<HTMLDivElement>(null);
+  // the window was opened here, over an entry of this page's own in the history
+  const pushed = useRef(false);
+  // what had the focus before the window opened, and gets it back afterwards
+  const opener = useRef<HTMLElement | null>(null);
+
+  const openLogin = useCallback((next: string, push: boolean) => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    gather.current = { from: gatheredAt(gather.current, performance.now()), to: 1, start: -1 };
+    shown.current = { next, leaving: false };
+    setLogin(shown.current);
+    if (push) {
+      window.history.pushState(null, "", loginPath(next));
+      pushed.current = true;
+    }
+    redraw();
   }, []);
+  const closeLogin = useCallback((fromHistory: boolean) => {
+    if (!shown.current || shown.current.leaving) return;
+    gather.current = { from: gatheredAt(gather.current, performance.now()), to: 0, start: -1 };
+    shown.current = { ...shown.current, leaving: true };
+    setLogin(shown.current);
+    if (!fromHistory) {
+      if (pushed.current) window.history.back();
+      else window.history.replaceState(null, "", "/");
+    }
+    pushed.current = false;
+    redraw();
+    window.setTimeout(() => {
+      if (!shown.current?.leaving) return;
+      shown.current = null;
+      setLogin(null);
+    }, SCATTER_MS + 150);
+  }, []);
+  // while the window is open the page under it is out of reach, for the keyboard and screen readers too; once it
+  // closes, the focus goes back to what opened it
+  const open = login !== null && !login.leaving;
+  useEffect(() => {
+    const page = root.current;
+    if (!page || !open) return;
+    const under = [...page.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.matches(".mp-veil, .mp-formulas, .mp-login"));
+    for (const child of under) child.inert = true;
+    return () => {
+      for (const child of under) child.inert = false;
+      opener.current?.focus({ preventScroll: true });
+    };
+  }, [open]);
+
+  useEffect(() => {
+    fetchMe().then(({ user }) => {
+      if (!user) return;
+      setWorkbench(WORKBENCH);
+      // signed in already (on this Mac, always): no window, straight on
+      if (shown.current) window.location.replace(shown.current.next);
+    }).catch(() => {});
+  }, []);
+  // every 进入工作台 still points at /login, so it works before the page has loaded; here it opens the window in place
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as Element | null)?.closest?.("a[href]");
+      const href = link?.getAttribute("href");
+      if (!href?.startsWith("/login")) return;
+      event.preventDefault();
+      if (!shown.current || shown.current.leaving) openLogin(nextOf(new URL(href, window.location.href).searchParams.get("next")), true);
+    };
+    const onHistory = () => {
+      const atLogin = window.location.pathname === "/login";
+      if (atLogin && (!shown.current || shown.current.leaving)) openLogin(nextOf(new URLSearchParams(window.location.search).get("next")), false);
+      else if (!atLogin) closeLogin(true);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") closeLogin(false); };
+    document.addEventListener("click", onClick);
+    window.addEventListener("popstate", onHistory);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onClick);
+      window.removeEventListener("popstate", onHistory);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [openLogin, closeLogin]);
   // Sections rise in as they scroll into view; without script they are simply shown.
   useEffect(() => {
     const page = root.current;
@@ -150,10 +258,24 @@ export default function IntroPage() {
     const mix = smoothstep(LEGS[leg].start, LEGS[leg].end, along);
     // the drawn loop gives way while the metal lies on it
     loopLine.current?.style.setProperty("--ribbon", String(leg === 1 ? mix : leg === 2 ? 1 - mix : 0));
-    return { from: shapes[leg], to: shapes[leg + 1], mix, alpha: 1 - LEGS[leg].dip * Math.sin(Math.PI * mix), moving };
+    const alpha = 1 - LEGS[leg].dip * Math.sin(Math.PI * mix);
+    // the login window: from the shape it has on the page (the scroll stands still meanwhile) into the window's frame
+    const now = performance.now(), g = gather.current;
+    if (g.start < 0 && g.to !== g.from) g.start = now;
+    const into = gatheredAt(g, now);
+    const box = glass.current?.getBoundingClientRect();
+    if (into > 0 && box) {
+      const frame: SculptureShape = { kind: "window", rect: { x: box.left, y: box.top, w: box.width, h: box.height }, ...FRAME };
+      return {
+        from: mix < 0.5 ? shapes[leg] : shapes[leg + 1], to: frame, mix: into,
+        alpha: alpha + (1 - alpha) * into, moving: moving || into !== g.to,
+      };
+    }
+    return { from: shapes[leg], to: shapes[leg + 1], mix, alpha, moving };
   };
 
-  return <div ref={root} className="mp-intro" data-mode={mode}>
+  return <div ref={root} className="mp-intro" data-mode={mode} data-login={login ? (login.leaving ? "out" : "in") : undefined}
+    data-opened={opened !== undefined ? "" : undefined}>
     <SculptureHero
       src={picture("light")} darkSrc={picture("dark")}
       mobileSrc={picture("light")} mobileDarkSrc={picture("dark")}
@@ -172,6 +294,8 @@ export default function IntroPage() {
       backdropText="教学"
       sculptureScale={0.86}
       ambient
+      // with the window open the cursor only ripples the window's frame, which keeps its shape
+      strength={login ? 0.25 : 1}
       scrollForms={scrollForms}
       ribbon={RIBBON}
       theme={mode}
@@ -251,5 +375,13 @@ export default function IntroPage() {
     <footer className="mp-foot">
       <BrandWordmark /><span>数学教研工作台</span><span>© 2026 MathPilot</span>
     </footer>
+
+    {login && <>
+      <div className="mp-veil" aria-hidden="true" />
+      <FormulaSand mode={mode} clear={glass} />
+      <div className="mp-login" role="dialog" aria-modal="true" aria-labelledby="mp-login-title" inert={login.leaving}>
+        <LoginForm ref={glass} next={login.next} guest={login.next === WORKBENCH ? WORKBENCH : "/library"} onClose={() => closeLogin(false)} />
+      </div>
+    </>}
   </div>;
 }
