@@ -21,7 +21,8 @@
 //   as the turns need, the stage stays pinned to the screen meanwhile, and each
 //   item rests at the front for a stretch. The index scrolls the page there.
 // - The ring comes last instead of first: the wheel opens on the drum and closes
-//   into the ring, each card taking the short way round to its place.
+//   into the ring, each card taking the short way round to its place. The drum
+//   turns with the page: the next card comes up from below as the page scrolls on.
 // - The frame loop rests while the wheel stands still, and the ring shrinks to
 //   fit the stage (a few items make big cards).
 // - An item may bring its own card face (`face`) and a line under its title
@@ -228,7 +229,8 @@ export function WorksWheel({
 
       for (let i = 0; i < count; i++) {
         const d = i - pos;
-        const drumDeg = d * STEP;
+        // the next ones wait below the front and come up as the page scrolls down
+        const drumDeg = -d * STEP;
         const card = cardRefs.current[i];
         if (card) {
           card.style.transform = place(
