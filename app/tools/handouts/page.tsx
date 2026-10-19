@@ -1,7 +1,6 @@
 "use client";
-/* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { type DragEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
+import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, loginPath, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, dropHandoutItem, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
@@ -87,7 +86,7 @@ export default function HandoutsPage() {
 
   // The list sits under the shared site header; an open handout's editor takes the whole window.
   if (!loaded) return <><SiteHeader active="handouts" user={null} loading /><main className="toolbox handouts"><p>正在读取…</p></main></>;
-  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 MathPilot。</p><a href="/">返回题库</a></main></>;
+  if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 MathPilot。</p><a href={loginPath("/tools/handouts")}>去登录</a></main></>;
   return <>
     {openId ? <HandoutEditor id={openId} onNotice={onNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={onNotice} /></>}
     {toastNode}
@@ -365,7 +364,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         {!!unsorted && navItem("unsorted", UNSORTED_TOPIC_LABEL, unsorted, viewing === "topic" && !activeTopic, () => choose("topic", "unsorted"))}
         {navItem("student", "学生讲义", 0, false, () => choose("student"), true)}
         {students?.map((item) => navItem(`student-${item.id}`, item.name, countIn({ ...NOWHERE, studentId: item.id }), viewing === "student" && activeStudent?.id === item.id, () => choose("student", item.id)))}
-        {students && !students.length && <a className="item handout-nav-link" href="/?view=wrong-book">去学生档案建立学生</a>}
+        {students && !students.length && <a className="item handout-nav-link" href="/library?view=wrong-book">去学生档案建立学生</a>}
       </nav>
     </div></aside>
     <div className="handout-board">
@@ -398,7 +397,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
           </div>
         </> : unsorted ? <div className="handout-columns single">{column("unsorted", UNSORTED_TOPIC_LABEL, "份", NOWHERE, null)}</div>
           : <p className="handout-board-note">还没有专题分类，点击左侧“专题库”旁的 ＋ 创建。</p>
-        : !activeStudent ? <p className="handout-board-note">{students === null ? "正在读取学生档案…" : <>还没有学生。<a href="/?view=wrong-book">去学生档案建立学生</a></>}</p>
+        : !activeStudent ? <p className="handout-board-note">{students === null ? "正在读取学生档案…" : <>还没有学生。<a href="/library?view=wrong-book">去学生档案建立学生</a></>}</p>
         : <div className="handout-columns single">{column(activeStudent.id, activeStudent.name, "份", { ...NOWHERE, studentId: activeStudent.id }, `为${activeStudent.name}新建讲义`, true)}</div>}
     </div>
     {moving && (() => {

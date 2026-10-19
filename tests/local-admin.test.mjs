@@ -76,7 +76,7 @@ test("limits automatic administrator access to loopback hostnames", async () => 
 });
 
 test("shows local administrator labels without internal account details and hides logout", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = await readFile(new URL("../app/library/page.tsx", import.meta.url), "utf8");
   const header = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
   assert.equal(ALEVEL_PAGE_COPY.zh.localAdmin, "本机管理员");
   assert.equal(ALEVEL_PAGE_COPY.en.localAdmin, "Local Admin");
@@ -85,7 +85,7 @@ test("shows local administrator labels without internal account details and hide
     assert.equal("loggedInAs" in copy, false);
     assert.equal("noLogin" in copy, false);
   }
-  // Shared headers own logout; the home callback keeps its existing state cleanup.
+  // Shared headers own logout; the 题库 callback keeps its existing state cleanup.
   assert.match(header, /user\?\.local \? copy\.localAdmin/);
   assert.match(header, /user && !user\.local && <button/);
   assert.match(page, /onSignOut=\{signOut\}/);

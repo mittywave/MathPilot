@@ -436,7 +436,7 @@ try {
   step('seeded 我的题库 (5 questions, 2 categories) and 公共题库 (1 question)');
 
   // ---- 题库 regression: 新建试题 now comes from the shared component ----
-  await page.goto(base + '/?scope=mine');
+  await page.goto(base + '/library?scope=mine');
   await page.locator('.user-chip').filter({ hasText: '本机管理员' }).waitFor();
   // One shared library: its default modules come first, so open the seeded module from the tree.
   await page.locator('.tree button.module-root').filter({ hasText: '初一数学' }).click();

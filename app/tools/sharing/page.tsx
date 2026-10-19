@@ -1,11 +1,10 @@
 "use client";
-/* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { SiteHeader } from "../../components/SiteHeader";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useState } from "react";
-import { changeTeamInvite, fetchMe, fetchTeam, resetTeamPassword, updateTeamMember } from "../../../lib/api-client";
+import { changeTeamInvite, fetchMe, fetchTeam, loginPath, resetTeamPassword, updateTeamMember } from "../../../lib/api-client";
 import { copyText } from "../../../lib/copy-text";
 import { fetchShareStatus, forgetSharedNetwork, setSharing, type ShareStatus } from "../../../lib/lan-share-client";
 import type { AuthUser, TeamInvite, TeamMember } from "../../../lib/types";
@@ -38,7 +37,7 @@ export default function SharingPage() {
 
   let body;
   if (!loaded) body = <p className="sharing-muted">正在读取…</p>;
-  else if (!user) body = <div className="sharing-card"><h2>请先登录</h2><p className="sharing-muted">登录后才能使用共享办公。</p><a className="primary-button sharing-link" href="/">去登录</a></div>;
+  else if (!user) body = <div className="sharing-card"><h2>请先登录</h2><p className="sharing-muted">登录后才能使用共享办公。</p><a className="primary-button sharing-link" href={loginPath("/tools/sharing")}>去登录</a></div>;
   else if (user.role !== "admin") body = <div className="sharing-card"><h2>共享办公由管理员管理</h2><p className="sharing-muted">需要开通账号、重置密码或调整权限时，请联系管理员。</p></div>;
   else body = <><ShareSection notify={notify} /><TeamSections me={user} notify={notify} /></>;
   return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:"工具箱",href:"/tools"},{label:"共享办公"}]} /><main className="toolbox sharing">

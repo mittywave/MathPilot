@@ -249,11 +249,6 @@ nav { display:flex; align-self:stretch; gap:26px; }
 }
 
 .question-actions small { min-width:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
-.auth-modal { width:min(480px,100%); }
-.auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:5px; padding:4px; margin:-5px 0 18px; background:color-mix(in srgb, var(--surface-soft) 90%, var(--line)); border-radius:calc(9px*var(--radius-scale)); }
-.auth-tabs button { border:0; border-radius:calc(7px*var(--radius-scale)); background:transparent; color:color-mix(in srgb, var(--green) 5%, var(--muted)); height:36px; font-size:13px; }
-.auth-tabs button.active { background:var(--surface); color:var(--green); font-weight:700; box-shadow:0 2px 8px color-mix(in srgb, var(--inverse) 8%, transparent); }
-.auth-note { margin:2px 0 17px; padding:10px 12px; border-radius:calc(8px*var(--radius-scale)); background:color-mix(in srgb, var(--green-soft) 63%, var(--surface-soft)); color:color-mix(in srgb, var(--green) 9%, var(--muted)); font-size:12px; line-height:1.65; }
 .file-draft-media { display:grid; gap:7px; width:100%; border:1px solid color-mix(in srgb, var(--muted) 12%, var(--surface-soft)); border-radius:calc(8px*var(--radius-scale)); padding:8px; background:color-mix(in srgb, var(--surface) 34%, var(--page)); }
 .file-draft-images { display:flex; align-items:flex-start; gap:8px; overflow-x:auto; }
 .file-draft-images img { flex:0 0 auto; width:150px; height:105px; object-fit:contain; object-position:left top; background:white; border:1px solid color-mix(in srgb, var(--line) 67%, var(--surface)); }
@@ -288,8 +283,6 @@ html[data-theme="dark"] .manual-image-grid figure,
 html[data-theme="dark"] .layout-choice,
 html[data-theme="dark"] .optimization-compare>div,
 html[data-theme="dark"] .diagram-compare figure { background:var(--surface); border-color:var(--line); }
-html[data-theme="dark"] .auth-tabs,
-html[data-theme="dark"] .auth-note,
 html[data-theme="dark"] .answer-box,
 html[data-theme="dark"] .data-tools,
 html[data-theme="dark"] .export-summary,

@@ -616,8 +616,8 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
-  if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
-  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
+  if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
+  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
   const report = submission.report;
   const live = ["submitted", "processing", "failed"].includes(submission.status);
@@ -646,7 +646,7 @@ export default function TeacherSubmissionPage() {
   const correctionQuestions = scoped.every((question) => question.result) ? scoped : [];
   let dayEnd = 0;
   const uploadDay = !correctionQuestions.length && scoped.length ? assigned!.days.find((entry) => (dayEnd += entry.size) > assigned!.questions.indexOf(scoped[0])) : undefined;
-  const archiveLink = `/?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
+  const archiveLink = `/library?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
   const canExportGrading = !!evidencePages.length && evidencePages.every(page => page.rotation != null) && !!evidenceItems.length && (Boolean(dayTask) || ["review_required", "ready", "published"].includes(submission.status));
   const gradingExport = <button type="button" disabled={busy || !!editingId || !canExportGrading} onClick={() => void exportGrading()}
     title={editingId ? "请先保存或取消判定修正" : evidencePages.some(page => page.rotation == null) ? "图片方向检查尚未完成，请稍后再导出；检查失败时请刷新重试" : canExportGrading ? `导出下方原卷标记的全部 ${evidencePages.length} 页，包含批改痕迹和错误原因（PDF）` : "当前暂无可导出的原卷批改"}>导出批改</button>;
@@ -659,7 +659,7 @@ export default function TeacherSubmissionPage() {
         {(live || submission.status === "ready") && <small>批改发布完成后可以切换</small>}
       </div>}</>;
   return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
-    trail={[{label:"学生档案",href:"/?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
+    trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
     trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={() => void newVersion({}, "上传新版本")}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
     {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
     <section className="homework-panel review-overview" aria-label="作业概览">

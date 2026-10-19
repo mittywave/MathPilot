@@ -63,7 +63,7 @@ export function AssignHomework({ title, questions, groups, studentId, className,
       <div className="modal-head"><div><span className="eyebrow">{origin}</span><h2>布置给学生</h2></div><button className="close" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></div>
       {assigned ? <>
         <p className="assign-done">已布置给 {assigned.map((item) => item.studentName).join("、")}。学生做完后，在学生档案的“作业”里上传学生拍好的照片或 PDF。</p>
-        <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`}>打开{item.studentName}的档案</a>)}</div>
+        <div className="assign-links">{assigned.map((item) => <a key={item.id} href={`/library?view=wrong-book&studentId=${encodeURIComponent(item.studentId)}&tab=homework`}>打开{item.studentName}的档案</a>)}</div>
         <div className="modal-actions"><button className="primary-button" onClick={onClose}>完成</button></div>
       </> : <>
         <label className="field">作业名称<input value={name} disabled={busy || attempted} onChange={(event) => setName(event.target.value)} /></label>

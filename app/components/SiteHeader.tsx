@@ -27,9 +27,9 @@ async function readCount(url: string) {
   return Number((await response.json() as { count?: number }).count ?? 0);
 }
 
-// The one top bar shared by the home page and top-level pages such as the toolbox. Its entries read
+// The one top bar shared by the 题库 page and top-level pages such as the toolbox. Its entries read
 // 题库 · 组卷篮 · 讲义编撰 · 知识图谱 · 学生档案 · 工具箱; the smaller tools sit inside the toolbox.
-// On the home page 题库, 组卷篮 and 学生档案 switch views in place (onSelect); elsewhere they link back to "/".
+// On the 题库 page 题库, 组卷篮 and 学生档案 switch views in place (onSelect); elsewhere they link back to "/library".
 export function SiteHeader({ active, user, loading = false, locale = "zh", basketCount = 0, onSelect, actions, trail, trailActions, title, onSignOut }: {
   active: SiteSection | null;
   user: AuthUser | null;
@@ -84,7 +84,7 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
     if (signOutPhase.current === "logout") return;
     signOutPhase.current = "logout";
     setSignOutStatus("busy");
-    try { await logout(); window.location.assign("/"); setSignOutStatus("idle"); }
+    try { await logout(); window.location.assign("/library"); setSignOutStatus("idle"); }
     catch { setSignOutStatus("error"); }
     finally { signOutPhase.current = "idle"; }
   }
@@ -108,12 +108,12 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   };
   const link = (href: string, label: ReactNode, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
   return <><header className="topbar">
-    {/* Native navigation keeps beforeunload protection. */}
-    <a className="brand" href="/intro" title={locale === "en" ? "Back to introduction" : "返回产品介绍"}><BrandWordmark /></a>
+    {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection. */}
+    <a className="brand" href="/" title={locale === "en" ? "Back to introduction" : "返回产品介绍"}><BrandWordmark /></a>
     <nav ref={navigation} className="library-entries" aria-label="题库入口">
-      {entry("library", "/", <>{copy.navPublic}{importingCount > 0 && <i title={`${importingCount} 个文件导入正在识别`} aria-label={`${importingCount} 个文件导入正在识别`}>{importingCount}</i>}</>)}
-      {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
-      {entry("students", "/?view=wrong-book", <>{copy.navStudents}{gradingCount > 0 && <i title={`${gradingCount} 份作业正在批改`} aria-label={`${gradingCount} 份作业正在批改`}>{gradingCount}</i>}</>)}
+      {entry("library", "/library", <>{copy.navPublic}{importingCount > 0 && <i title={`${importingCount} 个文件导入正在识别`} aria-label={`${importingCount} 个文件导入正在识别`}>{importingCount}</i>}</>)}
+      {user && <>{entry("basket", "/library?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
+      {entry("students", "/library?view=wrong-book", <>{copy.navStudents}{gradingCount > 0 && <i title={`${gradingCount} 份作业正在批改`} aria-label={`${gradingCount} 份作业正在批改`}>{gradingCount}</i>}</>)}
       {user && link("/tools", <>{copy.navTools}{transcribingCount > 0 && <i title={`${transcribingCount} 个文件转录正在进行`} aria-label={`${transcribingCount} 个文件转录正在进行`}>{transcribingCount}</i>}</>, active === "tools")}
     </nav>
     <div className="account-area">

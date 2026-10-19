@@ -12,6 +12,8 @@ export function fetchMe() { return request<{ user: AuthUser | null }>("/api/auth
 export function register(email: string, password: string, inviteCode: string) { return request<{ user: AuthUser }>("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password, inviteCode }) }); }
 export function login(email: string, password: string) { return request<{ user: AuthUser }>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }); }
 export function logout() { return request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }); }
+/** The login page, which comes back to `next` (a path on this site) once signed in. */
+export function loginPath(next = "/library") { return `/login?next=${encodeURIComponent(next)}`; }
 export function createCloudQuestion(question: Question) { return request<{ question: Question }>("/api/questions", { method: "POST", body: JSON.stringify({ question }) }); }
 export function saveTypesetQuestions(questions: Question[]) { return request<{ questions: Question[] }>("/api/questions", { method: "POST", body: JSON.stringify({ questions }) }); }
 export function updateCloudQuestion(question: Question) { return request<{ question: Question }>(`/api/questions/${encodeURIComponent(question.id)}`, { method: "PUT", body: JSON.stringify({ question }) }); }
