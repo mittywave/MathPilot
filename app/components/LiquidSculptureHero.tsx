@@ -104,6 +104,8 @@ export interface EngineOptions {
   imgBg: [number, number, number] | null
   /** 0 – 2: how much the whole sculpture flows while the cursor is over it */
   liquid: number
+  /** the most canvas px per CSS px: 2 by default, 1.5 on low-power devices */
+  maxDpr?: number
 }
 
 /** What the engine samples its grains from. */
@@ -1062,7 +1064,7 @@ export class LiquidEngine {
       }
       this.clearFlow()
     }
-    let dpr = Math.min(window.devicePixelRatio || 1, this.lowPower ? 1.5 : 2)
+    let dpr = Math.min(window.devicePixelRatio || 1, this.lowPower ? 1.5 : 2, this.opts.maxDpr ?? 2)
     const px = this.cssW * this.cssH * dpr * dpr
     if (px > 4.5e6) dpr = Math.max(1, Math.sqrt(4.5e6 / (this.cssW * this.cssH)))
     const w = Math.round(this.cssW * dpr)
@@ -1360,31 +1362,37 @@ export class LiquidEngine {
     gl.bindVertexArray(this.vao)
     gl.disable(gl.BLEND)
 
-    const I = this.pImg
-    gl.useProgram(I.p)
-    gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, this.imgTex)
-    gl.uniform1i(I.u.uImg, 0)
-    gl.activeTexture(gl.TEXTURE1)
-    gl.bindTexture(gl.TEXTURE_2D, this.flowTex[this.flowIdx])
-    gl.uniform1i(I.u.uFlow, 1)
-    gl.uniform2f(I.u.uRes, this.cssW, this.cssH)
-    gl.uniform1f(I.u.uDpr, dpr)
-    gl.uniform4f(I.u.uRect, r.x, r.y, r.w, r.h)
-    gl.uniform3f(I.u.uBg, br, bg, bb)
-    gl.uniform3f(I.u.uImgBg, ir, ig, ib)
-    gl.uniform2f(I.u.uMouse, mx, my)
-    gl.uniform1f(I.u.uPresence, pres)
-    gl.uniform1f(I.u.uRadius, this.radiusPx())
-    gl.uniform1f(I.u.uStrength, this.strength())
-    gl.uniform1f(I.u.uTime, this.time)
-    gl.uniform1f(I.u.uAmbient, amb)
-    gl.uniform1f(I.u.uIntroVis, introVis)
-    gl.uniform1f(I.u.uRest, rest)
-    gl.uniform1f(I.u.uAlphaMode, this.alphaMode ? 1 : 0)
-    gl.uniform1f(I.u.uShow, Math.max(showA, showB))
-    gl.uniform1f(I.u.uAlpha, alpha)
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    if (rest >= 1) {
+      // the grains carry the whole picture even at rest ("particles"): the picture pass would only clear the canvas
+      gl.clearColor(0, 0, 0, 0)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+    } else {
+      const I = this.pImg
+      gl.useProgram(I.p)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, this.imgTex)
+      gl.uniform1i(I.u.uImg, 0)
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, this.flowTex[this.flowIdx])
+      gl.uniform1i(I.u.uFlow, 1)
+      gl.uniform2f(I.u.uRes, this.cssW, this.cssH)
+      gl.uniform1f(I.u.uDpr, dpr)
+      gl.uniform4f(I.u.uRect, r.x, r.y, r.w, r.h)
+      gl.uniform3f(I.u.uBg, br, bg, bb)
+      gl.uniform3f(I.u.uImgBg, ir, ig, ib)
+      gl.uniform2f(I.u.uMouse, mx, my)
+      gl.uniform1f(I.u.uPresence, pres)
+      gl.uniform1f(I.u.uRadius, this.radiusPx())
+      gl.uniform1f(I.u.uStrength, this.strength())
+      gl.uniform1f(I.u.uTime, this.time)
+      gl.uniform1f(I.u.uAmbient, amb)
+      gl.uniform1f(I.u.uIntroVis, introVis)
+      gl.uniform1f(I.u.uRest, rest)
+      gl.uniform1f(I.u.uAlphaMode, this.alphaMode ? 1 : 0)
+      gl.uniform1f(I.u.uShow, Math.max(showA, showB))
+      gl.uniform1f(I.u.uAlpha, alpha)
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    }
 
     // particles are invisible at rest in "image" mode: skip them entirely
     if (!this.n || (!this.stateDirty && rest === 0 && introVis >= 1 && morphVis <= 0.001)) return

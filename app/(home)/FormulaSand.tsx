@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useRef, type RefObject } from "react";
-import katex from "katex";
 import { LiquidEngine, type EngineOptions, type Rect, type SculptureMorph, type SculpturePiece, type SculptureShape } from "../components/LiquidSculptureHero";
 
 // Behind the login window: the formulas that changed the world (Ian Stewart's seventeen equations and a few more),
@@ -241,6 +240,8 @@ const nextFrame = () => new Promise((done) => requestAnimationFrame(done));
 
 /** Typesets every formula off screen and reads it back once KaTeX's fonts are in. */
 async function typeset(measure: CanvasRenderingContext2D) {
+  // KaTeX comes with the window, not with the page
+  const { default: katex } = await import("katex");
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true");
   host.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;white-space:nowrap;line-height:normal;z-index:-1";
@@ -281,13 +282,17 @@ const options = (mode: "light" | "dark", reducedMotion: boolean): EngineOptions 
   streaks: true,
   restStyle: "particles",
   returnSpeed: 1,
-  ambient: false,
-  ambientIntensity: 1,
+  // the formulas float on their own: once the sand has settled, the engine only redraws them, every other frame, with
+  // no ambient field stirring them
+  ambient: true,
+  ambientIntensity: 0,
   speed: 1,
   intro: true,
   reducedMotion,
   bg: mode === "dark" ? [0.067, 0.067, 0.063] : [0.922, 0.914, 0.898],
   imgBg: null,
+  // the grains stay distinct at 1.5 canvas px per CSS px (the ∞ takes up to 2), on a third fewer pixels
+  maxDpr: 1.5,
 });
 
 /** The field of formulas, a canvas fixed behind the login window (`clear` is kept free of formulas). */
@@ -322,7 +327,7 @@ export default function FormulaSand({ mode, clear }: { mode: "light" | "dark"; c
         piece.x = still ? 0 : reach * (0.75 * Math.sin(speed[0] * t + phase[0]) + 0.25 * Math.sin(speed[1] * t + phase[1]));
         piece.y = still ? 0 : reach * 0.8 * (0.75 * Math.sin(speed[2] * t + phase[2]) + 0.25 * Math.sin(speed[3] * t + phase[3]));
       }
-      return { from: field, to: field, mix: 0, moving: !still };
+      return { from: field, to: field, mix: 0 };
     };
 
     const measure = document.createElement("canvas").getContext("2d")!;
@@ -360,8 +365,10 @@ export default function FormulaSand({ mode, clear }: { mode: "light" | "dark"; c
       window.clearTimeout(relayout);
       relayout = window.setTimeout(() => { sand.setOptions({ intro: false }); build().catch(() => {}); }, 250);
     };
-    const onMove = (event: PointerEvent) => sand.pointer("move", event.clientX, event.clientY, event.pointerType === "touch");
-    const onDown = (event: PointerEvent) => sand.pointer("down", event.clientX, event.clientY, event.pointerType === "touch");
+    // over the glass of the window the cursor is off the sand: the formulas settle and float on
+    const onSand = (event: PointerEvent) => !clear.current?.contains(event.target as Node);
+    const onMove = (event: PointerEvent) => sand.pointer(onSand(event) ? "move" : "leave", event.clientX, event.clientY, event.pointerType === "touch");
+    const onDown = (event: PointerEvent) => { if (onSand(event)) sand.pointer("down", event.clientX, event.clientY, event.pointerType === "touch"); };
     const onUp = (event: PointerEvent) => sand.pointer("up", event.clientX, event.clientY, event.pointerType === "touch");
     const onLeave = (event: PointerEvent) => sand.pointer("leave", event.clientX, event.clientY, event.pointerType === "touch");
     const onVisible = () => sand.setVisible(!document.hidden);
