@@ -362,10 +362,12 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       eyebrow="MathPilot — 数学教研工作台"
       headline={"教与学，\n循环不息。"}
       headlineAccent="循环不息。"
-      // no line beside the headline: the buttons stand on their own (left out, the component shows its sample copy)
+      // nothing beside the headline, no buttons and no credit: the nav and the closing lead on (left out, the component
+      // shows its own sample copy and buttons)
       body=""
-      primaryCta={{ label: "进入工作台", href: workbench }}
-      secondaryCta={{ label: "看看这个闭环", href: "#loop" }}
+      primaryCta={{ label: "", href: "" }}
+      secondaryCta={{ label: "", href: "" }}
+      showCredit={false}
       hint="移动鼠标，拨动这道 ∞"
       hintTouch="触碰这道 ∞"
       backdropText="教学"
