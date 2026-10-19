@@ -1315,6 +1315,8 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 .paper-folder-name{display:flex;align-items:center;flex:1;min-width:0;gap:8px;padding:10px 1px;background:transparent;border:0;color:inherit;text-align:left;font-size:14px}
 .paper-folder-name small{margin-left:auto;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 .paper-folder-chevron{width:23px;flex-shrink:0;border:0;padding:5px 0;background:transparent;color:var(--muted);font-size:20px}
+.paper-folder-chevron span{display:inline-block;transition:transform .4s var(--directory-ease)}
+.paper-folder-chevron[aria-expanded="true"] span{transform:rotate(90deg)}
 .paper-folder-icon{width:23px;flex-shrink:0;text-align:center;color:var(--muted)}
 .paper-folder-tree{scrollbar-gutter:stable;padding-right:12px}
 .paper-folder-row .basket-more{flex-shrink:0}
@@ -1417,7 +1419,7 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
   .library-workspace[data-directory-motion] .library-sidebar,.library-workspace[data-directory-motion] .library-directory,.library-workspace[data-directory-motion] .directory-chevron,.library-workspace[data-directory-motion] .directory-rail-label,.app-shell:has(>.library-workspace) .paper-dock{transition:none}
   .directory-glass{display:none}
   .directory-closed .library-directory{filter:none}
-  .tree-fold svg,.tree-children,.tree-children-content{transition:none}
+  .tree-fold svg,.paper-folder-chevron span,.tree-children,.tree-children-content{transition:none}
   .tree-children[data-directory-motion]::after{display:none}
   .tree-children[data-open="false"]>.tree-children-content{filter:none}
 }
