@@ -221,7 +221,7 @@ export default function SmartPaper() {
   }
 
   const paths = plan && library ? plan.brief.categoryIds.map((id) => categoryPath(library.modules, library.categories, id)).filter(Boolean) : [];
-  return <><SiteHeader active={fromStudent ? "students" : "tools"} user={user ?? null} loading={user === undefined} trail={fromStudent && student ? [{label:"学生档案",href:"/?view=wrong-book"},{label:student.name,href:`/?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:"智能组卷"}] : [{label:"工具箱",href:"/tools"},{label:"智能组卷"}]} /><main className="smart-paper">
+  return <><SiteHeader active={fromStudent ? "students" : "tools"} user={user ?? null} loading={user === undefined} trail={fromStudent && student ? [{label:"学生档案",href:"/library?view=wrong-book"},{label:student.name,href:`/library?view=wrong-book&studentId=${encodeURIComponent(student.id)}&tab=homework`},{label:"智能组卷"}] : [{label:"工具箱",href:"/tools"},{label:"智能组卷"}]} /><main className="smart-paper">
     <aside className="smart-paper-panel">
       {user === null ? <p className="smart-paper-note">{error || "请先在题库页登录，再使用智能组卷。"}</p> : <>
         {draftStatus && <p className="smart-paper-note" role="status">{draftStatus}</p>}

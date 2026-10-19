@@ -311,7 +311,7 @@ def word_export(page,app,out):
     mod=app.ok('/api/modules','POST',{'module':{'name':'V2 验收题库'}})['module']
     # Real application data, safe synthetic material. Fraction + picture exercise native Word structures.
     q={'moduleId':mod['id'],'categoryId':mod['id'],'type':'单选题','difficulty':'基础','stem':'合成验收：计算 $x=\\frac{1}{2}$。','options':['$\\frac{1}{2}$','1','2','4'],'answer':'A','analysis':'分数保持为可编辑公式：$\\frac{1}{2}$。','source':'V2 本地验收','tags':[],'contentImages':[word_image()],'imageLayout':'right','createdAt':1,'updatedAt':1}
-    app.ok('/api/questions','POST',{'question':q});page.goto(app.base+'/');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.locator('.tree-row.module-root',has_text='V2 验收题库').click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('button',name='生成 Word',exact=True)).to_be_visible()
+    app.ok('/api/questions','POST',{'question':q});page.goto(app.base+'/library');expect(page.locator('.user-chip')).to_contain_text(ADMIN);page.locator('.tree-row.module-root',has_text='V2 验收题库').click();expect(page.locator('.question-card')).to_have_count(1);page.locator('.question-card button.check').click();page.locator('.export-button').click();expect(page.get_by_role('button',name='生成 Word',exact=True)).to_be_visible()
     with page.expect_download() as dl:page.get_by_role('button',name='生成 Word',exact=True).click()
     path=out/'actual-page-export.docx';dl.value.save_as(str(path));page.screenshot(path=str(out/'question-bank-after-word-export.png'),full_page=True)
     with zipfile.ZipFile(path) as z:

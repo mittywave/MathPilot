@@ -1,9 +1,8 @@
 "use client";
-/* eslint-disable @next/next/no-html-link-for-pages -- client-only vinext navigation */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SiteHeader } from '../../components/SiteHeader';
 import { jobPageImage, jobsApi, postJson, RecognitionJobTable, uploadJobPage, useRecognitionJobs } from '../../components/RecognitionJobs';
-import { fetchMe } from '../../../lib/api-client';
+import { fetchMe, loginPath } from '../../../lib/api-client';
 import type { AuthUser } from '../../../lib/types';
 import { studioInputMode, type StudioDraft, type StudioInputMode } from '../../../lib/answer-studio';
 import type { StudioJob } from '../../../lib/server/answer-studio-jobs';
@@ -178,7 +177,7 @@ export default function AnswerStudioPage() {
   const missing=[!title.trim()&&{label:'资料名称',target:'.studio-controls .field-label input'},!saved&&!inputMode&&{label:'原题或答案',target:'#studio-question-files-entry'}].filter(field=>field!==false);
   return <><SiteHeader active="tools" user={user} loading={!loaded} trail={[{label:'工具箱',href:'/tools'},{label:'文件转录'}]} onSignOut={async exit=>{if(busy){setNotice('请等上传或生成 Word 完成后再退出登录。');setFailed(true);return;}await exit();}} />
     {transcriptions.confirmNode}
-    {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href="/">返回题库登录</a></main>:<main className="answer-studio">
+    {!loaded?<main className="homework-loading">正在读取…</main>:!user?<main className="homework-loading"><p>{failed ? notice : "请先登录 MathPilot。"}</p><a href={loginPath("/tools/answer-studio")}>去登录</a></main>:<main className="answer-studio">
     <fieldset className="studio-fields studio-workspace" disabled={busy}>
       <aside className="studio-controls">
         <label className="field-label"><span className="field-heading">资料名称</span><input value={title} onChange={e=>{changed();setTitle(e.target.value);}} placeholder="例如：第一讲 三角形的外心"/></label>

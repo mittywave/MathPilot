@@ -54,7 +54,7 @@ const stored = (owner, value) => page.evaluate(([owner, value]) => new Promise((
 }), [owner, value]);
 try {
   assert.equal((await api('/api/auth/me')).user.local, true);
-  await page.goto(base);
+  await page.goto(base + '/library');
   const figure = await page.evaluate(() => {
     const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
     const c = canvas.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, 320, 180); c.strokeStyle = '#222'; c.lineWidth = 2;
@@ -247,7 +247,7 @@ try {
   await page.getByRole('button', { name: /登录.*注册/ }).waitFor();
   assert.equal((await stored('local-admin')).title, '结构化组卷验收', 'sign out does not erase the first account draft');
   await page.unroute('**/api/auth/me');
-  await page.goto(base + '/?view=selected'); await outline.waitFor(); await ready();
+  await page.goto(base + '/library?view=selected'); await outline.waitFor(); await ready();
   assert.equal(await titleInput().inputValue(), '结构化组卷验收');
   assert.equal(await page.locator('.basket-outline-question').count(), 6);
   assert.equal((await stored('basket-test-other-owner')).title, '另一个账号的草稿');

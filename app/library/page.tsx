@@ -2,31 +2,31 @@
 
 import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { CategoryTree, type TreeLight } from "./components/CategoryTree";
-import { DocxContent } from "./components/DocxContent";
-import { MathText } from "./components/MathText";
-import { StudioSolution } from "./components/StudioSolution";
-import { PaperMoreMenu } from "./components/PaperMoreMenu";
-import { useConfirm } from "./components/ConfirmDialog";
-import { useToast } from "./components/Toast";
-import { SiteHeader } from "./components/SiteHeader";
-import { AssignPlan, StudentHomework } from "./components/StudentHomework";
-import { homeworkApi } from "../lib/homework-api-client";
-import { StudentProfile } from "./components/StudentProfile";
-import { StudentReports } from "./components/StudentReports";
-import { WrongQuestionEvidence } from "./components/WrongQuestionEvidence";
-import WrongQuestionUpload from "./components/WrongQuestionUpload";
-import { QuestionBody } from "./components/QuestionBody";
-import { BasketOutline } from "./components/BasketOutline";
-import LibraryKnowledgeMap, { KnowledgeMapRail, type KnowledgeMapFocus } from "./components/knowledge-graph/LibraryKnowledgeMap";
-import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./components/QuestionEntry";
-import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../lib/paper-basket";
-import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../lib/export-word";
-import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../lib/library-tree";
-import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, login, logout, register, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../lib/api-client";
-import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../lib/alevel-page-locale.mjs";
-import { randomClientId } from "../lib/client-random-id.mjs";
-import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../lib/types";
+import { CategoryTree, type TreeLight } from "../components/CategoryTree";
+import { DocxContent } from "../components/DocxContent";
+import { MathText } from "../components/MathText";
+import { StudioSolution } from "../components/StudioSolution";
+import { PaperMoreMenu } from "../components/PaperMoreMenu";
+import { useConfirm } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
+import { SiteHeader } from "../components/SiteHeader";
+import { AssignPlan, StudentHomework } from "../components/StudentHomework";
+import { homeworkApi } from "../../lib/homework-api-client";
+import { StudentProfile } from "../components/StudentProfile";
+import { StudentReports } from "../components/StudentReports";
+import { WrongQuestionEvidence } from "../components/WrongQuestionEvidence";
+import WrongQuestionUpload from "../components/WrongQuestionUpload";
+import { QuestionBody } from "../components/QuestionBody";
+import { BasketOutline } from "../components/BasketOutline";
+import LibraryKnowledgeMap, { KnowledgeMapRail, type KnowledgeMapFocus } from "../components/knowledge-graph/LibraryKnowledgeMap";
+import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../components/QuestionEntry";
+import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
+import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../../lib/export-word";
+import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../lib/library-tree";
+import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
+import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
+import { randomClientId } from "../../lib/client-random-id.mjs";
+import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../../lib/types";
 
 // The sidebar is hidden on phones, so the student picker there also offers creating a student.
 const NEW_STUDENT_OPTION = "__new_student__";
@@ -42,7 +42,7 @@ const LIBRARY_PAGE = 40;
 // A new list paints its first few cards on their own, so the page shows sooner; the rest of the first 40 follow below.
 const LIBRARY_FIRST = 8;
 // 组卷篮 opens 快速排版 in place; the typesetter loads only then.
-const Typesetter = lazy(() => import("./tools/typeset/Typesetter"));
+const Typesetter = lazy(() => import("../tools/typeset/Typesetter"));
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
 
@@ -138,13 +138,6 @@ export default function Home() {
   const [typesetKept, setTypesetKept] = useState<{ ids: string; settings: TypesetSettings } | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authDialog, setAuthDialog] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authInvite, setAuthInvite] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [moduleDialog, setModuleDialog] = useState<"new" | "manage" | null>(null);
   const [moduleDraft, setModuleDraft] = useState<LibraryModule | null>(null);
   const [moduleName, setModuleName] = useState("");
@@ -493,7 +486,9 @@ export default function Home() {
     setBasketWrongQuestions((current) => [...current.filter((item) => !snapshots.some((question) => question.id === item.id)), ...snapshots]);
   }
 
-  const requireLogin = () => { if (authUser) { if (draftOwner !== authUser.id) { show({ text: "正在读取本机组卷草稿，请稍候", tone: "success" }); return false; } return true; } setAuthMode("login"); setAuthDialog(true); setAuthError("请先登录后再使用这项功能"); return false; };
+  // signing in happens on the login page, which brings the teacher back to this very view
+  const goLogin = () => window.location.assign(loginPath(`${window.location.pathname}${window.location.search}`));
+  const requireLogin = () => { if (authUser) { if (draftOwner !== authUser.id) { show({ text: "正在读取本机组卷草稿，请稍候", tone: "success" }); return false; } return true; } goLogin(); return false; };
   function openLibrary() {
     setShowSelected(false); setShowWrongBook(false);
   }
@@ -606,16 +601,6 @@ export default function Home() {
   };
   const openEditQuestion = (question: Question) => { if (!requireLogin() || !question.canEdit) { show({ text: "当前题库为只读", tone: "error" }); return; } const questionModule = modules.find((item) => item.id === question.moduleId); if (questionModule && questionModule.id !== activeModuleId) { setActiveModuleId(questionModule.id); setPaperTitle(`${questionModule.name}专项练习`); setActiveCategory(question.categoryId); } setEntryDraft(editableQuestionDraft(question, questionModule)); };
 
-  async function submitAuth() {
-    setAuthSubmitting(true); setAuthError("");
-    try {
-      const result = authMode === "register" ? await register(authEmail, authPassword, authInvite) : await login(authEmail, authPassword);
-      setAuthUser(result.user); setAuthDialog(false); setAuthPassword(""); setAuthInvite("");
-      const data = await fetchLibrary(); applyLibrary(data, true); await restoreLocalBasket(result.user, data.questions);
-      show({ text: authMode === "register" ? "注册成功，已登录云端题库" : "登录成功", tone: "success" });
-    } catch (error) { setAuthError(error instanceof Error ? error.message : "操作失败，请重试"); }
-    finally { setAuthSubmitting(false); }
-  }
 
   async function signOut() {
     try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setIncludeAnswers(true); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
@@ -858,7 +843,7 @@ export default function Home() {
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading && !authUser} locale={pageLocale} basketCount={selectedIds.length}
         title={showWrongBook && (activeClassName || activeStudent) ? `${activeClassName ?? activeStudent?.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
-        actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={() => { setAuthMode("login"); setAuthError(""); setAuthDialog(true); }}>{pageCopy.loginRegister}</button>} />
+        actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={goLogin}>{pageCopy.loginRegister}</button>} />
 
       <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : !showWrongBook ? `library-workspace${directoryOpen ? "" : " directory-closed"}` : ""}`} data-directory-motion={directoryMotion ?? undefined}>
         {(!showSelected || showWrongBook) && <aside className={`sidebar${showWrongBook ? "" : " library-sidebar"}`}>
@@ -877,7 +862,7 @@ export default function Home() {
           <div id="library-directory" className="library-directory" inert={!directoryOpen} aria-hidden={!directoryOpen}>
           <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
-          {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={() => { setAuthMode("login"); setAuthDialog(true); }}>{pageCopy.loginToDownload}</button>}
+          {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
           {directoryMotion && <div key={directoryMotion} className="directory-glass" aria-hidden="true" onAnimationEnd={(event) => { if (event.animationName === "directory-glass-fade") setDirectoryMotion(null); }}>
             {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ "--x": `${18 + (index * 37) % 76}%`, "--y": `${7 + index * 5}%`, "--size": `${4 + (index * 7) % 10}px`, "--drift": `${(index % 2 ? 1 : -1) * (12 + index % 5 * 5)}px`, "--delay": `${index % 4 * 24}ms`, "--turn": `${index * 31}deg` } as CSSProperties} />)}
@@ -1039,16 +1024,6 @@ export default function Home() {
       {wrongUploadOpen && activeStudent && <WrongQuestionUpload student={activeStudent} onClose={() => setWrongUploadOpen(false)} onGraded={(submission) => { void loadStudents(submission.studentId); if (submission.status !== "published") return; const archived = submission.gradingSummary?.archived ?? 0; setWrongUploadOpen(false); show({ text: archived ? `已收录 ${archived} 道错题` : "批改完成，没有需要收录的错题", tone: "success" }); }} />}
 
 
-      {authDialog && <div className="modal-backdrop"><section className="modal auth-modal" role="dialog" aria-modal="true" aria-label={authMode === "login" ? "登录" : "注册"}>
-        <div className="modal-head"><div><span className="eyebrow">MathPilot</span><h2>{authMode === "login" ? "邮箱登录" : "使用邀请码注册"}</h2></div><button className="close" onClick={() => setAuthDialog(false)}>×</button></div>
-        <div className="auth-tabs"><button className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthError(""); }}>登录</button><button className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthError(""); }}>注册</button></div>
-        <label className="field">邮箱<input type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="name@example.com" /></label>
-        <label className="field">密码<input type="password" autoComplete={authMode === "login" ? "current-password" : "new-password"} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="至少 8 个字符" onKeyDown={(event) => { if (event.key === "Enter") submitAuth(); }} /></label>
-        {authMode === "register" && <label className="field">邀请码<input value={authInvite} onChange={(event) => setAuthInvite(event.target.value)} placeholder="请输入管理员提供的邀请码" onKeyDown={(event) => { if (event.key === "Enter") submitAuth(); }} /></label>}
-        {authError && <div className="recognition-error"><b>{authMode === "login" ? "登录未完成" : "注册未完成"}</b><span>{authError}</span></div>}
-        <p className="auth-note">访客无需登录即可浏览题目；注册后可以录题、组卷和下载 Word。普通会员只能修改自己录入的题目。</p>
-        <div className="modal-actions"><button className="secondary" onClick={() => setAuthDialog(false)}>取消</button><button className="primary-button" disabled={authSubmitting || !authEmail || !authPassword || (authMode === "register" && !authInvite)} onClick={submitAuth}>{authSubmitting ? "请稍候…" : authMode === "login" ? "登录" : "注册并登录"}</button></div>
-      </section></div>}
       {confirmDialog}
       {toastNode}
     </main>

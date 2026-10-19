@@ -57,7 +57,7 @@ try {
     const request={id:r.request().postDataJSON().question.id,status:r.status()}; result.requests.push(request);
     if(r.status()>=400)request.error=await r.json().catch(()=>({}));
   }});
-  await page.goto(base+'/');
+  await page.goto(base+'/library');
   await expect(page.locator('.user-chip')).toContainText('本机管理员');
   // 新建模块 sits in the sidebar heading's 管理模块 menu.
   await page.getByRole('button',{name:'管理模块',exact:true}).first().click();

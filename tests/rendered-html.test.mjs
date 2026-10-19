@@ -13,13 +13,13 @@ const { orthogonalizeCoordinatePlan, printReadyInkColor, regularizeQuadraticFunc
 import { ensureWordMathSettings, fullSizeInlineFractions, wordMathFractionDepth } from "../lib/word-math-sizing.mjs";
 import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
 
-async function render() {
+async function render(path = "/library") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${path}`, {
       headers: { accept: "text/html" },
     }),
     {
@@ -54,6 +54,16 @@ test("server-renders the cloud question-bank guest shell", async () => {
   assert.doesNotMatch(html, /Starter Project|Your site is taking shape/);
 });
 
+test("opens on the product introduction and sends old library links to /library", async () => {
+  const home = await render("/");
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /教与学/);
+  const old = await render("/?view=wrong-book&tab=homework");
+  assert.equal(old.status, 307);
+  const target = new URL(old.headers.get("location") ?? "", "http://localhost");
+  assert.equal(`${target.pathname}${target.search}`, "/library?view=wrong-book&tab=homework");
+});
+
 test("keeps every privileged operation behind server-side authentication", async () => {
   const auth = await readFile(new URL("../lib/server/auth.ts", import.meta.url), "utf8");
   const questionRoute = await readFile(new URL("../app/api/questions/[id]/route.ts", import.meta.url), "utf8");
@@ -74,7 +84,7 @@ test("keeps every privileged operation behind server-side authentication", async
 });
 
 test("keeps the select-all control on the right without filter scroll chrome", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = await readFile(new URL("../app/library/page.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.doesNotMatch(page, /local-badge/);
@@ -85,7 +95,7 @@ test("keeps the select-all control on the right without filter scroll chrome", a
 });
 
 test("keeps file import inside the new-question flow only", async () => {
-  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = await readFile(new URL("../app/library/page.tsx", import.meta.url), "utf8");
   const entry = await readFile(new URL("../app/components/QuestionEntry.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 

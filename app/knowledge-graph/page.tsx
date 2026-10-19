@@ -1,11 +1,11 @@
 "use client";
 
-/* eslint-disable @next/next/no-html-link-for-pages -- vinext beta currently breaks next/link RSC prefetch on these client-only pages. */
 
 import "./knowledge-graph.css";
 import { PaperMoreMenu } from "../components/PaperMoreMenu";
 import { useToast } from "../components/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loginPath } from "../../lib/api-client";
 import { homeworkApi } from "../../lib/homework-api-client";
 import { knowledgeGraphApi } from "../../lib/knowledge-graph-api-client";
 import {
@@ -275,7 +275,7 @@ export default function KnowledgeGraphPage() {
   }
 
   if (loading) return <main className="kg-shell kg-loading"><p>正在打开知识图谱…</p></main>;
-  if (!user) return <main className="kg-shell kg-loading"><h1>请先登录教师账号</h1><a href="/">返回题库登录</a></main>;
+  if (!user) return <main className="kg-shell kg-loading"><h1>请先登录教师账号</h1><a href={loginPath("/knowledge-graph")}>去登录</a></main>;
 
   const canEdit = Boolean(overview?.permissions.canEdit);
   const nextVersion = (editor.session?.published.version ?? version) + 1;
@@ -294,7 +294,7 @@ export default function KnowledgeGraphPage() {
 
     <header className="kg-top" data-inset="auto">
       <div className="kg-top-left">
-        <a className="kg-brand" href="/" title="返回题库" aria-label="返回题库"><i aria-hidden="true">‹</i><span>题</span></a>
+        <a className="kg-brand" href="/library" title="返回题库" aria-label="返回题库"><i aria-hidden="true">‹</i><span>题</span></a>
         <div className="kg-top-title">
           <select className="kg-graph-select" value={graphId} aria-label="切换知识图谱" title={title} onChange={(event) => void switchGraph(event.target.value)}>
             {KNOWLEDGE_GRAPHS.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
