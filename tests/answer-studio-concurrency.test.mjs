@@ -63,6 +63,7 @@ function jobFixture(t, recognize = async () => ({ status: 200, text: JSON.string
   sql.exec(readFileSync(resolve(root,'migrations/0037_studio_jobs.sql'),'utf8'));
   sql.exec(readFileSync(resolve(root,'migrations/0038_studio_jobs_mode_from_pages.sql'),'utf8'));
   sql.exec(readFileSync(resolve(root,'migrations/0039_studio_jobs_kind.sql'),'utf8'));
+  sql.exec(readFileSync(resolve(root,'migrations/0043_papers.sql'),'utf8'));
   const user = { id: 'owner' }, objects = new Map(), messages = [], requests = [];
   const bindings = {
     DB: { prepare(query) { return { bind(...values) { return {

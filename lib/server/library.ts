@@ -323,14 +323,8 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
   await validateModule(context, moduleId);
   const categoryId = await validateCategory(context, moduleId, String(raw.categoryId || moduleId));
   const question = await prepareQuestion({ ...raw, moduleId, categoryId: categoryId ?? moduleId }, user, context);
-  const payload = JSON.stringify(question);
   const db = appEnv().DB;
-  const result = await db.prepare(`INSERT INTO library_questions_v2
-    (row_id, source_id, library_id, publication_id, module_source_id, category_source_id,
-     payload_json, content_hash, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
-    .bind(rowId(context, "question", question.id), question.id, context.libraryId, context.publicationId,
-      moduleId, categoryId, payload, await sha256Text(payload), user.id, question.createdAt, question.updatedAt).run();
+  const result = await (await questionInsertStatement(question, user, context)).run();
   const code = await db.prepare("SELECT printf('%04d', number) AS code FROM question_codes WHERE question_id = ?")
     .bind(question.id).first<{ code: string }>();
   if (!code) throw new Error("试题编号分配失败，请刷新后重试");
@@ -360,6 +354,17 @@ export async function createScopedQuestion(raw: Question, user: AuthUser) {
     return { ...stored, code: code.code, createdByEmail: user.email, canEdit: true };
   }
   return { ...question, moduleId, categoryId: categoryId ?? moduleId, createdBy: user.id, createdByEmail: user.email, canEdit: true };
+}
+
+/** Ordinary entry and a whole-paper transaction share the same insert and ID trigger. */
+export async function questionInsertStatement(question: Question, user: AuthUser, context: LibraryContext) {
+  const payload = JSON.stringify(question);
+  return appEnv().DB.prepare(`INSERT INTO library_questions_v2
+    (row_id, source_id, library_id, publication_id, module_source_id, category_source_id,
+     payload_json, content_hash, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
+    .bind(rowId(context, "question", question.id), question.id, context.libraryId, context.publicationId,
+      question.moduleId, question.categoryId === question.moduleId ? null : question.categoryId, payload, await sha256Text(payload), user.id, question.createdAt, question.updatedAt);
 }
 
 // Quick typesetting and assignment use the same insertion path and permanent codes as manual entry.
@@ -468,14 +473,19 @@ export async function createScopedCategory(raw: Category, user: AuthUser) {
   const count = await appEnv().DB.prepare(`SELECT COUNT(*) AS count FROM library_categories_v2
     WHERE library_id = ? AND ${version} AND module_source_id = ?`)
     .bind(context.libraryId, ...versionBindings(context.publicationId), moduleId).first<{ count: number }>();
+  await (await categoryInsertStatement(category, user, context, Number(count?.count ?? 0))).run();
+  return category;
+}
+
+export async function categoryInsertStatement(category: Category, user: AuthUser, context: LibraryContext, sortOrder: number, ignoreExisting = false) {
+  const { name, moduleId, parentId } = category;
   const content = JSON.stringify({ name, moduleId, parentId });
-  await appEnv().DB.prepare(`INSERT INTO library_categories_v2
+  return appEnv().DB.prepare(`INSERT INTO library_categories_v2
     (row_id, source_id, library_id, publication_id, module_source_id, parent_source_id,
      name, sort_order, content_hash, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${ignoreExisting ? "ON CONFLICT(row_id) DO NOTHING" : ""}`)
     .bind(rowId(context, "category", category.id), category.id, context.libraryId, context.publicationId,
-      moduleId, parentId, name, Number(count?.count ?? 0), await sha256Text(content), user.id, category.createdAt).run();
-  return category;
+      moduleId, parentId, name, sortOrder, await sha256Text(content), user.id, category.createdAt);
 }
 
 export async function deleteScopedCategory(id: string, user: AuthUser) {
@@ -512,13 +522,18 @@ export async function createScopedModule(raw: Partial<LibraryModule>, user: Auth
     WHERE library_id = ? AND ${version}`).bind(context.libraryId, ...versionBindings(context.publicationId)).first<{ count: number }>();
   const now = Date.now();
   const createdModule: LibraryModule = { id: raw.id || crypto.randomUUID(), name, subtitle, sortOrder: Number(count?.count ?? 0), createdAt: now, updatedAt: now };
-  const content = JSON.stringify({ name, subtitle, sortOrder: createdModule.sortOrder });
-  await appEnv().DB.prepare(`INSERT INTO library_modules_v2
-    (row_id, source_id, library_id, publication_id, name, subtitle, sort_order,
-     content_hash, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(rowId(context, "module", createdModule.id), createdModule.id, context.libraryId, context.publicationId,
-      name, subtitle, createdModule.sortOrder, await sha256Text(content), user.id, now, now).run();
+  await (await moduleInsertStatement(createdModule, user, context)).run();
   return createdModule;
+}
+
+export async function moduleInsertStatement(createdModule: LibraryModule, user: AuthUser, context: LibraryContext, ignoreExisting = false) {
+  const { name, subtitle } = createdModule; const now = createdModule.createdAt;
+  const content = JSON.stringify({ name, subtitle, sortOrder: createdModule.sortOrder });
+  return appEnv().DB.prepare(`INSERT INTO library_modules_v2
+    (row_id, source_id, library_id, publication_id, name, subtitle, sort_order,
+     content_hash, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${ignoreExisting ? "ON CONFLICT(row_id) DO NOTHING" : ""}`)
+    .bind(rowId(context, "module", createdModule.id), createdModule.id, context.libraryId, context.publicationId,
+      name, subtitle, createdModule.sortOrder, await sha256Text(content), user.id, now, now);
 }
 
 export async function updateScopedModule(id: string, raw: Partial<LibraryModule>, user: AuthUser) {

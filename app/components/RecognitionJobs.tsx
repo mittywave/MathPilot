@@ -16,9 +16,9 @@ export async function jobsApi<T>(url: string, init?: RequestInit): Promise<T> {
 }
 export const postJson = (body: unknown): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 /** One page in source order: the full page for figures, and the copy the AI reads. */
-export async function uploadJobPage(jobId: string, page: Record<string, unknown> & { image: string }) {
+export async function uploadJobPage(jobId: string, page: Record<string, unknown> & { image: string }, endpoint = `/api/answer-studio/jobs/${jobId}/pages`) {
   const { image, ...meta } = page;
-  await jobsApi(`/api/answer-studio/jobs/${jobId}/pages`, postJson({ page: meta, image, recognizeImage: await resizeStudioImage(image) }));
+  await jobsApi(endpoint, postJson({ page: meta, image, recognizeImage: await resizeStudioImage(image) }));
 }
 export async function jobPageImage(jobId: string, pageId: string, label: string) {
   const response = await fetch(`/api/answer-studio/jobs/${jobId}/pages/${encodeURIComponent(pageId)}`);

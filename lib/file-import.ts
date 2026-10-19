@@ -6,6 +6,7 @@ import type { QuestionType } from "./types";
 
 export type StructuredDocxQuestion = {
   questionNumber: string;
+  section?: string;
   type: QuestionType;
   stem: string;
   stemParagraphs: string[];
@@ -154,7 +155,8 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   const questionEnd = answerBlockStart < 0 ? blocks.length : answerBlockStart;
   type ParsedQuestion = StructuredDocxQuestion & { firstParagraph: string; blocks: typeof blocks; heading: boolean };
   const questions: ParsedQuestion[] = [];
-  const parsedQuestion = (questionNumber: string, type: QuestionType, firstParagraph: string, heading: boolean, first: typeof blocks): ParsedQuestion => ({ questionNumber, type, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, contentImages: [], warnings: [], firstParagraph, blocks: first, heading });
+  let currentSection = "";
+  const parsedQuestion = (questionNumber: string, type: QuestionType, firstParagraph: string, heading: boolean, first: typeof blocks): ParsedQuestion => ({ questionNumber, section: currentSection, type, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, contentImages: [], warnings: [], firstParagraph, blocks: first, heading });
   let currentType: QuestionType | null = null; let currentQuestion: ParsedQuestion | null = null;
   for (let index = 0; index < questionEnd; index += 1) {
     const block = blocks[index];
@@ -162,7 +164,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     const heading = block.kind === "p" ? docxQuestionHeading(block.text, block.xml) : null;
     if (heading) { currentQuestion = parsedQuestion(`${heading.label} ${heading.number}`, "解答题", "", true, []); questions.push(currentQuestion); continue; }
     const detectedType = sectionQuestionType(block.text);
-    if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentQuestion = null; continue; }
+    if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentSection = block.text; currentQuestion = null; continue; }
     if (index > 0 && block.text === blocks[0]?.text) continue;
     if (currentQuestion?.heading && block.kind === "p" && docxTitleLine(block.text, block.xml)) { currentQuestion = null; continue; }
     const numberMatch = block.kind === "p" && !currentQuestion?.heading ? docxNumberedQuestion(block.text) : null;
@@ -254,7 +256,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     }
     if (!answers[question.questionNumber] && question.type === "解答题" && analyses[question.questionNumber]) answers[question.questionNumber] = "见解析";
   }
-  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets, ...(question.code ? { code: question.code } : {}) })) };
+  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, section: question.section, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets, ...(question.code ? { code: question.code } : {}) })) };
 }
 
 function waitForImages(root: HTMLElement) {
@@ -292,7 +294,8 @@ async function renderDocx(file: File, onProgress: (current: number, total: numbe
     const totalPages = sourceDocument.pageCount || 1;
     if (totalPages > MAX_PAGES) throw new Error(`文件共有约 ${totalPages} 页，当前一次最多导入 ${MAX_PAGES} 页`);
     onProgress(totalPages, totalPages);
-    return [{ pageNumber: 1, image: EMPTY_PAGE_IMAGE, sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }];
+    const heading = sourceDocument.paragraphs.slice(0, Math.max(0, sourceDocument.paragraphs.findIndex(paragraph => docxNumberedQuestion(paragraph)))).join("\n");
+    return [{ pageNumber: 1, image: EMPTY_PAGE_IMAGE, textHint: heading, sourceAnswers: sourceDocument.answers, sourceAnalyses: sourceDocument.analyses, sourceAnalysisXml: sourceDocument.analysisXml, sourceAnalysisAssets: sourceDocument.analysisAssets, sourceQuestionImages: sourceDocument.questionImages, sourceOptions: sourceDocument.options, sourceQuestions: sourceDocument.questions }];
   }
   const [{ renderAsync }, html2canvasModule] = await Promise.all([import("docx-preview"), import("html2canvas")]);
   const html2canvas = html2canvasModule.default;

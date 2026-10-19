@@ -1298,6 +1298,71 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 
 @media(min-width:851px) and (max-width:1279px){.workspace:not(.basket-workspace){grid-template-columns:220px minmax(0,1fr)}.library-content,.content:has(>.wrong-book-hero){padding:0 24px 60px}}
 
+/* Paper and knowledge directories are two faces of the same desktop sidebar. */
+.paper-view-toggle{display:inline-flex;align-items:center;gap:10px;padding:6px 0;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.paper-view-toggle span{font-size:17px;color:var(--green);transition:transform .2s}
+.paper-view-toggle:hover{color:var(--green)}
+.paper-view-toggle:hover span{transform:rotate(15deg)}
+.library-sidebar:has(.paper-directory-flip){perspective:1100px}
+.paper-directory-flip{position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform .52s cubic-bezier(.22,.8,.22,1)}
+.paper-directory-flip.is-papers{transform:rotateY(180deg)}
+.paper-directory-face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--page)}
+.paper-directory-front{transform:rotateY(0deg)}
+.paper-directory-back{transform:rotateY(180deg)}
+.paper-folder-row{display:flex;align-items:center;min-height:43px;gap:2px;border-radius:10px;color:var(--ink)}
+.paper-folder-row.active{background:var(--green-soft);color:var(--green)}
+.paper-folder-row:hover{background:color-mix(in srgb,var(--ink) 4%,var(--page))}
+.paper-folder-name{display:flex;align-items:center;flex:1;min-width:0;gap:8px;padding:10px 1px;background:transparent;border:0;color:inherit;text-align:left;font-size:14px}
+.paper-folder-name small{margin-left:auto;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.paper-folder-chevron{width:23px;flex-shrink:0;border:0;padding:5px 0;background:transparent;color:var(--muted);font-size:20px}
+.paper-folder-icon{width:23px;flex-shrink:0;text-align:center;color:var(--muted)}
+.paper-folder-tree{scrollbar-gutter:stable;padding-right:12px}
+.paper-folder-row .basket-more{flex-shrink:0}
+.paper-folder-tree>.tree-row{display:flex;justify-content:space-between}
+.paper-center{min-width:0}
+.paper-filters{gap:10px}
+.paper-filters .search{flex:1;min-width:200px}
+.paper-filters>select{max-width:175px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font-size:13px}
+.paper-list{display:grid;gap:14px}
+.paper-row{display:flex;align-items:center;gap:24px;padding:24px 26px;border:1px solid var(--line);border-radius:calc(16px*var(--radius-scale));background:var(--surface);box-shadow:0 3px 12px color-mix(in srgb,var(--ink) 3%,transparent)}
+.paper-row-main{flex:1;min-width:0}
+.paper-row h2{margin:0 0 12px;font-size:17px;font-weight:600;line-height:1.6}
+.paper-row h2 button{border:0;background:transparent;color:var(--ink);padding:0;text-align:left;font:inherit}
+.paper-row h2 button:hover:not(:disabled){color:var(--green)}
+.paper-row h2 button:disabled{opacity:1;cursor:default}
+.paper-row-meta{display:flex;flex-wrap:wrap;gap:5px 18px;color:var(--muted);font-size:12px;line-height:1.7}
+.paper-row-actions,.paper-detail-actions{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px 15px;flex-shrink:0}
+.paper-row-actions button,.paper-row-actions a,.paper-detail-actions button,.paper-detail-actions a{padding:5px 0;background:transparent;border:0;color:var(--green);font-size:13px;text-decoration:none;white-space:nowrap}
+.paper-job-state{margin:10px 0 0;font-size:13px;line-height:1.6;color:var(--amber)}
+.paper-job-state.error,.paper-error{color:var(--danger)}
+.paper-error{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+.paper-error button{margin-left:8px;font-size:13px;color:var(--green);border:0;background:transparent;text-decoration:underline}
+.paper-pagination{display:flex;justify-content:center;align-items:center;gap:20px;padding:28px}
+.paper-pagination button{padding:8px 14px;background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink)}
+.paper-pagination span{font-size:13px;color:var(--muted)}
+.paper-import-dialog,.paper-folder-dialog{max-width:520px}
+.paper-import-dialog>.subtext{margin:0 0 24px;line-height:1.8}
+.paper-import-dialog .field,.paper-folder-dialog .field,.paper-editor .field{display:grid;gap:7px;margin-bottom:16px;font-size:13px}
+.paper-import-dialog input,.paper-import-dialog select,.paper-folder-dialog input,.paper-folder-dialog select,.paper-editor input,.paper-editor select,.paper-editor textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit}
+.paper-editor{max-width:720px}
+.paper-editor.with-questions{max-width:1000px}
+.paper-metadata-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:15px 0 24px}
+.paper-metadata-fields label{display:grid;gap:7px;font-size:13px}
+.paper-draft-questions{display:grid;gap:12px}
+.paper-draft-question{padding:14px;border:1px solid var(--line);border-radius:10px}
+.paper-draft-question>summary{cursor:pointer;font-size:14px;color:var(--green)}
+.paper-draft-question[open]>summary{margin-bottom:18px}
+.paper-draft-question textarea{min-height:90px;resize:vertical}
+.paper-detail-header{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;margin-bottom:20px;padding:10px 0 20px;border-bottom:1px solid var(--line)}
+.paper-detail-header>h1{flex-basis:100%;margin:0;font-size:23px;line-height:1.55;font-weight:600}
+.paper-detail-actions{margin-left:auto}
+.paper-detail-actions>span{color:var(--muted);font-size:13px}
+.paper-missing{padding:24px;border:1px dashed var(--line);border-radius:12px;color:var(--muted);font-size:14px}
+.paper-return{padding-bottom:10px}
+.workspace[data-paper-flipping]>.content{animation:paper-center-change .52s ease both}
+@keyframes paper-center-change{0%{opacity:.45;transform:translateY(5px)}100%{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.paper-directory-flip,.paper-view-toggle span{transition:none}.workspace[data-paper-flipping]>.content{animation:none}}
+
 /* Keep the directory mounted at its full width: only its rail contracts, so labels never squash and scroll is retained. */
 @media(min-width:851px){
   .app-shell:has(>.library-workspace){--directory-full:260px;--directory-col:var(--directory-full);--directory-ease:cubic-bezier(.22,.8,.22,1);--directory-ms:.6s}
@@ -1403,3 +1468,9 @@ main p.missing-reason{grid-column:1/-1;margin:4px 0 0;color:var(--muted);font-si
 .handout-editor>.missing-reason{flex:none;margin:0;padding:2px 20px;text-align:right;border-bottom:1px solid var(--line)}
 main:not(.kg-shell) select:not([multiple]){appearance:none;padding-right:30px;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px;background-repeat:no-repeat}
 input[type="checkbox"],input[type="radio"]{accent-color:var(--accent-strong)}
+
+/* These transforms must follow the generic directory folding rules. */
+.library-directory.paper-directory-front{transform:rotateY(0deg)}
+.library-directory.paper-directory-back{transform:rotateY(180deg)}
+.directory-closed .paper-directory-front{transform:translateX(-28px)}
+.directory-closed .paper-directory-back{transform:translateX(-28px) rotateY(180deg)}

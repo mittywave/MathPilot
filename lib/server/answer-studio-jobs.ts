@@ -81,7 +81,7 @@ function bytesDataUrl(bytes: ArrayBuffer) {
 }
 
 export async function listStudioJobs(user: AuthUser, kind: unknown) {
-  const rows = await db().prepare("SELECT * FROM studio_jobs WHERE owner_user_id = ? AND kind = ? ORDER BY created_at DESC LIMIT 50").bind(user.id, kindOf(kind)).all<JobRow>();
+  const rows = await db().prepare("SELECT * FROM studio_jobs WHERE owner_user_id = ? AND kind = ? AND NOT EXISTS (SELECT 1 FROM exam_papers p WHERE p.job_id=studio_jobs.id) ORDER BY created_at DESC LIMIT 50").bind(user.id, kindOf(kind)).all<JobRow>();
   return rows.results.map(job);
 }
 /** The nav badges (工具箱 for transcriptions, 题库 for imports): jobs really in progress, queued or running and not stalled. */
@@ -142,7 +142,9 @@ async function addImportPage(user: AuthUser, row: JobRow, input: { page?: unknow
     || (page.textHint !== undefined && typeof page.textHint !== "string") || (page.documentSection !== undefined && page.documentSection !== "questions" && page.documentSection !== "answers")) throw badRequest("页面信息无效");
   const full = dataUrlBytes(input.image), recognize = dataUrlBytes(input.recognizeImage);
   const draft = await readImport(row.id);
-  if (draft.pages.some(item => item.hash === page.hash)) return job(row);
+  const paper = await (await import("./papers")).paperForJob(row.id);
+  if (draft.pages.some(item => paper ? item.id === page.id && item.hash === page.hash : item.hash === page.hash)) return job(row);
+  if (paper && draft.pages.some((item: LibraryImportPage) => item.id === page.id)) throw badRequest("页面编号已存在，但内容不同，请重新上传试卷");
   await bucket().put(imageKey(row.id, page.id, "full"), full, { httpMetadata: { contentType: "image/jpeg" } });
   await bucket().put(imageKey(row.id, page.id, "recognize"), recognize, { httpMetadata: { contentType: "image/jpeg" } });
   draft.pages.push({ id: page.id, page: page.page!, name: page.name.slice(0, 200), hash: page.hash, ...(page.textHint ? { textHint: page.textHint.slice(0, 24_000) } : {}), ...(page.documentSection ? { documentSection: page.documentSection } : {}) });
@@ -156,7 +158,10 @@ async function addImportPage(user: AuthUser, row: JobRow, input: { page?: unknow
 export async function startStudioJob(user: AuthUser, id: string) {
   const row = await ownedRow(user, id);
   if (row.status !== "uploading" && row.status !== "failed" && !job(row).stalled) throw badRequest("任务正在进行或已完成");
-  if (row.kind === "import") { if (!(await readImport(id)).pages.length) throw badRequest("请先上传页面"); }
+  if (row.kind === "import") {
+    const papers = await import("./papers"), paper = await papers.paperForJob(id);
+    if (!(await readImport(id)).pages.length && !(paper && (await papers.readPaperDraft(paper.id))?.questions.length)) throw badRequest("请先上传页面");
+  }
   else {
     const draft = await readDraft(id), inputMode = studioInputMode(draft.pages.map(page => page.role));
     if (!inputMode) throw badRequest("请先上传页面");
@@ -198,6 +203,7 @@ export async function studioJobPageImage(user: AuthUser, id: string, pageId: str
 }
 export async function deleteStudioJob(user: AuthUser, id: string) {
   await ownedRow(user, id);
+  if (await (await import("./papers")).paperForJob(id)) throw badRequest("请在试卷中心管理这套试卷");
   // A worker still running this job finds its row gone at the next checkpoint and stops.
   await db().prepare("DELETE FROM studio_jobs WHERE id = ?").bind(id).run();
   const store = bucket();
@@ -297,7 +303,15 @@ export async function processStudioJob(id: string) {
       .catch(() => undefined);
   }, 1000);
   try {
-    const questions = row.kind === "import" ? await runImport(id, row, { started, signal: controller.signal, touch }) : await runTranscription();
+    const papers = row.kind === "import" ? await import("./papers") : null;
+    const paper = papers ? await papers.paperForJob(id) : null;
+    const source = paper ? await readImport(id) : null;
+    const questions = paper && papers && source ? await papers.runPaperImport(paper.id,id,runId,source,{
+      signal:controller.signal,touch,checkpoint:()=>writeImport(id,source),
+      boundary:()=>{if(Date.now()-started>RUN_SLICE_MS)throw new StudioRunYield("本轮运行时间已到");},
+      image:async page=>{const object=await bucket().get(imageKey(id,page.id,"full"));if(!object)throw new Error(`第 ${page.page} 页原件缺失`);return object.arrayBuffer();},
+      recognize:async(image,prompt,schema)=>{const state=studioConcurrencyState(1);const [result]=await runStudioWindow([image],async value=>recognizePage({image:value,prompt,schema,schemaName:"whole_paper_page",signal:controller.signal}),state,notice=>{void touch({progress:retryProgress(notice)}).catch(()=>undefined);});if(result.status==="rejected")throw result.reason;return result.value;},
+    }) : row.kind === "import" ? await runImport(id, row, { started, signal: controller.signal, touch }) : await runTranscription();
     await db().prepare(`UPDATE studio_jobs SET status = 'done', progress = '', error = '', processed_count = page_count, question_count = ?, updated_at = ? WHERE ${owned}`)
       .bind(questions, Date.now(), id, runId).run();
   } catch (error) {

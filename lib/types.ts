@@ -191,6 +191,17 @@ export type LibraryData = {
   publishedAt?: number | null;
 };
 
+export type PaperFolder = { id: string; parentId: string | null; name: string; position: number; count: number };
+export type PaperMetadata = { kind: "school" | "mock" | "admission" | "custom"; year: string; school: string; district: string; grade: string; term: string; examType: string; moduleId: string };
+export type PaperItem = { questionId: string; number: string; section: string; page: number };
+export type ExamPaper = {
+  id: string; folderId: string; title: string; metadata: PaperMetadata; fileName: string;
+  questionCount: number; status: "uploading" | "queued" | "running" | "done" | "failed";
+  progress: string; error: string; stalled: boolean; jobId: string | null;
+  createdAt: number; updatedAt: number;
+};
+export type PaperDetail = ExamPaper & { items: (PaperItem & { question: Question | null })[] };
+
 // A handout references library questions or its own temporary question snapshots by id.
 // A section is a knowledge module (title + 知识点); each 讲义 question sits in one of its bands.
 // 一讲有讲义、小测、作业三份资料。小测和作业各是一列题，每道题记着它考的是哪个模块（讲义没有模块时为 null）。

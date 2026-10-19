@@ -234,7 +234,8 @@
 \newlength\mh@tagwidth\setlength\mh@tagwidth{10.5mm}
 \newcommand\mh@tagged[2]{\begin{list}{}{\setlength\leftmargin{\mh@tagwidth}\setlength\labelwidth{\mh@tagwidth}\setlength\labelsep{0pt}%
     \setlength\topsep{0.7mm}\setlength\partopsep{0pt}\setlength\parsep{0.8mm}\setlength\itemsep{0pt}}%
-  \item[{\makebox[\mh@tagwidth][l]{\mh@tag{#1}}}]#2\end{list}}
+  % Long inline fraction chains need stretchable right space to choose a legal operator break.
+  \raggedright\item[{\makebox[\mh@tagwidth][l]{\mh@tag{#1}}}]#2\end{list}}
 \newcommand\handoutanswerline[1]{\mh@tagged{答案}{{\bfseries #1}}}
 \newcommand\handoutanalysis[2]{\mh@tagged{#1}{#2}}
 

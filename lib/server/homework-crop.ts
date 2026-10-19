@@ -2,9 +2,9 @@ import jpeg from "jpeg-js";
 
 type Box = { x: number; y: number; width: number; height: number };
 
-export function cropHomeworkJpeg(bytes: ArrayBuffer, box: Box) {
-  const decoded = jpeg.decode(new Uint8Array(bytes), { useTArray: true, formatAsRGBA: true });
-  if (!decoded.width || !decoded.height || decoded.width * decoded.height > 8_000_000) throw new Error("校准图尺寸过大，暂不生成错题局部图");
+export function cropHomeworkJpeg(bytes: ArrayBuffer, box: Box, maxPixels = 8_000_000) {
+  const decoded = jpeg.decode(new Uint8Array(bytes), { useTArray: true, formatAsRGBA: true, maxResolutionInMP: Math.min(maxPixels, 12_000_000) / 1_000_000 });
+  if (!decoded.width || !decoded.height || decoded.width * decoded.height > Math.min(maxPixels, 12_000_000)) throw new Error("校准图尺寸过大，暂不生成错题局部图");
   const paddingX = Math.max(8, Math.round(decoded.width * .025));
   const paddingY = Math.max(8, Math.round(decoded.height * .025));
   const left = Math.max(0, Math.floor(box.x / 1000 * decoded.width) - paddingX);
