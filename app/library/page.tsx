@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { PaperCenter, PaperDirectory, PaperImportDialog } from "../components/PaperCenter";
 import { jobsApi } from "../components/RecognitionJobs";
 import type { PaperFolder, PaperDetail } from "../../lib/types";
-import { CategoryTree, type TreeLight } from "../components/CategoryTree";
+import { CategoryTree, FolderIcon, type TreeLight } from "../components/CategoryTree";
 import { DocxContent } from "../components/DocxContent";
 import { MathText } from "../components/MathText";
 import { StudioSolution } from "../components/StudioSolution";
@@ -955,7 +955,7 @@ export default function Home() {
           <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
           <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
           <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button></div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
           {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => activeModule ? setCategoryDialog("manage") : setModuleDialog("manage")}>{activeModule ? pageCopy.manageCategories : pageCopy.manageModules}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
           <div className="library-directory paper-directory-face paper-directory-back" inert={!directoryOpen || paperView !== "papers"} aria-hidden={!directoryOpen || paperView !== "papers"}>

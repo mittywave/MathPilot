@@ -1,6 +1,7 @@
 "use client";
 import { createPortal } from "react-dom";
 import { Fragment, useEffect, useRef, useState } from "react";
+import { FolderIcon } from "./CategoryTree";
 import type { AuthUser, ExamPaper, LibraryModule, PaperDetail, PaperFolder, PaperMetadata } from "../../lib/types";
 import { emptyPaperMetadata, paperDraftIssues, paperFolderDescendants, paperFolderPath, type PaperDraft } from "../../lib/papers";
 import { jobsApi, postJson, uploadJobPage } from "./RecognitionJobs";
@@ -46,7 +47,7 @@ export function PaperDirectory({folders,selected,onSelect,onChanged,user,onNotic
     const children=folders.some(f=>f.parentId===folder.id),open=!closed.includes(folder.id);
     const toggle=()=>setClosed(list=>open?[...list,folder.id]:list.filter(id=>id!==folder.id));
     return <Fragment key={folder.id}><div className={`paper-folder-row${selected===folder.id?" active":""}`} style={{paddingLeft:depth*15}}>
-      {children?<button className="paper-folder-chevron" title={open?"收起子文件夹":"展开子文件夹"} aria-label={`${open?"收起":"展开"}${folder.name}`} aria-expanded={open} onClick={toggle}><span aria-hidden="true">›</span></button>:<span className="paper-folder-icon" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M2 4.5v8h12V6H7.5L6 4.5z" /></svg></span>}
+      {children?<button className="paper-folder-chevron" title={open?"收起子文件夹":"展开子文件夹"} aria-label={`${open?"收起":"展开"}${folder.name}`} aria-expanded={open} onClick={toggle}><span aria-hidden="true">›</span></button>:<span className="paper-folder-icon" aria-hidden="true"><FolderIcon /></span>}
       <button className="paper-folder-name" onClick={()=>children&&selected===folder.id?toggle():onSelect(folder.id)} title={folder.name}>{folder.name}<small>{folder.count}</small></button>
       {user&&<PaperMoreMenu portal label={`${folder.name}文件夹操作`}><button onClick={()=>setEditor({name:"",parentId:folder.id})}>新建子文件夹</button><button onClick={()=>setEditor({id:folder.id,name:folder.name,parentId:folder.parentId??""})}>重命名 / 移动</button><button onClick={()=>void change({id:folder.id,direction:"up"})}>上移</button><button onClick={()=>void change({id:folder.id,direction:"down"})}>下移</button>{user.role==="admin"&&<button className="danger-text" onClick={()=>void remove(folder)}>删除空文件夹</button>}</PaperMoreMenu>}
     </div>{children&&<div className="tree-children" data-open={open} inert={!open} aria-hidden={!open}><div className="tree-children-content">{tree(folder.id,depth+1)}</div></div>}</Fragment>;
