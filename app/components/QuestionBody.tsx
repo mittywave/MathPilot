@@ -1,15 +1,17 @@
 import { DocxContent, DocxOptions } from "./DocxContent";
+import { docxWebImageSources, parseDocxWebContent } from "../../lib/docx-web-content";
 import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout, sourceFigureWidth } from "../../lib/question-layout";
 import type { Question } from "../../lib/types";
 
 // Stem, options and figures exactly as the library cards show them.
 export function QuestionBody({ question, number, figureAlt = "题目配图" }: { question: Question; number: number | string; figureAlt?: string }) {
-  const images = questionImages(question); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question);
+  const embeddedImages = new Set(docxWebImageSources(parseDocxWebContent(question.stemDocxXml ?? [], { pictures: true }).blocks, question.stemDocxAssets));
+  const images = questionImages(question).filter((image) => !embeddedImages.has(image)); const imageLayout = resolveQuestionImageLayout(question); const compactConclusion = isCompactConclusionQuestion(question);
   const optionsBelow = compactConclusion || imageLayout !== "right";
   const figureWidth = imageLayout === "below" && !compactConclusion ? sourceFigureWidth(question) : null;
   return <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}${compactConclusion ? " compact-conclusion" : ""}` : ""}`}>
     <div className="question-copy">
-      <div className="stem"><b className="question-number">{number}.</b><div className="stem-body">{question.source && <span className="question-source">（{question.source}）</span>}<DocxContent xml={question.stemDocxXml} fallback={question.stem} stripLeadingQuestionNumber /></div></div>
+      <div className="stem"><b className="question-number">{number}.</b><div className="stem-body">{question.source && <span className="question-source">（{question.source}）</span>}<DocxContent xml={question.stemDocxXml} fallback={question.stem} assets={question.stemDocxAssets} stripLeadingQuestionNumber /></div></div>
       {!optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} assets={question.optionsDocxAssets} />}
     </div>
     {!!images.length && <div className={`question-images ${images.length > 1 ? "multiple" : ""} ${figureWidth ? "source-width" : ""}`} style={figureWidth ? { width: `${figureWidth * 100}%` } : undefined}>{images.map((image, imageIndex) =>

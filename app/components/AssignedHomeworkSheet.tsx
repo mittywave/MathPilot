@@ -157,7 +157,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
               <QuestionBody question={question} number={item.number.replace(/^D\d+-/, "")} />
               {analysisOpen && <div className="answer-box" id={`assigned-analysis-${item.id}`}>
                 {question.answer.trim() && <><b>答案</b><p><MathText text={question.answer} /></p></>}
-                <b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{ ...question.studioSource, analysis: question.analysis }} /> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div>
+                <b>解析</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{ ...question.studioSource, analysis: question.analysis }} /> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} assets={question.analysisDocxAssets} />}</div>
               </div>}
               {hasAnalysis && <div className="question-actions"><button type="button" aria-expanded={analysisOpen} aria-controls={`assigned-analysis-${item.id}`}
                 onClick={() => setExpandedAnalyses((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])}>{analysisOpen ? "收起解析" : "查看解析"}</button></div>}

@@ -237,7 +237,7 @@ function parseParagraph(entry: XmlEntry, pictures = false): DocxWebParagraph {
 
 type RawCell = DocxWebTableCell & { verticalMerge?: "restart" | "continue" };
 
-function parseTableCell(entry: XmlEntry): RawCell {
+function parseTableCell(entry: XmlEntry, pictures = false): RawCell {
   const children = entryChildren(entry);
   const properties = childContent(children, "tcPr");
   const gridSpan = Math.max(1, Number(nestedAttribute(properties, "gridSpan") ?? 1) || 1);
@@ -245,15 +245,15 @@ function parseTableCell(entry: XmlEntry): RawCell {
   const mergeValue = attribute(mergeEntry, "val");
   const verticalMerge = mergeEntry ? mergeValue === "restart" ? "restart" : "continue" : undefined;
   return {
-    blocks: children.flatMap(parseBlockEntry),
+    blocks: children.flatMap((child) => parseBlockEntry(child, pictures)),
     colSpan: gridSpan,
     rowSpan: 1,
     verticalMerge,
   };
 }
 
-function parseTable(entry: XmlEntry): DocxWebTable {
-  const rawRows = childEntries(entryChildren(entry), "tr").map((row) => childEntries(entryChildren(row), "tc").map(parseTableCell));
+function parseTable(entry: XmlEntry, pictures = false): DocxWebTable {
+  const rawRows = childEntries(entryChildren(entry), "tr").map((row) => childEntries(entryChildren(row), "tc").map((cell) => parseTableCell(cell, pictures)));
   const rows: DocxWebTableCell[][] = [];
   let activeMerges = new Map<number, DocxWebTableCell>();
   for (const rawRow of rawRows) {
@@ -282,15 +282,15 @@ function parseTable(entry: XmlEntry): DocxWebTable {
   return { type: "table", rows };
 }
 
-function parseBlockEntry(entry: XmlEntry): DocxWebBlock[] {
+function parseBlockEntry(entry: XmlEntry, pictures = false): DocxWebBlock[] {
   const name = entryName(entry);
-  if (name === "p") return [parseParagraph(entry)];
-  if (name === "tbl") return [parseTable(entry)];
+  if (name === "p") return [parseParagraph(entry, pictures)];
+  if (name === "tbl") return [parseTable(entry, pictures)];
   return [];
 }
 
 function stripLeadingQuestionNumber(blocks: DocxWebBlock[]) {
-  const firstParagraph = blocks.find((block): block is DocxWebParagraph => block.type === "paragraph");
+  const firstParagraph = blocks.find((block): block is DocxWebParagraph => block.type === "paragraph" && block.inlines.some((inline) => inline.type === "text" || inline.type === "math"));
   if (!firstParagraph) return;
   for (let index = 0; index < firstParagraph.inlines.length; index += 1) {
     const inline = firstParagraph.inlines[index];
@@ -304,20 +304,28 @@ function stripLeadingQuestionNumber(blocks: DocxWebBlock[]) {
 
 function usefulBlock(block: DocxWebBlock): boolean {
   if (block.type === "table") return block.rows.some((row) => row.some((cell) => cell.blocks.some(usefulBlock)));
-  return block.inlines.some((inline) => inline.type === "math" || inline.type === "text" && inline.value.trim().length > 0);
+  return block.inlines.some((inline) => inline.type === "image" || inline.type === "math" || inline.type === "text" && inline.value.trim().length > 0);
 }
 
-export function parseDocxWebContent(xml: string[], options: { stripLeadingQuestionNumber?: boolean } = {}): DocxWebContent {
+export function parseDocxWebContent(xml: string[], options: { stripLeadingQuestionNumber?: boolean; pictures?: boolean } = {}): DocxWebContent {
   const blocks = xml.flatMap((fragment) => {
     try {
       const parsed = parser.parse(fragment) as XmlEntry[];
-      return parsed.flatMap(parseBlockEntry);
+      return parsed.flatMap((entry) => parseBlockEntry(entry, options.pictures));
     } catch {
       return [];
     }
   }).filter(usefulBlock);
   if (options.stripLeadingQuestionNumber) stripLeadingQuestionNumber(blocks);
   return { blocks };
+}
+
+// Only suppress gallery copies of pictures the structured renderer can actually place.
+// Unreferenced assets, unsupported floating drawings and missing XML keep their fallback.
+export function docxWebImageSources(blocks: DocxWebBlock[], assets: Record<string, string> = {}): string[] {
+  return blocks.flatMap((block) => block.type === "table"
+    ? block.rows.flatMap((row) => row.flatMap((cell) => docxWebImageSources(cell.blocks, assets)))
+    : block.inlines.flatMap((inline) => inline.type === "image" && assets[inline.id] ? [assets[inline.id]] : []));
 }
 
 function appendOptionInline(target: DocxWebInline[], inline: DocxWebInline) {
@@ -351,7 +359,7 @@ function semanticOptionInlines(inlines: DocxWebInline[]): DocxWebInline[] {
 
 export function parseDocxWebOptions(xml: string[]): DocxWebOption[] {
   // Options retain inline pictures, including a picture-only continuation paragraph.
-  // Stem/analysis pictures still use their existing separate placement paths.
+  // Other consumers opt into pictures only when they can place the embedded assets.
   const paragraphs = xml.flatMap((fragment) => {
     try { return (parser.parse(fragment) as XmlEntry[]).filter((entry) => entryName(entry) === "p").map((entry) => parseParagraph(entry, true)); }
     catch { return []; }

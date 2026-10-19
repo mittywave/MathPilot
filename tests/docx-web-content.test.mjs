@@ -161,3 +161,45 @@ test("the real question body renders Word option pictures once at source size ev
   assert.deepEqual(questionImages({...q,stemDocxAssets:{same:'/choice.png'}}),['/stem.png','/choice.png'],'an image also used by the stem is not lost');
   assert.deepEqual(questionImages({...q,optionsDocxXml:undefined}),['/stem.png','/choice.png'],'without raw options, supplementary images stay visible');
 });
+
+test("Word stem pictures stay between paragraphs and inside merged or nested table cells without gallery duplicates", async () => {
+  const {createElement} = await import('react');
+  const {renderToStaticMarkup} = await import('react-dom/server');
+  const {QuestionBody} = await loadSource('app/components/QuestionBody.tsx');
+  const picture = (id, mode = 'inline') => `<w:r><w:drawing><wp:${mode}><wp:extent cx="1800000" cy="1260000"/><a:blip r:embed="${id}"/></wp:${mode}></w:drawing></w:r>`;
+  const cell = (body, merge = '') => `<w:tc><w:tcPr>${merge}</w:tcPr>${body}</w:tc>`;
+  const nested = `<w:tbl><w:tr>${cell(paragraph(picture('nested')))}</w:tr></w:tbl>`;
+  const table = `<w:tbl><w:tr>${cell(paragraph(textRun('步骤一')))}${cell(paragraph(picture('diagram')), '<w:vMerge w:val="restart"/>')}</w:tr><w:tr>${cell(nested)}${cell(paragraph(''), '<w:vMerge/>')}</w:tr></w:tbl>`;
+  const xml = [paragraph(textRun('1．题干之前')), paragraph(picture('overview')), paragraph(textRun('开始作图')), table, paragraph(textRun('作图之后') + picture('floating', 'anchor'))];
+  const assets = {overview:'/overview.png',diagram:'/diagram.png',nested:'/nested.png',floating:'/floating.png',unused:'/unreferenced.png'};
+  const question = {id:'table-test',type:'解答题',stem:'题干',options:[],source:'',stemDocxXml:xml,stemDocxAssets:assets,contentImages:[...Object.values(assets),'/extra.png']};
+  const html = renderToStaticMarkup(createElement(QuestionBody,{question,number:1}));
+  assert.match(html, /rowSpan="2"[^>]*><p[^>]*><img[^>]*src="\/diagram.png"/i);
+  assert.match(html, /depth-1[\s\S]*?<td[^>]*><p[^>]*><img[^>]*src="\/nested.png"/);
+  assert.ok(html.indexOf('/overview.png') < html.indexOf('开始作图'));
+  assert.ok(html.indexOf('/diagram.png') < html.indexOf('作图之后'));
+  const gallery = html.slice(html.indexOf('class="question-images'));
+  for (const source of ['/overview.png','/diagram.png','/nested.png']) {
+    assert.equal(html.split(`src="${source}"`).length-1, 1);
+    assert.ok(!gallery.includes(source));
+  }
+  for (const source of ['/floating.png','/unreferenced.png','/extra.png']) assert.ok(gallery.includes(source), `${source} still needs the supplementary gallery`);
+  const fallback = renderToStaticMarkup(createElement(QuestionBody,{question:{...question,stemDocxXml:undefined},number:1}));
+  assert.equal((fallback.match(/<img /g)||[]).length,6,'editing away the source XML must not lose the pictures');
+  assert.equal((html.match(/<img /g)||[]).length,6);
+  const pictureFirst = renderToStaticMarkup(createElement(QuestionBody,{question:{...question,stemDocxXml:[paragraph(picture('overview')),paragraph(textRun('7．图片之后的题干'))]},number:1}));
+  assert.ok(!pictureFirst.includes('7．'),'a leading picture-only paragraph must not prevent question renumbering');
+});
+
+test("Word analysis renders picture-only paragraphs and picture-only tables at their source positions", async () => {
+  const {createElement} = await import('react');
+  const {renderToStaticMarkup} = await import('react-dom/server');
+  const {DocxContent} = await loadSource('app/components/DocxContent.tsx');
+  const picture = '<w:r><w:drawing><wp:inline><wp:extent cx="720000" cy="360000"/><a:blip r:embed="analysis"/></wp:inline></w:drawing></w:r>';
+  const xml = [paragraph(textRun('辅助线之前')),paragraph(picture),`<w:tbl><w:tr><w:tc>${paragraph(picture)}</w:tc></w:tr></w:tbl>`,paragraph(textRun('辅助线之后'))];
+  const html = renderToStaticMarkup(createElement(DocxContent,{xml,fallback:'解析',assets:{analysis:'/analysis.png'}}));
+  assert.equal((html.match(/<img /g)||[]).length,2,'repeated source placements in the document must both survive');
+  assert.match(html, /<td[^>]*><p[^>]*><img[^>]*src="\/analysis.png"/);
+  assert.ok(html.indexOf('/analysis.png') < html.indexOf('辅助线之后'));
+  assert.match(html,/width:20mm;max-width:100%;height:auto/);
+});
