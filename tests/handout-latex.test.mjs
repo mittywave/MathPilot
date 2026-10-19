@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, copyFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { loadSource } from "./load-source.mjs";
 
 const { buildHandoutLatex, choiceColumns, latexInline, latexPlain, splitHandoutTitle, wrapCjkInMath } = await loadSource("lib/handout-latex.ts");
@@ -36,6 +41,19 @@ const shot = (id, diagramBox) => ({ ...base, id, type: "填空题", stem: "如�
 const figureModules = [{ heading: "图位", note: "", bands: { ...empty, practice: [modelling, shot("beside", { x: 820, y: 60, width: 180, height: 800 }), shot("under", { x: 60, y: 300, width: 620, height: 400 })] } }];
 const buildFigures = answers => buildHandoutLatex({ title: "图位测试", modules: figureModules, answers }, source => source.startsWith("fig://") ? `figures/${source.slice(6)}.png` : null);
 const buildList = answers => buildHandoutLatex({ title: "第一讲-平行四边形的性质", answers, sheet: "小测", questions: [choice, proof, blank] }, source => source === "fig://one" ? "figures/fig-1.png" : null);
+
+test("long fraction chains in answer paragraphs break inside the printable width", { skip: !existsSync(".tools/tectonic/tectonic"), timeout: 60000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "paper-formula-regression-"));
+  try {
+    const term = n => `\\frac{\\sqrt{${n}}-\\sqrt{${n-1}}}{(\\sqrt{${n}}+\\sqrt{${n-1}})(\\sqrt{${n}}-\\sqrt{${n-1}})}`;
+    const questions = [2, 4, 7].map((count, i) => ({ ...base, id: `chain-${i}`, type: "解答题", stem: "化简。", analysis: `【解答】原式 $=${Array.from({ length: count }, (_, j) => term(j + 2)).join("+")}$。` }));
+    await writeFile(join(directory, "handout.tex"), buildHandoutLatex({ title: "分式排版验收", sheet: "练习", answers: "end", questions }));
+    await copyFile("latex/mitty-handout.cls", join(directory, "mitty-handout.cls"));
+    await promisify(execFile)(resolve(".tools/tectonic/tectonic"), ["-X", "compile", "handout.tex", "--keep-logs"], { cwd: directory, timeout: 55000 });
+    const log = await readFile(join(directory, "handout.log"), "utf8");
+    assert.doesNotMatch(log, /Overfull \\hbox/, "both short and long fraction chains must stay within the answer column");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test("plain text is escaped and keeps blanks and Word-style symbols printable", () => {
   assert.equal(latexPlain("100% & #1 {a_b} ~^\\"), "100\\% \\& \\#1 \\{a\\_b\\} \\textasciitilde{}\\textasciicircum{}\\textbackslash{}");

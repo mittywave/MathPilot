@@ -2,6 +2,9 @@
 
 import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { PaperCenter, PaperDirectory, PaperImportDialog } from "../components/PaperCenter";
+import { jobsApi } from "../components/RecognitionJobs";
+import type { PaperFolder, PaperDetail } from "../../lib/types";
 import { CategoryTree, type TreeLight } from "../components/CategoryTree";
 import { DocxContent } from "../components/DocxContent";
 import { MathText } from "../components/MathText";
@@ -73,8 +76,8 @@ function selectOnCardClick(event: MouseEvent<HTMLElement>, toggle: () => void) {
 
 // One card of the library list. It re-renders only when its own question or state changes, so ticking one question
 // in a long category does not rebuild every other card on the page.
-const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, isLast, isFirst = index === 0, sectionId, sections, path, checked, active = false, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
-  question: Question; index: number; isLast: boolean; path: string; checked: boolean; active?: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
+const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, number, hideSource = false, isLast, isFirst = index === 0, sectionId, sections, path, checked, active = false, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
+  question: Question; index: number; number?: string; hideSource?: boolean; isLast: boolean; path: string; checked: boolean; active?: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
   canDelete: boolean; isExporting: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
   isFirst?: boolean; sectionId?: string | null; sections?: Array<{ id: string | null; title: string }>;
 }) {
@@ -85,7 +88,7 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => { actions.focus(question.id); actions.toggleSelected(question.id); }}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
-      <QuestionBody question={question} number={index + 1} figureAlt={pageCopy.figureAlt} />
+      <QuestionBody question={hideSource ? {...question,source:""} : question} number={number ?? index + 1} figureAlt={pageCopy.figureAlt} />
       {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
       {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} />}</div></>}</div>}
       <div className="question-actions"><button onClick={() => { if (selectable) actions.focus(question.id); actions.toggleAnswer(question.id); }}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}{basket && <div className="basket-card-actions">{!!sections?.some((section) => section.id !== sectionId) && <label className="basket-move-to">移动到<select aria-label={`第 ${index + 1} 题移动到`} disabled={isExporting} value={sectionId ?? ""} onChange={(event) => actions.place(question.id, event.target.value || null)}>{sections.map((section) => <option key={section.id ?? "unassigned"} value={section.id ?? ""}>{section.title}</option>)}</select></label>}<button disabled={isFirst || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
@@ -97,6 +100,19 @@ export default function Home() {
   // The section a link opens (学生档案, 组卷篮) is drawn from the first paint; the server renders the same address.
   const searchParams = useSearchParams();
   const initialView = searchParams.get("view");
+  const [paperView,setPaperView] = useState<"modules"|"papers"|"paper">(initialView === "papers" ? "papers" : initialView === "paper" ? "paper" : "modules");
+  const [paperVisited,setPaperVisited] = useState(initialView === "papers");
+  const [paperFolderId,setPaperFolderId] = useState(searchParams.get("folder") ?? "");
+  const [activePaperId,setActivePaperId] = useState(searchParams.get("paperId") ?? "");
+  const [returnPaperId,setReturnPaperId] = useState(searchParams.get("returnPaper") ?? "");
+  const [paperFolders,setPaperFolders] = useState<PaperFolder[]>([]);
+  const [paperRefresh,setPaperRefresh] = useState(0);
+  const [paperData,setActivePaper] = useState<PaperDetail|null>(null);
+  const activePaper = paperData?.id === activePaperId ? paperData : null;
+  const [paperError,setPaperError] = useState("");
+  const [importPaperOpen,setImportPaperOpen] = useState(false);
+  const [paperFlipping,setPaperFlipping] = useState(false);
+  const paperFlipTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
   const [fromIntro] = useState(searchParams.get("from") === "intro" && !initialView);
   const introEntrancePending = useRef(fromIntro);
   const [alevelPageLocale, setAlevelPageLocale] = useState<AlevelPageLocale>("zh");
@@ -170,7 +186,7 @@ export default function Home() {
   const [studentNotes, setStudentNotes] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
   const activeModule = modules.find((item) => item.id === activeModuleId) ?? modules[0] ?? null;
-  const isAlevelPage = !showWrongBook && !showSelected && isAlevel9709ModuleName(activeModule?.name);
+  const isAlevelPage = paperView === "modules" && !showWrongBook && !showSelected && isAlevel9709ModuleName(activeModule?.name);
   const pageLocale: AlevelPageLocale = isAlevelPage ? alevelPageLocale : "zh";
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const [toastNode, show] = useToast(pageLocale);
@@ -356,6 +372,7 @@ export default function Home() {
   const categoryQuestions = moduleQuestions.filter((item) => activeCategoryIds.includes(item.categoryId));
 
   function switchExamModule(moduleId: string) {
+    leavePaperForCategory();
     const targetModule = modules.find((item) => item.id === moduleId); if (!targetModule) return;
     setActiveModuleId(targetModule.id);
     setActiveCategory(targetModule.id);
@@ -375,6 +392,7 @@ export default function Home() {
   const byCode = query.trim() ? questions.find((item) => item.code === query.trim()) : undefined;
   const filteredQuestions = useMemo(() => {
     if (showSelected) return orderedBasketQuestions(basketPool, selectedIds);
+    if (paperView === "paper") return activePaper?.items.flatMap(item => { const question = questions.find(q => q.id === item.questionId); return question ? [question] : []; }) ?? [];
     const keyword = query.trim().toLowerCase();
     if (byCode) return [byCode];
     let result = questions;
@@ -383,9 +401,9 @@ export default function Home() {
     if (keyword) result = result.filter((item) => questionMatchesKeyword(item, keyword, pathOf(item.categoryId)));
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode]);
+  }, [questions, basketPool, categories, activeCategory, showSelected, typeFilter, query, selectedIds, byCode, paperView, activePaper]);
   // A search also finds questions that are only in students' wrong books, by their ID or their text.
-  const searchingWrong = Boolean(authUser) && !showSelected && !showWrongBook && Boolean(query.trim());
+  const searchingWrong = paperView === "modules" && Boolean(authUser) && !showSelected && !showWrongBook && Boolean(query.trim());
   useEffect(() => {
     if (!searchingWrong || wrongCatalog) return;
     let current = true;
@@ -419,23 +437,23 @@ export default function Home() {
   const [mapQuestionId, setMapQuestionId] = useState<string | null>("");
   const resetMap = useCallback(() => setMapQuestionId(null), []);
   // Folded or open is remembered per browser; the panel is only drawn in the browser, so reading it here is safe.
-  const [mapOpen, setMapOpen] = useState(() => { if (fromIntro) return false; try { return window.localStorage.getItem(KNOWLEDGE_MAP_KEY) !== "closed"; } catch { return true; } });
+  const [mapOpen, setMapOpen] = useState(() => { if (initialView === "papers") return false; if (initialView === "paper") return true; if (fromIntro) return false; try { return window.localStorage.getItem(KNOWLEDGE_MAP_KEY) !== "closed"; } catch { return true; } });
   // Folding slides the panel out before it leaves, so it stays mounted (frozen on what it showed) until the column has narrowed.
   const [mapMounted, setMapMounted] = useState(mapOpen);
   const mapFoldTimer = useRef(0);
-  const chooseMapOpen = useCallback((open: boolean) => {
+  const chooseMapOpen = useCallback((open: boolean, remember = true) => {
     introEntrancePending.current = false;
     setMapOpen(open);
     window.clearTimeout(mapFoldTimer.current);
     if (open) setMapMounted(true);
     else mapFoldTimer.current = window.setTimeout(() => setMapMounted(false), 520);
-    try { window.localStorage.setItem(KNOWLEDGE_MAP_KEY, open ? "open" : "closed"); } catch { /* 本地存储不可用时仍保留本次切换 */ }
+    try { if(remember) window.localStorage.setItem(KNOWLEDGE_MAP_KEY, open ? "open" : "closed"); } catch { /* 本地存储不可用时仍保留本次切换 */ }
   }, []);
   const collapseMap = useCallback(() => chooseMapOpen(false), [chooseMapOpen]);
   const expandMap = useCallback(() => chooseMapOpen(true), [chooseMapOpen]);
   useEffect(() => {
     if (!introEntrancePending.current) return;
-    if (showSelected || showWrongBook) { introEntrancePending.current = false; return; }
+    if (showSelected || showWrongBook || paperView !== "modules") { introEntrancePending.current = false; return; }
     if (libraryLoading) return;
     // Paint the questions between two folded rails before opening them together. This entrance is transient:
     // it does not overwrite either saved preference, and a manual toggle takes over immediately. While the page is
@@ -456,7 +474,50 @@ export default function Home() {
       else unfold();
     });
     return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); window.removeEventListener("mp-entered", unfold); };
-  }, [libraryLoading, showSelected, showWrongBook]);
+  }, [libraryLoading, showSelected, showWrongBook, paperView]);
+  function navigatePapers(view: "modules"|"papers"|"paper", id = "", folder = paperFolderId, remember = returnPaperId) {
+    introEntrancePending.current = false;
+    if ((view === "papers") !== (paperView === "papers") && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setPaperFlipping(true); if (paperFlipTimer.current) clearTimeout(paperFlipTimer.current);
+      paperFlipTimer.current = setTimeout(() => setPaperFlipping(false), 540);
+    }
+    if(id!==activePaperId)setActivePaper(null);setPaperError("");
+    setPaperView(view); setActivePaperId(id); setPaperFolderId(folder); setShowSelected(false); setShowWrongBook(false); setDirectoryOpen(true);
+    if(view === "papers") setPaperVisited(true);
+    chooseMapOpen(view !== "papers",false); setMapQuestionId("");
+    const url = new URL(window.location.href);
+    for(const key of ["studentId","tab","class","from"]) url.searchParams.delete(key);
+    if(view === "modules") url.searchParams.delete("view"); else url.searchParams.set("view",view);
+    if(id)url.searchParams.set("paperId",id);else url.searchParams.delete("paperId");
+    if(folder)url.searchParams.set("folder",folder);else url.searchParams.delete("folder");
+    if(remember)url.searchParams.set("returnPaper",remember);else url.searchParams.delete("returnPaper");
+    window.history.pushState(window.history.state,"",`${url.pathname}${url.search}`);window.scrollTo(0,0);
+  }
+  function leavePaperForCategory() { if(paperView === "paper") { setReturnPaperId(activePaperId); navigatePapers("modules","",paperFolderId,activePaperId); setQuery(""); } }
+  function addWholePaper(paper: PaperDetail) {
+    if(!authUser){goLogin();return;}
+    const usable = paper.items.flatMap(item=>{const question=paperView==="paper"&&paper.id===activePaperId?questions.find(q=>q.id===item.questionId):item.question;return question?[question]:[];}), ids=[...new Set(usable.map(q=>q.id))], fresh=ids.filter(id=>!selectedIds.includes(id));
+    setQuestions(current=>[...current,...usable.filter(q=>!current.some(old=>old.id===q.id))]);
+    setSelectedIds(current=>[...current,...fresh]);if(!selectedIds.length)setPaperTitle(paper.title);
+    show({text:`已加入 ${fresh.length} 道题${ids.length-fresh.length ? `，${ids.length-fresh.length} 道已在组卷篮` : ""}${paper.items.length-usable.length ? `；${paper.items.length-usable.length} 道题已移入回收站` : ""}`,tone:"success"});
+  }
+  useEffect(()=>{
+    let live=true;void jobsApi<{folders:PaperFolder[]}>("/api/paper-folders").then(result=>{if(live)setPaperFolders(result.folders);}).catch(error=>{if(live&&paperView!=="modules")setPaperError(error instanceof Error?error.message:"目录读取失败");});return()=>{live=false;};
+  },[paperRefresh,paperView]);
+  useEffect(()=>{
+    if(paperView!=="paper"||!activePaperId)return;
+    const controller=new AbortController();
+    void jobsApi<{paper:PaperDetail}>(`/api/papers/${activePaperId}`,{signal:controller.signal}).then(async ({paper})=>{
+      await refreshLibrary(true);if(controller.signal.aborted)return;
+      setActivePaper(paper);const first=paper.items.find(i=>i.question)?.question;if(first?.moduleId){setActiveModuleId(first.moduleId);setActiveCategory(first.moduleId);}
+    }).catch(error=>{if(!controller.signal.aborted)setPaperError(error instanceof Error?error.message:"试卷读取失败");});return()=>controller.abort();
+  // refreshLibrary is the existing imperative loader; selecting a paper is the trigger.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[paperView,activePaperId,paperRefresh]);
+  useEffect(()=>{
+    const pop=()=>{const params=new URLSearchParams(window.location.search),view=params.get("view");setShowSelected(view==="selected");setShowWrongBook(view==="wrong-book");setPaperView(view==="papers"?"papers":view==="paper"?"paper":"modules");setActivePaperId(params.get("paperId")??"");setPaperFolderId(params.get("folder")??"");setReturnPaperId(params.get("returnPaper")??"");if(view==="papers")setPaperVisited(true);setMapOpen(view!=="papers");setMapMounted(view!=="papers");};
+    window.addEventListener("popstate",pop);return()=>{window.removeEventListener("popstate",pop);if(paperFlipTimer.current)clearTimeout(paperFlipTimer.current);};
+  },[]);
   const [treeLight, setTreeLight] = useState<TreeLight | null>(null);
   const mapQuestion = showKnowledgeMap && mapMounted && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;
   const knowledgeMapFocus = useMemo<KnowledgeMapFocus | null>(() => {
@@ -521,6 +582,7 @@ export default function Home() {
   const goLogin = () => window.location.assign(loginPath(`${window.location.pathname}${window.location.search}`));
   const requireLogin = () => { if (authUser) { if (draftOwner !== authUser.id) { show({ text: "正在读取本机组卷草稿，请稍候", tone: "success" }); return false; } return true; } goLogin(); return false; };
   function openLibrary() {
+    if(paperView!=="modules")navigatePapers("modules");
     setShowSelected(false); setShowWrongBook(false);
   }
 
@@ -858,7 +920,7 @@ export default function Home() {
   const keepTypeset = useCallback((title: string, settings: TypesetSettings) => {
     setPaperTitle(title); setIncludeAnswers(settings.answers !== "none"); setTypesetKept({ ids: typesetIds, settings });
   }, [typesetIds]);
-  const directoryLabel = pageLocale === "en" ? `${directoryOpen ? "Collapse" : "Expand"} knowledge directory` : `${directoryOpen ? "收起" : "展开"}知识点目录`;
+  const directoryLabel = paperView === "papers" ? `${directoryOpen ? "收起" : "展开"}试卷目录` : pageLocale === "en" ? `${directoryOpen ? "Collapse" : "Expand"} knowledge directory` : `${directoryOpen ? "收起" : "展开"}知识点目录`;
   if (typesetting) return <>{toastNode}<Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
     questions: selectedQuestions, title: paperTitle,
     groups: basketStructure.sections.length ? paperSections.filter((section) => section.questions.length).map((section) => ({ title: section.heading, size: section.questions.length })) : undefined,
@@ -873,9 +935,9 @@ export default function Home() {
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading && !authUser} locale={pageLocale} basketCount={selectedIds.length}
         title={showWrongBook && (activeClassName || activeStudent) ? `${activeClassName ?? activeStudent?.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}
-        actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={openNewQuestion} disabled={!activeModule}><span>＋</span> {pageCopy.newQuestion}</button> : <button className="account-button" onClick={goLogin}>{pageCopy.loginRegister}</button>} />
+        actions={authUser ? canManageLibrary && !showWrongBook && !showSelected && <button className="primary-button" onClick={paperView === "papers" ? () => setImportPaperOpen(true) : openNewQuestion} disabled={paperView !== "papers" && !activeModule}><span>＋</span> {paperView === "papers" ? "录入试卷" : pageCopy.newQuestion}</button> : <button className="account-button" onClick={goLogin}>{pageCopy.loginRegister}</button>} />
 
-      <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : !showWrongBook ? `library-workspace${directoryOpen ? "" : " directory-closed"}` : ""}`} data-directory-motion={directoryMotion ?? undefined}>
+      <section className={`workspace ${showSelected && !showWrongBook ? "basket-workspace" : !showWrongBook ? `library-workspace${directoryOpen ? "" : " directory-closed"}` : ""}`} data-directory-motion={directoryMotion ?? undefined} data-paper-flipping={paperFlipping || undefined}>
         {(!showSelected || showWrongBook) && <aside className={`sidebar${showWrongBook ? "" : " library-sidebar"}`}>
           {showWrongBook ? <>
             <div className="sidebar-heading"><span className="eyebrow">班级{studentsLoading ? "" : ` · ${studentClasses.length}`}</span><button className="icon-button" aria-label="新建班级" title="新建班级" onClick={() => openClassDialog()}>＋</button></div>
@@ -889,11 +951,17 @@ export default function Home() {
             setDirectoryOpen(open);
             setDirectoryMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? null : open ? "opening" : "closing");
             try { window.localStorage.setItem(LIBRARY_DIRECTORY_KEY, open ? "open" : "closed"); } catch { /* 本地存储不可用时仍可展开、收起 */ }
-          }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="directory-chevron" d="m16 9-3 3 3 3" /></svg><span className="directory-rail-label" aria-hidden="true">{pageLocale === "en" ? "Directory" : "知识目录"}</span></button>
-          <div id="library-directory" className="library-directory" inert={!directoryOpen} aria-hidden={!directoryOpen}>
-          <div className="sidebar-heading" ref={moduleManager}><span className="eyebrow">{pageCopy.moduleSwitcher}</span>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
+          }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="directory-chevron" d="m16 9-3 3 3 3" /></svg><span className="directory-rail-label" aria-hidden="true">{paperView === "papers" ? "试卷目录" : pageLocale === "en" ? "Directory" : "知识目录"}</span></button>
+          <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
+          <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
+          <div className="sidebar-heading" ref={moduleManager}><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
           {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
+          </div>
+          <div className="library-directory paper-directory-face paper-directory-back" inert={!directoryOpen || paperView !== "papers"} aria-hidden={!directoryOpen || paperView !== "papers"}>
+            <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={()=>navigatePapers("modules")}>试卷<span aria-hidden="true">⇄</span></button></div>
+            <PaperDirectory folders={paperFolders} selected={paperFolderId} user={authUser} onSelect={id=>navigatePapers("papers","",id)} onChanged={()=>setPaperRefresh(v=>v+1)} onNotice={onNotice}/>
+          </div>
           </div>
           {directoryMotion && <div key={directoryMotion} className="directory-glass" aria-hidden="true" onAnimationEnd={(event) => { if (event.animationName === "directory-glass-fade") setDirectoryMotion(null); }}>
             {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ "--x": `${18 + (index * 37) % 76}%`, "--y": `${7 + index * 5}%`, "--size": `${4 + (index * 7) % 10}px`, "--drift": `${(index % 2 ? 1 : -1) * (12 + index % 5 * 5)}px`, "--delay": `${index % 4 * 24}ms`, "--turn": `${index * 31}deg` } as CSSProperties} />)}
@@ -902,6 +970,8 @@ export default function Home() {
         </aside>}
 
         <section className={`content${!showWrongBook && !showSelected ? " library-content" : ""}`}>
+          {paperVisited && <div hidden={showWrongBook || showSelected || paperView !== "papers"} inert={showWrongBook || showSelected || paperView !== "papers"}><PaperCenter folderId={paperFolderId} folders={paperFolders} refresh={paperRefresh} user={authUser} modules={modules} onOpen={id=>navigatePapers("paper",id)} onAdd={addWholePaper} onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={()=>void refreshLibrary(true)}/></div>}
+
           {showWrongBook ? <>
             {!!students.length && <label className="mobile-student-picker"><span>当前学生</span><select value={activeStudentId} onChange={(event) => { if (event.target.value === NEW_STUDENT_OPTION) openStudentDialog(); else selectStudent(event.target.value); }}>{students.map((student) => <option value={student.id} key={student.id}>{student.name} · {student.wrongCount} 道错题</option>)}<option value={NEW_STUDENT_OPTION}>＋ 新建学生</option></select></label>}
             {activeClassName !== null ? <section className="class-profile" aria-label={`${activeClassName}的班级`}>
@@ -941,7 +1011,17 @@ export default function Home() {
               {!!historicalWrongEntries.length && <details className="wrong-history"><summary>历史记录（{historicalWrongEntries.length}）</summary><p>删除、部分正确及已修正的记录保留在此，不计入当前错题统计；删除的错题可以恢复。</p>{historicalWrongEntries.map(entry => <article key={entry.id}><b>{entry.sourcePath}</b><p><MathText text={entry.question.stem} /></p><small>{entry.archiveReason}</small>{entry.archiveReason === WRONG_QUESTION_DELETED && <button className="secondary" onClick={() => restoreWrongEntries([entry])}>恢复</button>}<WrongQuestionEvidence entry={entry} /></article>)}</details>}
               </>}
             </> : wrongBookLoading ? <div className="wrong-book-loading"><i></i><span>正在读取学生档案…</span></div> : <div className="empty-state wrong-book-empty"><div>人</div><h3>为第一位学生建立档案</h3><p>每位学生有自己的作业、错题和学习记录。</p><button onClick={() => openStudentDialog()}>＋ 新建学生档案</button></div>}
-          </> : <>
+          </> : !showSelected && paperView === "papers" ? null : !showSelected && paperView === "paper" ? <div className="paper-detail">
+            <header className="paper-detail-header"><button className="text-button" onClick={()=>navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper&&<div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{authUser&&<><button onClick={()=>addWholePaper(activePaper)}>整卷加入组卷篮</button><a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></>}</div>}</header>
+            {paperError&&<p className="paper-error" role="alert">{paperError}<button onClick={()=>setPaperRefresh(v=>v+1)}>重试</button></p>}
+            <div className="question-list">{activePaper?.items.map((item,index)=>{
+              const question=questions.find(q=>q.id===item.questionId);
+              return <Fragment key={`${index}-${item.questionId}`}>{item.section&&item.section!==activePaper.items[index-1]?.section&&<h2 className="basket-section-heading">{item.section}</h2>}
+                {question?<LibraryQuestionCard question={question} index={index} number={item.number} hideSource isLast={index===activePaper.items.length-1} path={pathOf(question.categoryId)} checked={selectedIds.includes(question.id)} active={mapOpen&&question.id===mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser)} basket={false} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={false} pageLocale="zh" actions={cardActions}/>:<div className="paper-missing">第 {item.number} 题已移入回收站或不再可用。原题位仍保留。</div>}
+              </Fragment>;
+            })}</div>
+          </div> : <>
+          {returnPaperId&&!showSelected&&<div className="paper-return"><button className="text-button" onClick={()=>navigatePapers("paper",returnPaperId)}>← 返回刚才的试卷</button></div>}
           {showSelected ? <>
             <aside className="basket-settings">
               <label className="basket-title">练习标题<input value={paperTitle} disabled={basketBusy} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
@@ -998,8 +1078,9 @@ export default function Home() {
         </div>}
       </section>
 
-{authUser && !showSelected && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
+{authUser && !showSelected && (paperView !== "papers" || showWrongBook) && !!selectedQuestions.length && <aside className="paper-dock visible"><div className="dock-count"><strong>{selectedQuestions.length}</strong><span>{pageCopy.selectedQuestions}</span></div><div className="dock-title"><b>{showWrongBook ? "该学生" : pageCopy.selectionHere} {alevelQuestionCount(selectedHere, pageLocale)}{selectedQuestions.length > selectedHere && ` · ${showWrongBook ? "其他来源" : pageCopy.selectionElsewhere} ${alevelQuestionCount(selectedQuestions.length - selectedHere, pageLocale)}`}</b><span>{pageCopy.basketReadyHint}</span></div>{showWrongBook ? !!selectedWrongEntries.length && <button className="ghost-button dock-delete-button" onClick={() => deleteWrongEntries(selectedWrongEntries)}>{pageCopy.delete}</button> : canDelete && <button className="ghost-button dock-delete-button" onClick={deleteSelectedQuestions}>{pageCopy.delete}</button>}<button className="ghost-button" onClick={() => setSelectedIds([])}>{pageCopy.clearSelection}</button><button className="export-button" onClick={() => { setShowWrongBook(false); setShowSelected(true); }}>{pageCopy.navBasket} <span>→</span></button></aside>}
 
+      {importPaperOpen && <PaperImportDialog folders={paperFolders} folderId={paperFolderId} modules={modules} onClose={()=>setImportPaperOpen(false)} onUploaded={folder=>{navigatePapers("papers","",folder);setPaperRefresh(v=>v+1);}} onNotice={onNotice}/>}
       {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} addToLibrary={entryAddsWrong} onClose={() => { setEntryDraft(null); setEntryAddsWrong(false); }} onNotice={onNotice} onSaved={(saved) => { setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt)); if (entryAddsWrong) setWrongCatalog((current) => current?.filter((item) => !saved.some((entry) => entry.id === item.question.id)) ?? null); }} />}
 
       {categoryDialog && activeModule && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理">
