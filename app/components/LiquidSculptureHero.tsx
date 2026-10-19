@@ -1498,7 +1498,7 @@ const CSS = `
 .sh-root *,.sh-root *::before,.sh-root *::after{box-sizing:border-box}
 .sh-stage{position:absolute;inset:0;z-index:0;pointer-events:none}
 .sh-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .5s ease}
-.sh-fallback{position:absolute;display:block;max-width:none;user-select:none;-webkit-user-drag:none;transition:opacity .5s ease}
+.sh-fallback{position:absolute;display:block;visibility:hidden;max-width:none;user-select:none;-webkit-user-drag:none;transition:opacity .5s ease}
 .sh-root[data-gl="on"] .sh-canvas{opacity:1}
 .sh-root[data-gl="on"] .sh-fallback{opacity:0}
 .sh-root[data-swap="1"] .sh-canvas{opacity:0;transition-duration:.25s}
@@ -1823,6 +1823,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
       img.style.top = rect.y + "px"
       img.style.width = rect.w + "px"
       img.style.height = rect.h + "px"
+      // A cached image can paint at its natural size before hydration; reveal only the measured rectangle.
+      img.style.visibility = "visible"
     }
     const hintEl = hintRef.current
     if (hintEl) {
@@ -2007,7 +2009,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
     e.setOptions(optsRef.current(rm))
   }, [interactive, strength, radius, particleDensity, dotSize, particleSpread, turbulence, liquid, streaks, restStyle, returnSpeed, ambient, ambientIntensity, speed, intro, bgRgb, imgBgRgb])
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     relayout()
   }, [sculptureScale, mobileSculptureScale, sculptureX, sculptureY, relayout])
 
