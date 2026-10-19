@@ -37,7 +37,9 @@ export function normalizeSmartPaperPlan(value: unknown): SmartPaperPlan | null {
       seen.add(id);
       return [{ id, focus: text(record(item).focus, 40), reason: text(record(item).reason, 600) }];
     });
-    return { title: text(record(group).title, 60) || `第 ${index + 1} 天`, theme: text(record(group).theme, 120), items };
+    // Older balanced plans appended every focus label here. Keep that generated heading short on reopening too.
+    const theme = text(record(group).theme, 120);
+    return { title: text(record(group).title, 60) || `第 ${index + 1} 天`, theme: theme.length > 16 && /^均衡练习\s*·/.test(theme) ? "均衡练习" : theme, items };
   });
   if (!seen.size) return null;
   return {
@@ -191,7 +193,7 @@ ${lines}
 1. 只能用上面候选题的编号，每道题最多出现一次，每天正好 ${input.brief.perDay} 题（候选不够时尽量多选）。
 2. 与侧重点相符的题占大多数，各个侧重点都要练到；同一天里不要都是同一种式子。
 3. 严格遵守上面的难度安排，最新调整意见优先；延续上一版已调整的要求，原始要求用于补充未被后续意见修改的限制。要求各天平均或持平时，各天的题库难度档位、繁度构成和计算负担应尽量接近，主题也不能暗示逐日加深；只有明确要求递进才逐日加深。单日题目顺序另按老师要求，未指定时不强制由易到难。“繁度”1—5 仅辅助衡量计算量，不等于数学难度；不要只比较均值而忽略各天的难易构成。
-4. 每天给一个简短主题（theme，例如“去括号热身”）。每道题写 focus 和 reason。有相关历史错因时，优先选择能重现该错因关键步骤的新题，focus 必须逐字使用对应的历史错因 label；仅属于同一知识点、含有相似符号，不足以对应具体错因。reason 用一句话指出本题的具体式子或条件，以及学生必须做哪一步来纠正该错误，不重复历史引文（程序会附上来源）。选入前逐题核对错误机制：例如“化简正确但未继续整体代入”须选给出整体关系并要求求值的题，单纯去括号或解方程不符合；“平方项外的负号漏保留”须核对化简后相关平方项的系数确实为负，只有负数底数、平方项化简后为正的题不符合。多个错因尽量覆盖，老师的范围与题型限制优先。找不到能训练某条错因的候选题时，不勉强对应；这类题 focus 使用普通侧重点或“一般巩固”，reason 只说明本题训练内容，不声称学生曾犯某种错误。`;
+4. 每天的主题 theme 是印在试卷上的短标题，用 6—12 字概括当天最主要的 1—2 个训练要点，最多 16 字，例如“分配律与符号”“通分约分巩固”。不要罗列全部侧重点、复制历史错因或写解释句，也不重复天数和整份练习标题。每道题写 focus 和 reason。有相关历史错因时，优先选择能重现该错因关键步骤的新题，focus 必须逐字使用对应的历史错因 label；仅属于同一知识点、含有相似符号，不足以对应具体错因。reason 用一句话指出本题的具体式子或条件，以及学生必须做哪一步来纠正该错误，不重复历史引文（程序会附上来源）。选入前逐题核对错误机制：例如“化简正确但未继续整体代入”须选给出整体关系并要求求值的题，单纯去括号或解方程不符合；“平方项外的负号漏保留”须核对化简后相关平方项的系数确实为负，只有负数底数、平方项化简后为正的题不符合。多个错因尽量覆盖，老师的范围与题型限制优先。找不到能训练某条错因的候选题时，不勉强对应；这类题 focus 使用普通侧重点或“一般巩固”，reason 只说明本题训练内容，不声称学生曾犯某种错误。`;
 }
 
 const raw = record;
@@ -280,7 +282,7 @@ export function assembleSmartPaperPlan(input: {
       }
       balanced.forEach((day, index) => {
         if (day.items.some((entry) => entry.day !== index) || day.items.length !== groups[index].items.length) {
-          groups[index].theme = `均衡练习${input.brief.focus.length ? ` · ${input.brief.focus.map((focus) => focus.label).join("、")}` : ""}`.slice(0, 120);
+          groups[index].theme = "均衡练习";
         }
         // Retain the model's within-day ordering as far as possible; balancing days does not imply sorting them.
         groups[index].items = day.items.sort((a, b) => a.position - b.position || a.day - b.day).map((entry) => entry.item);

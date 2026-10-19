@@ -119,7 +119,7 @@ test("balanced days correct a model's progression and preserve every selected qu
     assert.deepEqual(plan.groups.map((day) => day.items.map((item) => byId.get(item.id).level).sort()), [[1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5]], difficulty);
     assert.equal(new Set(plan.groups.flatMap((day) => day.items.map((item) => item.id))).size, 15);
     assert.ok(plan.groups.flatMap((day) => day.items).every((item) => item.reason === `依据 ${byId.get(item.id).code}`));
-    assert.ok(plan.groups.every((day) => day.theme.startsWith("均衡练习")));
+    assert.ok(plan.groups.every((day) => day.theme === "均衡练习"), "balancing must not append every focus label to printed headings");
   }
 });
 

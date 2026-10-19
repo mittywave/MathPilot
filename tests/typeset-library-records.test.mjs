@@ -131,7 +131,16 @@ test("智能组卷 records: own students only, questions once each, used questio
   assert.equal(second.title, "计算打卡", "the brief's title is the default");
   assert.deepEqual([...await records.usedQuestionIds(teacher, "s1")].sort(), ["q1", "q2", "q3", "q4"]);
 
+  const legacy = { ...second.plan, groups: second.plan.groups.map((group, index) => ({ ...group, theme: index ? "均衡练习 · 通分约分" : "均衡练习 · 带分数的四则混合运算、乘法分配律展开时负负相乘符号处理错误、提取负公因数时括号内符号出错" })) };
+  sqlite.prepare("UPDATE typeset_records SET plan_json = ? WHERE id = ?").run(JSON.stringify(legacy), second.id);
   const listed = await records.listTypesetRecords(teacher);
+  const reopened = listed.find((record) => record.id === second.id).plan;
+  assert.deepEqual(reopened.groups.map((group) => group.theme), ["均衡练习", "均衡练习 · 通分约分"], "old generated long headings are shortened; concise custom themes survive");
+  assert.deepEqual(reopened.groups.map((group) => group.items), legacy.groups.map((group) => group.items), "question order, focus and reasons survive reopening");
+  assert.deepEqual(reopened.findings, legacy.findings);
+  const { planDays } = await loadSource("lib/smart-paper-contract.ts");
+  assert.deepEqual(planDays(reopened, new Map(["q1", "q2", "q3"].map((id) => [id, { id }]))).map((day) => day.title), ["第 1 天 · 均衡练习", "第 2 天 · 均衡练习 · 通分约分"]);
+  assert.equal(sqlite.prepare("SELECT plan_json FROM typeset_records WHERE id = ?").get(second.id).plan_json, JSON.stringify(legacy), "viewing a legacy plan does not rewrite stored content");
   assert.equal(listed.find((record) => record.id === "w1").plan, null);
   assert.equal(listed.find((record) => record.id === "w1").sourceKind, "word");
   await assert.rejects(records.readTypesetSource(teacher, second.id), (error) => error instanceof Response && error.status === 404);
