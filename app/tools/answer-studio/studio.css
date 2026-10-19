@@ -1,12 +1,6 @@
 /* 文件转录页里还原经典配色的个别颜色（scripts/tokenize-colors.mjs 生成）。 */
 /* exact-classic:start */
 :root {
-  --studio-c-666666:#666666;
-  --studio-c-1b6862:#1b6862;
-  --studio-c-222222:#222222;
-  --studio-c-b40000:#b40000;
-}
-html[data-theme="dark"],html[data-style]:not([data-style="classic"]) {
   --studio-c-666666:color-mix(in srgb, var(--ink) 74%, var(--surface));
   --studio-c-1b6862:var(--accent-strong);
   --studio-c-222222:var(--ink);

@@ -79,9 +79,12 @@ const long = (hex) => hex.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/, "#$1$1$2$
 const light = tokenBlock(":root");
 const styles = Object.fromEntries(APPEARANCES.map((item) => [item.id, item.style === "classic" ? light : tokenBlock(`html[data-style="${item.style}"]`)]));
 
-test("the retained appearances keep their original colours", () => {
-  for (const [name, value] of Object.entries(CLASSIC.light)) assert.equal(long(light[name]), value, `light --${name}`);
-  assert.deepEqual([styles.tech.page, styles.tech.surface, styles.tech["accent-strong"]], ["#060a13", "#0c1322", "#22d3ee"]);
+test("both appearances take the product intro's colours", async () => {
+  const intro = (await readFile(new URL("../app/(home)/intro.css", import.meta.url), "utf8")).toLowerCase();
+  const mode = (selector) => Object.fromEntries([...intro.slice(intro.indexOf(`${selector} {`)).split("}")[0].matchAll(/--(bg|fg|acc):(#[0-9a-f]{6})/g)].map(([, name, value]) => [name, value]));
+  for (const [palette, colours] of [[light, mode(".mp-intro")], [styles.tech, mode('.mp-intro[data-mode="dark"]')]]) {
+    assert.deepEqual([palette.page, palette.ink, palette.green], [colours.bg, colours.fg, colours.acc]);
+  }
 });
 
 test("every style sets every colour token", () => {
