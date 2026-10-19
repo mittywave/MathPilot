@@ -13,9 +13,11 @@ export const metadata: Metadata = {
 
 // Arriving from the product page's 进入工作台 (?from=intro, the 题库's entrance marker), the page joins the view
 // transition the product page opted into, so the workbench fades in where the ∞'s sand lay. While that runs <html>
-// carries data-entering, and "mp-entered" says when it is over (the 题库 holds its entrance till then).
+// carries data-entering. The library releases the sand once its first cards have committed; "mp-entered" then
+// tells its rails to unfold. Waiting is bounded so a failed read or hydration never strands the user behind the sand.
 const entranceScript = `(() => {
-  if (new URLSearchParams(location.search).get("from") !== "intro") return;
+  const params = new URLSearchParams(location.search);
+  if (location.pathname !== "/library" || params.get("from") !== "intro" || params.has("view")) return;
   const optIn = document.createElement("style");
   optIn.textContent = "@view-transition{navigation:auto}";
   document.head.append(optIn);
@@ -23,12 +25,29 @@ const entranceScript = `(() => {
     const transition = event.viewTransition;
     if (!transition) return optIn.remove();
     const root = document.documentElement;
-    root.dataset.entering = "";
-    transition.finished.finally(() => {
+    const motion = matchMedia("(prefers-reduced-motion: reduce)");
+    const reveal = () => {
+      clearTimeout(timeout);
+      if (root.hasAttribute("data-entering")) root.dataset.entering = "";
+    };
+    const skip = () => transition.skipTransition();
+    const onMotion = () => { if (motion.matches) skip(); };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      removeEventListener("mp-library-ready", reveal);
+      removeEventListener("pagehide", skip);
+      motion.removeEventListener("change", onMotion);
       optIn.remove();
       delete root.dataset.entering;
       dispatchEvent(new Event("mp-entered"));
-    });
+    };
+    root.dataset.entering = document.querySelector('.app-shell[aria-busy="false"]') ? "" : "loading";
+    const timeout = setTimeout(reveal, 2500);
+    addEventListener("mp-library-ready", reveal, { once: true });
+    addEventListener("pagehide", skip, { once: true });
+    motion.addEventListener("change", onMotion);
+    transition.finished.then(cleanup, cleanup);
+    if (motion.matches) skip();
   }, { once: true });
 })();`;
 

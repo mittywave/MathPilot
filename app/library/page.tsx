@@ -422,10 +422,14 @@ export default function Home() {
   const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_FIRST;
   useEffect(() => {
     if (listPaging.key === listKey) return;
-    // After the frame that shows the first cards, not in the same one.
+    // Keep the first cards light while the intro fades in; rendering the next batch must not stall that handoff.
     let timer = 0;
-    const frame = requestAnimationFrame(() => { timer = window.setTimeout(() => setListPaging((current) => current.key === listKey ? current : { key: listKey, count: LIBRARY_PAGE })); });
-    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); };
+    const extend = () => { timer = window.setTimeout(() => setListPaging((current) => current.key === listKey ? current : { key: listKey, count: LIBRARY_PAGE })); };
+    const frame = requestAnimationFrame(() => {
+      if (document.documentElement.hasAttribute("data-entering")) window.addEventListener("mp-entered", extend, { once: true });
+      else extend();
+    });
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); window.removeEventListener("mp-entered", extend); };
   }, [listKey, listPaging.key]);
   // The basket question shown on the knowledge map: the one last clicked in the outline or the list, else the first.
   const [activeBasketId, setActiveBasketId] = useState("");
@@ -472,6 +476,7 @@ export default function Home() {
     const frame = window.requestAnimationFrame(() => {
       if (document.documentElement.hasAttribute("data-entering")) window.addEventListener("mp-entered", unfold, { once: true });
       else unfold();
+      window.dispatchEvent(new Event("mp-library-ready"));
     });
     return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); window.removeEventListener("mp-entered", unfold); };
   }, [libraryLoading, showSelected, showWrongBook, paperView]);
@@ -952,7 +957,7 @@ export default function Home() {
   }} /></Suspense></>;
 
   return (
-    <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()}>
+    <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()} aria-busy={libraryLoading}>
       <SiteHeader active={showWrongBook ? "students" : showSelected ? "basket" : "library"} user={authUser} loading={authLoading && !authUser} locale={pageLocale} basketCount={selectedIds.length}
         title={showWrongBook && (activeClassName || activeStudent) ? `${activeClassName ?? activeStudent?.name} · ${pageCopy.navStudents}` : undefined} onSignOut={signOut}
         onSelect={(section) => { if (section === "library") openLibrary(); else if (section === "students") void openWrongBook(); else { setShowWrongBook(false); setShowSelected(true); } }}

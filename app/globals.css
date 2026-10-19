@@ -474,9 +474,14 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 /* 从介绍页进入工作台（app/layout.tsx 开启的跨页视图过渡）：∞ 停成的沙线和沙尘淡去，工作台在同一位置淡入，像沙凝成实线 */
 ::view-transition-old(root) { animation:.45s ease both view-fade-out; }
 ::view-transition-new(root) { animation:.45s ease both view-fade-in; }
+/* Keep the arriving loading shell covered while the first questions render; the sand breathes until the real read ends. */
+html[data-entering="loading"]::view-transition { background:var(--page); }
+html[data-entering="loading"]::view-transition-old(root) { animation:1.2s ease-in-out infinite alternate view-sand-wait; mix-blend-mode:normal; }
+html[data-entering="loading"]::view-transition-new(root) { animation-play-state:paused; }
+@keyframes view-sand-wait { to { opacity:.78; } }
 @keyframes view-fade-out { to { opacity:0; } }
-@keyframes view-fade-in { from { opacity:0; } }
-@media (prefers-reduced-motion:reduce) { ::view-transition-old(root),::view-transition-new(root) { animation:none; } }
+@keyframes view-fade-in { from { opacity:0; } to { opacity:1; } }
+@media (prefers-reduced-motion:reduce) { ::view-transition-old(root),::view-transition-new(root),html[data-entering]::view-transition-old(root),html[data-entering]::view-transition-new(root) { animation:none; } }
 .publication-progress>i { width:120px; height:4px; overflow:hidden; border-radius:calc(4px*var(--radius-scale)); background:var(--surface-soft); }
 .publication-progress>i>em { display:block; height:100%; border-radius:calc(4px*var(--radius-scale)); background:var(--green); transition:width .2s ease; }
 .publication-progress.failed { color:var(--danger); }
