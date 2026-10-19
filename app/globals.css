@@ -2,53 +2,22 @@
 /* 外观 = 基调 html[data-theme]（light/dark）+ 风格 html[data-style]（classic/tech），由 app/layout.tsx 首屏脚本设置。
    页面颜色都写成这些语义变量或它们的 color-mix() 组合（scripts/tokenize-colors.mjs 转换），新增风格只需给变量赋值。
    --green 沿用旧名，表示主强调色；--accent-strong 是实心按钮底色，配 --on-accent 文字；--inverse 是始终深色的浮条（组卷条、提示）。 */
+/* 两套基调都取自介绍页（app/(home)/intro.css）：浅色是暖石灰底 + 墨绿，深色是炭黑底 + 灰绿；实心按钮像介绍页的“进入工作台”，浅色用墨黑、深色用米白。
+   语义色（成功/警告/错误…）降低饱和度，和石灰、炭黑底放在一起不跳。 */
 :root { color-scheme:light; --radius-scale:1; --topbar-h:56px;
-  --page:#f5f7f4; --surface:#fff; --surface-soft:#eef3f0; --ink:#24352f; --muted:#61706a; --line:#e4e9e6;
-  --green:#2f6b53; --green-soft:#edf5f0; --accent-strong:#2f6b53; --on-accent:#fff; --inverse:#203d31; --on-inverse:#fff; --shadow-tint:#1a2a22;
-  --success:#2b8257; --success-soft:#e5f2ea; --warn:#c18429; --warn-soft:#fff0dc; --warn-strong:#956227; --danger:#a34f39; --danger-soft:#fff0e8; --danger-strong:#b83229; --danger-fill:#a34f39; --on-fill:#fff;
-  --amber:#8b7134; --amber-soft:#fff8e6; --info:#6675c9; --info-soft:#edf0fb; --sky:#287cad; --sky-soft:#e8f2f9; --teal:#197b76; --teal-soft:#eff9f7; --violet:#72558d; --violet-soft:#f2edf7;
+  --page:#ebe9e5; --surface:#f7f6f3; --surface-soft:#e3e1dc; --ink:#151514; --muted:#63625d; --line:#d9d6d0;
+  --green:#3e5e4c; --green-soft:#dfe6e0; --accent-strong:#1b1b1a; --on-accent:#f1efea; --inverse:#1b1b1a; --on-inverse:#f1efea; --shadow-tint:#151514;
+  --success:#3f7a57; --success-soft:#e1e9e2; --warn:#b0802f; --warn-soft:#f2e9d6; --warn-strong:#84601f; --danger:#a3503b; --danger-soft:#f2e2db; --danger-strong:#a8392d; --danger-fill:#9e4a36; --on-fill:#fff;
+  --amber:#85703f; --amber-soft:#f1ebdc; --info:#5f6a97; --info-soft:#e5e6ed; --sky:#44708f; --sky-soft:#e1e8ed; --teal:#3e736d; --teal-soft:#e0eae7; --violet:#6e5c83; --violet-soft:#e9e4ed;
 }
-html[data-style="tech"] { color-scheme:dark; /* 科技风（深色基调）：近黑深蓝底、青色霓虹、利落的角 */ --radius-scale:.6;
-  --page:#060a13; --surface:#0c1322; --surface-soft:#121b2e; --ink:#e1ecff; --muted:#8296b8; --line:#1d2a44;
-  --green:#2ee6f6; --green-soft:#0a2836; --accent-strong:#22d3ee; --on-accent:#03121c; --inverse:#0f2340; --on-inverse:#e6f6ff; --shadow-tint:#000;
-  --success:#3ee6a0; --success-soft:#0b2b24; --warn:#ffc53d; --warn-soft:#2e2408; --warn-strong:#ffd36b; --danger:#ff6b8b; --danger-soft:#33121f; --danger-strong:#ff4d6d; --danger-fill:#e11d48; --on-fill:#fff;
-  --amber:#f5d33f; --amber-soft:#2b2709; --info:#8b9dff; --info-soft:#161d45; --sky:#3cc4ff; --sky-soft:#0b2740; --teal:#2de0c8; --teal-soft:#0a2b2a; --violet:#c792ff; --violet-soft:#24163f;
+html[data-style="tech"] { color-scheme:dark; /* 深色基调（id 仍叫 tech，兼容已保存的设置）：介绍页夜间的炭黑底、米白字、灰绿强调 */ --radius-scale:1;
+  --page:#111110; --surface:#191918; --surface-soft:#21211f; --ink:#f1efea; --muted:#9b988f; --line:#2d2c29;
+  --green:#9dbfaa; --green-soft:#1d2621; --accent-strong:#f1efea; --on-accent:#111110; --inverse:#262624; --on-inverse:#f1efea; --shadow-tint:#000;
+  --success:#8fc4a0; --success-soft:#1a271f; --warn:#d9b068; --warn-soft:#2a2418; --warn-strong:#e6c27f; --danger:#e39a86; --danger-soft:#2e1c17; --danger-strong:#ec8670; --danger-fill:#b5523d; --on-fill:#fff;
+  --amber:#d6c08a; --amber-soft:#28241a; --info:#a9b2da; --info-soft:#1d1f2a; --sky:#93b8d2; --sky-soft:#19232b; --teal:#8cc2b9; --teal-soft:#172624; --violet:#bfa8d6; --violet-soft:#241f2b;
 }
 /* exact-classic:start */
 :root {
-  --c-a06135:#a06135;
-  --c-537493:#537493;
-  --c-f0f2e9:#f0f2e9;
-  --c-6f3c2e:#6f3c2e;
-  --c-274d3d:#274d3d;
-  --c-f5f2f8:#f5f2f8;
-  --c-cfc0df:#cfc0df;
-  --c-a68bbf:#a68bbf;
-  --c-64477d:#64477d;
-  --c-faf7fc:#faf7fc;
-  --c-74a088:#74a088;
-  --c-416f9a:#416f9a;
-  --c-5f8c74:#5f8c74;
-  --c-a65e3c:#a65e3c;
-  --c-a65d3d:#a65d3d;
-  --c-c89232:#c89232;
-  --c-9a671f:#9a671f;
-  --c-a35e3e:#a35e3e;
-  --c-a45d3e:#a45d3e;
-  --c-2b8b5a:#2b8b5a;
-  --c-9e5d41:#9e5d41;
-  --c-101713:#101713;
-  --c-a35e37:#a35e37;
-  --c-bd6552:#bd6552;
-  --c-b55c49:#b55c49;
-  --c-99641e:#99641e;
-  --c-d1a34b:#d1a34b;
-  --c-d36b5d:#d36b5d;
-  --c-b05847:#b05847;
-  --c-95671f:#95671f;
-  --c-96631d:#96631d;
-}
-html[data-theme="dark"],html[data-style]:not([data-style="classic"]) {
   --c-a06135:color-mix(in srgb, var(--danger) 39%, var(--warn-strong));
   --c-537493:color-mix(in srgb, color-mix(in srgb, var(--info) 68%, var(--surface-soft)) 56%, var(--ink));
   --c-f0f2e9:color-mix(in srgb, var(--green) 4%, var(--page));
@@ -1073,7 +1042,6 @@ button.drop-entry.compact b { font-size:14px; }
 .grading-figures { display:flex; flex-wrap:wrap; gap:10px; }.grading-figures img { display:block; max-width:min(100%,340px); max-height:230px; object-fit:contain; padding:6px; border-radius:calc(8px*var(--radius-scale)); background:white; }.grading-figures img.options { max-width:100%; }
 
 /* 风格点缀（只在对应风格下生效；纯 CSS，不加载额外资源） */
-html[data-style="tech"] body { background-image:linear-gradient(color-mix(in srgb, var(--green) 5%, transparent) 1px, transparent 1px),linear-gradient(90deg, color-mix(in srgb, var(--green) 5%, transparent) 1px, transparent 1px); background-size:32px 32px; }
 
 html[data-style="dopamine"] body { background-image:radial-gradient(circle at 6% 0, color-mix(in srgb, var(--warn) 16%, transparent), transparent 320px),radial-gradient(circle at 96% 4%, color-mix(in srgb, var(--info) 12%, transparent), transparent 360px); background-repeat:no-repeat; }
 html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -120px, color-mix(in srgb, var(--green) 12%, transparent), transparent 520px); background-repeat:no-repeat; }
