@@ -13,7 +13,7 @@ const text = (value: unknown, max = 200) => typeof value === "string" ? value.tr
 export const emptyPaperMetadata = (): PaperMetadata => ({ kind: "school", year: "", school: "", district: "", grade: "", term: "", examType: "", moduleId: "" });
 export function paperMetadata(value: unknown): PaperMetadata {
   const input = (value && typeof value === "object" ? value : {}) as Partial<PaperMetadata>;
-  return { kind: ["school", "mock", "admission", "custom"].includes(input.kind ?? "") ? input.kind! : "school", year: text(input.year,40), school: text(input.school), district: text(input.district), grade: text(input.grade,20), term: text(input.term,20), examType: text(input.examType,60), moduleId: text(input.moduleId) };
+  return { kind: ["school", "mock", "admission", "custom"].includes(input.kind ?? "") ? input.kind! : "school", year: text(input.year,40), school: text(input.school), district: text(input.district), grade: text(input.grade,20), term: text(input.term,20), examType: text(input.examType,60), moduleId: text(input.moduleId), ...(input.autoFolder === true ? { autoFolder: true } : {}) };
 }
 export function paperFolderDescendants(folders: PaperFolder[], id: string) {
   const ids = new Set([id]);
@@ -24,6 +24,37 @@ export function paperFolderPath(folders: PaperFolder[], id: string) {
   const path: string[] = [], seen = new Set<string>();
   for (let node = folders.find(f => f.id === id); node && !seen.has(node.id); node = folders.find(f => f.id === node!.parentId)) { seen.add(node.id); path.unshift(node.name); }
   return path.join(" / ");
+}
+/** Match existing folders only. A vague title stays in a broad folder, never a guessed semester. */
+export function inferPaperFolder(folders: PaperFolder[], title: string, metadata?: PaperMetadata): string {
+  const normalize = (value: string) => value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu, "")
+    .replace(/初一|7年级|七(?=[上下])/g, "七年级").replace(/初二|8年级|八(?=[上下])/g, "八年级").replace(/初三|9年级|九(?=[上下])/g, "九年级")
+    .replace(/上学期|第一学期|第1学期/g, "上").replace(/下学期|第二学期|第2学期/g, "下")
+    .replace(/第?([一二三123])次?模拟(?:考试|考|测试)?/g, (_, n: string) => `${({ "1": "一", "2": "二", "3": "三" } as Record<string,string>)[n] ?? n}模`)
+    .replace(/([123])模/g, (_, n: string) => `${({ "1": "一", "2": "二", "3": "三" } as Record<string,string>)[n]}模`).replace(/自招/g, "自主招生");
+  const key = normalize(title), grade = key.match(/([七八九])年级/)?.[1] ?? normalize(metadata?.grade ?? "").match(/([七八九])年级/)?.[1];
+  const term = key.match(/[七八九]年级([上下])/)?.[1] ?? title.match(/([上下])学期/)?.[1] ?? (/第[一1]学期/.test(title) ? "上" : /第[二2]学期/.test(title) ? "下" : metadata?.term);
+  const round = key.match(/([一二三])模/)?.[1] ?? normalize(metadata?.examType ?? "").match(/([一二三])模/)?.[1];
+  const kind = /自主招生/.test(key) ? "admission" : /[一二三]模|中考.*(?:模拟|仿真)/.test(key) ? "mock" : /年级|期中|期末|统考|月考|周练|中考/.test(key) ? "school" : metadata?.kind ?? "school";
+  const root = `paper-${kind === "custom" ? "school" : kind}`;
+  const specific = kind === "mock" && round ? `paper-mock${({ 一: 1, 二: 2, 三: 3 } as Record<string,number>)[round]}`
+    : kind === "school" && grade && (term === "上" || term === "下") ? `paper-g${({ 七: 7, 八: 8, 九: 9 } as Record<string,number>)[grade]}${term === "上" ? "a" : "b"}` : root;
+  const byId = new Map(folders.map(folder => [folder.id, folder]));
+  let best = byId.get(specific) ?? byId.get(root), bestScore = best ? (best.id === root ? 1 : 5) : 0;
+  for (const folder of folders) {
+    const name = normalize(folder.name);
+    if (name.length < 2 || !key.includes(name)) continue;
+    let score = name.length, valid = true;
+    const seen = new Set([folder.id]);
+    for (let parent = byId.get(folder.parentId ?? ""); parent && !seen.has(parent.id); parent = byId.get(parent.parentId ?? "")) {
+      seen.add(parent.id);
+      if (["paper-school", "paper-mock", "paper-admission"].includes(parent.id)) { if (parent.id !== root) valid = false; }
+      else if (key.includes(normalize(parent.name))) score += normalize(parent.name).length;
+      else valid = false;
+    }
+    if (valid && score > bestScore) { best = folder; bestScore = score; }
+  }
+  return best?.id ?? folders.find(folder => !folder.parentId)?.id ?? "";
 }
 // Prefixing the stem preserves leading Chinese conditions in brackets. The legacy matcher may remove
 // source notes; paper deduplication must never drop mathematical conditions or use fuzzy text matching.

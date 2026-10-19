@@ -46,6 +46,68 @@ function draft(questions){return{title:"2025 深圳七年级期末试卷",metada
 test("paper folders preserve descendants, reject cycles and only delete empty folders",async()=>{
   const f=await fixture();try{let folders=await f.api.readPaperFolders();assert.equal(folders.length,12);await f.api.savePaperFolder({name:"自定义",parentId:"paper-g7a"});folders=await f.api.readPaperFolders();const added=folders.find(x=>x.name==="自定义");await assert.rejects(f.api.savePaperFolder({id:"paper-school",name:"期中期末与统考",parentId:added.id}),e=>e.status===400);await f.api.savePaperFolder({id:added.id,name:"改名",parentId:"paper-mock"});assert.equal((await f.api.readPaperFolders()).find(x=>x.id===added.id).parentId,"paper-mock");f.paper("p1");await assert.rejects(f.api.deletePaperFolder(f.user,"paper-g7a"),e=>e.status===400);await assert.rejects(f.api.deletePaperFolder({...f.user,role:"member"},added.id),e=>e.status===403);await f.api.deletePaperFolder(f.user,added.id);assert.ok(!(await f.api.readPaperFolders()).some(x=>x.id===added.id));}finally{f.sqlite.close();}
 });
+test("automatic paper folders follow title aliases, existing hierarchy and conservative fallbacks",async()=>{
+ const f=await fixture();try{
+  const folders=await f.api.readPaperFolders();
+  for(const [title,expected] of [
+   ["2026-2027学年深圳市八年级（上）第1周周练数学试卷","paper-g8a"],
+   ["初一下学期期末试卷","paper-g7b"],["7年级第一学期期中数学","paper-g7a"],
+   ["九下数学统考试卷","paper-g9b"],["深圳中考第一次模拟考试","paper-mock1"],
+   ["2026深圳中考第2次模拟考试","paper-mock2"],["深圳中考三模数学","paper-mock3"],
+   ["中考模拟数学试卷","paper-mock"],["2026自招数学试卷","paper-admission"],
+   ["八年级数学试卷","paper-school"],["扫描件","paper-school"],
+   ["八年级下学期期末模拟试卷","paper-g8b"],
+  ])assert.equal(f.rules.inferPaperFolder(folders,title),expected,title);
+  await f.api.savePaperFolder({name:"深圳中学",parentId:"paper-g8a"});
+  await f.api.savePaperFolder({name:"深圳中学",parentId:"paper-g7a"});
+  const nested=await f.api.readPaperFolders(),target=nested.find(x=>x.name==="深圳中学"&&x.parentId==="paper-g8a");
+  assert.equal(f.rules.inferPaperFolder(nested,"2026深圳中学八年级上期末试卷"),target.id);
+  assert.equal(f.rules.inferPaperFolder(nested,"2026深圳中学八年级下期末试卷"),"paper-g8b");
+  assert.equal(f.rules.inferPaperFolder(nested.filter(x=>x.id!=="paper-mock2"),"中考二模"),"paper-mock");
+  assert.equal(f.rules.inferPaperFolder([],"初二上数学"),"");
+ }finally{f.sqlite.close();}
+});
+test("auto filing uses the recognized title at commit; manual and legacy folders stay selected",async()=>{
+ const f=await fixture();try{
+  const create=(name,folder,bytes)=>f.api.createPaper(f.user,new Request(`http://local/api/papers?${new URLSearchParams({fileName:name,...(folder===undefined?{}:{folder})})}`,{method:"POST",body:`%PDF-${bytes}`}));
+  const automatic=await create("扫描件.pdf",undefined,"auto"),manual=await create("初二上.pdf","paper-admission","manual");
+  assert.equal(automatic.paper.folderId,"paper-school");assert.equal(automatic.paper.metadata.autoFolder,true);
+  assert.equal(manual.paper.metadata.autoFolder,undefined);
+  const d={...draft([question()]),title:"2026八年级下学期期末试卷"};
+  await f.api.preparePaperDraft(automatic.paper.id,d);
+  assert.equal((await f.api.readPaperDraft(automatic.paper.id)).metadata.autoFolder,true);
+  for(const entry of [automatic,manual]){
+   f.sqlite.prepare("UPDATE studio_jobs SET status='running',run_id='run-1' WHERE id=?").run(entry.paper.jobId);
+   await f.api.commitPaper(entry.paper.id,structuredClone(d),f.user,"run-1");
+  }
+  assert.equal((await f.api.readPaper(automatic.paper.id,f.user)).folderId,"paper-g8b");
+  assert.equal((await f.api.readPaper(manual.paper.id,f.user)).folderId,"paper-admission");
+  const repeated=await create("扫描件.pdf","paper-mock","auto");
+  assert.equal(repeated.paper.id,automatic.paper.id);assert.equal(repeated.paper.folderId,"paper-g8b");
+  f.paper("legacy");await f.api.commitPaper("legacy",structuredClone(d),f.user,"run-1");
+  assert.equal((await f.api.readPaper("legacy",f.user)).folderId,"paper-g7a");
+ }finally{f.sqlite.close();}
+});
+test("manual corrections override automatic filing on retry and cancelled commits cannot move a paper",async()=>{
+ const f=await fixture();try{
+  const created=await f.api.createPaper(f.user,new Request("http://local/api/papers?fileName=scan.pdf",{method:"POST",body:"%PDF-retry"}));
+  const id=created.paper.id,d={...draft([question()]),title:"中考二模数学试卷"};
+  f.sqlite.prepare("UPDATE studio_jobs SET status='running',run_id='run-1' WHERE id=?").run(created.paper.jobId);
+  await assert.rejects(f.api.commitPaper(id,structuredClone(d),f.user,"cancelled-run"),/NOT NULL/);
+  assert.equal((await f.api.readPaper(id,f.user)).folderId,"paper-school");assert.equal(f.count(),0);
+  f.sqlite.prepare("UPDATE studio_jobs SET status='failed' WHERE id=?").run(created.paper.jobId);
+  await f.api.updatePaper(id,{folderId:"paper-admission",metadata:{...d.metadata,autoFolder:true}});
+  await f.api.preparePaperDraft(id,d);
+  assert.equal((await f.api.readPaperDraft(id)).metadata.autoFolder,undefined);
+  f.sqlite.prepare("UPDATE studio_jobs SET status='running' WHERE id=?").run(created.paper.jobId);
+  await f.api.commitPaper(id,d,f.user,"run-1");
+  assert.equal((await f.api.readPaper(id,f.user)).folderId,"paper-admission");
+  await f.api.updatePaper(id,{folderId:"",title:"2026深圳中考三模数学"});
+  assert.equal((await f.api.readPaper(id,f.user)).folderId,"paper-mock3");
+  await f.api.updatePaper(id,{title:"初一下学期期末数学"});
+  assert.equal((await f.api.readPaper(id,f.user)).folderId,"paper-g7b");
+ }finally{f.sqlite.close();}
+});
 test("whole paper commits ordered references and permanent IDs; repeats and concurrent papers reuse questions",async()=>{
  const f=await fixture();try{f.paper("p1");const d=draft([question(),question("计算 $3+4$ 的值。",{answer:"7"})]);await f.api.commitPaper("p1",d,f.user,"run-1");let result=await f.api.readPaper("p1",f.user);assert.equal(result.status,"done");assert.deepEqual(result.items.map(i=>i.number),["1","2"]);assert.ok(result.items.every(i=>/^\d{4,}$/.test(i.question.code)));assert.equal(f.count(),2);await f.api.commitPaper("p1",d,f.user,"run-1");assert.equal(f.count(),2);
  f.paper("p2");f.paper("p3");await Promise.all([f.api.commitPaper("p2",{...d,title:"另一个来源"},f.user,"run-1"),f.api.commitPaper("p3",d,f.user,"run-1")]);assert.equal(f.count(),2);const again=await f.api.readPaper("p2",f.user);assert.deepEqual(again.items.map(i=>i.questionId),result.items.map(i=>i.questionId));assert.equal((await f.api.readPaperFolders()).find(x=>x.id==="paper-school").count,3);

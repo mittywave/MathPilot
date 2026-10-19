@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { FolderIcon } from "./CategoryTree";
 import type { AuthUser, ExamPaper, LibraryModule, PaperDetail, PaperFolder, PaperMetadata } from "../../lib/types";
-import { emptyPaperMetadata, paperDraftIssues, paperFolderDescendants, paperFolderPath, type PaperDraft } from "../../lib/papers";
+import { emptyPaperMetadata, inferPaperFolder, paperDraftIssues, paperFolderDescendants, paperFolderPath, type PaperDraft } from "../../lib/papers";
 import { jobsApi, postJson, uploadJobPage } from "./RecognitionJobs";
 import { PaperMoreMenu } from "./PaperMoreMenu";
 import { useConfirm } from "./ConfirmDialog";
@@ -102,11 +102,19 @@ function MetadataFields({metadata,onChange,modules}:{metadata:PaperMetadata;onCh
     {metadata.kind==="custom"&&<label>题库模块<select value={metadata.moduleId} onChange={e=>onChange({...metadata,moduleId:e.target.value})}><option value="">请选择</option>{modules.map(m=><option value={m.id} key={m.id}>{m.name}</option>)}</select></label>}
   </div>;
 }
-export function PaperImportDialog({folders,folderId,modules,onClose,onUploaded,onNotice}:{folders:PaperFolder[];folderId:string;modules:LibraryModule[];onClose:()=>void;onUploaded:(folder:string)=>void;onNotice:Notice}) {
-  const [file,setFile]=useState<File|null>(null),[folder,setFolder]=useState(folderId||folders[0]?.id||""),[moduleId,setModule]=useState(""),[busy,setBusy]=useState(false),[progress,setProgress]=useState(""),[error,setError]=useState("");
+export function PaperImportDialog({folders,modules,onClose,onUploaded,onNotice}:{folders:PaperFolder[];modules:LibraryModule[];onClose:()=>void;onUploaded:(folder:string)=>void;onNotice:Notice}) {
+  const [file,setFile]=useState<File|null>(null),[folder,setFolder]=useState(""),[moduleId,setModule]=useState(""),[busy,setBusy]=useState(false),[progress,setProgress]=useState(""),[error,setError]=useState(""),[dragging,setDragging]=useState(false);
   const dialogRef=usePaperDialog(true,onClose,busy);
-  async function upload(){if(!file||!folder||busy)return;setBusy(true);setError("");try{
-    if(!/\.(docx|pdf)$/i.test(file.name)||file.size>80*1024*1024)throw new Error("请选择 80MB 以内的一份 .docx 或 PDF 文件");
+  const fileRef=useRef<HTMLInputElement>(null);
+  function chooseFiles(files:File[]){
+    if(busy||!files.length)return;
+    setDragging(false);setProgress("");setError("");
+    if(files.length!==1){setFile(null);setError("每次只能录入一份试卷，请选择一个文件");return;}
+    const next=files[0];
+    if(!/\.(docx|pdf)$/i.test(next.name)||!next.size||next.size>80*1024*1024){setFile(null);setError("请选择一份非空、80MB 以内的 Word（.docx）或 PDF 文件；旧版 .doc 请先另存为 .docx");return;}
+    setFile(next);
+  }
+  async function upload(){if(!file||!folders.length||busy)return;setBusy(true);setError("");try{
     setProgress("正在保存试卷原文件…");
     const result=await jobsApi<{paper:ExamPaper;existing:boolean}>(`/api/papers?${new URLSearchParams({fileName:file.name,folder,moduleId})}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});
     if(result.existing&&result.paper.status!=="uploading"){onNotice(result.paper.status==="done"?"这份文件已经收录，已保留原试卷和 ID":"这份文件已有录入任务，可在试卷列表继续");onUploaded(result.paper.folderId);onClose();return;}
@@ -125,25 +133,41 @@ export function PaperImportDialog({folders,folderId,modules,onClose,onUploaded,o
       else{const {readStudioFilesInBatches}=await import("../../lib/answer-studio-images");await readStudioFilesInBatches([file],"question","",setProgress,async batch=>{for(const page of batch)await uploadPage(page);});}
       if(!count)throw new Error("文件中没有可识别的页面");
     }
-    await jobsApi(`/api/papers/${result.paper.id}`,patch({action:"start"}));onNotice("试卷已转入后台，识别完整后会自动入库");onUploaded(result.paper.folderId);onClose();
+    await jobsApi(`/api/papers/${result.paper.id}`,patch({action:"start"}));onNotice("试卷已转入后台，识别完整后会自动入库");onUploaded(folder?result.paper.folderId:"");onClose();
   }catch(e){setError(errorText(e));}finally{setBusy(false);}}
-  return <div className="modal-backdrop"><section ref={dialogRef} tabIndex={-1} className="modal paper-import-dialog" role="dialog" aria-modal="true" aria-label="录入整套试卷"><div className="modal-head"><h2>录入试卷</h2><button className="close" aria-label="关闭录入" disabled={busy} onClick={onClose}>×</button></div><p className="subtext">上传完整 Word 或 PDF，系统自动拆题、归类并加入题库。答案可以放在同一份文件中。</p>
-    <label className="field">试卷文件<input type="file" accept=".docx,.pdf" disabled={busy} onChange={e=>setFile(e.target.files?.[0]??null)}/></label>
-    <label className="field">试卷文件夹<select value={folder} disabled={busy} onChange={e=>setFolder(e.target.value)}>{folders.map(f=><option value={f.id} key={f.id}>{paperFolderPath(folders,f.id)}</option>)}</select></label>
+  return <div className="modal-backdrop"><section ref={dialogRef} tabIndex={-1} className="modal paper-import-dialog" role="dialog" aria-modal="true" aria-label="录入整套试卷"
+    onPaste={event=>{const files=[...event.clipboardData.files];if(files.length){event.preventDefault();event.stopPropagation();chooseFiles(files);}}}
+    onDragOver={event=>{if(event.dataTransfer.types.includes("Files")){event.preventDefault();event.dataTransfer.dropEffect=busy?"none":"copy";}}}
+    onDrop={event=>{if(event.dataTransfer.types.includes("Files")){event.preventDefault();event.stopPropagation();setDragging(false);chooseFiles([...event.dataTransfer.files]);}}}>
+    <div className="modal-head"><h2>录入试卷</h2><button className="close" aria-label="关闭录入" disabled={busy} onClick={onClose}>×</button></div><p className="subtext">上传完整 Word 或 PDF，系统自动拆题、归类并加入题库。答案可以放在同一份文件中。</p>
+    <div className="paper-file-field">
+      <button type="button" className="file-dropzone paper-file-dropzone" data-dragging={dragging} disabled={busy} aria-label={file?`更换试卷文件：${file.name}`:"选择试卷文件，也可拖入或粘贴"} aria-describedby="paper-file-help" onClick={()=>fileRef.current?.click()}
+        onDragEnter={event=>{if(!busy&&event.dataTransfer.types.includes("Files"))setDragging(true);}}
+        onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setDragging(false);}}>
+        <svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 3H8a2 2 0 0 0-2 2v22a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V10Z"/><path d="M19 3v7h7M16 24V14m-4 4 4-4 4 4"/></svg>
+        <strong>{dragging?"松开以选择这份试卷":file?file.name:"点击选择或将试卷拖到这里"}</strong>
+        <span>{file?`${/\.pdf$/i.test(file.name)?"PDF":"Word"} · ${file.size>=1024*1024?`${(file.size/1024/1024).toFixed(1)} MB`:`${Math.max(1,Math.ceil(file.size/1024))} KB`} · 点击更换`:"也可直接粘贴文件（⌘V / Ctrl+V）"}</span>
+        <small id="paper-file-help">支持 Word（.docx）或 PDF · 每次一份 · 最大 80MB</small>
+      </button>
+      <input ref={fileRef} hidden type="file" aria-label="试卷文件" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={busy} onChange={event=>{chooseFiles([...event.target.files??[]]);event.target.value="";}}/>
+      {file&&<div className="paper-file-selected" role="status"><span>已选择试卷文件</span><button type="button" disabled={busy} onClick={()=>{setFile(null);setError("");setProgress("");dialogRef.current?.querySelector<HTMLButtonElement>(".paper-file-dropzone")?.focus();}}>移除</button></div>}
+    </div>
+    <label className="field">试卷文件夹<select value={folder} disabled={busy} onChange={e=>setFolder(e.target.value)}><option value="">自动按试卷标题归档</option>{folders.map(f=><option value={f.id} key={f.id}>{paperFolderPath(folders,f.id)}</option>)}</select></label>
+    {!folder&&<p className="paper-folder-hint">{file?`按文件名暂放「${paperFolderPath(folders,inferPaperFolder(folders,file.name))||"暂无文件夹"}」，识别原卷标题后自动归档。`:"根据原卷标题匹配现有文件夹；信息不足时保留在上级目录。"}</p>}
     <label className="field">题目归属<select value={moduleId} disabled={busy} onChange={e=>setModule(e.target.value)}><option value="">自动按试卷类别归类</option>{modules.map(m=><option value={m.id} key={m.id}>自定义 · {m.name}</option>)}</select></label>
     {progress&&busy&&<p className="paper-job-state" role="status">{progress}</p>}{error&&<p className="paper-error" role="alert">{error}</p>}
-    <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button><button className="primary-button" disabled={busy||!file||!folder} onClick={()=>void upload()}>{busy?"准备中…":"开始录入"}</button></div>
+    <div className="modal-actions"><button className="secondary" disabled={busy} onClick={onClose}>取消</button><button className="primary-button" disabled={busy||!file||!folders.length} onClick={()=>void upload()}>{busy?"准备中…":"开始录入"}</button></div>
   </section></div>;
 }
 
 function PaperEditor({paper,folders,modules,onClose,onSaved,onNotice}:{paper:ExamPaper;folders:PaperFolder[];modules:LibraryModule[];onClose:()=>void;onSaved:()=>void;onNotice:Notice}) {
-  const [title,setTitle]=useState(paper.title),[folder,setFolder]=useState(paper.folderId),[metadata,setMetadata]=useState(paper.metadata),[draft,setDraft]=useState<PaperDraft|null>(null),[loading,setLoading]=useState(paper.status!=="done"),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [title,setTitle]=useState(paper.title),[folder,setFolder]=useState(paper.metadata.autoFolder?"":paper.folderId),[metadata,setMetadata]=useState(paper.metadata),[draft,setDraft]=useState<PaperDraft|null>(null),[loading,setLoading]=useState(paper.status!=="done"),[busy,setBusy]=useState(false),[error,setError]=useState("");
   useEffect(()=>{if(paper.status==="done")return;let live=true;void jobsApi<{draft:PaperDraft|null}>(`/api/papers/${paper.id}?draft=1`).then(result=>{if(live){setDraft(result.draft);if(result.draft){setTitle(result.draft.title);setMetadata(result.draft.metadata);}}}).catch(e=>{if(live)setError(errorText(e));}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[paper.id,paper.status]);
   const dialogRef=usePaperDialog(true,onClose,busy);
   function itemChange(index:number,changes:Partial<PaperDraft["questions"][number]>){setDraft(current=>current?{...current,classified:false,questions:current.questions.map((q,i)=>i===index?{...q,...changes}:q)}:null);}
   async function save(){setBusy(true);setError("");try{await jobsApi(`/api/papers/${paper.id}`,patch({title,folderId:folder,metadata}));if(draft){const updated={...draft,title,metadata};const issues=paperDraftIssues(updated);if(issues.length)throw new Error(issues.slice(0,5).join("；"));await jobsApi(`/api/papers/${paper.id}`,patch({action:"prepare",draft:updated}));await jobsApi(`/api/papers/${paper.id}`,patch({action:"start"}));}onNotice(draft?"修正已保存，正在继续入库":"试卷信息已更新");onSaved();}catch(e){setError(errorText(e));}finally{setBusy(false);}}
   return <div className="modal-backdrop"><section ref={dialogRef} tabIndex={-1} className={`modal paper-editor${draft?" with-questions":""}`} role="dialog" aria-modal="true" aria-label="编辑试卷"><div className="modal-head"><h2>{paper.status==="done"?"编辑试卷信息":"修正试卷"}</h2><button className="close" aria-label="关闭编辑" disabled={busy} onClick={onClose}>×</button></div>
-    <label className="field">试卷标题<input value={title} onChange={e=>setTitle(e.target.value)}/></label><label className="field">文件夹<select value={folder} onChange={e=>setFolder(e.target.value)}>{folders.map(f=><option key={f.id} value={f.id}>{paperFolderPath(folders,f.id)}</option>)}</select></label>
+    <label className="field">试卷标题<input value={title} onChange={e=>setTitle(e.target.value)}/></label><label className="field">文件夹<select value={folder} onChange={e=>setFolder(e.target.value)}><option value="">自动按试卷标题归档</option>{folders.map(f=><option key={f.id} value={f.id}>{paperFolderPath(folders,f.id)}</option>)}</select></label>
     <MetadataFields metadata={metadata} modules={modules} onChange={setMetadata}/>
     {loading?<p>正在读取识别结果…</p>:paper.status!=="done"&&!draft?<p>页面识别尚未完成，请关闭后点击“继续”重试未完成的页面。</p>:null}
     {paper.error&&<p className="paper-error">{paper.error}</p>}

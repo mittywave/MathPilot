@@ -192,7 +192,7 @@ export type LibraryData = {
 };
 
 export type PaperFolder = { id: string; parentId: string | null; name: string; position: number; count: number };
-export type PaperMetadata = { kind: "school" | "mock" | "admission" | "custom"; year: string; school: string; district: string; grade: string; term: string; examType: string; moduleId: string };
+export type PaperMetadata = { kind: "school" | "mock" | "admission" | "custom"; year: string; school: string; district: string; grade: string; term: string; examType: string; moduleId: string; autoFolder?: boolean };
 export type PaperItem = { questionId: string; number: string; section: string; page: number };
 export type ExamPaper = {
   id: string; folderId: string; title: string; metadata: PaperMetadata; fileName: string;

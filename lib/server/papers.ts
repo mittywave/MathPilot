@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { AuthUser, ExamPaper, PaperDetail, PaperFolder, PaperItem, PaperMetadata, Question } from "../types";
-import { paperDraftIssues, paperFolderDescendants, paperMetadata, paperPagePrompt, paperPageSchema, normalizePaperPage, paperQuestionIdentity, type PaperDraft, type PaperPage } from "../papers";
+import { paperDraftIssues, paperFolderDescendants, inferPaperFolder, paperMetadata, paperPagePrompt, paperPageSchema, normalizePaperPage, paperQuestionIdentity, type PaperDraft, type PaperPage } from "../papers";
 import { categoryInsertStatement, hashBytes, hashText, moduleInsertStatement, prepareQuestion, questionInsertStatement, readLibrary, requireAdmin, resolveLibraryContext } from "./library";
 import { createStudioJob, deleteStudioJob, startStudioJob, cancelStudioJob, type LibraryImportDraft, type LibraryImportPage } from "./answer-studio-jobs";
 import { callStructuredAi } from "./ai-gateway";
@@ -81,16 +81,17 @@ export async function paperJobOwner(row:PaperRow):Promise<AuthUser> {
   if(!user)throw fail("录入任务不存在，请重新上传原文件",409);return user;
 }
 export async function createPaper(user:AuthUser,request:Request) {
-  const query=new URL(request.url).searchParams, name=clean(query.get("fileName")), folder=clean(query.get("folder"));
+  const query=new URL(request.url).searchParams, name=clean(query.get("fileName")), selectedFolder=clean(query.get("folder"));
   if(!/\.(docx|pdf)$/i.test(name))throw fail("请选择一份 Word（.docx）或 PDF");
-  if(!folder || !(await readPaperFolders()).some(f=>f.id===folder))throw fail("请选择试卷文件夹");
+  const folders=await readPaperFolders(), folder=selectedFolder||inferPaperFolder(folders,name);
+  if(!folders.some(f=>f.id===folder))throw fail("请选择有效的试卷文件夹，或先新建一个文件夹");
   if(Number(request.headers.get("content-length"))>80*1024*1024)throw fail("文件不能超过 80MB",413);
   const bytes=new Uint8Array(await request.arrayBuffer());if(!bytes.length||bytes.byteLength>80*1024*1024)throw fail("文件为空或超过 80MB",413);
   if(/\.pdf$/i.test(name)?new TextDecoder().decode(bytes.slice(0,5))!=="%PDF-":bytes[0]!==80||bytes[1]!==75)throw fail("文件内容与扩展名不符");
   const hash=await hashBytes(bytes), previous=await db().prepare(`${SELECT} WHERE p.source_hash=?`).bind(hash).first<PaperRow>();
   if(previous)return{paper:summary(previous),existing:true};
   const id=crypto.randomUUID(), now=Date.now(), type=/\.pdf$/i.test(name)?"application/pdf":"application/vnd.openxmlformats-officedocument.wordprocessingml.document", key=`papers/${id}/source`;
-  const title=name.replace(/\.(docx|pdf)$/i,""), metadata=paperMetadata({moduleId:clean(query.get("moduleId")),kind:query.get("moduleId")?"custom":undefined});
+  const title=name.replace(/\.(docx|pdf)$/i,""), metadata=paperMetadata({moduleId:clean(query.get("moduleId")),kind:query.get("moduleId")?"custom":undefined,autoFolder:!selectedFolder});
   const job=await createStudioJob(user,{kind:"import",title});
   let created;
   try {
@@ -115,7 +116,7 @@ export async function preparePaperDraft(id:string,raw:unknown) {
   if(!draft || !Array.isArray(draft.questions) || !draft.questions.length || draft.questions.length>300)throw fail("试卷草稿格式无效");
   for(const item of draft.questions){if(!item||!item.question||typeof item.question.stem!=="string"||item.question.stem.length>100000||!QUESTION_CONTENT_TYPES.includes(item.question.type)||typeof item.question.answer!=="string"||typeof item.question.analysis!=="string"||!Array.isArray(item.question.options)||item.question.options.some(o=>typeof o!=="string")||!Array.isArray(item.categoryPath)||!item.categoryPath.every(p=>typeof p==="string"&&p.length<=100))throw fail("题干、选项或分类格式无效");
     item.number=clean(item.number,40);item.section=clean(item.section);item.page=Math.max(0,Number(item.page)||0);item.warnings=Array.isArray(item.warnings)?item.warnings.map(w=>clean(w,500)):[];}
-  draft.title=clean(draft.title)||row.title;draft.metadata=paperMetadata(draft.metadata);draft.issues=Array.isArray(draft.issues)?draft.issues.map(i=>clean(i,500)):[];
+  draft.title=clean(draft.title)||row.title;draft.metadata=paperMetadata({...draft.metadata,autoFolder:paperMetadata(JSON.parse(row.metadata_json)).autoFolder});draft.issues=Array.isArray(draft.issues)?draft.issues.map(i=>clean(i,500)):[];
   if(new TextEncoder().encode(JSON.stringify(draft)).byteLength>45*1024*1024)throw fail("试卷草稿过大，请缩小图片后重试",413);
   draft.edited = row.status === "failed";
   await writePaperDraft(id,draft);
@@ -125,10 +126,11 @@ export async function updatePaper(id:string,raw:{action?:string;draft?:unknown;t
   if(raw.action==="prepare"){await preparePaperDraft(id,raw.draft);return;}
   if(raw.action==="start"||raw.action==="cancel") {if(row.completed_at)throw fail("试卷已经入库");const owner=await paperJobOwner(row);return raw.action==="start"?startStudioJob(owner,row.job_id!):cancelStudioJob(owner,row.job_id!);}
   if(!row.completed_at&&row.status!=="failed"&&row.status!=="uploading")throw fail("请等待处理完成，或先取消录入",409);
-  const title=raw.title===undefined?row.title:clean(raw.title), folder=raw.folderId===undefined?row.folder_id:clean(raw.folderId);
-  if(!title||!(await readPaperFolders()).some(f=>f.id===folder))throw fail("请填写标题并选择文件夹");
-  const metadata=raw.metadata===undefined?row.metadata_json:JSON.stringify(paperMetadata(raw.metadata));
-  await db().prepare("UPDATE exam_papers SET title=?,folder_id=?,metadata_json=?,updated_at=? WHERE id=?").bind(title,folder,metadata,Date.now(),id).run();
+  const title=raw.title===undefined?row.title:clean(raw.title), previous=paperMetadata(JSON.parse(row.metadata_json));
+  const metadata=paperMetadata({...paperMetadata(raw.metadata===undefined?previous:raw.metadata),autoFolder:raw.folderId===undefined?previous.autoFolder:!clean(raw.folderId)});
+  const folders=await readPaperFolders(), folder=metadata.autoFolder?inferPaperFolder(folders,title,metadata):raw.folderId===undefined?row.folder_id:clean(raw.folderId);
+  if(!title||!folders.some(f=>f.id===folder))throw fail("请填写标题并选择有效的文件夹");
+  await db().prepare("UPDATE exam_papers SET title=?,folder_id=?,metadata_json=?,updated_at=? WHERE id=?").bind(title,folder,JSON.stringify(metadata),Date.now(),id).run();
 }
 export async function paperSource(id:string) {const row=await paperRow(id),object=await store().get(row.source_key);if(!object)throw fail("原文件不存在",404);return new Response(object.body,{headers:{"Content-Type":row.source_type,"Content-Disposition":`attachment; filename*=UTF-8''${encodeURIComponent(row.file_name)}`,"Cache-Control":"private, no-store"}});}
 export async function deletePaper(user:AuthUser,id:string) {
@@ -166,6 +168,8 @@ export async function commitPaper(id:string,draft:PaperDraft,user:AuthUser,runId
   const row=await paperRow(id);if(row.completed_at)return;
   const issues=paperDraftIssues(draft);if(issues.length)throw new Error(issues.slice(0,5).join("；"));
   if(draft.questions.some(q=>!q.categoryPath.length))throw new Error("仍有题目没有知识分类");
+  draft.metadata=paperMetadata({...draft.metadata,autoFolder:paperMetadata(JSON.parse(row.metadata_json)).autoFolder});
+  const folder=draft.metadata.autoFolder?inferPaperFolder(await readPaperFolders(),draft.title,draft.metadata):row.folder_id;
   const context=await resolveLibraryContext(user), library=await readLibrary(user), now=Date.now(), statements:D1PreparedStatement[]=[], items:PaperItem[]=[];
   const moduleName=draft.metadata.kind==="admission"?"自主招生":"初中数学";
   let targetModule=draft.metadata.moduleId?library.modules.find(m=>m.id===draft.metadata.moduleId):library.modules.find(m=>m.name===moduleName);
@@ -221,8 +225,8 @@ export async function commitPaper(id:string,draft:PaperDraft,user:AuthUser,runId
       AND EXISTS(SELECT 1 FROM libraries_v2 WHERE id=? AND active_publication_id IS ?)
       AND NOT EXISTS(SELECT value FROM json_each(?) x WHERE NOT EXISTS(SELECT 1 FROM library_questions_v2 q WHERE q.library_id=? AND q.publication_id IS ? AND q.source_id=json_extract(x.value,'$.id') AND q.content_hash=json_extract(x.value,'$.hash') AND q.deleted_at IS NULL))
       THEN ? ELSE NULL END,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET title=excluded.title,metadata_json=excluded.metadata_json,items_json=excluded.items_json,completed_at=excluded.completed_at,updated_at=excluded.updated_at`)
-    .bind(id,row.folder_id,draft.title,JSON.stringify(draft.metadata),id,runId,context.libraryId,context.publicationId,references,context.libraryId,context.publicationId,JSON.stringify(items),row.file_name,row.source_key,row.source_type,row.source_hash,row.job_id,row.created_by,now,row.created_at,now));
+    ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,title=excluded.title,metadata_json=excluded.metadata_json,items_json=excluded.items_json,completed_at=excluded.completed_at,updated_at=excluded.updated_at`)
+    .bind(id,folder,draft.title,JSON.stringify(draft.metadata),id,runId,context.libraryId,context.publicationId,references,context.libraryId,context.publicationId,JSON.stringify(items),row.file_name,row.source_key,row.source_type,row.source_hash,row.job_id,row.created_by,now,row.created_at,now));
   try{await db().batch(statements);}catch(error){
     if(attempt<2&&/NOT NULL.*items_json/i.test(error instanceof Error?error.message:String(error))){
       const active=await db().prepare("SELECT j.id FROM studio_jobs j JOIN exam_papers p ON p.job_id=j.id WHERE p.id=? AND j.run_id=? AND j.status='running'").bind(id,runId).first();
