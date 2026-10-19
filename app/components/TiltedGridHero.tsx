@@ -2,9 +2,8 @@
 
 import * as React from "react";
 
-/* Taken from 21st.dev as published, with three local changes: `cn` is inlined (the app has no shadcn utils), the strip
- * placeholder is a plain tint instead of shadcn's `bg-muted`, and `arc`, `CAMERA` and `MAX_WIDTH` are exported so the
- * sculpture on /intro can trace the same cylinder. */
+/* Taken from 21st.dev as published, with two local changes: `cn` is inlined (the app has no shadcn utils), and the strip
+ * placeholder is a plain tint instead of shadcn's `bg-muted`. */
 const cn = (...names: (string | false | null | undefined)[]) => names.filter(Boolean).join(" ");
 
 /* ── the curved row ──────────────────────────────────────────────
@@ -35,20 +34,20 @@ const SLICES = 16;
 // Camera distance from the screen, as a multiple of the cylinder's radius.
 // Just past the axis, so the ends come right up to the lens and swell; much
 // further back and the row flattens out however tight the cylinder.
-export const CAMERA = 1.6;
+const CAMERA = 1.6;
 
 /**
  * Cylinder radius, as a share of the hero's width, that puts the frame's
  * edge `bend` radians round the arc as seen through the camera:
  * r·sinθ · CAMERA / (CAMERA − 1 + cosθ) = width / 2, solved for r.
  */
-export function arc(bend: number) {
+function arc(bend: number) {
   return (CAMERA - 1 + Math.cos(bend)) / (2 * CAMERA * Math.sin(bend));
 }
 
 // A tile is never wider than this share of the hero, so a phone still
 // shows its neighbours instead of one tile edge to edge.
-export const MAX_WIDTH = 55;
+const MAX_WIDTH = 55;
 
 /**
  * Lays the loop on the cylinder. The radius puts the frame's edge `bend`
