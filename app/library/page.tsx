@@ -26,7 +26,7 @@ import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../compo
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../lib/library-tree";
-import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
+import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, reorderCloudCategories, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../../lib/client-random-id.mjs";
 import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../../lib/types";
@@ -159,7 +159,7 @@ export default function Home() {
   const [moduleDraft, setModuleDraft] = useState<LibraryModule | null>(null);
   const [moduleName, setModuleName] = useState("");
   const [moduleSubtitle, setModuleSubtitle] = useState("");
-  const [moduleDrag, setModuleDrag] = useState<{ source: string; target: string } | null>(null);
+  const [directoryDrag, setDirectoryDrag] = useState<{ source: string; target: string; kind: "module" | "category" } | null>(null);
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLButtonElement>(null);
@@ -269,7 +269,7 @@ export default function Home() {
   function applyLibrary(data: LibraryData, preserveCategory = true) {
     const sortedModules = [...data.modules].sort((left, right) => left.sortOrder - right.sortOrder);
     setModules(sortedModules);
-    setCategories(data.categories.sort((a, b) => a.createdAt - b.createdAt));
+    setCategories(data.categories);
     setQuestions(data.questions.sort((a, b) => b.createdAt - a.createdAt));
     const availableIds = new Set([...sortedModules.map((item) => item.id), ...data.categories.map((item) => item.id)]);
     const nextModule = sortedModules.find((item) => item.id === activeModuleId) ?? sortedModules[0] ?? null;
@@ -884,38 +884,60 @@ export default function Home() {
     catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
   }
 
-  async function dropModule(targetId: string) {
-    const sourceId = moduleDrag?.source;
-    setModuleDrag(null);
-    if (!sourceId || sourceId === targetId) return;
-    const source = modules.find((item) => item.id === sourceId); const targetIndex = modules.findIndex((item) => item.id === targetId);
-    if (!source || targetIndex < 0) return;
-    const next = modules.filter((item) => item.id !== sourceId); next.splice(targetIndex, 0, source);
-    const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder })); setModules(ordered);
-    try { await reorderCloudModules(ordered.map((item) => item.id)); }
-    catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
+  async function dropDirectoryItem(targetId: string, siblings: string[], kind: "module" | "category") {
+    const sourceId = directoryDrag?.kind === kind ? directoryDrag.source : "";
+    setDirectoryDrag(null);
+    const sourceIndex = siblings.indexOf(sourceId), targetIndex = siblings.indexOf(targetId);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+    const order = siblings.filter(id => id !== sourceId); order.splice(targetIndex, 0, sourceId);
+    try {
+      if (kind === "module") {
+        setModules(order.map((id, sortOrder) => ({ ...modules.find(item => item.id === id)!, sortOrder })));
+        await reorderCloudModules(order);
+      } else {
+        const reordered = order.map(id => categories.find(item => item.id === id)!);
+        const ids = new Set(order);
+        setCategories(current => { let index = 0; return current.map(item => ids.has(item.id) ? reordered[index++] : item); });
+        await reorderCloudCategories(order);
+      }
+    } catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "目录排序失败", tone: "error" }); }
   }
 
-  function moduleDragProps(id: string) {
+  function directoryDragProps(id: string, kind: "module" | "category" = "module") {
+    const category = kind === "category" ? categories.find(item => item.id === id) : null;
+    const siblings = (category ? categories.filter(item => item.moduleId === category.moduleId && (item.parentId || item.moduleId) === (category.parentId || category.moduleId)) : modules).map(item => item.id);
+    const sourceIndex = directoryDrag?.kind === kind ? siblings.indexOf(directoryDrag.source) : -1;
     const acceptDrop = (event: DragEvent<HTMLDivElement>) => {
-      if (!moduleDrag) return;
+      if (!directoryDrag || directoryDrag.kind !== kind) return;
+      if (sourceIndex < 0) {
+        event.dataTransfer.dropEffect = "none";
+        if (directoryDrag.target) setDirectoryDrag({ ...directoryDrag, target: "" });
+        return;
+      }
+      event.stopPropagation();
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
-      if (moduleDrag.target !== id) setModuleDrag({ ...moduleDrag, target: id });
+      if (directoryDrag.target !== id) setDirectoryDrag({ ...directoryDrag, target: id });
     };
     return {
       draggable: canManageLibrary,
-      "data-dragging": moduleDrag?.source === id || undefined,
-      "data-drop-position": moduleDrag?.target === id && moduleDrag.source !== id ? modules.findIndex(item => item.id === moduleDrag.source) < modules.findIndex(item => item.id === id) ? "after" : "before" : undefined,
+      title: canManageLibrary ? kind === "category" ? "拖动调整同级知识点顺序" : "拖动调整模块顺序" : undefined,
+      "data-dragging": directoryDrag?.kind === kind && directoryDrag.source === id || undefined,
+      "data-drop-position": sourceIndex >= 0 && directoryDrag?.target === id && directoryDrag.source !== id ? sourceIndex < siblings.indexOf(id) ? "after" : "before" : undefined,
       onDragStart: (event: DragEvent<HTMLDivElement>) => {
+        event.stopPropagation();
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", id);
-        setModuleDrag({ source: id, target: id });
+        setDirectoryDrag({ source: id, target: id, kind });
       },
       onDragEnter: acceptDrop,
       onDragOver: acceptDrop,
-      onDrop: (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); void dropModule(id); },
-      onDragEnd: () => setModuleDrag(null),
+      onDrop: (event: DragEvent<HTMLDivElement>) => {
+        if (directoryDrag?.kind !== kind || sourceIndex < 0) return;
+        event.stopPropagation(); event.preventDefault();
+        void dropDirectoryItem(id, siblings, kind);
+      },
+      onDragEnd: (event: DragEvent<HTMLDivElement>) => { event.stopPropagation(); setDirectoryDrag(null); },
     };
   }
 
@@ -979,8 +1001,8 @@ export default function Home() {
           <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
           <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
           <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button></div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => <div key={examModule.id} className="library-module" {...moduleDragProps(examModule.id)} title={canManageLibrary ? "拖动调整模块顺序" : undefined}>
-            {examModule.id === activeModule?.id ? <CategoryTree collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>}
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => <div key={examModule.id} className="library-module" {...directoryDragProps(examModule.id)} title={canManageLibrary ? "拖动调整模块顺序" : undefined}>
+            {examModule.id === activeModule?.id ? <CategoryTree collapsible dragProps={canManageLibrary ? id => directoryDragProps(id, "category") : undefined} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>}
           </div>)}</div>
           {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => setManagementDialog("manage")}>{pageCopy.manageLibrary}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
@@ -1126,13 +1148,13 @@ export default function Home() {
           <div className="library-management-grid">
             <section aria-label="模块列表">
               <header><h3>{pageCopy.moduleSwitcher}</h3><button className="secondary" onClick={openNewModule}>＋ {pageCopy.newModule}</button></header>
-              <div className="module-manage-list">{modules.length ? modules.map((item, index) => <div key={item.id} {...moduleDragProps(item.id)} data-active={item.id === activeModule?.id || undefined}>
-                <span className="drag-handle" title="拖动排序" aria-hidden="true">⋮⋮</span><button className="module-select" aria-label={`选择模块 ${item.name}`} aria-pressed={item.id === activeModule?.id} onClick={() => switchExamModule(item.id)}><b>{item.name}</b><small>{countFor(item.id)} 题{item.subtitle && ` · ${item.subtitle}`}</small></button><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button aria-label={`编辑${item.name}`} onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" aria-label={`删除模块${item.name}`} onClick={() => void removeModule(item)}>删除</button>}</div>
+              <div className="module-manage-list">{modules.length ? modules.map((item, index) => <div key={item.id} {...directoryDragProps(item.id)} data-active={item.id === activeModule?.id || undefined}>
+                <button className="module-select" aria-label={`选择模块 ${item.name}`} aria-pressed={item.id === activeModule?.id} onClick={() => switchExamModule(item.id)}><b>{item.name}</b><small>{countFor(item.id)} 题{item.subtitle && ` · ${item.subtitle}`}</small></button><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button aria-label={`编辑${item.name}`} onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" aria-label={`删除模块${item.name}`} onClick={() => void removeModule(item)}>删除</button>}</div>
               </div>) : <p className="empty-tree">还没有模块，请先新建一个模块。</p>}</div>
             </section>
             <section aria-label="分类列表">
               <header><h3>{activeModule ? `${activeModule.name} · 分类` : "分类"}</h3><button className="secondary" disabled={!activeModule} onClick={() => { if (!activeModule) return; setCategoryName(""); setCategoryParent(activeCategory ?? activeModule.id); setManagementDialog("category"); }}>＋ {pageCopy.addCategory}</button></header>
-              <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button aria-label={`删除分类${item.name}`} onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">{activeModule ? "当前模块还没有子分类" : "新建模块后即可管理分类"}</p>}</div>
+              <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id} {...directoryDragProps(item.id, "category")}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button aria-label={`删除分类${item.name}`} onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">{activeModule ? "当前模块还没有子分类" : "新建模块后即可管理分类"}</p>}</div>
             </section>
           </div>
           <div className="data-tools"><div><b>题库备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>

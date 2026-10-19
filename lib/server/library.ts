@@ -477,6 +477,25 @@ export async function createScopedCategory(raw: Category, user: AuthUser) {
   return category;
 }
 
+export async function reorderScopedCategories(ids: string[], user: AuthUser) {
+  const context = await resolveLibraryContext(user); requireWritable(context);
+  const db = appEnv().DB;
+  const version = versionWhere(context.publicationId);
+  const bindings = [context.libraryId, ...versionBindings(context.publicationId)];
+  const rows = (await db.prepare(`SELECT source_id, module_source_id, COALESCE(parent_source_id, module_source_id) AS parent_id
+    FROM library_categories_v2 WHERE library_id = ? AND ${version}`).bind(...bindings).all<{ source_id: string; module_source_id: string; parent_id: string }>()).results;
+  const first = rows.find(row => row.source_id === ids[0]);
+  const siblings = first ? rows.filter(row => row.module_source_id === first.module_source_id && row.parent_id === first.parent_id) : [];
+  const allowed = new Set(siblings.map(row => row.source_id));
+  if (!ids.length || ids.length !== siblings.length || new Set(ids).size !== ids.length || ids.some(id => !allowed.has(id))) {
+    throw new Response(JSON.stringify({ error: "请提供同一父分类下完整的知识点顺序" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+  // Normalize sibling ranks, including older rows with tied positions; keep their hierarchy intact.
+  await db.batch(ids.map((id, index) => db.prepare(`UPDATE library_categories_v2 SET sort_order = ?
+    WHERE library_id = ? AND ${version} AND source_id = ?`)
+    .bind(index, ...bindings, id)));
+}
+
 export async function categoryInsertStatement(category: Category, user: AuthUser, context: LibraryContext, sortOrder: number, ignoreExisting = false) {
   const { name, moduleId, parentId } = category;
   const content = JSON.stringify({ name, moduleId, parentId });

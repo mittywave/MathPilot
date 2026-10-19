@@ -21,6 +21,7 @@ export function deleteCloudQuestion(id: string) { return request<{ ok: boolean }
 export function fetchDeletedQuestions() { return request<{ questions: Array<Question & { deletedAt: number }> }>("/api/questions"); }
 export function restoreCloudQuestion(id: string) { return request<{ ok: boolean }>(`/api/questions/${encodeURIComponent(id)}`, { method: "PATCH" }); }
 export function createCloudCategory(category: Category) { return request<{ category: Category }>("/api/categories", { method: "POST", body: JSON.stringify({ category }) }); }
+export function reorderCloudCategories(order: string[]) { return request<{ ok: boolean }>("/api/categories", { method: "POST", body: JSON.stringify({ order }) }); }
 export function deleteCloudCategory(id: string) { return request<{ ok: boolean; categoryIds: string[] }>(`/api/categories/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 export function createCloudModule(module: Pick<LibraryModule, "name" | "subtitle">) { return request<{ module: LibraryModule }>("/api/modules", { method: "POST", body: JSON.stringify({ module }) }); }
 export function updateCloudModule(module: LibraryModule) { return request<{ module: LibraryModule }>(`/api/modules/${encodeURIComponent(module.id)}`, { method: "PUT", body: JSON.stringify({ module }) }); }

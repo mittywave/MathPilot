@@ -1,12 +1,16 @@
 import type { Category } from "../../../lib/types";
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
-import { createScopedCategory } from "../../../lib/server/library";
+import { createScopedCategory, reorderScopedCategories } from "../../../lib/server/library";
 
 export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     const user = await requireUser(request);
-    const body = await request.json() as { category?: Category };
+    const body = await request.json() as { category?: Category; order?: string[] };
+    if (Array.isArray(body.order)) {
+      await reorderScopedCategories(body.order, user);
+      return Response.json({ ok: true });
+    }
     if (!body.category) return Response.json({ error: "请填写分类名称" }, { status: 400 });
     const category = await createScopedCategory(body.category, user);
     return Response.json({ category }, { status: 201 });

@@ -186,6 +186,29 @@ test("one shared library: every teacher reads and edits it, only administrators 
     const order = (await jsonRequest(base, "/api/library", { cookie: two })).payload.modules.map((item) => item.id).filter((id) => id !== tempId);
     assert.equal((await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { order: [tempId, ...order] } })).response.status, 200);
 
+    // Sorting a knowledge branch changes only sibling order, never ownership or hierarchy.
+    for (const [id, parentId] of [["shared-peer", moduleId], ["shared-peer-two", moduleId], ["shared-child-a", "shared-category"], ["shared-child-b", "shared-category"], ["shared-grandchild", "shared-child-a"]]) {
+      assert.equal((await jsonRequest(base, "/api/categories", { cookie: one, method: "POST", body: { category: { id, name: id, moduleId, parentId, createdAt: 1 } } })).response.status, 201);
+    }
+    const beforeSort = await jsonRequest(base, "/api/library", { cookie: one });
+    const roots = ["shared-peer", "shared-peer-two", "shared-category"];
+    assert.equal((await jsonRequest(base, "/api/categories", { method: "POST", body: { order: roots } })).response.status, 401);
+    assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: roots } })).response.status, 200, "another teacher can order shared categories");
+    // Old/imported categories can have tied ranks; the requested order must still persist.
+    command(["d1", "execute", "DB", "--local", "--persist-to", state, "--config", join(ROOT, "wrangler.jsonc"), "--command", "UPDATE library_categories_v2 SET sort_order=0 WHERE source_id IN ('shared-child-a','shared-child-b')"]);
+    const children = ["shared-child-b", "shared-child-a"];
+    assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: children } })).response.status, 200);
+    const sorted = await jsonRequest(base, "/api/library", { cookie: one });
+    assert.deepEqual(sorted.payload.categories.filter(item => item.moduleId === moduleId && item.parentId === moduleId).map(item => item.id), roots);
+    assert.deepEqual(sorted.payload.categories.filter(item => item.parentId === "shared-category").map(item => item.id), children);
+    assert.deepEqual([...sorted.payload.categories].sort((a, b) => a.id.localeCompare(b.id)), [...beforeSort.payload.categories].sort((a, b) => a.id.localeCompare(b.id)), "all category identities and parents remain unchanged");
+    assert.deepEqual(sorted.payload.questions, beforeSort.payload.questions, "questions keep their categories and IDs");
+    assert.notEqual(sorted.response.headers.get("etag"), beforeSort.response.headers.get("etag"), "a refresh must observe the new order");
+    for (const invalid of [[], ["shared-child-a"], ["shared-child-a", "shared-child-a"], ["shared-child-a", "missing"], ["shared-child-a", "shared-peer"], ["shared-child-a", "temp-category"]]) {
+      assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: invalid } })).response.status, 400, `reject incomplete or unrelated siblings: ${invalid}`);
+    }
+    assert.deepEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.categories, sorted.payload.categories, "invalid orders must leave every category unchanged");
+
     // Deleting is reserved for administrators.
     assert.equal((await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "DELETE" })).response.status, 403);
     assert.equal((await jsonRequest(base, "/api/categories/shared-category", { cookie: one, method: "DELETE" })).response.status, 403);
