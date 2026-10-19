@@ -51,6 +51,8 @@ export interface WorksWheelProps extends React.ComponentPropsWithoutRef<"section
   label?: string;
   /** Label on the card's hover affordance. Omit to drop it. @default undefined */
   action?: string;
+  /** Told which item has come to the front, whenever that changes. */
+  onFront?: (index: number) => void;
 }
 
 /* Geometry. The card is measured against the stage; everything else is measured
@@ -59,8 +61,8 @@ export interface WorksWheelProps extends React.ComponentPropsWithoutRef<"section
    swinging on a huge drum. The three that matter are tuned together: STEP
    against DRUM sets how hard the neighbours rotate away, and DRUM against LENS
    decides whether they land inside the frame or run off it. */
-const CARD_H = 0.38; // front card height, of the stage
-const CARD_MAX_W = 0.34; // ... but never wider than this much of the stage
+const CARD_H = 0.49; // front card height, of the stage
+const CARD_MAX_W = 0.44; // ... but never wider than this much of the stage
 const CARD_RATIO = 1.45; // card width / height
 const STEP = 40; // degrees between cards on the drum
 const DRUM = 2.22; // drum radius, in card heights - and everything below likewise
@@ -127,6 +129,7 @@ export function WorksWheel({
   items,
   label = "Works '26",
   action = "View",
+  onFront,
   className,
   style,
   children,
@@ -300,6 +303,8 @@ export function WorksWheel({
     const run = Math.max(1, box.height - window.innerHeight);
     window.scrollTo({ top: window.scrollY + box.top + (i / (last + 1)) * run, behavior: reduced ? "instant" : "smooth" });
   };
+
+  React.useEffect(() => onFront?.(active), [active, onFront]);
 
   const current = items[active];
 

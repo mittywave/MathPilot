@@ -1,0 +1,1310 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>闭环演示动画</title>
+<!--
+  Source of public/intro/loop/<step>-{light,dark}.mp4, the demos the 01 闭环 cards on / play at the front.
+  Each step is a short animation of the app redrawn in the product page's colours, not a screen recording; the labels
+  are the app's own. scripts/render-intro-loop.mjs turns them into the videos (`--serve` prints a preview address;
+  ?scene=intake&mode=dark picks one). Every frame is a function of time, so the render steps through them exactly.
+
+  The first and last 0.8 s of every demo are the card's face as Intro.tsx draws it (.mp-step-face in intro.css: the
+  number, the name in the ∞'s metal, the same background), so the card turns into its video and loops without a seam.
+  Keep the two in step. The pill in the window's title bar counts only the teacher's own time: it stops while the
+  machine works (AI, typesetting) or days pass, and says so.
+-->
+<link rel="stylesheet" href="../node_modules/katex/dist/katex.min.css">
+<script src="../node_modules/katex/dist/katex.min.js"></script>
+<style>
+  :root { --sans:"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif; }
+  html, body { margin:0; }
+  body { background:#8a8885; font-family:var(--sans); }
+  body[data-render] { background:transparent; }
+  body:not([data-render]) .stage { margin:24px auto 12px; box-shadow:0 20px 60px -30px rgba(0,0,0,.6); }
+
+  /* the product page's colours (app/(home)/intro.css), and the card face's background over them */
+  .stage[data-mode="light"] { --bg:#EBE9E5; --fg:#151514; --acc:#3E5E4C; --paper:#F8F7F4; --err:#A4503B; --on-acc:#F8F7F4;
+    --metal:linear-gradient(180deg, #6A655C 0%, #989183 30%, #BDB7A9 46%, #8C8579 62%, #5E5950 100%);
+    --pill-bg:#1D1D1B; --pill-fg:#F1EFEA; --pill-acc:#9DBFAA; --shade:rgba(21,21,20,.42); }
+  .stage[data-mode="dark"] { --bg:#111110; --fg:#F1EFEA; --acc:#9DBFAA; --paper:#1D1D1B; --err:#DA8A73; --on-acc:#111110;
+    --metal:linear-gradient(180deg, #A39E94 0%, #D6D3CA 30%, #F4F2ED 46%, #BAB6AA 62%, #8C877D 100%);
+    --pill-bg:#F1EFEA; --pill-fg:#151514; --pill-acc:#3E5E4C; --shade:rgba(0,0,0,.8); }
+  .stage { --ink:var(--fg); --face:color-mix(in srgb, var(--fg) 3%, var(--bg));
+    --panel:color-mix(in srgb, var(--fg) 4%, var(--paper)); --soft:color-mix(in srgb, var(--fg) 62%, var(--paper));
+    --faint:color-mix(in srgb, var(--fg) 36%, var(--paper)); --line:color-mix(in srgb, var(--fg) 13%, transparent);
+    --wash:color-mix(in srgb, var(--acc) 15%, var(--paper)); --err-wash:color-mix(in srgb, var(--err) 14%, var(--paper));
+    --sheet:#FBFAF6; --sheet-ink:#1C1C1A; --sheet-line:#DCD9D1; --sheet-acc:#3E5E4C; --sheet-err:#B23A26; --ink-blue:#23407C;
+    position:relative; width:725px; height:500px; overflow:hidden; background:var(--face); color:var(--ink);
+    font-family:var(--sans); -webkit-font-smoothing:antialiased; }
+
+  /* the card face, exactly as .mp-step-face */
+  .face { position:absolute; inset:0; display:grid; place-items:center; container-type:size; }
+  .face-no { position:absolute; top:9cqh; left:7cqw; font-family:var(--serif); font-size:8cqh; color:var(--acc); }
+  .face-name { padding-left:.06em; font-family:var(--serif); font-size:36cqh; line-height:1; letter-spacing:.06em; color:transparent;
+    background:var(--metal); -webkit-background-clip:text; background-clip:text; }
+
+  .cam { position:absolute; inset:0; }
+  .win { position:absolute; inset:12px; overflow:hidden; border:1px solid var(--line); border-radius:11px; background:var(--paper);
+    box-shadow:0 16px 36px -26px var(--shade); }
+  .bar { position:absolute; inset:0 0 auto; display:flex; align-items:center; gap:20px; height:34px; padding:0 14px; border-bottom:1px solid var(--line);
+    font-size:11.5px; color:var(--soft); box-sizing:border-box; }
+  .bar .brand { display:flex; color:var(--ink); }
+  .bar .brand svg { width:auto; height:13px; }
+  .bar .brand-text { font-family:var(--serif); font-size:14px; }
+  .bar nav { display:flex; gap:14px; }
+  .bar nav span { position:relative; }
+  .bar nav .on { color:var(--ink); font-weight:600; }
+  .bar nav .on::after { content:""; position:absolute; right:0; bottom:-11px; left:0; height:2px; border-radius:1px; background:var(--acc); }
+  .body { position:absolute; inset:34px 0 0; overflow:hidden; }
+  .view { position:absolute; inset:0; }
+  .layer { position:absolute; inset:0; }
+
+  .rail { position:absolute; inset:0 auto 0 0; width:150px; padding:14px 10px; border-right:1px solid var(--line); background:var(--panel); box-sizing:border-box; }
+  .eyebrow { font-size:10.5px; letter-spacing:.08em; color:var(--faint); }
+  .rail .eyebrow { margin:0 6px 8px; }
+  .rail .item { display:flex; justify-content:space-between; align-items:center; height:27px; padding:0 8px; border-radius:7px; font-size:12.5px; color:var(--soft); }
+  .rail .item.on { background:var(--wash); color:var(--acc); font-weight:600; }
+  .rail .item small { font-size:10.5px; font-weight:400; color:var(--faint); }
+  .rail .item.on small { color:var(--acc); }
+  .main { position:absolute; inset:0 0 0 150px; padding:14px 16px; box-sizing:border-box; }
+  .main.full { left:0; }
+  .head { display:flex; align-items:center; gap:10px; height:30px; }
+  .head h3 { margin:0; font-size:16px; font-weight:600; }
+  .head .count { font-size:12px; color:var(--soft); font-variant-numeric:tabular-nums; }
+  .grow { flex:1; }
+
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:28px; padding:0 12px; border:1px solid var(--line); border-radius:8px;
+    background:var(--paper); color:var(--ink); font-size:12.5px; white-space:nowrap; box-sizing:border-box; }
+  .btn.primary { border-color:transparent; background:var(--acc); color:var(--on-acc); font-weight:600; }
+  .btn.ghost { background:transparent; }
+  .btn.small { height:24px; padding:0 9px; border-radius:7px; font-size:11.5px; }
+  .search, .input, .select { display:flex; align-items:center; gap:8px; height:30px; padding:0 10px; border:1px solid var(--line); border-radius:8px;
+    background:var(--paper); font-size:12px; box-sizing:border-box; }
+  .search { margin-top:10px; color:var(--faint); }
+  .select::after { content:"▾"; margin-left:auto; color:var(--faint); font-size:10px; }
+  .lbl { margin-bottom:4px; font-size:11px; color:var(--soft); }
+
+  .list { position:relative; display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+  .qcard { position:relative; padding:9px 12px 10px; border:1px solid var(--line); border-radius:10px; background:var(--paper); }
+  .qcard .meta { display:flex; gap:8px; font-size:11px; color:var(--soft); }
+  .qcard .meta .id { margin:0 -5px; padding:0 5px; border-radius:5px; color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums;
+    background:color-mix(in srgb, var(--acc) calc(var(--hl, 0) * 30%), transparent); }
+  .qcard .stem { margin-top:5px; font-family:var(--serif); font-size:13.5px; line-height:1.55; }
+  .qcard.pickable { padding-left:42px; }
+  .qcard.pickable.on { border-color:color-mix(in srgb, var(--acc) 55%, var(--line)); background:color-mix(in srgb, var(--acc) 6%, var(--paper)); }
+  .check { position:absolute; top:50%; left:13px; display:grid; place-items:center; width:18px; height:18px; margin-top:-9px; border:1.5px solid var(--faint);
+    border-radius:5px; box-sizing:border-box; }
+  .check svg { width:12px; height:12px; opacity:0; }
+  .check path { fill:none; stroke:var(--on-acc); stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .on > .check, .check.on { border-color:var(--acc); background:var(--acc); }
+  .on > .check svg, .check.on svg { opacity:1; }
+  .cb { display:flex; align-items:center; gap:7px; font-size:12px; }
+  .cb .check { position:relative; top:auto; left:auto; flex:none; width:16px; height:16px; margin:0; }
+
+  .backdrop { position:absolute; inset:0; background:color-mix(in srgb, var(--fg) 12%, transparent); }
+  .modal { position:absolute; top:8px; bottom:8px; left:50%; display:flex; flex-direction:column; width:560px; margin-left:-280px; overflow:hidden;
+    border:1px solid var(--line); border-radius:12px; background:var(--paper); box-shadow:0 24px 60px -28px var(--shade); }
+  .mhead { display:flex; align-items:center; justify-content:space-between; padding:12px 16px 8px; }
+  .mhead .eyebrow { color:var(--acc); }
+  .mhead h2 { margin:2px 0 0; font-size:16px; font-weight:600; }
+  .x { display:grid; place-items:center; width:24px; height:24px; border-radius:6px; font-size:16px; color:var(--soft); }
+  .modes { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:0 16px; }
+  .modes > div { padding:6px 10px; border:1px solid var(--line); border-radius:9px; font-size:11px; color:var(--soft); }
+  .modes b { display:block; font-size:12.5px; font-weight:600; color:var(--ink); }
+  .modes .on { border-color:color-mix(in srgb, var(--acc) 60%, transparent); background:var(--wash); }
+  .mbody { position:relative; flex:1; margin:10px 16px; }
+  .mfoot { display:flex; justify-content:flex-end; gap:8px; padding:9px 16px 11px; border-top:1px solid var(--line); }
+
+  .capture { position:absolute; inset:0; display:flex; align-items:center; gap:16px; padding:0 22px; border:1.5px dashed color-mix(in srgb, var(--acc) 55%, transparent);
+    border-radius:12px; background:color-mix(in srgb, var(--acc) 5%, var(--paper)); }
+  .capture .icon { display:grid; place-items:center; flex:none; width:54px; height:54px; border-radius:14px; background:var(--wash); color:var(--acc); font-size:16px; font-weight:700; }
+  .capture b { font-size:15px; }
+  .capture p { margin:4px 0 0; font-size:11.5px; color:var(--soft); }
+  .capture .note { margin-left:auto; font-size:11px; color:var(--acc); }
+  .recog { position:absolute; inset:0; display:grid; grid-template-columns:200px 1fr; grid-template-rows:128px 1fr; gap:10px 14px; }
+  .src { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:9px; background:var(--panel); }
+  .scan { position:absolute; right:0; left:0; height:38px; background:linear-gradient(180deg, transparent, color-mix(in srgb, var(--acc) 26%, transparent) 78%, var(--acc)); }
+  .recognizing { position:absolute; inset:0; display:grid; place-content:center; gap:3px; text-align:center; background:color-mix(in srgb, var(--paper) 50%, transparent); }
+  .recognizing b { font-size:12.5px; }
+  .recognizing span { font-size:10.5px; color:var(--soft); }
+  .status b { display:block; margin-top:2px; font-size:13.5px; }
+  .fields { display:grid; gap:6px; margin-top:8px; }
+  .field { display:grid; grid-template-columns:52px 1fr; align-items:center; font-size:11.5px; color:var(--soft); }
+  .field .val { display:flex; align-items:center; height:24px; padding:0 8px; border:1px solid var(--line); border-radius:6px; font-size:12px; color:var(--ink); }
+  .stembox { grid-column:1 / -1; display:flex; gap:12px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; font-family:var(--serif); font-size:12.5px; line-height:1.62; }
+  .stembox .ans { margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); font-size:12px; color:var(--soft); }
+  .stembox .ans b { color:var(--acc); font-weight:600; }
+  .fig { flex:none; }
+  .fig path.curve { stroke-dasharray:1; stroke-dashoffset:calc(1 - var(--draw, 1)); }
+
+  .photo { position:absolute; inset:6px; display:flex; gap:6px; padding:8px 9px; overflow:hidden; border-radius:3px; background:var(--sheet); color:var(--sheet-ink);
+    font-family:var(--serif); font-size:8.4px; line-height:1.55; box-shadow:0 6px 16px -8px rgba(0,0,0,.45); }
+  .photo::after { content:""; position:absolute; inset:0; background:linear-gradient(112deg, rgba(255,255,255,.3), rgba(0,0,0,.04) 58%, rgba(0,0,0,.13)); }
+  .photo .katex { font-size:1em; }
+
+  .drop { position:absolute; inset:0; display:grid; place-content:center; gap:4px; text-align:center; border:1.5px dashed color-mix(in srgb, var(--acc) 50%, transparent);
+    border-radius:12px; background:color-mix(in srgb, var(--acc) calc(4% + var(--hl, 0) * 12%), var(--paper)); font-size:13.5px; }
+  .drop small { font-size:11px; color:var(--soft); }
+  .drafts .eyebrow { color:var(--acc); }
+  .drafts h5 { margin:2px 0 8px; font-size:14px; }
+  .draft { display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:center; margin-bottom:6px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; font-family:var(--serif); font-size:12px; }
+  .draft .check { position:relative; top:auto; left:auto; width:15px; height:15px; margin:0; }
+  .more { font-size:11px; color:var(--faint); }
+  .file { position:absolute; display:flex; align-items:center; gap:7px; padding:6px 10px 6px 7px; border:1px solid var(--line); border-radius:8px; background:var(--paper);
+    font-size:11.5px; white-space:nowrap; box-shadow:0 12px 24px -14px var(--shade); }
+  .file i { display:grid; place-items:center; width:20px; height:24px; border-radius:3px; background:#2B579A; color:#fff; font-size:11px; font-style:normal; font-weight:700; }
+  .toast { position:absolute; right:0; bottom:16px; left:0; width:max-content; margin:0 auto; padding:7px 14px; border-radius:8px; background:var(--pill-bg); color:var(--pill-fg);
+    font-size:12px; box-shadow:0 10px 24px -14px rgba(0,0,0,.5); }
+
+  .dock { position:absolute; right:16px; bottom:12px; left:16px; display:flex; align-items:center; gap:14px; height:46px; padding:0 8px 0 16px; border:1px solid var(--line);
+    border-radius:12px; background:var(--paper); box-shadow:0 14px 30px -18px var(--shade); box-sizing:border-box; }
+  .dock .n { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .dock .n small { margin-left:5px; font-size:11px; font-weight:400; color:var(--soft); }
+  .dock .t { font-size:11px; color:var(--soft); }
+  .dock .t b { display:block; font-size:12px; color:var(--ink); }
+
+  .outline { display:flex; flex-direction:column; gap:7px; margin-top:14px; }
+  .orow { display:flex; align-items:center; gap:10px; height:40px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--paper); font-size:12px; }
+  .orow .no { width:16px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .orow .id { font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .orow .stem { flex:1; overflow:hidden; font-family:var(--serif); font-size:12.5px; white-space:nowrap; }
+  .orow .ops { display:flex; gap:4px; }
+  .orow .ops span { padding:2px 6px; border:1px solid var(--line); border-radius:5px; font-size:10.5px; color:var(--soft); }
+  .links { display:flex; gap:14px; margin-top:10px; font-size:11.5px; color:var(--acc); }
+
+  .split { position:absolute; inset:0; display:grid; grid-template-columns:var(--side, 210px) 1fr; }
+  .side { display:flex; flex-direction:column; gap:10px; padding:14px; border-right:1px solid var(--line); background:var(--panel); }
+  .seg { display:flex; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--paper); }
+  .seg span { flex:1; padding:5px 0; font-size:11.5px; text-align:center; color:var(--soft); }
+  .seg span.on { background:var(--acc); color:var(--on-acc); font-weight:600; }
+  .stack { position:relative; }
+  .a4 { position:absolute; top:14px; left:50%; width:258px; height:364px; margin-left:-129px; padding:16px 18px; overflow:hidden; border-radius:3px; background:var(--sheet);
+    color:var(--sheet-ink); font-family:var(--serif); font-size:9.5px; line-height:1.7; box-shadow:0 14px 34px -18px rgba(0,0,0,.55); box-sizing:border-box; }
+  .a4 h4 { margin:0 0 2px; font-size:12.5px; text-align:center; }
+  .a4 .sub { margin-bottom:8px; font-family:var(--sans); font-size:7.5px; text-align:center; color:#77746c; }
+  .a4 .q { margin-bottom:9px; }
+  .a4 .key { margin-top:2px; font-size:9px; color:var(--sheet-acc); }
+  .a4 .rule { height:1px; margin:10px 0; background:var(--sheet-line); }
+  .a4 .blank { height:5px; margin:7px 0; border-radius:3px; background:#E8E5DE; }
+
+  .textarea { min-height:72px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--paper); font-size:12.5px; line-height:1.55; box-sizing:border-box; }
+  .textarea.short { min-height:46px; }
+  .ph { color:var(--faint); }
+  .caret { display:inline-block; width:1.5px; height:1.1em; margin-left:1px; vertical-align:-2px; background:var(--acc); }
+  .out { position:relative; padding:14px; }
+  .busy { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--soft); }
+  .spin { width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--acc); border-radius:50%; box-sizing:border-box; }
+  .brief { padding:8px 11px; border:1px solid var(--line); border-radius:9px; font-size:11.5px; line-height:1.6; }
+  .brief h6 { margin:0 0 2px; font-size:12px; }
+  .brief dl { display:grid; grid-template-columns:auto 1fr; gap:0 10px; margin:0; }
+  .brief dt { color:var(--soft); }
+  .brief dd { margin:0; }
+  .brief .find { color:var(--err); }
+  .days { display:grid; grid-template-columns:repeat(5, 1fr); gap:7px; margin-top:9px; }
+  .day { display:flex; flex-direction:column; gap:5px; padding:7px 6px; border:1px solid var(--line); border-radius:9px; }
+  .day h6 { margin:0 0 1px; font-size:11.5px; }
+  .qchip { padding:3px 6px; border:1px solid var(--line); border-radius:6px; background:var(--panel); font-size:10.5px; font-variant-numeric:tabular-nums; }
+  .qchip em { display:block; font-size:9.5px; font-style:normal; color:var(--acc); }
+  .qchip.focus em { color:var(--err); }
+  .caption { position:absolute; inset:0; display:grid; place-items:center; background:color-mix(in srgb, var(--paper) 88%, transparent); font-family:var(--serif);
+    font-size:30px; letter-spacing:.08em; }
+
+  .hd-top { display:flex; align-items:flex-end; gap:14px; padding:12px 16px 0; }
+  .crumb { font-size:10.5px; color:var(--faint); }
+  .hd-title { margin-top:2px; font-family:var(--serif); font-size:17px; font-weight:600; }
+  .tabs { display:flex; gap:2px; padding:2px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  .tabs span { padding:4px 12px; border-radius:6px; font-size:11.5px; color:var(--soft); }
+  .tabs .on { background:var(--paper); color:var(--ink); font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+  .page { position:absolute; top:62px; right:16px; bottom:0; left:16px; overflow:hidden; border:1px solid var(--line); border-bottom:0; border-radius:10px 10px 0 0;
+    background:var(--paper); font-family:var(--serif); }
+  .sheet { position:absolute; inset:14px 22px; }
+  .sheet h4 { margin:0 0 9px; font-size:14px; }
+  .lane { position:relative; display:grid; grid-template-columns:44px 1fr; gap:10px; margin-bottom:8px; font-size:12.5px; line-height:1.75; }
+  .lane > span:first-child { padding-top:2px; font-family:var(--sans); font-size:10.5px; letter-spacing:.06em; color:var(--acc); }
+  .lane .faint { color:var(--faint); }
+  .lane p { margin:0; }
+  .pick { display:inline-flex; align-items:center; gap:5px; width:max-content; padding:1px 9px; border:1px dashed color-mix(in srgb, var(--acc) 55%, transparent); border-radius:7px;
+    font-family:var(--sans); font-size:11.5px; color:var(--acc); }
+  .picker { position:absolute; top:0; right:0; bottom:0; display:flex; flex-direction:column; gap:8px; width:240px; padding:12px; border-left:1px solid var(--line);
+    background:var(--paper); box-shadow:-18px 0 40px -30px var(--shade); box-sizing:border-box; }
+  .picker h5 { margin:0; font-size:13px; }
+  .pcard { padding:7px 9px; border:1px solid var(--line); border-radius:9px; font-size:10.5px; color:var(--soft); }
+  .pcard .stem { margin-top:3px; font-family:var(--serif); font-size:12.5px; color:var(--ink); }
+  .pcard .sel { float:right; padding:0 6px; border:1px solid color-mix(in srgb, var(--acc) 50%, transparent); border-radius:6px; color:var(--acc); }
+  .pcard.on .sel { background:var(--acc); color:var(--on-acc); }
+  .export { position:absolute; top:84px; left:50%; width:318px; margin-left:-159px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:var(--paper);
+    box-shadow:0 24px 60px -28px var(--shade); box-sizing:border-box; }
+  .export h5 { margin:0 0 10px; font-size:14px; }
+  .export .hint { margin:8px 0 12px; font-size:11px; color:var(--soft); }
+  .progress { height:4px; margin-top:10px; overflow:hidden; border-radius:2px; background:var(--panel); }
+  .progress i { display:block; width:calc(var(--p, 0) * 100%); height:100%; background:var(--acc); }
+  .fan { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:22px; padding-bottom:26px; background:color-mix(in srgb, var(--paper) 90%, transparent); }
+  .mini { position:relative; width:128px; height:180px; padding:12px 11px; border-radius:3px; background:var(--sheet); color:var(--sheet-ink); font-family:var(--serif); font-size:6.6px;
+    line-height:1.65; box-shadow:0 16px 30px -16px rgba(0,0,0,.6); box-sizing:border-box; }
+  .mini .ttl { margin-bottom:6px; font-size:8.5px; font-weight:600; text-align:center; }
+  .mini .ln { height:3px; margin:5px 0; border-radius:2px; background:#DEDBD3; }
+  .mini .ln.k { background:color-mix(in srgb, var(--sheet-acc) 55%, #fff); }
+  .mini .tag { position:absolute; right:0; bottom:-24px; left:0; font-family:var(--sans); font-size:12px; font-weight:600; text-align:center; color:var(--ink); }
+
+  .people { position:absolute; inset:0 auto 0 0; width:150px; padding:14px 10px; border-right:1px solid var(--line); background:var(--panel); box-sizing:border-box; }
+  .people .eyebrow { margin:0 6px 8px; }
+  .person { display:flex; flex-direction:column; justify-content:center; height:38px; padding:0 9px; border-radius:8px; font-size:12.5px; }
+  .person small { font-size:10.5px; color:var(--faint); }
+  .person.on { background:var(--wash); color:var(--acc); font-weight:600; }
+  .person.on small { color:var(--acc); font-weight:400; }
+  .ahead { display:flex; align-items:center; gap:10px; }
+  .ahead h3 { margin:0; font-size:17px; }
+  .ahead small { font-size:11.5px; color:var(--soft); }
+  .tabs2 { display:flex; gap:18px; margin-top:8px; border-bottom:1px solid var(--line); }
+  .tabs2 span { position:relative; padding:6px 0; font-size:12.5px; color:var(--soft); }
+  .tabs2 .on { color:var(--ink); font-weight:600; }
+  .tabs2 .on::after { content:""; position:absolute; right:0; bottom:-1px; left:0; height:2px; background:var(--acc); }
+  .tools { display:flex; gap:8px; margin-top:12px; }
+  .rows { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+  .hrow { display:grid; grid-template-columns:1fr auto; gap:2px 12px; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--paper); }
+  .hrow b { font-size:13px; }
+  .hrow small { font-size:11px; color:var(--soft); }
+  .hrow .state { grid-row:span 3; align-self:center; padding:3px 9px; border-radius:6px; background:var(--panel); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .hrow .state.good { background:var(--wash); color:var(--acc); }
+  .squares { display:flex; gap:5px; margin-top:4px; }
+  .squares i { width:15px; height:15px; border:1px solid var(--line); border-radius:4px; background:var(--panel); box-sizing:border-box; }
+  .squares i.done { border-color:var(--acc); background:var(--acc); }
+  .dialog { position:absolute; top:40px; left:50%; width:390px; margin-left:-195px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:var(--paper);
+    box-shadow:0 24px 60px -28px var(--shade); box-sizing:border-box; }
+  .dialog h5 { margin:0 0 10px; font-size:14px; }
+  .plan { display:grid; grid-template-columns:1fr auto; align-items:center; gap:2px 10px; padding:9px 11px; border:1px solid var(--line); border-radius:9px; }
+  .plan b { font-size:12.5px; }
+  .plan small { font-size:11px; color:var(--soft); }
+  .plan .btn { grid-row:span 2; }
+  .who { display:flex; gap:14px; margin:4px 0 2px; }
+  .sum { margin-top:10px; font-size:12px; font-weight:600; }
+  .hint { font-size:11px; line-height:1.55; color:var(--soft); }
+  .date { position:absolute; top:-2px; right:0; padding:2px 8px; border-radius:6px; background:var(--pill-bg); color:var(--pill-fg); font-size:11px; font-variant-numeric:tabular-nums; }
+
+  .upform { position:absolute; inset:0 auto 0 0; display:flex; flex-direction:column; gap:9px; width:250px; padding:14px 16px; border-right:1px solid var(--line);
+    background:var(--panel); box-sizing:border-box; }
+  .upform h4 { margin:0; font-size:15px; }
+  .dropzone { position:absolute; top:14px; right:16px; bottom:58px; left:266px; }
+  .thumbs { position:absolute; top:26px; right:30px; left:280px; display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+  .thumb { position:relative; aspect-ratio:3 / 4; overflow:hidden; padding:6px 5px; border-radius:3px; background:var(--sheet); box-shadow:0 8px 18px -10px rgba(0,0,0,.55); box-sizing:border-box; }
+  .thumb i { display:block; height:3px; margin:4px 0; border-radius:2px; background:#D9D6CE; }
+  .thumb i.h { width:70%; background:color-mix(in srgb, var(--ink-blue) 45%, #fff); }
+  .thumb span { position:absolute; right:0; bottom:-18px; left:0; font-size:10px; text-align:center; color:var(--soft); }
+  .stackfile { position:absolute; width:44px; height:56px; }
+  .stackfile i { position:absolute; inset:0; border-radius:3px; background:var(--sheet); box-shadow:0 6px 14px -8px rgba(0,0,0,.6); }
+  .live { position:absolute; inset:0; padding:18px 22px; }
+  .live h4 { margin:0; font-size:15px; }
+  .steps { display:grid; gap:9px; margin-top:16px; }
+  .stepx { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--soft); }
+  .stepx i { display:grid; place-items:center; width:18px; height:18px; border:1.5px solid var(--line); border-radius:50%; font-size:11px; font-style:normal; box-sizing:border-box; }
+  .stepx.done { color:var(--ink); }
+  .stepx.done i { border-color:var(--acc); background:var(--acc); color:var(--on-acc); }
+  .feed { position:absolute; top:18px; right:22px; width:230px; font-size:11.5px; line-height:2; color:var(--soft); }
+  .feed b { color:var(--acc); font-weight:600; }
+  .feed b.bad { color:var(--err); }
+  .sheetx { position:absolute; top:12px; bottom:-30px; left:16px; width:292px; padding:12px 16px; border-radius:3px; background:var(--sheet); color:var(--sheet-ink);
+    font-family:var(--serif); font-size:11px; line-height:1.5; box-shadow:0 14px 34px -18px rgba(0,0,0,.55); box-sizing:border-box; }
+  .sheetx h5 { margin:0 0 8px; font-size:12px; text-align:center; }
+  .sheetx ol { margin:0; padding:0; list-style:none; }
+  .sheetx li { position:relative; min-height:58px; padding-right:40px; }
+  .sheetx .q .katex { font-size:1.02em; }
+  .hand { display:block; margin:3px 0 0 14px; font-family:var(--hand); font-size:14px; color:var(--ink-blue); }
+  .pid { position:absolute; top:1px; right:0; font-family:var(--sans); font-size:7.5px; letter-spacing:.04em; color:#8A877F; }
+  .mark { position:absolute; width:22px; height:22px; }
+  .mark path { fill:none; stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round; }
+  .mark.ok path { stroke:#2F7D55; }
+  .mark.no path { stroke:var(--sheet-err); }
+  .ring { position:absolute; border:2px solid var(--sheet-err); border-radius:50%; }
+  .callout { position:absolute; width:150px; padding:6px 8px; border-left:2px solid var(--err); border-radius:4px; background:var(--err-wash); font-size:10.5px; line-height:1.5; }
+  .callout b { display:block; color:var(--err); font-size:11px; }
+  .gpanel { position:absolute; top:12px; right:16px; bottom:0; left:326px; }
+  .tally { display:flex; flex-wrap:wrap; gap:6px; }
+  .tally span { padding:3px 8px; border-radius:6px; background:var(--wash); font-size:11px; color:var(--acc); font-variant-numeric:tabular-nums; }
+  .tally .bad { background:var(--err-wash); color:var(--err); }
+  .gcard { display:flex; justify-content:space-between; margin-top:7px; padding:7px 10px; border:1px solid var(--line); border-radius:9px; font-size:11.5px; }
+  .gcard .ok { color:var(--acc); }
+  .gcard.open { display:block; border-color:color-mix(in srgb, var(--err) 45%, var(--line)); background:color-mix(in srgb, var(--err) calc(var(--hl, 0) * 9%), var(--paper)); }
+  .gcard.open .row { display:flex; justify-content:space-between; }
+  .gcard.open .bad { color:var(--err); font-weight:600; }
+  .gcard .ref { margin-top:5px; font-size:10.5px; color:var(--soft); }
+  .gcard .ref b { color:var(--ink); font-variant-numeric:tabular-nums; }
+  .gcard .refans { margin-top:3px; font-family:var(--serif); font-size:12px; }
+  .link { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+  .link path { fill:none; stroke:var(--acc); stroke-width:1.6; stroke-dasharray:1; stroke-dashoffset:calc(1 - var(--draw, 0)); }
+
+  .filters { display:flex; gap:6px; margin-top:10px; }
+  .filters span { padding:2px 9px; border:1px solid var(--line); border-radius:7px; font-size:11px; color:var(--soft); }
+  .filters .on { border-color:transparent; background:var(--wash); color:var(--acc); font-weight:600; }
+  .cards2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; }
+  .box { padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:var(--paper); }
+  .box h4 { display:flex; align-items:center; gap:8px; margin:0; font-size:13px; }
+  .box h4 small { padding:1px 6px; border-radius:5px; background:var(--wash); font-size:10px; font-weight:400; color:var(--acc); }
+  .box .kpi { margin-top:4px; font-size:11.5px; color:var(--soft); font-variant-numeric:tabular-nums; }
+  .topic { display:grid; grid-template-columns:1fr auto; gap:3px 8px; margin-top:9px; font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .topic small { color:var(--soft); }
+  .meter { grid-column:1 / -1; height:5px; overflow:hidden; border-radius:3px; background:var(--panel); }
+  .meter i { display:block; width:calc(var(--p, 0) * 1%); height:100%; border-radius:3px; background:var(--acc); }
+  .meter.weak i { background:var(--err); }
+  .ability { display:flex; align-items:center; justify-content:space-between; height:25px; border-bottom:1px dashed var(--line); font-size:11.5px; }
+  .ability q { margin-left:6px; font-size:10.5px; color:var(--soft); }
+  .tag { padding:1px 7px; border-radius:6px; background:var(--panel); font-size:10.5px; color:var(--soft); white-space:nowrap; }
+  .tag.weak { background:var(--err-wash); color:var(--err); }
+  .tag.good { background:var(--wash); color:var(--acc); }
+  .note { display:flex; gap:8px; align-items:flex-end; margin-top:9px; }
+  .note .textarea { flex:1; }
+  .entry { margin-top:8px; padding:6px 9px; border-radius:8px; background:var(--panel); font-size:11.5px; }
+  .entry small { color:var(--soft); }
+  .entry .chips { display:flex; gap:5px; margin-top:4px; }
+  .month { margin-top:12px; font-size:13px; font-weight:600; }
+  .month small { margin-left:6px; font-size:11.5px; font-weight:400; color:var(--soft); }
+  .wcards { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:9px; }
+
+  .report { margin-top:9px; padding:9px 14px; border:1px solid var(--line); border-radius:11px; }
+  .report .rh { display:flex; align-items:center; justify-content:space-between; }
+  .report .rh b { font-size:14px; }
+  .stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin:8px 0 4px; }
+  .stat { padding:5px 9px; border-radius:8px; background:var(--panel); }
+  .stat b { display:block; font-size:16px; font-variant-numeric:tabular-nums; }
+  .stat small { font-size:10.5px; color:var(--soft); }
+  .rsec { display:grid; grid-template-columns:64px 1fr; gap:8px; padding:5px 0; border-top:1px dashed var(--line); font-size:11.5px; line-height:1.55; }
+  .rsec > b { font-size:11px; font-weight:600; color:var(--acc); }
+  .lemni { position:absolute; overflow:visible; }
+  .lemni path { fill:none; stroke:var(--acc); stroke-width:1.8; stroke-linecap:round; stroke-dasharray:1; stroke-dashoffset:calc(1 - var(--draw, 0)); }
+
+  .cursor { position:absolute; top:0; left:0; z-index:50; width:18px; height:23px; filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.32)); transform-origin:2px 1.5px; }
+  .ripple { position:absolute; z-index:49; width:30px; height:30px; margin:-15px 0 0 -15px; border:2px solid var(--acc); border-radius:50%;
+    background:color-mix(in srgb, var(--acc) 22%, transparent); box-sizing:border-box; }
+  .keys { position:absolute; z-index:48; display:flex; gap:5px; }
+  .keys kbd { display:grid; place-items:center; min-width:28px; height:28px; padding:0 7px; border:1px solid var(--line); border-bottom-width:2.5px; border-radius:6px;
+    background:var(--paper); font:600 13px var(--sans); color:var(--ink); box-shadow:0 6px 14px -8px var(--shade); box-sizing:border-box; }
+  .carry { position:absolute; z-index:47; }
+
+  .pill { position:absolute; top:18px; right:20px; z-index:60; display:flex; align-items:center; gap:8px; height:24px; padding:0 10px; border-radius:12px;
+    background:var(--pill-bg); color:var(--pill-fg); font-size:11.5px; white-space:nowrap; box-shadow:0 6px 16px -10px rgba(0,0,0,.5); transform-origin:100% 50%; }
+  .pill .ff { display:flex; align-items:center; gap:4px; overflow:hidden; color:var(--pill-acc); }
+  .pill .ff i { font-style:normal; }
+  .pill .chev { display:inline-block; letter-spacing:-2px; }
+  .pill .clock { display:flex; align-items:center; gap:5px; }
+  .pill .clock svg { width:12px; height:12px; }
+  .pill .clock circle, .pill .clock path { fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:round; }
+  .pill .t { min-width:25px; font-weight:600; font-variant-numeric:tabular-nums; }
+
+  .controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px; width:725px; margin:0 auto 24px; font-size:13px; color:#fff; }
+  .controls a { color:#fff; }
+  .controls a.on { font-weight:700; }
+  .controls input[type=range] { width:320px; }
+</style>
+<body>
+<div id="stage" class="stage"></div>
+<script>
+"use strict";
+
+// ---- time ----------------------------------------------------------------------------------------------------------
+// Everything moves along keyed tracks (time, value, ease), plus hooks that read the time; seek(t) draws the frame at t.
+const EASE = {
+  lin: (p) => p,
+  in: (p) => p ** 3,
+  out: (p) => 1 - (1 - p) ** 3,
+  io: (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2),
+  back: (p) => 1 + 2.4 * (p - 1) ** 3 + 1.4 * (p - 1) ** 2,
+};
+const tracks = new Map();
+const hooks = [];
+const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+function anim(el, prop, keys) {
+  if (!tracks.has(el)) tracks.set(el, new Map());
+  const props = tracks.get(el);
+  props.set(prop, [...(props.get(prop) ?? []), ...keys].sort((a, b) => a[0] - b[0]));
+}
+function sample(keys, t) {
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    const [t1, v1, ease = "io"] = keys[i];
+    if (t < t1) {
+      const [t0, v0] = keys[i - 1];
+      return v0 + (v1 - v0) * EASE[ease]((t - t0) / (t1 - t0));
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+const every = (fn) => hooks.push(fn);
+function seek(t) {
+  for (const [el, props] of tracks) {
+    const v = (p, d) => (props.has(p) ? sample(props.get(p), t) : d);
+    if (props.has("x") || props.has("y") || props.has("s") || props.has("r")) {
+      el.style.transform = `translate(${v("x", 0)}px, ${v("y", 0)}px) scale(${v("s", 1)}) rotate(${v("r", 0)}deg)`;
+    }
+    if (props.has("o")) el.style.opacity = v("o", 1);
+    for (const [p, keys] of props) if (p.startsWith("--")) el.style.setProperty(p, sample(keys, t));
+  }
+  for (const fn of hooks) fn(t);
+}
+
+// ---- kit -----------------------------------------------------------------------------------------------------------
+const stage = document.getElementById("stage");
+const params = new URLSearchParams(location.search);
+const mode = params.get("mode") === "dark" ? "dark" : "light";
+stage.dataset.mode = mode;
+const CHECK = `<span class="check"><svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.6 9.6 3.6"/></svg></span>`;
+const ARROW = `<svg viewBox="0 0 24 30" width="18" height="23"><path d="M2.5 1.8 L2.5 22.8 L7.6 17.9 L11.3 26.6 L15.1 25 L11.4 16.6 L18.6 16.6 Z" fill="#141a17" stroke="#fff" stroke-width="1.7" stroke-linejoin="round"/></svg>`;
+const html = (parent, markup) => {
+  const t = document.createElement("template");
+  t.innerHTML = markup.trim();
+  const node = t.content.firstElementChild;
+  parent.append(node);
+  return node;
+};
+const tex = (s) => s.replace(/\$([^$]+)\$/g, (_, x) => katex.renderToString(x, { throwOnError: false }));
+const show = (el, t, { d = 0.35, y = 8, x = 0, s = null, ease = "out" } = {}) => {
+  anim(el, "o", [[t, 0], [t + d, 1, ease]]);
+  if (y) anim(el, "y", [[t, y], [t + d, 0, ease]]);
+  if (x) anim(el, "x", [[t, x], [t + d, 0, ease]]);
+  if (s != null) anim(el, "s", [[t, s], [t + d, 1, "back"]]);
+};
+const hide = (el, t, { d = 0.3, y = 0 } = {}) => {
+  anim(el, "o", [[t, 1], [t + d, 0]]);
+  if (y) anim(el, "y", [[t, 0], [t + d, y]]);
+};
+// visible over the given [from, to] stretches only, fading at each end
+const during = (el, spans, d = 0.25) => anim(el, "o", spans.flatMap(([a, b]) => [[a, 0], [a + d, 1], [b - d, 1], [b, 0]]));
+const flag = (el, cls, from, to = Infinity) => every((t) => el.classList.toggle(cls, t >= from && t < to));
+const texts = (el, keys) => every((t) => {
+  let s = keys[0][1];
+  for (const [k, v] of keys) if (t >= k) s = v;
+  if (el.textContent !== s) el.textContent = s;
+});
+const count = (el, keys, fmt = (v) => String(Math.round(v))) => every((t) => { el.textContent = fmt(sample(keys, t)); });
+// typed text; the caret shows while the field has the focus, steady while typing and blinking otherwise
+function typing(el, str, t0, { cps = 3.2, focus = t0 - 0.1, blur = Infinity } = {}) {
+  const chars = [...str], t1 = t0 + chars.length / cps;
+  const text = document.createElement("span"), caret = document.createElement("i");
+  caret.className = "caret";
+  el.append(text, caret);
+  every((t) => {
+    text.textContent = chars.slice(0, clamp(Math.floor((t - t0) * cps + 1e-6), 0, chars.length)).join("");
+    const on = t >= focus && t < blur && (t < t1 + 0.05 || Math.floor((t - t1) * 2.2) % 2 === 0);
+    caret.style.opacity = on ? 1 : 0;
+  });
+  return t1;
+}
+const flash = (el, t, hold = 0.9) => anim(el, "--hl", [[t, 0], [t + 0.2, 1], [t + 0.2 + hold, 1], [t + 0.6 + hold, 0]]);
+const press = (el, t) => anim(el, "s", [[t, 1], [t + 0.07, 0.95], [t + 0.2, 1, "out"]]);
+
+let camBox = null;
+const pos = (target, dx = 0.5, dy = 0.5) => {
+  if (Array.isArray(target)) return target;
+  const r = target.getBoundingClientRect();
+  return [r.left - camBox.left + r.width * dx, r.top - camBox.top + r.height * dy];
+};
+
+// The cursor glides along eased arcs between the places it is sent, presses on each click and leaves a ripple.
+class Cursor {
+  constructor(layer, start) {
+    this.layer = layer;
+    this.el = html(layer, `<div class="cursor">${ARROW}</div>`);
+    this.start = start;
+    this.moves = [];
+    this.clicks = [];
+    every((t) => {
+      const [x, y] = this.at(t);
+      const pressed = this.clicks.some((c) => t >= c && t < c + 0.14);
+      this.el.style.transform = `translate(${x - 2}px, ${y - 1.5}px) scale(${pressed ? 0.86 : 1})`;
+    });
+  }
+  go(t, target, d = 0.5, { dx = 0.5, dy = 0.5 } = {}) {
+    const [x, y] = pos(target, dx, dy);
+    this.moves.push({ t0: t, t1: t + d, x, y });
+    this.moves.sort((a, b) => a.t0 - b.t0);
+    return t + d;
+  }
+  at(t) {
+    let [x, y] = this.start;
+    for (const m of this.moves) {
+      if (t >= m.t1) { x = m.x; y = m.y; continue; }
+      if (t > m.t0) {
+        const p = EASE.io((t - m.t0) / (m.t1 - m.t0));
+        const bend = Math.min(36, Math.hypot(m.x - x, m.y - y) * 0.1) * Math.sin(Math.PI * p);
+        return [x + (m.x - x) * p, y + (m.y - y) * p - bend];
+      }
+      break;
+    }
+    return [x, y];
+  }
+  tap(t, target) {
+    if (target) press(target, t);
+    this.clicks.push(t);
+    const [x, y] = this.at(t);
+    const ring = html(this.layer, `<div class="ripple" style="left:${x}px;top:${y}px"></div>`);
+    anim(ring, "o", [[t, 0], [t + 0.01, 0.95], [t + 0.5, 0, "out"]]);
+    anim(ring, "s", [[t, 0.3], [t + 0.5, 1.3, "out"]]);
+    return t;
+  }
+  // something the cursor holds from `t0` to `t1`, offset from its tip
+  carry(node, t0, t1, [ox, oy] = [10, 12]) {
+    node.classList.add("carry");
+    this.layer.append(node);
+    anim(node, "o", [[t0 - 0.01, 0], [t0, 1], [t1, 1], [t1 + 0.15, 0]]);
+    every((t) => {
+      const [x, y] = this.at(clamp(t, t0, t1));
+      node.style.left = `${x + ox}px`;
+      node.style.top = `${y + oy}px`;
+    });
+  }
+}
+
+// ⌘ V and the like, shown as keycaps by the cursor
+function keys(layer, labels, t0, t1, [x, y]) {
+  const node = html(layer, `<div class="keys" style="left:${x}px;top:${y}px">${labels.map((k) => `<kbd>${k}</kbd>`).join("")}</div>`);
+  [...node.children].forEach((key, i) => {
+    show(key, t0 + i * 0.08, { d: 0.25, y: 6, s: 0.8 });
+    anim(key, "y", [[t0 + 0.45 + i * 0.08, 0], [t0 + 0.55 + i * 0.08, 2], [t0 + 0.7 + i * 0.08, 0]]);
+  });
+  hide(node, t1);
+}
+const toast = (layer, t0, t1, text) => during(html(layer, `<div class="toast">${text}</div>`), [[t0, t1]]);
+
+// the y = x² − 2x − 3 figure of the demo question, 30 px a unit, origin at (−30, 0)
+function parabola(width, { color = "currentColor", draw = false } = {}) {
+  const pts = [];
+  for (let x = -1.4; x <= 3.401; x += 0.05) pts.push(`${(-30 + 30 * x).toFixed(1)},${(-30 * (x * x - 2 * x - 3)).toFixed(1)}`);
+  const label = (x, y, s) => `<text x="${x}" y="${y}" style="font:italic 15px 'Times New Roman',serif" fill="${color}">${s}</text>`;
+  return `<svg class="fig" width="${width}" viewBox="-105 -62 210 232" style="color:${color}">
+    <line x1="-95" y1="0" x2="98" y2="0" stroke="currentColor" stroke-width="1.3"/><path d="M92 -4 98 0 92 4" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <line x1="-30" y1="160" x2="-30" y2="-55" stroke="currentColor" stroke-width="1.3"/><path d="M-34 -49 -30 -55 -26 -49" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <path class="${draw ? "curve" : ""}" pathLength="1" d="M${pts.join(" L")}" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <polygon points="-60,0 -30,90 0,120 60,0" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="4 3"/>
+    ${label(90, 18, "x")}${label(-24, -44, "y")}${label(-46, 16, "O")}${label(-78, -6, "A")}${label(64, -6, "B")}${label(-52, 98, "C")}${label(4, 140, "D")}
+  </svg>`;
+}
+const STEM = "如图，抛物线 $y=x^{2}-2x-3$ 与 $x$ 轴交于 $A$、$B$ 两点（点 $A$ 在点 $B$ 的左侧），与 $y$ 轴交于点 $C$，顶点为 $D$．（1）求 $A$、$B$、$C$、$D$ 四点的坐标；（2）求四边形 $ACDB$ 的面积．";
+
+// a shell like the app's: the top bar with its entries, the body under it
+async function wordmark() {
+  try {
+    const source = await (await fetch("../app/components/SiteHeader.tsx")).text();
+    const svg = source.match(/<svg className="brand-word"[\s\S]*?<\/svg>/)[0];
+    return svg.replace(/className=/g, "class=").replace(/stroke([A-Z])([a-z]+)=/g, (_, a, b) => `stroke-${a.toLowerCase()}${b}=`);
+  } catch {
+    return `<b class="brand-text">MathPilot</b>`;
+  }
+}
+const NAV = ["题库", "组卷篮", "讲义编撰", "知识图谱", "学生档案", "工具箱"];
+
+// a handwriting face from the ones macOS keeps, for the students' answers
+function handwriting() {
+  const ctx = document.createElement("canvas").getContext("2d");
+  const width = (font) => { ctx.font = `20px ${font}`; return ctx.measureText("手写答案 = −8 ＋ 1").width; };
+  const base = width("monospace");
+  return ["Hannotate SC", "HanziPen SC", "Kaiti SC", "STKaiti"].find((name) => width(`"${name}", monospace`) !== base) ?? "serif";
+}
+
+// ---- scenes --------------------------------------------------------------------------------------------------------
+// Each builds its screens into `body`, then keys them. `clock` lists the teacher's own stretches (act), the machine's
+// (machine: label) and days passing (wait: label); `final` is when the reading settles.
+const SCENES = {};
+
+SCENES.intake = {
+  no: "01", name: "入库", nav: "题库", duration: 15.6,
+  async build({ body, cam, ready }) {
+    const card = (id, kind, level, stem, extra = "") => `<article class="qcard ${extra}"><div class="meta"><span class="id">ID ${id}</span><span>${kind}</span><span>${level}</span></div><div class="stem">${tex(stem)}</div></article>`;
+    const view = html(body, `<div class="view">
+      <aside class="rail"><div class="eyebrow">共享题库 · 初中数学</div>
+        ${[["有理数", 32], ["整式", 41], ["一元一次方程", 26], ["二次函数", 23], ["三角形", 38]].map(([n, c]) => `<div class="item ${n === "二次函数" ? "on" : ""}">${n}<small>${n === "二次函数" ? '<b class="n">23</b>' : c}</small></div>`).join("")}
+      </aside>
+      <section class="main">
+        <div class="head"><h3>二次函数</h3><span class="count"><b class="n">23</b> 道题</span><span class="grow"></span><span class="btn primary new">＋ 新建试题</span></div>
+        <div class="search">⌕　搜索题干、知识点，或输入四位 ID</div>
+        <div class="list">
+          ${card("1236", "选择题", "容易", "抛物线 $y=-(x+2)^{2}+1$ 的对称轴是（　）", "batch")}
+          ${card("1237", "填空题", "中等", "将抛物线 $y=x^{2}$ 向右平移 $2$ 个单位，所得抛物线为____．", "batch")}
+          ${card("1238", "解答题", "中等", "已知二次函数 $y=x^{2}+bx+c$ 的图象经过 $(1,0)$、$(0,-3)$，求 $b$、$c$．", "batch")}
+          ${card("1235", "解答题", "中等", "如图，抛物线 $y=x^{2}-2x-3$ 与 $x$ 轴交于 $A$、$B$ 两点，与 $y$ 轴交于点 $C$ …", "fresh")}
+          ${card("1219", "解答题", "较难", "已知抛物线 $y=ax^{2}+bx+c$ 经过点 $(-1,0)$，且顶点在直线 $y=2x$ 上 …")}
+          ${card("1201", "填空题", "中等", "若二次函数 $y=x^{2}-4x+m$ 的图象与 $x$ 轴只有一个交点，则 $m=$____．")}
+          ${card("1188", "选择题", "容易", "抛物线 $y=2(x-1)^{2}+3$ 的顶点坐标是（　）")}
+        </div>
+      </section></div>`);
+    const layer = html(body, `<div class="layer">
+      <div class="backdrop"></div>
+      <section class="modal">
+        <div class="mhead"><div><div class="eyebrow">智能录题</div><h2>截图自动录题</h2></div><span class="x">×</span></div>
+        <div class="modes"><div class="m1"><b>AI 截图录入</b>识别单道题目截图</div><div class="m2"><b>文件批量录入</b>PDF / Word 整份导入</div></div>
+        <div class="mbody">
+          <div class="capture"><div class="icon">⌘V</div><div><b>直接粘贴题目截图</b><p>也可以点击选择图片，或把图片拖到这里</p></div><span class="note">自动识别题干、公式、<br>答案与配图</span></div>
+          <div class="recog">
+            <div class="src"><div class="photo"><div>23．${tex(STEM)}</div>${parabola(58, { color: "#1C1C1A" })}</div><div class="scan"></div>
+              <div class="recognizing"><b>正在识别题目…</b><span>文字、公式和配图会自动拆分</span></div></div>
+            <div class="status"><div class="eyebrow">原始截图已保留</div><b class="st">识别处理中</b><div class="fields">
+              <div class="field">题型<span class="val"><span class="v">解答题</span></span></div>
+              <div class="field">难度<span class="val"><span class="v">中等</span></span></div>
+              <div class="field">所属分类<span class="val"><span class="v">二次函数 › 图像与性质</span></span></div></div></div>
+            <div class="stembox"><div><div class="stemtext">${tex(STEM)}</div>
+              <div class="ans"><b>【答案】</b>${tex("（1）$A(-1,0)$，$B(3,0)$，$C(0,-3)$，$D(1,-4)$；（2）$9$．")}</div></div>${parabola(96, { draw: true })}</div>
+          </div>
+          <div class="fileimp layer">
+            <div class="drop dz"><b>选择、拖入文件或粘贴图片</b><small>PDF、Word 或图片，可以一次放多个</small></div>
+            <div class="drop reading"><b>正在读取 第3周周练.docx …</b><small>能直接读出的 Word 不用 AI</small></div>
+            <div class="drafts layer"><div class="eyebrow">文件批量录入</div><h5>20 道待校对题目</h5>
+              ${["1．抛物线 $y=-(x+2)^{2}+1$ 的对称轴是（　）", "2．将抛物线 $y=x^{2}$ 向右平移 $2$ 个单位，所得抛物线为____．", "3．已知二次函数 $y=x^{2}+bx+c$ 的图象经过 $(1,0)$、$(0,-3)$ …", "4．二次函数 $y=x^{2}-6x+5$ 的最小值是____．"].map((s) => `<div class="draft on">${CHECK}<span>${tex(s)}</span></div>`).join("")}
+              <div class="more">…… 还有 16 道</div></div>
+          </div>
+        </div>
+        <div class="mfoot"><span class="btn">取消</span><span class="btn primary save">确认并保存</span></div>
+      </section></div>`);
+    const word = html(document.createElement("div"), `<div class="file"><i>W</i>第3周周练.docx</div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cards = qa(".qcard"), batch = qa(".qcard.batch"), fresh = q(".qcard.fresh"), older = cards.filter((c) => !c.matches(".batch, .fresh"));
+    const step = (c) => c.getBoundingClientRect().height + 8;
+    const hB = batch.reduce((s, c) => s + step(c), 0), hF = step(fresh);
+    const cur = new Cursor(cam, [520, 330]);
+
+    // the list: the new question lands on top, the 20 from the Word file later
+    for (const c of older) anim(c, "y", [[7.45, -(hB + hF)], [7.85, -hB, "out"], [13.1, -hB], [13.5, 0, "out"]]);
+    anim(fresh, "o", [[7.55, 0], [7.95, 1, "out"]]);
+    anim(fresh, "y", [[7.55, -hB - 10], [7.95, -hB, "out"], [13.1, -hB], [13.5, 0, "out"]]);
+    flash(q(".id", fresh), 7.95, 1.0);
+    batch.forEach((c, i) => { show(c, 13.15 + i * 0.07, { d: 0.35, y: -8 }); flash(q(".id", c), 13.5, 0.8); });
+    for (const n of qa(".n", view)) every((t) => { n.textContent = t < 7.6 ? "23" : t < 13.2 ? "24" : String(Math.round(24 + 20 * EASE.out(clamp((t - 13.2) / 0.6)))); });
+
+    // the dialog, twice: a screenshot, then a Word file
+    anim(layer, "o", [[2.05, 0], [2.3, 1], [7.2, 1], [7.45, 0], [9.5, 0], [9.75, 1], [13.05, 1], [13.3, 0]]);
+    anim(q(".modal", layer), "y", [[2.05, 14], [2.3, 0, "out"], [7.2, 0], [7.45, 8], [9.5, 14], [9.75, 0, "out"], [13.05, 0], [13.3, 8]]);
+    flag(q(".m1", layer), "on", 0, 10.25);
+    flag(q(".m2", layer), "on", 10.25);
+    anim(q(".capture", layer), "o", [[2.75, 1], [2.9, 0], [9.0, 0], [9.05, 1], [10.25, 1], [10.4, 0]]);
+    const recog = q(".recog", layer);
+    anim(recog, "o", [[2.8, 0], [2.95, 1], [7.45, 1], [7.5, 0]]);
+    show(q(".photo", layer), 2.8, { d: 0.3, y: 0, s: 1.08 });
+    anim(q(".photo", layer), "r", [[2.8, -3], [3.1, -1.2, "out"]]);
+    const src = q(".src", layer), scan = q(".scan", layer), height = src.getBoundingClientRect().height;
+    during(scan, [[2.95, 4.45]], 0.1);
+    every((t) => { scan.style.top = `${((Math.max(0, t - 2.95) / 0.75) % 1) * (height + 38) - 38}px`; });
+    during(q(".recognizing", layer), [[2.95, 4.5]], 0.15);
+    const status = q(".st", layer);
+    texts(status, [[0, "识别处理中"], [4.45, "识别可信度 96%"]]);
+    anim(status, "s", [[4.45, 0.9], [4.7, 1, "back"]]);
+    qa(".field .v", layer).forEach((v, i) => show(v, 4.55 + i * 0.15, { d: 0.3, y: 0, x: 6 }));
+    show(q(".stemtext", layer), 5.0, { d: 0.4, y: 6 });
+    anim(q(".stembox .fig", layer), "--draw", [[5.2, 0], [5.9, 1]]);
+    show(q(".stembox .fig", layer), 5.15, { d: 0.2, y: 0 });
+    show(q(".ans", layer), 5.45, { d: 0.35, y: 4 });
+    anim(cam, "s", [[4.4, 1], [5.0, 1.035], [7.0, 1.035], [7.5, 1]]);
+    cam.style.transformOrigin = "362px 270px";
+
+    const file = q(".fileimp", layer);
+    anim(file, "o", [[10.3, 0], [10.45, 1], [13.3, 1], [13.31, 0]]);
+    const dz = q(".dz", layer);
+    anim(dz, "o", [[11.3, 1], [11.4, 0]]);
+    anim(dz, "--hl", [[10.9, 0], [11.15, 1], [11.3, 1]]);
+    during(q(".reading", layer), [[11.3, 11.95]], 0.1);
+    const drafts = q(".drafts", layer);
+    anim(drafts, "o", [[11.9, 0], [12.0, 1]]);
+    qa(".draft, .more", drafts).forEach((d, i) => show(d, 11.95 + i * 0.09, { d: 0.3, y: 8 }));
+    const save = q(".save", layer);
+    texts(save, [[0, "确认并保存"], [10.25, "保存所选 20 道题"]]);
+    anim(save, "o", [[10.25, 1], [10.26, 0.4], [11.95, 0.4], [12.1, 1]]);
+
+    // the teacher
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    cur.go(1.4, q(".new"), 0.55);
+    cur.tap(2.0, q(".new"));
+    const capture = q(".capture", layer);
+    cur.go(2.35, capture, 0.4, { dx: 0.5, dy: 0.62 });
+    keys(cam, ["⌘", "V"], 2.5, 3.25, pos(capture, 0.43, 0.12));
+    cur.go(5.6, q(".stembox .fig", layer), 0.5);
+    cur.go(6.15, qa(".field .val", layer)[2], 0.4, { dx: 0.7 });
+    cur.go(6.6, save, 0.5);
+    cur.tap(7.15, save);
+    cur.go(7.5, fresh, 0.6, { dx: 0.62, dy: 0.7 });
+    cur.go(8.9, q(".new"), 0.5);
+    cur.tap(9.45, q(".new"));
+    cur.go(9.85, q(".m2", layer), 0.4);
+    cur.tap(10.25, q(".m2", layer));
+    cur.go(10.4, [700, 330], 0.35);
+    cur.carry(word, 10.75, 11.3, [8, 10]);
+    cur.go(10.8, dz, 0.5, { dy: 0.45 });
+    cur.go(12.5, save, 0.45);
+    cur.tap(13.0, save);
+    cur.go(13.3, [600, 400], 0.6);
+    toast(cam, 7.3, 8.8, "试题已保存到云端");
+    toast(cam, 13.15, 14.45, "已从文件录入 20 道云端试题");
+    return { act: [[1.35, 2.95], [4.45, 13.3]], machine: [[2.95, 4.45, "AI 识别中"]], final: 13.4 };
+  },
+};
+
+SCENES.paper = {
+  no: "02", name: "组卷", nav: "题库", duration: 16.0,
+  async build({ body, cam, ready, nav }) {
+    const items = [["0402", "计算：$(-3)+(-5)-(-7)$", "$-1$"], ["0388", "计算：$-2^{2}\\times3+(-6)\\div2$", "$-15$"], ["0421", "计算：$-(1)^{2}+9\\times\\frac{1}{9}$", "$0$"]];
+    const lib = html(body, `<div class="view">
+      <aside class="rail"><div class="eyebrow">共享题库 · 初中数学</div>
+        ${[["有理数", 32], ["整式", 41], ["一元一次方程", 26], ["二次函数", 24], ["三角形", 38]].map(([n, c]) => `<div class="item ${n === "有理数" ? "on" : ""}">${n}<small>${c}</small></div>`).join("")}</aside>
+      <section class="main">
+        <div class="head"><h3>有理数</h3><span class="count">32 道题</span><span class="grow"></span><span class="btn">＋ 新建试题</span></div>
+        <div class="search">⌕　搜索题干、知识点，或输入四位 ID</div>
+        <div class="list">${items.map(([id, stem]) => `<article class="qcard pickable">${CHECK}<div class="meta"><span class="id">ID ${id}</span><span>计算题</span><span>中等</span></div><div class="stem">${tex(stem)}</div></article>`).join("")}
+          <article class="qcard pickable">${CHECK}<div class="meta"><span class="id">ID 0433</span><span>计算题</span><span>较难</span></div><div class="stem">${tex("计算：$(-\\frac{3}{4}+\\frac{7}{12}-\\frac{5}{8})\\times(-24)$")}</div></article></div>
+        <div class="dock"><div class="n"><span class="dn">1</span><small>已选试题</small></div><div class="t"><b>本分类 <span class="dn">1</span> 题</b>选好后去组卷篮整理</div><span class="grow"></span><span class="btn ghost">清空</span><span class="btn primary go">组卷篮 →</span></div>
+      </section></div>`);
+    const basket = html(body, `<div class="view"><section class="main full">
+      <div class="head"><div class="input" style="width:270px"><span class="ph">练习标题</span>有理数运算练习</div><div class="cb on">${CHECK}附带答案与解析</div><span class="grow"></span><span class="btn">生成 Word</span><span class="btn primary ts">快速排版</span></div>
+      <div class="outline">${items.map(([id, stem], i) => `<div class="orow"><span class="no">${i + 1}</span><span class="id">ID ${id}</span><span class="stem">${tex(stem)}</span><span class="ops"><span>↑ 上移</span><span class="down">↓ 下移</span><span>移除</span></span></div>`).join("")}</div>
+      <div class="links"><span>＋ 大标题</span><span>按题型分类</span></div></section></div>`);
+    const typeset = html(body, `<div class="view"><div class="split" style="--side:200px">
+      <div class="side"><span class="btn small" style="align-self:flex-start">← 组卷篮</span><div class="lbl" style="margin:4px 0 -4px">版本</div>
+        <div class="seg"><span class="e1">学生版</span><span class="e2">附答案</span><span class="e3">教师版</span></div>
+        <span class="btn primary">下载 PDF</span><span class="btn">布置给学生</span></div>
+      <div class="stack"><div class="a4"><h4>有理数运算练习</h4><div class="sub">姓名＿＿＿＿　班级＿＿＿＿　用时＿＿＿＿</div>
+        ${[items[1], items[0], items[2]].map(([, stem, key], i) => `<div class="q"><div class="ln">${i + 1}．${tex(stem.replace("计算：", "计算："))}</div><div class="key">答案：${tex(key)}</div><div class="blank"></div><div class="blank" style="width:70%"></div></div>`).join("")}
+        <div class="rule"></div><div class="blank"></div><div class="blank" style="width:60%"></div></div></div></div></div>`);
+    const smart = html(body, `<div class="view"><div class="split" style="--side:236px">
+      <div class="side"><div><div class="lbl">学生</div><div class="select">Mia（远航G7）</div></div>
+        <div><div class="lbl">要出什么样的练习</div><div class="textarea req"><span class="ph">例如：出一份 5 天的计算打卡，每天 5 道题</span></div></div>
+        <span class="btn primary go2" style="align-self:flex-start">✦ 生成方案</span>
+        <div class="hint">会参考课后反馈、知识点正确率和具体错因；每题说明对应的历史错误或一般巩固，并避开做过、布置过的题。</div></div>
+      <div class="out"><div class="busy"><i class="spin"></i><span class="bt"></span></div>
+        <div class="plan-out layer" style="inset:14px"><div class="brief"><h6>方案要点</h6><dl><dt>题量</dt><dd>5 天 × 每天 5 题</dd><dt>学生档案要点</dt><dd class="find">乘方前的负号漏掉 · 同号相加与异号相加混淆</dd></dl></div>
+          <div class="days">${[1, 2, 3, 4, 5].map((d) => `<div class="day"><h6>第 ${d} 天</h6>${[0, 1, 2, 3, 4].map((k) => { const id = String(400 + ((d * 37 + k * 11) % 90)).padStart(4, "0"); return `<div class="qchip ${k === 0 ? "focus" : ""}">ID ${id}${k === 0 ? "<em>针对：乘方符号</em>" : k === 2 ? "<em>一般巩固</em>" : ""}</div>`; }).join("")}</div>`).join("")}</div></div>
+      </div></div></div>`);
+    const caption = html(body, `<div class="caption">或者，说一句话</div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [430, 380]);
+    const picks = qa(".qcard.pickable", lib);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    [1.85, 2.35, 2.85].forEach((t, i) => {
+      cur.go(t - (i ? 0.4 : 0.45), q(".check", picks[i]), i ? 0.35 : 0.4);
+      cur.tap(t, q(".check", picks[i]));
+      flag(picks[i], "on", t + 0.03);
+    });
+    const dock = q(".dock", lib);
+    show(dock, 1.9, { d: 0.3, y: 14 });
+    for (const n of qa(".dn", dock)) texts(n, [[0, "1"], [2.38, "2"], [2.88, "3"]]);
+    const go = q(".go", lib);
+    cur.go(2.95, go, 0.45);
+    cur.tap(3.45, go);
+
+    // 题库 → 组卷篮 → 快速排版 → 智能组卷
+    anim(lib, "o", [[3.5, 1], [3.75, 0]]);
+    anim(basket, "o", [[3.5, 0], [3.8, 1], [5.2, 1], [5.4, 0]]);
+    anim(typeset, "o", [[5.25, 0], [5.5, 1], [7.4, 1], [7.6, 0]]);
+    anim(smart, "o", [[7.5, 0], [7.7, 1]]);
+    nav(3.5, "组卷篮");
+    nav(7.5, "工具箱");
+    const rows = qa(".orow", basket), gap = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
+    const down = q(".down", rows[0]);
+    cur.go(3.9, down, 0.4);
+    cur.tap(4.3, down);
+    anim(rows[0], "y", [[4.35, 0], [4.65, gap]]);
+    anim(rows[1], "y", [[4.35, 0], [4.65, -gap]]);
+    texts(q(".no", rows[0]), [[0, "1"], [4.5, "2"]]);
+    texts(q(".no", rows[1]), [[0, "2"], [4.5, "1"]]);
+    const ts = q(".ts", basket);
+    cur.go(4.7, ts, 0.45);
+    cur.tap(5.2, ts);
+    const sheet = q(".a4", typeset);
+    show(sheet, 5.3, { d: 0.4, y: 16 });
+    qa(".a4 > *", typeset).forEach((line, i) => show(line, 5.45 + i * 0.07, { d: 0.25, y: 0 }));
+    qa(".key", typeset).forEach((k) => anim(k, "o", [[0, 0], [6.6, 0], [6.85, 1]]));
+    flag(q(".e1", typeset), "on", 0, 6.55);
+    flag(q(".e3", typeset), "on", 6.55);
+    cur.go(6.1, q(".e3", typeset), 0.4);
+    cur.tap(6.55, q(".e3", typeset));
+    during(caption, [[7.25, 7.95]], 0.2);
+
+    const req = q(".req", smart);
+    cur.go(8.0, req, 0.4);
+    cur.tap(8.45);
+    const ph = q(".ph", req);
+    anim(ph, "o", [[8.5, 1], [8.51, 0]]);
+    const typed = typing(req, "5 天打卡，针对错因", 8.55, { focus: 8.48, blur: 11.75 });
+    const go2 = q(".go2", smart);
+    cur.go(typed + 0.15, go2, 0.4);
+    cur.tap(typed + 0.6, go2);
+    const t0 = typed + 0.65;
+    const busy = q(".busy", smart);
+    during(busy, [[t0, t0 + 1.35]], 0.12);
+    texts(q(".bt", smart), [[0, "正在读学生档案…"], [t0 + 0.45, "正在理解需求…"], [t0 + 0.9, "正在从题库挑题…"]]);
+    every((t) => { q(".spin", smart).style.transform = `rotate(${t * 540}deg)`; });
+    const out = q(".plan-out", smart);
+    anim(out, "o", [[t0 + 1.3, 0], [t0 + 1.4, 1]]);
+    show(q(".brief", smart), t0 + 1.35, { d: 0.35, y: 8 });
+    qa(".day", smart).forEach((d, i) => show(d, t0 + 1.5 + i * 0.1, { d: 0.35, y: 10 }));
+    cur.go(t0 + 1.6, [560, 380], 0.6);
+    return { act: [[1.35, 5.25], [6.05, 7.2], [8.0, t0], [t0 + 1.35, t0 + 1.6]], machine: [[5.25, 6.05, "排版中"], [t0, t0 + 1.35, "AI 组卷中"]], final: t0 + 1.7 };
+  },
+};
+
+SCENES.handout = {
+  no: "03", name: "讲义", nav: "讲义编撰", duration: 14.6,
+  async build({ body, cam, ready }) {
+    const view = html(body, `<div class="view">
+      <div class="hd-top"><div><div class="crumb">讲义编撰 / 深圳创新体系 · 初一 · 秋季 · 第 3 讲</div><div class="hd-title">正负数的五则运算</div></div>
+        <div class="tabs"><span class="s1">讲义</span><span class="s2">小测</span><span class="s3">作业</span></div><span class="grow"></span><span class="btn primary ex">导出</span></div>
+      <div class="page">
+        <div class="sheet k1"><h4>知识点 1　有理数的加法</h4>
+          <div class="lane"><span>知识点</span><div><p class="typed">同号两数相加，取相同的符号，</p><p>异号两数相加，取绝对值较大的加数的符号，并用较大的绝对值减去较小的绝对值。</p></div></div>
+          <div class="lane"><span>例题</span><div><p class="e1">例 1　计算：${tex("$(-3)+(-5)$")}</p><p class="e2">例 2　计算：${tex("$(+6)+(-9)$")}</p><span class="pick">＋ 从题库选题</span></div></div>
+          <div class="lane"><span>练习</span><p class="faint">练习 1　计算：${tex("$(-12)+(+7)$")}　　练习 2　计算：${tex("$(-\\frac{1}{2})+(-\\frac{1}{3})$")}</p></div>
+          <div class="lane"><span>变式</span><p class="faint">若 ${tex("$|a|=3$")}，${tex("$|b|=5$")}，且 ${tex("$a+b<0$")}，求 ${tex("$a+b$")} 的值．</p></div></div>
+        <div class="sheet k2"><h4>小测 · 有理数的加法（5 题，10 分钟）</h4>
+          ${["$(-8)+(-6)$", "$(+15)+(-9)$", "$(-2.5)+(+2.5)$", "$(-\\frac{2}{3})+(+\\frac{1}{6})$", "$(-7)+(+3)+(-5)$"].map((s, i) => `<div class="lane"><span>${i + 1}</span><p>计算：${tex(s)}</p></div>`).join("")}</div>
+        <div class="sheet k3"><h4>作业 · 第 3 讲（8 题）</h4>
+          ${["$(-17)+(+23)$", "$(-0.6)+(-1.4)$", "$(+\\frac{3}{4})+(-\\frac{5}{6})$", "某地早晨气温 $-3$ ℃，中午上升 $8$ ℃，求中午气温．", "若 $a$ 与 $-2$ 互为相反数，求 $a+(-7)$．"].map((s, i) => `<div class="lane"><span>${i + 1}</span><p>${tex(s.startsWith("$") ? "计算：" + s : s)}</p></div>`).join("")}</div>
+      </div>
+      <aside class="picker"><h5>从题库选题 · 有理数的加法</h5><div class="search" style="margin:0">⌕　有理数加法</div>
+        ${[["0402", "$(-3)+(-5)$"], ["0388", "$(+6)+(-9)$"], ["0391", "$(-2.5)+(+1.5)$"]].map(([id, s]) => `<div class="pcard"><span class="sel">＋ 选择</span>ID ${id} · 计算题<div class="stem">计算：${tex(s)}</div></div>`).join("")}
+        <span class="grow"></span><span class="btn primary done" style="align-self:flex-end">完成</span></aside>
+      <div class="export"><h5>导出讲义</h5><div class="lbl">答案</div><div class="seg"><span class="on">不附</span><span>文末</span><span>每题后</span></div>
+        <div class="hint">不附答案是学生版，文末是附答案版，每题后是教师版；三份一起排好。</div>
+        <span class="btn primary pdf" style="width:100%">生成 PDF</span><div class="progress"><i></i></div></div>
+      <div class="fan">${[["学生版", false], ["附答案版", "end"], ["教师版", "each"]].map(([name, key]) => `<div class="mini"><div class="ttl">正负数的五则运算</div>
+        ${[0, 1, 2, 3, 4].map((i) => `<div class="ln" style="width:${[92, 80, 88, 70, 84][i]}%"></div>${key === "each" && i % 2 ? '<div class="ln k" style="width:46%"></div>' : ""}`).join("")}
+        ${key === "end" ? '<div class="ln k" style="width:60%;margin-top:12px"></div><div class="ln k" style="width:52%"></div>' : ""}<div class="tag">${name}</div></div>`).join("")}</div>
+    </div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [520, 300]);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    const typedLine = q(".typed", view);
+    cur.go(1.4, typedLine, 0.45, { dx: 0.98 });
+    cur.tap(1.9);
+    const end = typing(typedLine, "并把绝对值相加。", 1.95, { focus: 1.9, blur: 4.6 });
+    const pick = q(".pick", view);
+    cur.go(end + 0.1, pick, 0.45);
+    cur.tap(4.6, pick);
+    const picker = q(".picker", view);
+    anim(picker, "o", [[4.62, 0], [4.7, 1], [7.3, 1], [7.55, 0]]);
+    anim(picker, "x", [[4.62, 250], [4.95, 0, "out"], [7.3, 0], [7.55, 250, "in"]]);
+    const pcards = qa(".pcard", picker);
+    [[5.45, 0, ".e1"], [6.3, 1, ".e2"]].forEach(([t, i, slot]) => {
+      const sel = q(".sel", pcards[i]);
+      cur.go(t - 0.4, sel, 0.35);
+      cur.tap(t, sel);
+      flag(pcards[i], "on", t + 0.03);
+      texts(sel, [[0, "＋ 选择"], [t + 0.03, "已选"]]);
+      show(q(slot, view), t + 0.05, { d: 0.4, y: 0, x: 60 });
+    });
+    const done = q(".done", picker);
+    cur.go(6.85, done, 0.35);
+    cur.tap(7.25, done);
+    // 讲义 → 小测 → 作业
+    const [s1, s2, s3] = [".s1", ".s2", ".s3"].map((s) => q(s, view));
+    const [k1, k2, k3] = [".k1", ".k2", ".k3"].map((s) => q(s, view));
+    flag(s1, "on", 0, 8.05); flag(s2, "on", 8.05, 8.75); flag(s3, "on", 8.75, 11.0); flag(s1, "on", 11.0);
+    anim(k1, "o", [[8.05, 1], [8.2, 0], [11.0, 0], [11.1, 1]]);
+    anim(k2, "o", [[8.05, 0], [8.25, 1], [8.75, 1], [8.9, 0]]);
+    anim(k3, "o", [[8.75, 0], [8.95, 1], [11.0, 1], [11.1, 0]]);
+    cur.go(7.65, s2, 0.35);
+    cur.tap(8.05, s2);
+    cur.go(8.45, s3, 0.25);
+    cur.tap(8.75, s3);
+    const ex = q(".ex", view);
+    cur.go(8.95, ex, 0.35);
+    cur.tap(9.35, ex);
+    const dialog = q(".export", view);
+    anim(dialog, "o", [[9.4, 0], [9.6, 1], [10.95, 1], [11.15, 0]]);
+    anim(dialog, "y", [[9.4, 12], [9.65, 0, "out"]]);
+    const pdf = q(".pdf", view);
+    cur.go(9.75, pdf, 0.35);
+    cur.tap(10.15, pdf);
+    anim(q(".progress", view), "--p", [[10.2, 0], [11.0, 1, "lin"]]);
+    anim(q(".progress", view), "o", [[10.15, 0], [10.2, 1]]);
+    const fan = q(".fan", view);
+    anim(fan, "o", [[11.0, 0], [11.25, 1]]);
+    qa(".mini", fan).forEach((m, i) => {
+      show(m, 11.05 + i * 0.1, { d: 0.5, y: 24 });
+      anim(m, "r", [[11.05 + i * 0.1, 0], [11.6 + i * 0.1, (i - 1) * 6, "out"]]);
+    });
+    cur.go(11.2, [600, 420], 0.6);
+    return { act: [[1.35, 10.2]], machine: [[10.2, 11.0, "排版中"]], final: 11.05 };
+  },
+};
+
+SCENES.assign = {
+  no: "04", name: "布置", nav: "学生档案", duration: 13.2,
+  async build({ body, cam, ready }) {
+    const view = html(body, `<div class="view">
+      <aside class="people"><div class="eyebrow">学生 · 远航G7</div>
+        ${[["Mia", "远航G7 · 作业 6"], ["Leo", "远航G7 · 作业 5"], ["Ryan", "远航G7 · 作业 6"], ["林知夏", "初一(3) · 作业 4"]].map(([n, c], i) => `<div class="person ${i ? "" : "on"}">${n}<small>${c}</small></div>`).join("")}</aside>
+      <section class="main">
+        <div class="ahead"><h3>Mia</h3><small>远航G7</small><span class="grow"></span><span class="btn small">✦ 智能组卷</span></div>
+        <div class="tabs2"><span class="on">作业</span><span>错题本</span><span>定档</span><span>学情报告</span></div>
+        <div class="tools"><span class="btn primary small as">布置作业</span><span class="btn small">上传作业</span></div>
+        <div class="rows">
+          <div class="hrow new"><b>Mia · 有理数混合运算 5 天计算打卡</b><span class="state st">未提交</span><small>布置 · 打卡任务 · 5 天 · 25 道题</small>
+            <div class="squares">${"<i></i>".repeat(5)}</div><small class="ups"></small></div>
+          <div class="hrow old"><b>有理数混合运算 · 第 2 周</b><span class="state good">已交 5/5 天</span><small>打卡任务 · 5 天 · 正确率 86%</small></div>
+          <div class="hrow old"><b>整式复习</b><span class="state good">已批改</span><small>作业 · 31 道题 · 正确率 78%</small></div>
+        </div>
+      </section>
+      <div class="layer d1"><div class="backdrop"></div><div class="dialog"><h5>给 Mia 布置作业</h5><div class="lbl">组好还没布置的卷</div>
+        <div class="plan pl"><b>Mia · 有理数混合运算 5 天计算打卡</b><span class="btn primary small">布置</span><small>智能组卷 · 5 天 · 25 道题</small></div></div></div>
+      <div class="layer d2"><div class="backdrop"></div><div class="dialog"><h5>布置给学生</h5>
+        <div class="lbl">作业名称</div><div class="input">Mia · 有理数混合运算 5 天计算打卡</div>
+        <div class="lbl" style="margin-top:10px">学生</div><div class="who"><span class="cb on">${CHECK}Mia</span><span class="cb leo">${CHECK}Leo</span><span class="cb">${CHECK}Ryan</span></div>
+        <div class="sum">25 道题 · 5 天任务 · 全部带答案</div>
+        <p class="hint">可以分几次上传；没交的题不算错。各天任务可以分开完成，只记录实际提交日期。</p>
+        <div style="display:flex;justify-content:flex-end"><span class="btn primary go">布置</span></div></div></div>
+    </div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [480, 330]);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    const as = q(".as", view), d1 = q(".d1", view), d2 = q(".d2", view);
+    cur.go(1.4, as, 0.45);
+    cur.tap(1.9, as);
+    anim(d1, "o", [[1.95, 0], [2.2, 1], [2.85, 1], [3.0, 0]]);
+    anim(q(".dialog", d1), "y", [[1.95, 12], [2.2, 0, "out"]]);
+    const pl = q(".pl", d1);
+    cur.go(2.3, q(".btn", pl), 0.45);
+    cur.tap(2.8, pl);
+    anim(d2, "o", [[2.85, 0], [3.1, 1], [4.3, 1], [4.5, 0]]);
+    anim(q(".dialog", d2), "y", [[2.85, 12], [3.1, 0, "out"]]);
+    const leo = q(".leo", d2);
+    cur.go(3.2, q(".check", leo), 0.4);
+    cur.tap(3.65, q(".check", leo));
+    flag(leo, "on", 3.68);
+    const goBtn = q(".go", d2);
+    cur.go(3.8, goBtn, 0.4);
+    cur.tap(4.25, goBtn);
+    toast(cam, 4.4, 5.9, "已布置给 Mia、Leo");
+    // the new homework comes in on top, then is handed in over several days
+    const fresh = q(".new", view), old = qa(".old", view), h = fresh.getBoundingClientRect().height + 8;
+    for (const r of old) anim(r, "y", [[4.45, -h], [4.85, 0, "out"]]);
+    show(fresh, 4.55, { d: 0.35, y: -8 });
+    const date = html(fresh, `<span class="date">10.19</span>`);
+    during(date, [[5.0, 9.6]], 0.2);
+    const squares = qa(".squares i", fresh), st = q(".st", fresh), ups = q(".ups", fresh);
+    texts(date, [[0, "10.19"], [6.4, "10.20"], [7.6, "10.22"]]);
+    [[5.6, 1], [6.8, 2], [8.0, 3]].forEach(([t, n]) => {
+      flag(squares[n - 1], "done", t);
+      anim(squares[n - 1], "s", [[t, 0.6], [t + 0.3, 1, "back"]]);
+    });
+    texts(st, [[0, "未提交"], [5.6, "已交 1/5 天"], [6.8, "已交 2/5 天"], [8.0, "已交 3/5 天"]]);
+    flag(st, "good", 5.6);
+    texts(ups, [[0, ""], [5.6, "第 1 次上传 10.19"], [6.8, "第 1 次上传 10.19 · 第 2 次 10.20"], [8.0, "第 1 次上传 10.19 · 第 2 次 10.20 · 第 3 次 10.22"]]);
+    cur.go(4.7, [560, 360], 0.6);
+    return { act: [[1.35, 4.5]], machine: [], wait: [[5.0, 9.4, "几天后"]], final: 9.5 };
+  },
+};
+
+SCENES.grading = {
+  no: "05", name: "批改", nav: "学生档案", duration: 13.8,
+  async build({ body, cam, ready }) {
+    const QS = [["0402", "$(-3)+(-5)-(-7)$", "= −8 + 7 = −1"], ["0388", "$-2^{2}\\times3+(-6)\\div2$", "= −12 − 3 = −15"], ["0415", "$(-\\frac{1}{2})\\times(-4)\\div\\frac{1}{3}$", "= 2 × 3 = 6"],
+      ["0421", "$-(1)^{2}+9\\times\\frac{1}{9}$", "= 1 + 1 = 2"], ["0433", "$(-\\frac{3}{4}+\\frac{7}{12})\\times(-24)$", "= 18 − 14 = 4"]];
+    const upload = html(body, `<div class="view">
+      <div class="upform"><h4>上传作业</h4><div><div class="lbl">学生</div><div class="select">Mia（远航G7）</div></div>
+        <div><div class="lbl">作业名称</div><div class="input name"></div></div><div><div class="lbl">课程</div><div class="select">初一数学 · 秋季</div></div>
+        <span class="cb on">${CHECK}加入学生错题本</span><span class="cb on">${CHECK}生成批改报告</span><span class="cb on">${CHECK}计入定档</span></div>
+      <div class="dropzone"><div class="drop"><b>粘贴或拖入学生的作业</b><small>照片或 PDF，按页排好</small></div></div>
+      <div class="thumbs">${[1, 2, 3, 4].map((p) => `<div class="thumb">${"<i></i><i class=\"h\"></i>".repeat(5)}<span>第 ${p} 页</span></div>`).join("")}</div>
+      <span class="btn primary go" style="position:absolute;right:16px;bottom:16px">开始自动批改</span></div>`);
+    const live = html(body, `<div class="view"><div class="live"><h4>正在批改 · Mia · 第 1 天</h4>
+      <div class="steps">${["读取页面", "识别题目", "准备参考答案", "逐题批改"].map((s) => `<div class="stepx"><i>✓</i>${s}</div>`).join("")}</div>
+      <div class="feed">${[["第 1 题", "对"], ["第 2 题", "对"], ["第 3 题", "对"], ["第 4 题", "错"], ["第 5 题", "对"], ["第 6 题", "对"]].map(([a, b]) => `<div>${a} · <b class="${b === "错" ? "bad" : ""}">${b}</b></div>`).join("")}</div></div></div>`);
+    const graded = html(body, `<div class="view">
+      <div class="sheetx"><h5>有理数混合运算 · 第 1 天</h5><ol>${QS.map(([id, s, a], i) => `<li><span class="q">${i + 1}．计算：${tex(s)}</span><span class="hand">${a}</span><span class="pid">ID ${id}</span></li>`).join("")}</ol></div>
+      <div class="gpanel"><div class="tally"><span>正确 12</span><span class="bad">错误（待订正）3</span><span>未交 0</span></div>
+        <div class="gcard"><span>第 1 题</span><span class="ok">正确</span></div><div class="gcard"><span>第 3 题</span><span class="ok">正确</span></div>
+        <div class="gcard open"><div class="row"><span>第 4 题</span><span class="bad">错误</span></div><div class="ref">按卷面编号对上 <b>ID 0421</b> · 参考答案 · 题库答案</div><div class="refans">${tex("$-(1)^{2}+9\\times\\frac{1}{9}=-1+1=0$")}</div></div>
+        <div class="gcard"><span>第 5 题</span><span class="ok">正确</span></div></div>
+      <svg class="link"><path pathLength="1"/></svg></div>`);
+    const stackfile = html(document.createElement("div"), `<div class="stackfile"><i style="transform:rotate(-8deg)"></i><i style="transform:rotate(-3deg)"></i><i style="transform:rotate(3deg)"></i><i></i></div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [300, 220]);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    const name = q(".name", upload);
+    cur.go(1.4, name, 0.4);
+    cur.tap(1.85, name);
+    const typed = typing(name, "第 1 天", 1.95, { focus: 1.88, blur: 3.7 });
+    cur.go(typed + 0.1, [705, 250], 0.35);
+    const drop = q(".drop", upload);
+    cur.carry(stackfile, typed + 0.5, typed + 1.15, [6, 8]);
+    cur.go(typed + 0.55, drop, 0.6, { dy: 0.42 });
+    const dropAt = typed + 1.15;
+    anim(drop, "--hl", [[typed + 0.85, 0], [typed + 1.05, 1], [dropAt, 1], [dropAt + 0.2, 0]]);
+    anim(q(".dropzone", upload), "o", [[dropAt, 1], [dropAt + 0.2, 0]]);
+    qa(".thumb", upload).forEach((th, i) => show(th, dropAt + 0.05 + i * 0.08, { d: 0.3, y: 10, s: 0.9 }));
+    const go = q(".go", upload);
+    anim(go, "o", [[0, 0.45], [dropAt + 0.3, 0.45], [dropAt + 0.45, 1]]);
+    cur.go(dropAt + 0.45, go, 0.45);
+    const start = dropAt + 0.95;
+    cur.tap(start, go);
+    // the machine grades; the teacher only waits
+    anim(upload, "o", [[start + 0.05, 1], [start + 0.3, 0]]);
+    anim(live, "o", [[start + 0.05, 0], [start + 0.3, 1], [start + 2.2, 1], [start + 2.4, 0]]);
+    qa(".stepx", live).forEach((s, i) => flag(s, "done", start + 0.35 + i * 0.45));
+    qa(".feed div", live).forEach((f, i) => show(f, start + 1.5 + i * 0.1, { d: 0.2, y: 4 }));
+    const ready2 = start + 2.25;
+    anim(graded, "o", [[ready2, 0], [ready2 + 0.25, 1]]);
+    // the marks go onto the student's own page, then the wrong step gets its ring and reason
+    const sheet = q(".sheetx", graded), lis = qa(".sheetx li", graded), sheetBox = sheet.getBoundingClientRect();
+    lis.forEach((li, i) => {
+      const hand = q(".hand", li).getBoundingClientRect();
+      const ok = i !== 3;
+      const mark = html(sheet, `<svg class="mark ${ok ? "ok" : "no"}" viewBox="0 0 22 22"><path d="${ok ? "M4 11.5 9 16.5 18 5.5" : "M5 5 17 17 M17 5 5 17"}"/></svg>`);
+      mark.style.left = `${hand.right - sheetBox.left + 6}px`;
+      mark.style.top = `${hand.top - sheetBox.top - 3}px`;
+      show(mark, ready2 + 0.35 + i * 0.16, { d: 0.25, y: 0, s: 0.4 });
+    });
+    const wrong = q(".hand", lis[3]).getBoundingClientRect();
+    const ring = html(sheet, `<div class="ring"></div>`);
+    Object.assign(ring.style, { left: `${wrong.left - sheetBox.left + 6}px`, top: `${wrong.top - sheetBox.top - 4}px`, width: `${wrong.width * 0.62}px`, height: `${wrong.height + 8}px` });
+    show(ring, ready2 + 1.15, { d: 0.3, y: 0, s: 1.3 });
+    const callout = html(sheet, `<div class="callout"><b>错误原因</b>${tex("$-(1)^{2}=-1$，不是 $1$；结果应为 $0$。")}</div>`);
+    Object.assign(callout.style, { left: `${wrong.left - sheetBox.left + 30}px`, top: `${wrong.bottom - sheetBox.top + 6}px` });
+    show(callout, ready2 + 1.4, { d: 0.35, y: 6 });
+    // the printed number finds its question in the library
+    const pid = q(".pid", lis[3]), open = q(".gcard.open", graded);
+    const a = pos(pid, 1, 0.5), b = pos(open, 0, 0.3);
+    const viewBox = graded.getBoundingClientRect(), off = [viewBox.left - camBox.left, viewBox.top - camBox.top];
+    q(".link path", graded).setAttribute("d", `M${a[0] - off[0] + 2} ${a[1] - off[1]} C ${a[0] - off[0] + 40} ${a[1] - off[1]}, ${b[0] - off[0] - 40} ${b[1] - off[1]}, ${b[0] - off[0] - 2} ${b[1] - off[1]}`);
+    anim(q(".link", graded), "--draw", [[ready2 + 2.15, 0], [ready2 + 2.7, 1]]);
+    flash(open, ready2 + 2.6, 2.4);
+    cur.go(ready2 + 0.4, [560, 330], 0.6);
+    cur.go(ready2 + 1.7, pid, 0.45);
+    cur.go(ready2 + 3.0, open, 0.6, { dx: 0.7, dy: 0.75 });
+    anim(cam, "s", [[ready2 + 1.2, 1], [ready2 + 2.0, 1.045], [12.2, 1.045], [12.7, 1]]);
+    cam.style.transformOrigin = `${pos(callout)[0]}px ${pos(callout)[1]}px`;
+    return { act: [[1.35, start + 0.05]], machine: [[start + 0.05, ready2, "AI 批改中"]], final: ready2 + 0.1 };
+  },
+};
+
+SCENES.profile = {
+  no: "06", name: "定档", nav: "学生档案", duration: 13.0,
+  async build({ body, cam, ready }) {
+    const topics = [["有理数的乘方", "4/9", 44, true], ["有理数的加减", "11/16", 69, false], ["整式的加减", "13/15", 87, false], ["一元一次方程", "17/18", 94, false]];
+    const abilities = [["粗心", "没提到", "c"], ["计算能力", "改善", ""], ["思维能力 · 逆向", "没提到", ""], ["思维能力 · 分析", "优势", "good"], ["思维能力 · 转化", "没提到", "z"]];
+    const view = html(body, `<div class="view">
+      <aside class="people"><div class="eyebrow">学生 · 远航G7</div>
+        ${[["Mia", "远航G7 · 作业 6"], ["Leo", "远航G7 · 作业 5"], ["Ryan", "远航G7 · 作业 6"], ["林知夏", "初一(3) · 作业 4"]].map(([n, c], i) => `<div class="person ${i ? "" : "on"}">${n}<small>${c}</small></div>`).join("")}</aside>
+      <section class="main">
+        <div class="ahead"><h3>Mia</h3><small>远航G7</small><span class="grow"></span><span class="btn small">在知识图谱里看</span></div>
+        <div class="tabs2"><span>作业</span><span class="t-w">错题本</span><span class="t-p">定档</span><span>学情报告</span></div>
+        <div class="layer pane-p" style="top:78px;left:16px;right:16px"><div class="filters"><span class="on">全部</span><span>近 30 天</span><span>近 90 天</span></div>
+          <div class="cards2">
+            <div class="box"><h4>知识点<small>客观 · 来自作业批改</small></h4><div class="kpi">84 道题 · 正确率 81%</div>
+              ${topics.map(([n, r, p, weak]) => `<div class="topic"><span>${n}</span><small>${r}　${p}%</small><div class="meter ${weak ? "weak" : ""}" data-p="${p}"><i></i></div></div>`).join("")}</div>
+            <div class="box"><h4>能力<small>主观 · 来自课后反馈</small></h4>
+              ${abilities.map(([n, s, k]) => `<div class="ability ${k}"><span>${n}<q></q></span><span class="tag ${s === "优势" ? "good" : ""}">${s}</span></div>`).join("")}
+              <div class="note"><div class="textarea short fb"><span class="ph">课后反馈：说一句今天的表现…</span></div><span class="btn primary small sv">保存</span></div>
+              <div class="entry"><small>10.19 课后反馈</small><div>符号常出错，转化不错</div><div class="chips"><span class="tag weak">粗心 · 短板</span><span class="tag good">转化 · 优势</span></div></div></div>
+          </div></div>
+        <div class="layer pane-w" style="top:78px;left:16px;right:16px"><div class="month">2026年10月<small>7 题</small></div>
+          <div class="wcards">${[["0421", "$-(1)^{2}+9\\times\\frac{1}{9}$", 2], ["0388", "$-2^{2}\\times3+(-6)\\div2$", 1], ["0402", "$(-3)+(-5)-(-7)$", 1], ["0447", "$-b^{2}-4b^{2}$", 1]].map(([id, s, n]) => `<article class="qcard"><div class="meta"><span class="id">ID ${id}</span><span>错 ${n} 次</span></div><div class="stem">计算：${tex(s)}</div></article>`).join("")}</div></div>
+      </section></div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [470, 260]);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    qa(".meter", view).forEach((m, i) => anim(m, "--p", [[1.05 + i * 0.12, 0], [1.75 + i * 0.12, Number(m.dataset.p), "out"]]));
+    const fb = q(".fb", view);
+    cur.go(1.85, fb, 0.45);
+    cur.tap(2.35, fb);
+    anim(q(".ph", fb), "o", [[2.4, 1], [2.41, 0]]);
+    const typed = typing(fb, "符号常出错，转化不错", 2.45, { focus: 2.38, blur: 6.0 });
+    const sv = q(".sv", view);
+    cur.go(typed + 0.1, sv, 0.35);
+    const saved = typed + 0.5;
+    cur.tap(saved, sv);
+    const entry = q(".entry", view);
+    show(entry, saved + 0.1, { d: 0.3, y: 6 });
+    qa(".entry .tag", view).forEach((tg, i) => show(tg, saved + 1.05 + i * 0.12, { d: 0.25, y: 0, s: 0.7 }));
+    anim(fb, "o", [[saved + 0.05, 1], [saved + 0.06, 0.999]]);
+    const clear = qa("span", fb)[0];
+    anim(clear, "o", [[saved + 0.08, 1], [saved + 0.1, 0]]);
+    // the abilities take the note's verdicts
+    const c = q(".ability.c", view), z = q(".ability.z", view);
+    for (const [row, label, cls, quote, t] of [[c, "短板", "weak", "符号常出错", saved + 1.35], [z, "优势", "good", "转化不错", saved + 1.5]]) {
+      const tag = q(".tag", row);
+      texts(tag, [[0, "没提到"], [t, label]]);
+      flag(tag, cls, t);
+      anim(tag, "s", [[t, 0.7], [t + 0.3, 1, "back"]]);
+      texts(q("q", row), [[0, ""], [t, quote]]);
+    }
+    // then the wrong book, filled by the grading
+    const tw = q(".t-w", view), tp = q(".t-p", view);
+    flag(tp, "on", 0, 8.85);
+    flag(tw, "on", 8.85);
+    cur.go(8.35, tw, 0.45);
+    cur.tap(8.85, tw);
+    anim(q(".pane-p", view), "o", [[8.88, 1], [9.05, 0]]);
+    anim(q(".pane-w", view), "o", [[8.9, 0], [9.0, 1]]);
+    show(q(".month", view), 8.95, { d: 0.3, y: 6 });
+    qa(".wcards .qcard", view).forEach((w, i) => show(w, 9.05 + i * 0.1, { d: 0.35, y: 10 }));
+    cur.go(9.4, [560, 380], 0.6);
+    return { act: [[1.35, saved + 0.05]], machine: [[saved + 0.05, saved + 1.35, "AI 归类中"]], final: saved + 1.45 };
+  },
+};
+
+SCENES.report = {
+  no: "∞", name: "学情", nav: "学生档案", duration: 14.8,
+  async build({ body, cam, ready, nav }) {
+    const view = html(body, `<div class="view">
+      <aside class="people"><div class="eyebrow">学生 · 远航G7</div>
+        ${[["Mia", "远航G7 · 作业 6"], ["Leo", "远航G7 · 作业 5"], ["Ryan", "远航G7 · 作业 6"], ["林知夏", "初一(3) · 作业 4"]].map(([n, c], i) => `<div class="person ${i ? "" : "on"}">${n}<small>${c}</small></div>`).join("")}</aside>
+      <section class="main">
+        <div class="ahead"><h3>Mia</h3><small>远航G7</small><span class="grow"></span><span class="btn small sm">✦ 智能组卷</span></div>
+        <div class="tabs2"><span>作业</span><span>错题本</span><span>定档</span><span class="on">学情报告</span></div>
+        <div class="tools"><div class="input" style="height:26px">从 2026-10-01</div><div class="input" style="height:26px">到 2026-10-31</div><span class="btn primary small gen">生成学情报告</span></div>
+        <div class="report"><div class="rh"><b>Mia · 10 月学情报告</b><span class="btn small">下载 PDF</span></div>
+          <div class="stats"><div class="stat"><b class="c1">6</b><small>作业</small></div><div class="stat"><b class="c2">84</b><small>批改题数</small></div><div class="stat"><b class="c3">81%</b><small>正确率</small></div><div class="stat"><b class="c4">4</b><small>课后反馈</small></div></div>
+          <div class="rsec"><b>总体情况</b><span>本月按时完成 6 次作业，整体正确率 81%，比上月提高 6 个百分点。</span></div>
+          <div class="rsec"><b>知识掌握</b><span>一元一次方程最稳（94%）；有理数的乘方最弱（44%），多错在负号与乘方的先后。</span></div>
+          <div class="rsec"><b>能力表现</b><span>转化意识好，能从结论倒推；计算时粗心偏多，符号容易漏变。</span></div>
+          <div class="rsec"><b>下一步安排</b><span>先补乘方与符号，每天 5 道计算打卡，错题隔天重做。</span></div>
+          <div class="rsec"><b>给家长的话</b><span>孩子思路清楚，提醒她做完回头检查符号即可。</span></div></div>
+      </section></div>`);
+    const smart = html(body, `<div class="view"><div class="split" style="--side:236px">
+      <div class="side"><div><div class="lbl">学生</div><div class="select">Mia（远航G7）</div></div>
+        <div><div class="lbl">要出什么样的练习</div><div class="textarea req"><span class="ph">例如：出一份 5 天的计算打卡，每天 5 道题</span></div></div>
+        <span class="btn primary go" style="align-self:flex-start">✦ 生成方案</span>
+        <div class="hint">会参考课后反馈、知识点正确率和具体错因；每题说明对应的历史错误或一般巩固，并避开做过、布置过的题。</div></div>
+      <div class="out"><div class="busy"><i class="spin"></i><span class="bt"></span></div>
+        <div class="plan-out layer" style="inset:14px"><div class="brief"><h6>方案要点</h6><dl><dt>题量</dt><dd>5 天 × 每天 5 题</dd><dt>学生档案要点</dt><dd class="find">有理数的乘方 44% · 粗心：符号常出错</dd></dl></div>
+          <div class="days">${[1, 2, 3, 4, 5].map((d) => `<div class="day"><h6>第 ${d} 天</h6>${[0, 1, 2, 3, 4].map((k) => { const id = String(452 + ((d * 29 + k * 13) % 80)).padStart(4, "0"); return `<div class="qchip ${k < 2 ? "focus" : ""}">ID ${id}${k === 0 ? "<em>针对：乘方符号</em>" : k === 1 ? "<em>针对：粗心</em>" : ""}</div>`; }).join("")}</div>`).join("")}</div>
+          <svg class="lemni" width="64" height="26" viewBox="-34 -13 68 26" style="right:6px;top:6px"><path pathLength="1" d=""/></svg></div>
+      </div></div></div>`);
+    await ready();
+
+    const q = (s, root = body) => root.querySelector(s);
+    const qa = (s, root = body) => [...root.querySelectorAll(s)];
+    const cur = new Cursor(cam, [470, 230]);
+    anim(cur.el, "o", [[1.3, 0], [1.45, 1]]);
+    const gen = q(".gen", view);
+    cur.go(1.4, gen, 0.45);
+    cur.tap(1.9, gen);
+    texts(gen, [[0, "生成学情报告"], [1.95, "AI 正在写报告…"], [3.55, "生成学情报告"]]);
+    const report = q(".report", view);
+    show(report, 3.55, { d: 0.35, y: 10 });
+    for (const [s, to, fmt] of [[".c1", 6], [".c2", 84], [".c3", 81, (v) => `${Math.round(v)}%`], [".c4", 4]]) count(q(s, view), [[3.7, 0], [4.5, to, "out"]], fmt);
+    qa(".rsec", view).forEach((r, i) => show(r, 3.9 + i * 0.28, { d: 0.35, y: 6 }));
+    cur.go(5.6, qa(".rsec", view)[1], 0.6, { dx: 0.62 });
+    const sm = q(".sm", view);
+    cur.go(6.45, sm, 0.45);
+    cur.tap(6.95, sm);
+    anim(view, "o", [[7.0, 1], [7.25, 0]]);
+    anim(smart, "o", [[7.0, 0], [7.3, 1]]);
+    nav(7.0, "工具箱");
+    const req = q(".req", smart);
+    cur.go(7.4, req, 0.4);
+    cur.tap(7.85);
+    anim(q(".ph", req), "o", [[7.9, 1], [7.91, 0]]);
+    const typed = typing(req, "针对薄弱点，5 天打卡", 7.95, { focus: 7.88, blur: 11.2 });
+    const go = q(".go", smart);
+    cur.go(typed + 0.15, go, 0.4);
+    const t0 = typed + 0.6;
+    cur.tap(t0, go);
+    during(q(".busy", smart), [[t0 + 0.05, t0 + 1.2]], 0.12);
+    texts(q(".bt", smart), [[0, "正在读学生档案…"], [t0 + 0.45, "正在从题库挑题…"]]);
+    every((t) => { q(".spin", smart).style.transform = `rotate(${t * 540}deg)`; });
+    const out = q(".plan-out", smart);
+    anim(out, "o", [[t0 + 1.15, 0], [t0 + 1.25, 1]]);
+    show(q(".brief", smart), t0 + 1.2, { d: 0.35, y: 8 });
+    flash(q(".find", smart), t0 + 1.5, 1.2);
+    qa(".day", smart).forEach((d, i) => show(d, t0 + 1.35 + i * 0.1, { d: 0.35, y: 10 }));
+    // a lemniscate drawn by the plan: the loop closes on the next round
+    const pts = [];
+    for (let i = 0; i <= 120; i++) { const t = (i / 120) * Math.PI * 2, s = Math.sin(t), d = 1 + s * s; pts.push(`${(30 * Math.cos(t) / d).toFixed(2)},${(26 * s * Math.cos(t) / d).toFixed(2)}`); }
+    q(".lemni path", smart).setAttribute("d", `M${pts.join(" L")}`);
+    anim(q(".lemni", smart), "--draw", [[t0 + 2.0, 0], [t0 + 3.0, 1]]);
+    cur.go(t0 + 1.4, [560, 400], 0.6);
+    return { act: [[1.35, 1.95], [6.4, t0 + 0.05]], machine: [[1.95, 3.55, "AI 写报告中"], [t0 + 0.05, t0 + 1.2, "AI 组卷中"]], final: t0 + 1.3 };
+  },
+};
+
+// ---- the frame of every scene --------------------------------------------------------------------------------------
+async function boot() {
+  const name = SCENES[params.get("scene")] ? params.get("scene") : "intake";
+  const scene = SCENES[name];
+  const D = scene.duration;
+  const face = html(stage, `<div class="face"><span class="face-no">${scene.no}</span><span class="face-name">${scene.name}</span></div>`);
+  const cam = html(stage, `<div class="cam"><div class="win"><header class="bar"><span class="brand">${await wordmark()}</span><nav>${NAV.map((n) => `<span>${n}</span>`).join("")}</nav></header><div class="body"></div></div></div>`);
+  const body = cam.querySelector(".body");
+  stage.style.setProperty("--hand", `"${handwriting()}", "Kaiti SC", serif`);
+  const navs = [...cam.querySelectorAll(".bar nav span")];
+  const navKeys = [[0, scene.nav]];
+  const nav = (t, label) => navKeys.push([t, label]);
+  every((t) => {
+    let on = navKeys[0][1];
+    for (const [k, v] of navKeys.sort((a, b) => a[0] - b[0])) if (t >= k) on = v;
+    for (const n of navs) n.classList.toggle("on", n.textContent === on);
+  });
+  const ready = async () => {
+    await document.fonts.ready;
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    camBox = cam.getBoundingClientRect();
+  };
+  const clock = await scene.build({ body, cam, ready, nav });
+
+  // bookends: the card's face, the app coming up out of it, and back
+  anim(face, "o", [[0.8, 1], [1.25, 0], [D - 0.95, 0], [D - 0.3, 1]]);
+  const faceName = face.querySelector(".face-name");
+  anim(faceName, "s", [[0.8, 1], [1.25, 1.06, "out"], [D - 0.95, 0.96], [D - 0.3, 1, "out"]]);
+  anim(cam, "o", [[0.85, 0], [1.3, 1], [D - 1.0, 1], [D - 0.45, 0]]);
+  anim(cam, "y", [[0.85, 10], [1.35, 0, "out"]]);
+
+  // the pill: the teacher's time, stopped while the machine works or days pass
+  const pill = html(stage, `<div class="pill"><span class="ff"><i></i><b class="chev">››</b></span><span class="clock"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.8"/><path d="M6 3.4V6l1.8 1.2"/></svg>老师操作 <b class="t">0:00</b></span></div>`);
+  const ff = pill.querySelector(".ff"), label = ff.querySelector("i"), chev = ff.querySelector(".chev"), digits = pill.querySelector(".t");
+  const spans = [...clock.machine.map(([a, b, l]) => ({ a, b, l: `${l} · 快进`, fast: true })), ...(clock.wait ?? []).map(([a, b, l]) => ({ a, b, l, fast: false }))];
+  const widths = new Map(spans.map((s) => { label.textContent = s.l; chev.style.display = s.fast ? "" : "none"; return [s, ff.scrollWidth]; }));
+  anim(pill, "o", [[1.0, 0], [1.3, 1], [D - 1.05, 1], [D - 0.6, 0]]);
+  anim(pill, "s", [[clock.final, 1], [clock.final + 0.2, 1.1, "out"], [clock.final + 0.5, 1]]);
+  every((t) => {
+    let secs = 0;
+    for (const [a, b] of clock.act) secs += clamp(t - a, 0, b - a);
+    digits.textContent = `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, "0")}`;
+    const span = spans.find((s) => t >= s.a && t < s.b);
+    const f = span ? clamp((t - span.a) / 0.2) * clamp((span.b - t) / 0.2) : 0;
+    if (span) { label.textContent = span.l; chev.style.display = span.fast ? "" : "none"; }
+    ff.style.opacity = f;
+    ff.style.width = `${f * (span ? widths.get(span) : 0)}px`;
+    ff.style.marginRight = `${f * 2 - 8 * (1 - f)}px`;
+    chev.style.transform = `translateX(${((t * 2.4) % 1) * 3}px)`;
+    digits.style.opacity = 1 - 0.5 * f;
+    digits.style.color = t >= clock.final ? "var(--pill-acc)" : "";
+  });
+
+  window.scene = { name, duration: D, fps: 30 };
+  window.seek = seek;
+  seek(0);
+  if (!params.has("render")) preview(name, D);
+}
+
+// outside a render: play it, with a scrubber and links to the other scenes and modes
+function preview(name, D) {
+  const bar = html(document.body, `<div class="controls">${Object.keys(SCENES).map((s) => `<a class="${s === name ? "on" : ""}" href="?scene=${s}&mode=${mode}">${s}</a>`).join("")}
+    <a href="?scene=${name}&mode=${mode === "dark" ? "light" : "dark"}">${mode === "dark" ? "浅色" : "深色"}</a>
+    <button type="button">暂停</button><input type="range" min="0" max="${D}" step="0.01" value="0"><span>0.00</span></div>`);
+  const [button, range, readout] = [bar.querySelector("button"), bar.querySelector("input"), bar.querySelector("span")];
+  let playing = true, origin = performance.now();
+  const frame = (now) => {
+    if (playing) range.value = (((now - origin) / 1000) % D).toFixed(2);
+    seek(Number(range.value));
+    readout.textContent = Number(range.value).toFixed(2);
+    requestAnimationFrame(frame);
+  };
+  button.onclick = () => { playing = !playing; button.textContent = playing ? "暂停" : "播放"; origin = performance.now() - Number(range.value) * 1000; };
+  range.oninput = () => { playing = false; button.textContent = "播放"; };
+  requestAnimationFrame(frame);
+}
+
+if (params.has("render")) document.body.dataset.render = "";
+window.ready = boot();
+</script>

@@ -53,20 +53,52 @@ const ROW = { tile: 30, aspect: 16 / 9, axis: 60, curve: 80, fade: 12 };
 // name and line beside it, and at the end they close into a ring round 教与学. A card is the step's name set large in
 // the ∞'s metal.
 const STEPS = [
-  { no: "01", name: "入库", short: "入库", text: "照片、PDF、Word 转成可编辑的题目，每道题一个永久编号。" },
-  { no: "02", name: "组卷", short: "组卷", text: "从题库勾选，或者说一句要什么练习，按学生档案挑题、按天排好。" },
-  { no: "03", name: "讲义", short: "讲义", text: "所见即所得地编讲义，排成学生版、附答案版和教师版 PDF。" },
-  { no: "04", name: "布置", short: "布置", text: "在学生档案里布置作业，一份作业可以分几次交。" },
-  { no: "05", name: "批改", short: "批改", text: "上传作业照片或 PDF 自动批改，按卷面上印的题号对上原题和答案。" },
-  { no: "06", name: "定档", short: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
-  { no: "∞", name: "学情报告", short: "学情", text: "汇总每个学生的强项和薄弱处，带回下一轮组卷。" },
+  { demo: "intake", no: "01", name: "入库", short: "入库", text: "照片、PDF、Word 转成可编辑的题目，每道题一个永久编号。" },
+  { demo: "paper", no: "02", name: "组卷", short: "组卷", text: "从题库勾选，或者说一句要什么练习，按学生档案挑题、按天排好。" },
+  { demo: "handout", no: "03", name: "讲义", short: "讲义", text: "所见即所得地编讲义，排成学生版、附答案版和教师版 PDF。" },
+  { demo: "assign", no: "04", name: "布置", short: "布置", text: "在学生档案里布置作业，一份作业可以分几次交。" },
+  { demo: "grading", no: "05", name: "批改", short: "批改", text: "上传作业照片或 PDF 自动批改，按卷面上印的题号对上原题和答案。" },
+  { demo: "profile", no: "06", name: "定档", short: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
+  { demo: "report", no: "∞", name: "学情报告", short: "学情", text: "汇总每个学生的强项和薄弱处，带回下一轮组卷。" },
 ];
-const WHEEL = STEPS.map((step) => ({
-  title: step.name,
-  text: step.text,
-  face: <span className="mp-step-face"><span className="mp-step-face-no">{step.no}</span><span className="mp-step-face-name">{step.short}</span></span>,
-}));
+const REDUCE = "(prefers-reduced-motion: reduce)";
+const followMotion = (changed: () => void) => {
+  const query = window.matchMedia(REDUCE);
+  query.addEventListener("change", changed);
+  return () => query.removeEventListener("change", changed);
+};
+const motionReduced = () => window.matchMedia(REDUCE).matches;
+const stepFace = (step: (typeof STEPS)[number]) =>
+  <span className="mp-step-face"><span className="mp-step-face-no">{step.no}</span><span className="mp-step-face-name">{step.short}</span></span>;
 
+// A step's demo: a drawn walk-through of doing it (scripts/intro-loop-demos.html, rendered by
+// scripts/render-intro-loop.mjs). It opens and closes on the card's face, so it lies over the face and only the card
+// at the front plays; its neighbours fetch the start, the rest are not loaded. Reduced motion leaves it paused.
+function StepDemo({ step, front, near, mode }: { step: (typeof STEPS)[number]; front: boolean; near: boolean; mode: "light" | "dark" }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const reduced = useSyncExternalStore(followMotion, motionReduced, () => false);
+  const [chosen, setChosen] = useState<boolean | null>(null); // the button's play/pause, over the default
+  const playing = front && (chosen ?? !reduced);
+  useEffect(() => {
+    const el = video.current;
+    if (!el) return;
+    if (playing) el.play().catch(() => {});
+    else el.pause();
+    if (!front) el.currentTime = 0; // back on the face, the frame it opens on
+  }, [playing, front, mode]);
+  if (!near) return stepFace(step);
+  return <>
+    {stepFace(step)}
+    <video ref={video} key={mode} className="mp-step-demo" src={`/intro/loop/${step.demo}-${mode}.mp4`} muted loop playsInline
+      preload={front ? "auto" : "metadata"} aria-hidden="true" />
+    {front ? <button type="button" className="mp-step-demo-toggle" aria-label={playing ? "暂停演示" : "播放演示"} title={playing ? "暂停演示" : "播放演示"}
+      onClick={() => setChosen(!playing)}>
+      {playing
+        ? <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2v8M8.5 2v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+        : <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6L10 6z" fill="currentColor" /></svg>}
+    </button> : null}
+  </>;
+}
 const DEPLOY = [
   { name: "局域网共享", text: "一台 Mac 就是服务器。同事在同一个网络里用浏览器打开，共用一套题库和讲义。" },
   { name: "账号与权限", text: "用邀请码给同事开账号；删除这类操作只有管理员能做。" },
@@ -128,6 +160,12 @@ function Arrow() {
 export default function IntroPage({ login: opened }: { login?: string }) {
   const mode = useSyncExternalStore(followTheme, themeNow, themeOnServer);
   const shade = mode ?? "light";
+  const [front, setFront] = useState(0);
+  const wheel = STEPS.map((step, i) => ({
+    title: step.name,
+    text: step.text,
+    face: <StepDemo step={step} front={i === front} near={Math.abs(i - front) <= 1} mode={shade} />,
+  }));
   const root = useRef<HTMLDivElement>(null);
   const closingArt = useRef<HTMLImageElement>(null);
   const scrolled = useRef(-1);
@@ -387,7 +425,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       loadFonts={false}
     />
 
-    <WorksWheel id="loop" className="mp-wheel" label="教与学" items={WHEEL}>
+    <WorksWheel id="loop" className="mp-wheel" label="教与学" items={wheel} onFront={setFront}>
       <header className="mp-wheel-head">
         <p className="mp-kicker">01 闭环</p>
         <p className="mp-lead">七步连成一圈：学生做过的每一道题，<br />都会带着批改结果回到下一轮备课。</p>
