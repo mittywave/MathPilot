@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type DragEvent, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PaperCenter, PaperDirectory, PaperImportDialog } from "../components/PaperCenter";
 import { jobsApi } from "../components/RecognitionJobs";
@@ -142,7 +142,7 @@ export default function Home() {
   const [entryAddsWrong, setEntryAddsWrong] = useState(false);
   // Questions in students' wrong books that are not in the library, read when a search starts; 题库 search finds them too.
   const [wrongCatalog, setWrongCatalog] = useState<WrongQuestionCatalogItem[] | null>(null);
-  const [categoryDialog, setCategoryDialog] = useState<"new" | "manage" | "trash" | null>(null);
+  const [managementDialog, setManagementDialog] = useState<"category" | "module" | "manage" | "trash" | null>(null);
   const [trashQuestions, setTrashQuestions] = useState<Array<Question & { deletedAt: number }> | null>(null);
   const [restoringIds, setRestoringIds] = useState<string[]>([]);
   const [categoryName, setCategoryName] = useState("");
@@ -156,11 +156,10 @@ export default function Home() {
   const [typesetKept, setTypesetKept] = useState<{ ids: string; settings: TypesetSettings } | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [moduleDialog, setModuleDialog] = useState<"new" | "manage" | null>(null);
   const [moduleDraft, setModuleDraft] = useState<LibraryModule | null>(null);
   const [moduleName, setModuleName] = useState("");
   const [moduleSubtitle, setModuleSubtitle] = useState("");
-  const [draggedModuleId, setDraggedModuleId] = useState("");
+  const [moduleDrag, setModuleDrag] = useState<{ source: string; target: string } | null>(null);
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLButtonElement>(null);
@@ -679,10 +678,10 @@ export default function Home() {
     if (!requireLogin()) return;
     setSelectedIds((current) => allFilteredSelected ? current.filter((id) => !selectableIds.includes(id)) : [...current, ...selectableIds.filter((id) => !current.includes(id))]);
   };
-  const openNewQuestion = () => { if (!requireLogin() || !canManageLibrary) return; if (!activeModule) { setModuleDialog("new"); return; } setEntryDraft(newQuestionDraft(activeModule, activeCategory ?? activeModule.id)); };
+  const openNewQuestion = () => { if (!requireLogin() || !canManageLibrary) return; if (!activeModule) { openNewModule(); return; } setEntryDraft(newQuestionDraft(activeModule, activeCategory ?? activeModule.id)); };
   const addWrongToLibrary = async (item: WrongQuestionCatalogItem) => {
     if (!requireLogin() || !canManageLibrary) return;
-    if (!activeModule) { setModuleDialog("new"); return; }
+    if (!activeModule) { openNewModule(); return; }
     try {
       // The student's photographed page is evidence of the mistake, not part of the question.
       const question: Question = { ...item.question };
@@ -774,12 +773,12 @@ export default function Home() {
   async function createCategory() {
     if (!categoryName.trim() || !activeModule) { show({ text: "请填写分类名称", tone: "error" }); return; }
     const category: Category = { id: uid("cat"), name: categoryName.trim(), moduleId: activeModule.id, parentId: categoryParent || activeModule.id, createdAt: currentTimestamp() };
-    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setCategoryDialog(null); setActiveCategory(result.category.id); show({ text: "分类已创建", tone: "success" }); }
+    try { const result = await createCloudCategory(category); setCategories((current) => [...current, result.category]); setCategoryName(""); setManagementDialog("manage"); setActiveCategory(result.category.id); show({ text: "分类已创建", tone: "success" }); }
     catch (error) { show({ text: error instanceof Error ? error.message : "分类创建失败", tone: "error" }); }
   }
 
   async function openTrash() {
-    setCategoryDialog("trash"); setTrashQuestions(null);
+    setManagementDialog("trash"); setTrashQuestions(null);
     try { setTrashQuestions((await fetchDeletedQuestions()).questions); }
     catch (error) { show({ text: error instanceof Error ? error.message : "回收站读取失败", tone: "error" }); }
   }
@@ -820,7 +819,7 @@ export default function Home() {
 
   async function importBackup(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; if (!file) return;
-    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!await confirm({ title: "导入备份到题库", body: "将追加到当前题库，不覆盖已有内容；导入后不能一键撤销。", items: [`${Array.isArray(data.modules) ? data.modules.length : 0} 个模块`, `${data.categories.length} 个分类`, `${data.questions.length} 道题`], confirmLabel: "导入备份" })) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setCategoryDialog(null); show({ text: `已迁移 ${result.imported} 道题到当前题库`, tone: "success" }); } catch (error) { show({ text: error instanceof Error ? error.message : "无法识别这个备份文件", tone: "error" }); } finally { event.target.value = ""; }
+    try { const data = JSON.parse(await file.text()) as LibraryData; if (!Array.isArray(data.categories) || !Array.isArray(data.questions)) throw new Error("bad shape"); if (!await confirm({ title: "导入备份到题库", body: "将追加到当前题库，不覆盖已有内容；导入后不能一键撤销。", items: [`${Array.isArray(data.modules) ? data.modules.length : 0} 个模块`, `${data.categories.length} 个分类`, `${data.questions.length} 道题`], confirmLabel: "导入备份" })) return; const result = await importCloudLibrary(data); await refreshLibrary(false); setSelectedIds([]); setManagementDialog(null); show({ text: `已迁移 ${result.imported} 道题到当前题库`, tone: "success" }); } catch (error) { show({ text: error instanceof Error ? error.message : "无法识别这个备份文件", tone: "error" }); } finally { event.target.value = ""; }
   }
 
   async function generateWord() {
@@ -851,11 +850,11 @@ export default function Home() {
 
   function openNewModule() {
     if (!requireLogin() || !canManageLibrary) return;
-    setModuleDraft(null); setModuleName(""); setModuleSubtitle(""); setModuleDialog("new");
+    setModuleDraft(null); setModuleName(""); setModuleSubtitle(""); setManagementDialog("module");
   }
 
   function openModuleEditor(module: LibraryModule) {
-    setModuleDraft(module); setModuleName(module.name); setModuleSubtitle(module.subtitle); setModuleDialog("new");
+    setModuleDraft(module); setModuleName(module.name); setModuleSubtitle(module.subtitle); setManagementDialog("module");
   }
 
   async function saveModule() {
@@ -871,7 +870,7 @@ export default function Home() {
         setModules((current) => [...current, result.module]); setActiveModuleId(result.module.id); setActiveCategory(result.module.id); setPaperTitle(`${result.module.name}专项练习`);
         show({ text: "模块已创建", tone: "success" });
       }
-      setModuleDialog(null); setModuleDraft(null); setModuleName(""); setModuleSubtitle("");
+      setManagementDialog("manage"); setModuleDraft(null); setModuleName(""); setModuleSubtitle("");
     } catch (error) { show({ text: error instanceof Error ? error.message : "模块保存失败", tone: "error" }); }
   }
 
@@ -886,13 +885,38 @@ export default function Home() {
   }
 
   async function dropModule(targetId: string) {
-    if (!draggedModuleId || draggedModuleId === targetId) { setDraggedModuleId(""); return; }
-    const source = modules.find((item) => item.id === draggedModuleId); const targetIndex = modules.findIndex((item) => item.id === targetId);
+    const sourceId = moduleDrag?.source;
+    setModuleDrag(null);
+    if (!sourceId || sourceId === targetId) return;
+    const source = modules.find((item) => item.id === sourceId); const targetIndex = modules.findIndex((item) => item.id === targetId);
     if (!source || targetIndex < 0) return;
-    const next = modules.filter((item) => item.id !== draggedModuleId); next.splice(targetIndex, 0, source);
-    const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder })); setModules(ordered); setDraggedModuleId("");
+    const next = modules.filter((item) => item.id !== sourceId); next.splice(targetIndex, 0, source);
+    const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder })); setModules(ordered);
     try { await reorderCloudModules(ordered.map((item) => item.id)); }
     catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
+  }
+
+  function moduleDragProps(id: string) {
+    const acceptDrop = (event: DragEvent<HTMLDivElement>) => {
+      if (!moduleDrag) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      if (moduleDrag.target !== id) setModuleDrag({ ...moduleDrag, target: id });
+    };
+    return {
+      draggable: canManageLibrary,
+      "data-dragging": moduleDrag?.source === id || undefined,
+      "data-drop-position": moduleDrag?.target === id && moduleDrag.source !== id ? modules.findIndex(item => item.id === moduleDrag.source) < modules.findIndex(item => item.id === id) ? "after" : "before" : undefined,
+      onDragStart: (event: DragEvent<HTMLDivElement>) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", id);
+        setModuleDrag({ source: id, target: id });
+      },
+      onDragEnter: acceptDrop,
+      onDragOver: acceptDrop,
+      onDrop: (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); void dropModule(id); },
+      onDragEnd: () => setModuleDrag(null),
+    };
   }
 
   async function removeModule(module: LibraryModule) {
@@ -908,7 +932,7 @@ export default function Home() {
       const removedQuestions = questions.filter((item) => item.moduleId === removedId).map((item) => item.id);
       setModules(next); setCategories((current) => current.filter((item) => item.moduleId !== removedId)); setQuestions((current) => current.filter((item) => item.moduleId !== removedId));
       setSelectedIds((current) => current.filter((id) => !removedQuestions.includes(id)));
-      setModuleDialog(null);
+      setManagementDialog(null);
       setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
       show({ text: "模块及其内容已删除", tone: "success" });
       requestAnimationFrame(() => moduleManager.current?.focus());
@@ -955,8 +979,10 @@ export default function Home() {
           <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
           <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
           <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button></div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
-          {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => activeModule ? setCategoryDialog("manage") : setModuleDialog("manage")}>{activeModule ? pageCopy.manageCategories : pageCopy.manageModules}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => <div key={examModule.id} className="library-module" {...moduleDragProps(examModule.id)} title={canManageLibrary ? "拖动调整模块顺序" : undefined}>
+            {examModule.id === activeModule?.id ? <CategoryTree collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>}
+          </div>)}</div>
+          {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => setManagementDialog("manage")}>{pageCopy.manageLibrary}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
           <div className="library-directory paper-directory-face paper-directory-back" inert={!directoryOpen || paperView !== "papers"} aria-hidden={!directoryOpen || paperView !== "papers"}>
             <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={()=>navigatePapers("modules")}>试卷<span aria-hidden="true">⇄</span></button></div>
@@ -1083,34 +1109,35 @@ export default function Home() {
       {importPaperOpen && <PaperImportDialog folders={paperFolders} folderId={paperFolderId} modules={modules} onClose={()=>setImportPaperOpen(false)} onUploaded={folder=>{navigatePapers("papers","",folder);setPaperRefresh(v=>v+1);}} onNotice={onNotice}/>}
       {entryDraft && <QuestionEntry initial={entryDraft} modules={modules} categories={categories} moduleIds={[entryDraft.moduleId || activeModule?.id || ""]} addToLibrary={entryAddsWrong} onClose={() => { setEntryDraft(null); setEntryAddsWrong(false); }} onNotice={onNotice} onSaved={(saved) => { setQuestions((current) => [...saved, ...current.filter((item) => !saved.some((entry) => entry.id === item.id))].sort((a, b) => b.createdAt - a.createdAt)); if (entryAddsWrong) setWrongCatalog((current) => current?.filter((item) => !saved.some((entry) => entry.id === item.question.id)) ?? null); }} />}
 
-      {categoryDialog && activeModule && <div className="modal-backdrop"><section className="modal category-modal" role="dialog" aria-modal="true" aria-label="分类管理">
-        <div className="modal-head"><div><span className="eyebrow">{activeModule.name}</span><h2>{categoryDialog === "new" ? "新建模块内分类" : categoryDialog === "trash" ? "回收站" : "分类与数据管理"}</h2></div><button className="close" onClick={() => setCategoryDialog(null)}>×</button></div>
-        {categoryDialog === "new" ? <>
+      {managementDialog && <div className="modal-backdrop"><section className="modal library-management-modal" data-view={managementDialog} role="dialog" aria-modal="true" aria-label={pageCopy.manageLibrary}>
+        <div className="modal-head"><div><span className="eyebrow">{managementDialog === "category" || managementDialog === "trash" ? activeModule?.name : pageCopy.publicLibrary}</span><h2>{managementDialog === "category" ? "新建模块内分类" : managementDialog === "module" ? moduleDraft ? "编辑模块" : "新建模块" : managementDialog === "trash" ? "回收站" : pageCopy.manageLibrary}</h2></div><button className="close" aria-label="关闭管理窗口" onClick={() => { setManagementDialog(null); setModuleDraft(null); }}>×</button></div>
+        {managementDialog === "category" && activeModule ? <>
           <label className="field">分类名称<input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：二次函数" /></label>
           <label className="field">上级分类<select value={categoryParent || activeModule.id} onChange={(event) => setCategoryParent(event.target.value)}><option value={activeModule.id}>{activeModule.name}（模块根目录）</option>{moduleCategories.map((item) => <option key={item.id} value={item.id}>{pathOf(item.id)}</option>)}</select></label>
-          <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog(null)}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div>
-        </> : categoryDialog === "trash" ? <>
-          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{item.code && `ID ${item.code} · `}{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button disabled={restoringIds.includes(item.id)} onClick={() => restoreTrashQuestion(item.id)}>{restoringIds.includes(item.id) ? "恢复中…" : "恢复"}</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
-          <div className="modal-actions"><button className="secondary" onClick={() => setCategoryDialog("manage")}>返回</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
-        </> : <>
-          <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>
-          <div className="data-tools"><div><b>题库备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>
-          {canDelete && <div className="data-tools"><div><b>回收站</b><small>删除的试题保留在这里，可恢复到原分类。</small></div><button className="secondary" onClick={openTrash}>打开</button></div>}
-          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryDialog(null); setModuleDialog("manage"); }}>{pageCopy.manageModules}</button><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ {pageCopy.addCategory}</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
-        </>}
-      </section></div>}
-
-      {moduleDialog && <div className="modal-backdrop"><section className="modal module-modal" role="dialog" aria-modal="true" aria-label="模块管理">
-        <div className="modal-head"><div><span className="eyebrow">{pageCopy.publicLibrary}</span><h2>{moduleDialog === "new" ? moduleDraft ? "编辑模块" : "新建模块" : "模块管理"}</h2></div><button className="close" onClick={() => { setModuleDialog(null); setModuleDraft(null); }}>×</button></div>
-        {moduleDialog === "new" ? <>
+          <div className="modal-actions"><button className="secondary" onClick={() => setManagementDialog("manage")}>取消</button><button className="primary-button" onClick={createCategory}>创建分类</button></div>
+        </> : managementDialog === "module" ? <>
           <label className="field">模块名称<input value={moduleName} onChange={(event) => setModuleName(event.target.value)} placeholder="例如：深圳中考" /></label>
           <label className="field">副标题<input value={moduleSubtitle} onChange={(event) => setModuleSubtitle(event.target.value)} placeholder="例如：数学真题与专题训练" /></label>
-          <div className="modal-actions"><button className="secondary" onClick={() => setModuleDialog(moduleDraft ? "manage" : null)}>取消</button><button className="primary-button" onClick={saveModule}>{moduleDraft ? "保存修改" : "创建模块"}</button></div>
+          <div className="modal-actions"><button className="secondary" onClick={() => { setManagementDialog("manage"); setModuleDraft(null); }}>取消</button><button className="primary-button" onClick={saveModule}>{moduleDraft ? "保存修改" : "创建模块"}</button></div>
+        </> : managementDialog === "trash" && activeModule ? <>
+          <div className="manage-list trash-list">{!trashQuestions ? <p className="empty-tree">正在读取回收站…</p> : trashQuestions.some((item) => item.moduleId === activeModule.id) ? trashQuestions.filter((item) => item.moduleId === activeModule.id).map((item) => <div key={item.id}><span><b><MathText text={item.stem.split("\n")[0]} /></b><small>{item.code && `ID ${item.code} · `}{pathOf(item.categoryId) || `${activeModule.name}（原分类已删除，恢复到模块根目录）`} · {new Date(item.deletedAt).toLocaleDateString("zh-CN")} 删除</small></span><button disabled={restoringIds.includes(item.id)} onClick={() => restoreTrashQuestion(item.id)}>{restoringIds.includes(item.id) ? "恢复中…" : "恢复"}</button></div>) : <p className="empty-tree">回收站是空的</p>}</div>
+          <div className="modal-actions"><button className="secondary" onClick={() => setManagementDialog("manage")}>返回</button><button className="primary-button" onClick={() => setManagementDialog(null)}>完成</button></div>
         </> : <>
-          <div className="module-manage-list">{modules.map((item, index) => <div key={item.id} draggable onDragStart={() => setDraggedModuleId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => dropModule(item.id)}>
-            <span className="drag-handle" title="拖动排序">⋮⋮</span><span><b>{item.name}</b><small>{item.subtitle || "未设置副标题"} · {countFor(item.id)} 题</small></span><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" onClick={() => void removeModule(item)}>删除</button>}</div>
-          </div>)}</div>
-          <div className="modal-actions"><button className="secondary" onClick={openNewModule}>＋ 新建模块</button><button className="primary-button" onClick={() => setModuleDialog(null)}>完成</button></div>
+          <div className="library-management-grid">
+            <section aria-label="模块列表">
+              <header><h3>{pageCopy.moduleSwitcher}</h3><button className="secondary" onClick={openNewModule}>＋ {pageCopy.newModule}</button></header>
+              <div className="module-manage-list">{modules.length ? modules.map((item, index) => <div key={item.id} {...moduleDragProps(item.id)} data-active={item.id === activeModule?.id || undefined}>
+                <span className="drag-handle" title="拖动排序" aria-hidden="true">⋮⋮</span><button className="module-select" aria-label={`选择模块 ${item.name}`} aria-pressed={item.id === activeModule?.id} onClick={() => switchExamModule(item.id)}><b>{item.name}</b><small>{countFor(item.id)} 题{item.subtitle && ` · ${item.subtitle}`}</small></button><div><button title="上移" aria-label={`上移${item.name}`} disabled={index === 0} onClick={() => moveModule(item.id, -1)}>↑</button><button title="下移" aria-label={`下移${item.name}`} disabled={index === modules.length - 1} onClick={() => moveModule(item.id, 1)}>↓</button><button aria-label={`编辑${item.name}`} onClick={() => openModuleEditor(item)}>编辑</button>{canDelete && <button className="danger-text" aria-label={`删除模块${item.name}`} onClick={() => void removeModule(item)}>删除</button>}</div>
+              </div>) : <p className="empty-tree">还没有模块，请先新建一个模块。</p>}</div>
+            </section>
+            <section aria-label="分类列表">
+              <header><h3>{activeModule ? `${activeModule.name} · 分类` : "分类"}</h3><button className="secondary" disabled={!activeModule} onClick={() => { if (!activeModule) return; setCategoryName(""); setCategoryParent(activeCategory ?? activeModule.id); setManagementDialog("category"); }}>＋ {pageCopy.addCategory}</button></header>
+              <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button aria-label={`删除分类${item.name}`} onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">{activeModule ? "当前模块还没有子分类" : "新建模块后即可管理分类"}</p>}</div>
+            </section>
+          </div>
+          <div className="data-tools"><div><b>题库备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>
+          {canDelete && activeModule && <div className="data-tools"><div><b>回收站</b><small>删除的试题保留在这里，可恢复到原分类。</small></div><button className="secondary" onClick={openTrash}>打开</button></div>}
+          <div className="modal-actions"><button className="primary-button" onClick={() => setManagementDialog(null)}>完成</button></div>
         </>}
       </section></div>}
 
