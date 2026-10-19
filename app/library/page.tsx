@@ -163,7 +163,7 @@ export default function Home() {
   const [draggedModuleId, setDraggedModuleId] = useState("");
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
-  const moduleManager = useRef<HTMLDivElement>(null);
+  const moduleManager = useRef<HTMLButtonElement>(null);
   const [directoryOpen, setDirectoryOpen] = useState(!fromIntro);
   const [directoryMotion, setDirectoryMotion] = useState<"opening" | "closing" | null>(null);
   const [showWrongBook, setShowWrongBook] = useState(initialView === "wrong-book");
@@ -911,7 +911,7 @@ export default function Home() {
       setModuleDialog(null);
       setActiveModuleId(next[0]?.id ?? ""); setActiveCategory(next[0]?.id ?? null); if (next[0]) setPaperTitle(`${next[0].name}专项练习`);
       show({ text: "模块及其内容已删除", tone: "success" });
-      requestAnimationFrame(() => moduleManager.current?.querySelector<HTMLButtonElement>(".more-toggle")?.focus());
+      requestAnimationFrame(() => moduleManager.current?.focus());
     } catch (error) { show({ text: error instanceof Error ? error.message : "模块删除失败", tone: "error" }); }
     finally { deleting.current = false; }
   }
@@ -954,9 +954,9 @@ export default function Home() {
           }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="directory-chevron" d="m16 9-3 3 3 3" /></svg><span className="directory-rail-label" aria-hidden="true">{paperView === "papers" ? "试卷目录" : pageLocale === "en" ? "Directory" : "知识目录"}</span></button>
           <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
           <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
-          <div className="sidebar-heading" ref={moduleManager}><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button>{canManageLibrary && <PaperMoreMenu label={pageCopy.manageModules}><button onClick={openNewModule}>{pageCopy.newModule}</button><button onClick={() => setModuleDialog("manage")}>{pageCopy.manageModules}</button></PaperMoreMenu>}</div>
+          <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button></div>
           <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => examModule.id === activeModule?.id ? <CategoryTree key={examModule.id} collapsible module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button key={examModule.id} className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot">◆</span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>)}</div>
-          {canManageLibrary ? <button className="manage-button" onClick={() => setCategoryDialog("manage")} disabled={!activeModule}>{pageCopy.manageCategories}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
+          {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => activeModule ? setCategoryDialog("manage") : setModuleDialog("manage")}>{activeModule ? pageCopy.manageCategories : pageCopy.manageModules}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
           <div className="library-directory paper-directory-face paper-directory-back" inert={!directoryOpen || paperView !== "papers"} aria-hidden={!directoryOpen || paperView !== "papers"}>
             <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={()=>navigatePapers("modules")}>试卷<span aria-hidden="true">⇄</span></button></div>
@@ -1096,7 +1096,7 @@ export default function Home() {
           <div className="manage-list">{moduleCategories.length ? moduleCategories.map((item) => <div key={item.id}><span><b>{item.name}</b><small>{pathOf(item.id)} · {countFor(item.id)} 题</small></span>{canDelete && <button onClick={() => deleteCategory(item)}>删除</button>}</div>) : <p className="empty-tree">当前模块还没有子分类</p>}</div>
           <div className="data-tools"><div><b>题库备份</b><small>备份包含动态模块、分类和题目；导入会追加到当前题库。</small></div><button className="secondary" onClick={() => importRef.current?.click()}>导入备份</button><button className="secondary" onClick={exportBackup}>导出备份</button><input ref={importRef} type="file" accept="application/json" hidden onChange={importBackup} /></div>
           {canDelete && <div className="data-tools"><div><b>回收站</b><small>删除的试题保留在这里，可恢复到原分类。</small></div><button className="secondary" onClick={openTrash}>打开</button></div>}
-          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ {pageCopy.addCategory}</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
+          <div className="modal-actions"><button className="secondary" onClick={() => { setCategoryDialog(null); setModuleDialog("manage"); }}>{pageCopy.manageModules}</button><button className="secondary" onClick={() => { setCategoryParent(activeCategory ?? activeModule.id); setCategoryDialog("new"); }}>＋ {pageCopy.addCategory}</button><button className="primary-button" onClick={() => setCategoryDialog(null)}>完成</button></div>
         </>}
       </section></div>}
 
