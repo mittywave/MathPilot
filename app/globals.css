@@ -1317,7 +1317,7 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 .paper-folder-chevron{width:23px;flex-shrink:0;border:0;padding:5px 0;background:transparent;color:var(--muted);font-size:20px}
 .paper-folder-chevron span{display:inline-block;transition:transform .4s var(--directory-ease)}
 .paper-folder-chevron[aria-expanded="true"] span{transform:rotate(90deg)}
-.paper-folder-icon{width:23px;flex-shrink:0;text-align:center;color:var(--muted)}
+.paper-folder-icon{display:grid;place-items:center;width:23px;flex-shrink:0;color:var(--muted)}
 .paper-folder-tree{scrollbar-gutter:stable;padding-right:12px}
 .paper-folder-row .basket-more{flex-shrink:0}
 .paper-folder-tree>.tree-row{display:flex;justify-content:space-between}
