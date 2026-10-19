@@ -1,4 +1,6 @@
-/* MathPilot product page (/ and, with its login window open, /login). Colours follow the hero's light/dark switch through data-mode. */
+/* MathPilot product page (/ and, with its login window open, /login). Colours follow the site's light/dark setting
+   (lib/appearance.ts, the hero's switch included) through data-mode, which the page sets once it has read the setting:
+   until then the server's light page stays out of sight on a dark setting, over the dark --page of globals.css. */
 html:has(.mp-intro) { scroll-behavior:smooth; }
 html:has(.mp-intro[data-mode="light"]), html:has(.mp-intro[data-mode="light"]) body { background:#EBE9E5; }
 html:has(.mp-intro[data-mode="dark"]), html:has(.mp-intro[data-mode="dark"]) body { background:#111110; }
@@ -12,6 +14,10 @@ html:has(.mp-intro[data-mode="dark"]), html:has(.mp-intro[data-mode="dark"]) bod
   min-height:100vh; background:var(--bg); color:var(--fg); font-family:var(--sans); -webkit-font-smoothing:antialiased;
   transition:background-color .6s ease, color .6s ease; }
 .mp-intro[data-mode="dark"] { --bg:#111110; --fg:#F1EFEA; --acc:#9DBFAA; }
+/* until then, on a dark setting, the page is out of sight but already in its dark colours (the hero's own included), so
+   that nothing fades over from light when it appears */
+html[data-theme="dark"] .mp-intro:not([data-mode]) { visibility:hidden; --bg:#111110; --fg:#F1EFEA; --acc:#9DBFAA; }
+html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --sh-bg:#111110 !important; --sh-fg:#F1EFEA !important; --sh-acc:#9DBFAA !important; }
 
 /* Hero: Chinese copy needs upright accents and more leading than the Latin original. */
 .mp-intro .sh-h1 { line-height:1.1; letter-spacing:-.01em; }
@@ -146,6 +152,11 @@ html:has(.mp-intro[data-login]) { overflow:hidden; }
 .mp-login-switch { margin:18px 0 0; font-size:13px; text-align:center; color:var(--soft); }
 .mp-login-switch button { margin-left:4px; padding:0; border:0; background:none; color:var(--acc); font:inherit; font-weight:600; cursor:pointer; }
 .mp-login-switch button:hover { text-decoration:underline; text-underline-offset:3px; }
+
+/* Into the workbench: the page holds still and everything but the sand (and the veil, the page's own colour under the
+   login window) fades, leaving the ∞ to open into the workbench's frame. */
+html:has(.mp-intro[data-entering]) { overflow:hidden; }
+.mp-intro[data-entering] > :not(.sh-fixed, .mp-veil), .mp-intro[data-entering] .sh-backdrop { opacity:0; pointer-events:none; transition:opacity .35s ease; }
 
 .mp-intro[data-reveal="on"] .mp-reveal { opacity:0; transform:translateY(18px); transition:opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1); }
 .mp-intro[data-reveal="on"] .mp-reveal.is-in { opacity:1; transform:none; }

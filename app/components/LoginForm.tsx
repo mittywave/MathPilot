@@ -24,10 +24,12 @@ function Field({ id, type, label, value, onChange, autoComplete }: {
 }
 
 /**
- * Signs a teacher in (or registers one with an invite code) and then opens `next`. `guest` is where visitors without an
- * account may still look around; `onClose` goes back to the product page.
+ * Signs a teacher in (or registers one with an invite code) and then opens `next`, or hands it to `onDone` to open.
+ * `guest` is where visitors without an account may still look around; `onClose` goes back to the product page.
  */
-export function LoginForm({ next, guest, onClose, ref }: { next: string; guest: string; onClose: () => void; ref?: Ref<HTMLDivElement> }) {
+export function LoginForm({ next, guest, onClose, onDone, ref }: {
+  next: string; guest: string; onClose: () => void; onDone?: (next: string) => void; ref?: Ref<HTMLDivElement>;
+}) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,7 +48,8 @@ export function LoginForm({ next, guest, onClose, ref }: { next: string; guest: 
     try {
       if (registering) await register(email, password, invite);
       else await login(email, password);
-      window.location.assign(next);
+      if (onDone) onDone(next);
+      else window.location.assign(next);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "没有成功，请重试");
       setSubmitting(false);

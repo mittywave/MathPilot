@@ -478,7 +478,7 @@
    the appearance (浅色/深色, 风格) instead of this page's fixed dark canvas. */
 /* The dock is the grid column: it glides between the 44px rail and the panel width. The panel keeps its full width
    the whole time, pinned to the right edge, so it slides in like a drawer and the canvas never re-lays out mid-motion. */
-.kgl-dock { position:sticky; top:var(--topbar-h); width:44px; height:calc(100dvh - var(--topbar-h)); overflow:hidden; border-left:1px solid var(--line); background:var(--surface); color:var(--ink);
+.kgl-dock { position:sticky; top:var(--topbar-h); width:var(--kgl-rail); height:calc(100dvh - var(--topbar-h)); overflow:hidden; border-left:1px solid var(--line); background:var(--surface); color:var(--ink);
   transition:width var(--kgl-ms) var(--kgl-ease); }
 .kgl-dock.open { width:var(--kgl-full); }
 .kgl-shell,.kgl-rail { position:absolute; top:0; height:100%; }
@@ -526,7 +526,7 @@
 .kgl-relation p { margin:2px 6px; }
 .kgl-more { padding:2px 6px; }
 .kgl-dock:not(.open)>.kgl-shell { pointer-events:none; animation:kgl-drawer-out calc(var(--kgl-ms)*.8) var(--kgl-ease) both; }
-.kgl-rail { left:0; width:44px; display:flex; justify-content:center; padding-top:10px; opacity:0; visibility:hidden; transition:opacity .15s,visibility 0s .15s; }
+.kgl-rail { left:0; width:var(--kgl-rail); display:flex; justify-content:center; padding-top:10px; opacity:0; visibility:hidden; transition:opacity .15s,visibility 0s .15s; }
 .kgl-dock:not(.open)>.kgl-rail { opacity:1; visibility:visible; transition:opacity .25s calc(var(--kgl-ms)*.6); }
 .kgl-rail button { align-content:start; gap:10px; width:32px; padding:8px 0; }
 .kgl-rail span { writing-mode:vertical-rl; letter-spacing:.24em; font-size:12px; }
