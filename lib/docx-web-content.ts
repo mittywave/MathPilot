@@ -6,6 +6,7 @@ type XmlEntry = Record<string, unknown> & { ":@"?: XmlAttributes };
 export type DocxWebInline =
   | { type: "text"; value: string; bold?: boolean; italic?: boolean; underline?: boolean; vertical?: "sup" | "sub" }
   | { type: "math"; latex: string }
+  | { type: "image"; id: string; width: number; height: number }
   | { type: "tab" }
   | { type: "break" };
 
@@ -172,7 +173,7 @@ function propertyEnabled(entry: XmlEntry | undefined) {
   return value !== "0" && value !== "false" && value !== "off" && value !== "none";
 }
 
-function parseRun(entry: XmlEntry): DocxWebInline[] {
+function parseRun(entry: XmlEntry, pictures = false): DocxWebInline[] {
   const children = entryChildren(entry);
   const properties = childContent(children, "rPr");
   const verticalValue = nestedAttribute(properties, "vertAlign");
@@ -185,6 +186,7 @@ function parseRun(entry: XmlEntry): DocxWebInline[] {
   const inlines: DocxWebInline[] = [];
   for (const child of children) {
     const name = entryName(child);
+    if (name === "drawing" && pictures) inlines.push(...inlineFigures([child]).map((figure) => ({ type: "image" as const, ...figure })));
     if (name === "rPr" || name === "drawing" || name === "pict" || name === "object") continue;
     if (name === "t" || name === "instrText") {
       const value = textContent(entryChildren(child));
@@ -198,17 +200,17 @@ function parseRun(entry: XmlEntry): DocxWebInline[] {
       const code = Number.parseInt(attribute(child, "char") ?? "", 16);
       if (Number.isFinite(code)) inlines.push({ type: "text", value: String.fromCodePoint(code), ...style });
     } else {
-      inlines.push(...parseInlineEntries(entryChildren(child), style));
+      inlines.push(...parseInlineEntries(entryChildren(child), style, pictures));
     }
   }
   return inlines;
 }
 
-function parseInlineEntries(entries: XmlEntry[], inheritedStyle: Partial<Extract<DocxWebInline, { type: "text" }>> = {}): DocxWebInline[] {
+function parseInlineEntries(entries: XmlEntry[], inheritedStyle: Partial<Extract<DocxWebInline, { type: "text" }>> = {}, pictures = false): DocxWebInline[] {
   const inlines: DocxWebInline[] = [];
   for (const entry of entries) {
     const name = entryName(entry);
-    if (name === "r") inlines.push(...parseRun(entry));
+    if (name === "r") inlines.push(...parseRun(entry, pictures));
     else if (name === "oMath" || name === "oMathPara") {
       const latex = mathEntryLatex(entry);
       if (latex) inlines.push({ type: "math", latex });
@@ -217,18 +219,18 @@ function parseInlineEntries(entries: XmlEntry[], inheritedStyle: Partial<Extract
       if (value) inlines.push({ type: "text", value, ...inheritedStyle });
     } else if (name === "tab") inlines.push({ type: "tab" });
     else if (name === "br" || name === "cr") inlines.push({ type: "break" });
-    else if (name !== "pPr" && name !== "bookmarkStart" && name !== "bookmarkEnd" && name !== "proofErr") inlines.push(...parseInlineEntries(entryChildren(entry), inheritedStyle));
+    else if (name !== "pPr" && name !== "bookmarkStart" && name !== "bookmarkEnd" && name !== "proofErr") inlines.push(...parseInlineEntries(entryChildren(entry), inheritedStyle, pictures));
   }
   return inlines;
 }
 
-function parseParagraph(entry: XmlEntry): DocxWebParagraph {
+function parseParagraph(entry: XmlEntry, pictures = false): DocxWebParagraph {
   const children = entryChildren(entry);
   const properties = childContent(children, "pPr");
   const alignment = nestedAttribute(properties, "jc");
   return {
     type: "paragraph",
-    inlines: parseInlineEntries(children),
+    inlines: parseInlineEntries(children, {}, pictures),
     align: alignment === "center" ? "center" : alignment === "right" || alignment === "end" ? "right" : "left",
   };
 }
@@ -336,11 +338,11 @@ function trimOptionInlines(inlines: DocxWebInline[]) {
 function semanticOptionInlines(inlines: DocxWebInline[]): DocxWebInline[] {
   const cleaned = trimOptionInlines(inlines);
   const text = cleaned.filter((inline): inline is Extract<DocxWebInline, { type: "text" }> => inline.type === "text").map((inline) => inline.value).join("");
-  const isFormula = !/[\u3400-\u9fff]/.test(text) && cleaned.some((inline) => inline.type === "math" || inline.type === "text" && Boolean(inline.vertical));
+  const isFormula = !cleaned.some((inline) => inline.type === "image") && !/[\u3400-\u9fff]/.test(text) && cleaned.some((inline) => inline.type === "math" || inline.type === "text" && Boolean(inline.vertical));
   if (!isFormula) return cleaned;
   const latex = cleaned.map((inline) => {
     if (inline.type === "math") return inline.latex;
-    if (inline.type === "break" || inline.type === "tab") return " ";
+    if (inline.type === "break" || inline.type === "tab" || inline.type === "image") return " ";
     const value = escapeMathText(inline.value);
     return inline.vertical === "sup" ? `^{${value}}` : inline.vertical === "sub" ? `_{${value}}` : value;
   }).join("");
@@ -348,11 +350,15 @@ function semanticOptionInlines(inlines: DocxWebInline[]): DocxWebInline[] {
 }
 
 export function parseDocxWebOptions(xml: string[]): DocxWebOption[] {
-  const content = parseDocxWebContent(xml);
+  // Options retain inline pictures, including a picture-only continuation paragraph.
+  // Stem/analysis pictures still use their existing separate placement paths.
+  const paragraphs = xml.flatMap((fragment) => {
+    try { return (parser.parse(fragment) as XmlEntry[]).filter((entry) => entryName(entry) === "p").map((entry) => parseParagraph(entry, true)); }
+    catch { return []; }
+  });
   const found = new Map<string, DocxWebInline[]>();
   let currentLabel = "";
-  for (const block of content.blocks) {
-    if (block.type !== "paragraph") continue;
+  for (const block of paragraphs) {
     for (const inline of block.inlines) {
       if (inline.type !== "text") {
         if (currentLabel) appendOptionInline(found.get(currentLabel)!, inline);
@@ -381,11 +387,7 @@ export type DocxFigureLine = { align: DocxWebParagraph["align"]; figures: Array<
 
 // The pictures a paragraph places in line with its text, at the size the document printed them (mm), with the
 // paragraph's alignment. Floating pictures and pictures inside tables are not included.
-export function docxFigureLine(xml: string): DocxFigureLine | null {
-  let entries: XmlEntry[];
-  try { entries = parser.parse(xml) as XmlEntry[]; } catch { return null; }
-  const paragraph = entries.find((entry) => entryName(entry) === "p");
-  if (!paragraph) return null;
+function inlineFigures(entries: XmlEntry[]): DocxFigureLine["figures"] {
   const figures: DocxFigureLine["figures"] = [];
   const blipId = (list: XmlEntry[]): string | undefined => {
     for (const entry of list) {
@@ -402,7 +404,16 @@ export function docxFigureLine(xml: string): DocxFigureLine | null {
       if (id && width > 0 && height > 0) figures.push({ id, width, height });
     }
   };
-  visit(entryChildren(paragraph));
+  visit(entries);
+  return figures;
+}
+
+export function docxFigureLine(xml: string): DocxFigureLine | null {
+  let entries: XmlEntry[];
+  try { entries = parser.parse(xml) as XmlEntry[]; } catch { return null; }
+  const paragraph = entries.find((entry) => entryName(entry) === "p");
+  if (!paragraph) return null;
+  const figures = inlineFigures(entryChildren(paragraph));
   return figures.length ? { align: parseParagraph(paragraph).align, figures } : null;
 }
 
@@ -422,7 +433,7 @@ export function docxMathLatex(xml: string): string[] {
 }
 
 export function docxWebInlineText(inlines: DocxWebInline[]) {
-  return inlines.map((inline) => inline.type === "text" ? inline.value : inline.type === "math" ? `$${inline.latex}$` : inline.type === "break" ? "\n" : "\t").join("");
+  return inlines.map((inline) => inline.type === "text" ? inline.value : inline.type === "math" ? `$${inline.latex}$` : inline.type === "image" ? "" : inline.type === "break" ? "\n" : "\t").join("");
 }
 
 export function docxWebContentText(content: DocxWebContent): string {

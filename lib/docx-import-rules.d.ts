@@ -1,5 +1,6 @@
 export function isDocxOptionBlock(value: string): boolean;
 export function splitDocxOptionBlocks(values: string[]): string[];
+export function docxNumberedQuestion(text: string): { number: string; stem: string } | null;
 export function normalizedDocxPageLookup(value: string): string;
 export function docxQuestionHeading(text: string, xml: string): { label: string; number: string } | null;
 export function docxTitleLine(text: string, xml: string): boolean;

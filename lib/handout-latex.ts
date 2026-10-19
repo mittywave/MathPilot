@@ -187,7 +187,7 @@ function stretchLatex(parts: FormulaPart[]): string {
   return glyphText(before as Glyph[]) + (formula && !range ? formulaLatex(core) : glyphText(core as Glyph[])) + glyphText(after as Glyph[]);
 }
 
-function latexInlines(inlines: DocxWebInline[]) {
+function latexInlines(inlines: DocxWebInline[], picture: (image: Extract<DocxWebInline, { type: "image" }>) => string = () => "") {
   const out: string[] = []; let stretch: FormulaPart[] = []; let text: Glyph[] = [];
   const flush = () => {
     if (text.length) out.push(glyphText(text));
@@ -211,6 +211,7 @@ function latexInlines(inlines: DocxWebInline[]) {
     flush();
     if (part.type === "tab") { out.push("\\quad "); return; }
     if (part.type === "break") { out.push("\\newline "); return; }
+    if (part.type === "image") { out.push(picture(part)); return; }
     if (part.type !== "text") return;
     if (part.underline && !part.value.trim()) { out.push(`\\handoutblank{${Math.min(12, Math.max(3, part.value.length * 0.5)).toFixed(1)}em}`); return; }
     let value = latexPlain(part.value);
@@ -230,7 +231,7 @@ function plainWeight(value: string) {
 }
 
 function inlinesWeight(inlines: DocxWebInline[]) {
-  return inlines.reduce((sum, inline) => sum + (inline.type === "text" ? plainWeight(inline.value) : inline.type === "math" ? plainWeight(inline.latex) : 1), 0);
+  return inlines.reduce((sum, inline) => sum + (inline.type === "text" ? plainWeight(inline.value) : inline.type === "math" ? plainWeight(inline.latex) : inline.type === "image" ? inline.width / 4 : 1), 0);
 }
 
 function latexTable(table: DocxWebTable) {
@@ -315,8 +316,15 @@ function stemContent(question: Question, figureName: (source: string) => string 
 
 type Choice = { label: string; latex: string; weight: number };
 
-function questionChoices(question: Question): Choice[] {
-  if (question.optionsDocxXml?.length) return parseDocxWebOptions(question.optionsDocxXml).map((option) => ({ label: option.label, latex: latexInlines(option.inlines), weight: inlinesWeight(option.inlines) }));
+function questionChoices(question: Question, figureName: (source: string) => string | null = () => null): Choice[] {
+  if (question.optionsDocxXml?.length) return parseDocxWebOptions(question.optionsDocxXml).map((option) => ({
+    label: option.label,
+    latex: latexInlines(option.inlines, (image) => {
+      const source = question.optionsDocxAssets?.[image.id]; const name = source ? figureName(source) : null;
+      return name ? `\\handoutfigure[.45\\textheight]{${Math.min(150, image.width).toFixed(1)}mm}{${name}}` : "";
+    }),
+    weight: inlinesWeight(option.inlines),
+  }));
   return question.options.map((option, index) => ({ label: String.fromCharCode(65 + index), latex: latexInline(option), weight: plainWeight(option) }));
 }
 
@@ -392,7 +400,7 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   const layout = resolveQuestionImageLayout(question);
   const compactConclusion = isCompactConclusionQuestion(question);
   const sourceWidth = sourceFigureWidth(question, true);
-  const choices = questionChoices(question);
+  const choices = questionChoices(question, figureName);
   const out = [`\\begin{handoutquestion}{${label}}`];
   if (figures.length === 1 && layout === "right" && !compactConclusion) {
     out.push(`\\begin{handoutsidefigure}${sourceWidth ? `[${Math.min(.45, sourceWidth).toFixed(2)}]` : ""}{${figures[0]}}`, stem, "\\end{handoutsidefigure}");

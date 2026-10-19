@@ -16,3 +16,9 @@ test("does not duplicate an image already embedded by the raw Word stem", () => 
     stemDocxAssets: { rId5: "/api/assets/embedded" },
   }), ["/api/assets/separate"]);
 });
+
+test("raw Word option pictures are not exported a second time as stem figures", () => {
+  const q={optionsDocxXml:['<w:p/>'],optionsDocxAssets:{a:'/choice'},contentImages:['/choice','/stem']};
+  assert.deepEqual(standaloneWordQuestionImages(q),['/stem']);
+  assert.deepEqual(standaloneWordQuestionImages({...q,optionsDocxXml:undefined}),['/choice','/stem']);
+});

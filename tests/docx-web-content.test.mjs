@@ -130,3 +130,34 @@ test("lists every Word equation of a document part in order, inside paragraphs, 
   assert.deepEqual(docxMathLatex(body), ["x", "\\frac{1}{2}", "a", "\\sqrt{3}", "y"]);
   assert.deepEqual(docxMathLatex("<w:body><w:p>"), []);
 });
+
+test("picture-only and mixed Word choices retain labels, order and printed dimensions", () => {
+  const picture = (id, width = 12, height = 10) => `<w:r><w:drawing><wp:inline><wp:extent cx="${width * 36000}" cy="${height * 36000}"/><a:graphic><a:blip r:embed="${id}"/></a:graphic></wp:inline></w:drawing></w:r>`;
+  const xml = [paragraph(textRun("A．") + picture("a") + '<w:r><w:tab/></w:r>' + textRun("B．说明") + picture("b", 18, 14)), paragraph(textRun("C．")), paragraph(picture("c")), paragraph(textRun("D．") + mathRun('<m:r><m:t>x</m:t></m:r>') + picture("d"))];
+  const options = parseDocxWebOptions(xml);
+  assert.deepEqual(options.map(o => o.label), ["A", "B", "C", "D"]);
+  assert.deepEqual(options.map(o => o.inlines.filter(i => i.type === 'image')), [
+    [{type:'image',id:'a',width:12,height:10}], [{type:'image',id:'b',width:18,height:14}],
+    [{type:'image',id:'c',width:12,height:10}], [{type:'image',id:'d',width:12,height:10}],
+  ]);
+  assert.equal(docxWebInlineText(options[1].inlines), '说明');
+  assert.equal(docxWebInlineText(options[3].inlines), '$x$');
+  assert.deepEqual(parseDocxWebContent([paragraph(picture('stem'))]).blocks, [], 'stem pictures keep their separate placement path');
+});
+
+test("the real question body renders Word option pictures once at source size even with no text fallback", async () => {
+  const {createElement} = await import('react');
+  const {renderToStaticMarkup} = await import('react-dom/server');
+  const {QuestionBody} = await loadSource('app/components/QuestionBody.tsx');
+  const {questionImages} = await loadSource('lib/question-layout.ts');
+  const xml = paragraph(textRun('A．') + '<w:r><w:drawing><wp:inline><wp:extent cx="432000" cy="360000"/><a:blip r:embed="choice"/></wp:inline></w:drawing></w:r>' + textRun('B．普通选项'));
+  const q = {id:'test', type:'单选题', stem:'选择正确图形',options:[],optionsDocxXml:[xml],optionsDocxAssets:{choice:'/choice.png'},contentImages:['/stem.png','/choice.png','/choice.png'],source:''};
+  const html = renderToStaticMarkup(createElement(QuestionBody,{question:q,number:1}));
+  assert.equal((html.match(/<img /g)||[]).length,2);
+  assert.match(html,/width:12mm;max-width:100%;height:auto/);
+  assert.match(html,/docx-web-option-label">A\./);
+  assert.match(html,/docx-web-option-label">B\./);
+  assert.deepEqual(questionImages(q),['/stem.png']);
+  assert.deepEqual(questionImages({...q,stemDocxAssets:{same:'/choice.png'}}),['/stem.png','/choice.png'],'an image also used by the stem is not lost');
+  assert.deepEqual(questionImages({...q,optionsDocxXml:undefined}),['/stem.png','/choice.png'],'without raw options, supplementary images stay visible');
+});

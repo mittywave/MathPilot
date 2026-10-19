@@ -10,13 +10,13 @@ export function QuestionBody({ question, number, figureAlt = "题目配图" }: {
   return <div className={`question-presentation ${images.length ? `with-images layout-${imageLayout}${compactConclusion ? " compact-conclusion" : ""}` : ""}`}>
     <div className="question-copy">
       <div className="stem"><b className="question-number">{number}.</b><div className="stem-body">{question.source && <span className="question-source">（{question.source}）</span>}<DocxContent xml={question.stemDocxXml} fallback={question.stem} stripLeadingQuestionNumber /></div></div>
-      {!!question.options.length && !optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
+      {!optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} assets={question.optionsDocxAssets} />}
     </div>
     {!!images.length && <div className={`question-images ${images.length > 1 ? "multiple" : ""} ${figureWidth ? "source-width" : ""}`} style={figureWidth ? { width: `${figureWidth * 100}%` } : undefined}>{images.map((image, imageIndex) =>
       // eslint-disable-next-line @next/next/no-img-element
       <img className="question-diagram" src={image} alt={`${figureAlt} ${imageIndex + 1}`} key={`${question.id}-image-${imageIndex}`} />
     )}</div>}
-    {!!question.options.length && optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} />}
+    {optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} assets={question.optionsDocxAssets} />}
     {question.optionsImage && <img className="question-options-figure" src={question.optionsImage} alt={`${figureAlt}（选项）`} />}
   </div>;
 }
