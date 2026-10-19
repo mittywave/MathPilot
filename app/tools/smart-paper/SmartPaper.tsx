@@ -1,5 +1,5 @@
 "use client";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SiteHeader } from "../../components/SiteHeader";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
@@ -23,6 +23,48 @@ function SmartIcon({ name }: { name: "spark" }) {
     spark: <><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.2l-1.8-5.6-5.7-1.8L10.2 9Z" /><path d="M18.5 3.5v3M17 5h3M5.5 17v3M4 18.5h3" /></>,
   } as const;
   return <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
+
+// Keep each question's rationale on its existing focus tag. A native popover escapes the scrolling plan's clipping.
+function FocusReason({ focus, reason }: { focus: string; reason: string }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
+  const tip = useRef<HTMLSpanElement>(null);
+  const id = useId();
+  useLayoutEffect(() => {
+    if (!open || !anchor.current || !tip.current) return;
+    const panel = tip.current;
+    const bounds = anchor.current.getBoundingClientRect();
+    const below = window.innerHeight - bounds.bottom - 16;
+    const above = bounds.top - 16;
+    panel.style.maxHeight = `${Math.max(80, Math.min(360, Math.max(below, above)))}px`;
+    panel.showPopover();
+    const size = panel.getBoundingClientRect();
+    panel.style.left = `${Math.max(16, Math.min(bounds.left, window.innerWidth - size.width - 16))}px`;
+    panel.style.top = `${below >= size.height || below >= above ? bounds.bottom - 1 : Math.max(16, bounds.top - size.height + 1)}px`;
+    const dismiss = (event: Event) => {
+      if (event.type === "scroll" && panel.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    return () => {
+      panel.hidePopover();
+      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+    };
+  }, [open]);
+
+  if (!reason) return focus ? <em>{focus}</em> : null;
+  const label = focus || (reason.startsWith("针对历史错因") ? "针对历史错因" : reason.startsWith("一般巩固") ? "一般巩固" : "选题说明");
+  return <div className="smart-paper-reason" ref={anchor} onMouseEnter={() => setOpen(true)}
+    onMouseLeave={(event) => { if (!event.currentTarget.contains(document.activeElement)) setOpen(false); }}
+    onFocus={() => setOpen(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !event.currentTarget.matches(":hover")) setOpen(false); }}>
+    <button type="button" className="smart-paper-focus" aria-label={`${label}，查看选题说明`} aria-describedby={open ? id : undefined} onClick={() => setOpen(true)}>{label}</button>
+    {open && <span ref={tip} id={id} className="smart-paper-reason-detail" role="tooltip" popover="auto" onToggle={(event) => { if (event.newState === "closed") setOpen(false); }}>
+      {reason.split(/(《[^》]+》第[^：]+题（第\d+次上传）：)/u).map((part, index) => index % 2 ? part : <MathText key={index} text={part} />)}
+    </span>}
+  </div>;
 }
 
 export default function SmartPaper() {
@@ -242,8 +284,7 @@ export default function SmartPaper() {
               <div className="smart-paper-meta">
                 {question?.code && <span>ID {question.code}</span>}
                 {question && <span>繁度 {questionComplexity(question.stem)}</span>}
-                {item.focus && <em>{item.focus}</em>}
-                <small>{item.reason.split(/(《[^》]+》第[^：]+题（第\d+次上传）：)/u).map((part, index) => index % 2 ? part : <MathText key={index} text={part} />)}</small>
+                <FocusReason focus={item.focus} reason={item.reason} />
                 <PaperMoreMenu label={`${group.title}第 ${itemIndex + 1} 题的操作`}>
                   <button type="button" onClick={() => swap(dayIndex, itemIndex)}>换一道</button>
                   <button type="button" disabled={itemIndex === 0} onClick={() => move(dayIndex, itemIndex, -1)}>上移</button>
