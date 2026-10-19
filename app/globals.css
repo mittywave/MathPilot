@@ -84,11 +84,13 @@ nav { display:flex; align-self:stretch; gap:26px; }
 .account-button { min-height:32px; padding:0 8px; border:0; border-radius:calc(8px*var(--radius-scale)); background:transparent; color:var(--muted); font-size:13px; white-space:nowrap; }
 .account-button:hover:not(:disabled) { background:var(--surface-soft); color:var(--ink); }
 .guest-badge { color:var(--muted); font-size:12px; white-space:nowrap; }
-/* 外观入口：单个图标按钮直接切换两种配色；前缀保持 AI 设置等页面中的按钮样式一致。 */
+/* 外观入口：和介绍页顶栏的切换按钮同款（细边圆钮，悬停填满墨色）；浅色显示月亮、深色显示太阳。前缀保持 AI 设置等页面中的按钮样式一致。 */
 .appearance-picker { flex:0 0 auto; }
-.appearance-picker .appearance-toggle { display:grid; place-items:center; width:32px; height:32px; min-height:0; padding:0; border:0; border-radius:calc(8px*var(--radius-scale)); background:transparent; color:var(--muted); }
-.appearance-picker .appearance-toggle:hover { background:var(--surface-soft); color:var(--ink); }
-.appearance-picker .appearance-toggle:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+.appearance-picker .appearance-toggle { display:grid; place-items:center; width:34px; height:34px; min-height:0; padding:0; border:1px solid color-mix(in srgb, var(--ink) 22%, transparent); border-radius:50%; background:transparent; color:var(--ink); }
+.appearance-picker .appearance-toggle:hover { background:var(--ink); color:var(--page); }
+.appearance-picker .appearance-toggle:focus-visible { outline:2px solid var(--ink); outline-offset:4px; }
+.appearance-toggle .theme-sun,html[data-theme="dark"] .appearance-toggle .theme-moon { display:none; }
+html[data-theme="dark"] .appearance-toggle .theme-sun { display:block; }
 .topbar a:focus-visible,.topbar button:focus-visible,.site-trail a:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
 .site-trail { display:flex; align-items:center; gap:20px; min-height:48px; padding:0 32px; border-bottom:1px solid var(--line); background:var(--page); font-size:13px; }
 .site-trail>nav { display:flex; flex:1; align-items:center; min-width:0; }

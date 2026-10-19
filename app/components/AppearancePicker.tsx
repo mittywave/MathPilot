@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { type AppearanceId, readAppearance, saveAppearance } from "../../lib/appearance";
+import { MoonIcon, SunIcon } from "./ThemeIcons";
 
-// 顶栏外观按钮：直接在经典浅色和科技风之间切换。
+// 顶栏外观按钮：直接在浅色和深色之间切换，样子和介绍页顶栏的切换按钮一样。
+// 两个图标都渲染，由 html[data-theme] 决定显示哪个，首屏脚本设好基调后图标就对，不会先闪一下月亮。
 export function AppearancePicker({ label, locale = "zh" }: { label: string; locale?: "zh" | "en" }) {
   const [current, setCurrent] = useState<AppearanceId>("light");
 
@@ -22,7 +24,7 @@ export function AppearancePicker({ label, locale = "zh" }: { label: string; loca
 
   return <div className="appearance-picker">
     <button type="button" className="appearance-toggle" aria-label={label} title={title} aria-pressed={current === "tech"} onClick={toggle}>
-      <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M10 3a7 7 0 0 1 0 14Z" fill="currentColor" /></svg>
+      <MoonIcon className="theme-moon" /><SunIcon className="theme-sun" />
     </button>
   </div>;
 }
