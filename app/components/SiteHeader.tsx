@@ -108,8 +108,8 @@ export function SiteHeader({ active, user, loading = false, locale = "zh", baske
   };
   const link = (href: string, label: ReactNode, current = false) => <a className={`nav-item ${current ? "active" : ""}`} href={href} aria-current={current ? "page" : undefined}>{label}</a>;
   return <><header className="topbar">
-    {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation keeps beforeunload protection; the home page switches in place. */}
-    <a className="brand" href="/" onClick={(event) => { if (onSelect) { event.preventDefault(); onSelect("library"); } }}><BrandWordmark /></a>
+    {/* Native navigation keeps beforeunload protection. */}
+    <a className="brand" href="/intro" title={locale === "en" ? "Back to introduction" : "返回产品介绍"}><BrandWordmark /></a>
     <nav ref={navigation} className="library-entries" aria-label="题库入口">
       {entry("library", "/", <>{copy.navPublic}{importingCount > 0 && <i title={`${importingCount} 个文件导入正在识别`} aria-label={`${importingCount} 个文件导入正在识别`}>{importingCount}</i>}</>)}
       {user && <>{entry("basket", "/?view=selected", <>{copy.navBasket}{basketCount ? <i>{basketCount}</i> : null}</>)}{link("/tools/handouts", copy.navHandouts, active === "handouts")}{link("/knowledge-graph", copy.navKnowledge)}</>}
