@@ -477,23 +477,51 @@ export async function createScopedCategory(raw: Category, user: AuthUser) {
   return category;
 }
 
-export async function reorderScopedCategories(ids: string[], user: AuthUser) {
+export async function moveScopedCategory(id: string, parentId: string, beforeId: string | null, user: AuthUser) {
   const context = await resolveLibraryContext(user); requireWritable(context);
   const db = appEnv().DB;
   const version = versionWhere(context.publicationId);
   const bindings = [context.libraryId, ...versionBindings(context.publicationId)];
-  const rows = (await db.prepare(`SELECT source_id, module_source_id, COALESCE(parent_source_id, module_source_id) AS parent_id
-    FROM library_categories_v2 WHERE library_id = ? AND ${version}`).bind(...bindings).all<{ source_id: string; module_source_id: string; parent_id: string }>()).results;
-  const first = rows.find(row => row.source_id === ids[0]);
-  const siblings = first ? rows.filter(row => row.module_source_id === first.module_source_id && row.parent_id === first.parent_id) : [];
-  const allowed = new Set(siblings.map(row => row.source_id));
-  if (!ids.length || ids.length !== siblings.length || new Set(ids).size !== ids.length || ids.some(id => !allowed.has(id))) {
-    throw new Response(JSON.stringify({ error: "请提供同一父分类下完整的知识点顺序" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  const rows = (await db.prepare(`SELECT source_id, name, module_source_id, COALESCE(parent_source_id, module_source_id) AS parent_id
+    FROM library_categories_v2 WHERE library_id = ? AND ${version}
+    ORDER BY sort_order, created_at, source_id`).bind(...bindings).all<{ source_id: string; name: string; module_source_id: string; parent_id: string }>()).results;
+  const source = rows.find(row => row.source_id === id);
+  if (!source) throw new Response(JSON.stringify({ error: "知识点不存在" }), { status: 404, headers: { "Content-Type": "application/json" } });
+  const moduleId = source.module_source_id;
+  if (parentId !== moduleId && !rows.some(row => row.source_id === parentId && row.module_source_id === moduleId)) {
+    throw new Response(JSON.stringify({ error: "请选择当前模块内的目标分类" }), { status: 400, headers: { "Content-Type": "application/json" } });
   }
-  // Normalize sibling ranks, including older rows with tied positions; keep their hierarchy intact.
-  await db.batch(ids.map((id, index) => db.prepare(`UPDATE library_categories_v2 SET sort_order = ?
-    WHERE library_id = ? AND ${version} AND source_id = ?`)
-    .bind(index, ...bindings, id)));
+  const descendants = new Set([id]);
+  for (let size = -1; size !== descendants.size;) {
+    size = descendants.size;
+    for (const row of rows) if (descendants.has(row.parent_id)) descendants.add(row.source_id);
+  }
+  if (descendants.has(parentId)) throw new Response(JSON.stringify({ error: "不能移入自身或自己的子分类" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  const destination = rows.filter(row => row.module_source_id === moduleId && row.parent_id === parentId && row.source_id !== id).map(row => row.source_id);
+  const index = beforeId === null ? destination.length : destination.indexOf(beforeId);
+  if (index < 0) throw new Response(JSON.stringify({ error: "目标位置已改变，请刷新后重试" }), { status: 409, headers: { "Content-Type": "application/json" } });
+  destination.splice(index, 0, id);
+  const positions = destination.map((sourceId, rank) => ({ id: sourceId, rank }));
+  if (source.parent_id !== parentId) positions.push(...rows.filter(row => row.module_source_id === moduleId && row.parent_id === source.parent_id && row.source_id !== id).map((row, rank) => ({ id: row.source_id, rank })));
+  const ranks = JSON.stringify(positions);
+  const hash = await sha256Text(JSON.stringify({ name: source.name, moduleId, parentId }));
+  // One statement changes parent and ranks together. Recheck the subtree at write time:
+  // concurrent A -> B and B -> A moves must never create a cycle.
+  const result = await db.prepare(`WITH RECURSIVE subtree(id) AS (
+      SELECT source_id FROM library_categories_v2 WHERE library_id = ? AND ${version} AND source_id = ?
+      UNION SELECT child.source_id FROM library_categories_v2 AS child JOIN subtree ON child.parent_source_id = subtree.id
+        WHERE child.library_id = ? AND child.${version}
+    ) UPDATE library_categories_v2 SET
+      parent_source_id = CASE WHEN source_id = ? THEN ? ELSE parent_source_id END,
+      content_hash = CASE WHEN source_id = ? THEN ? ELSE content_hash END,
+      sort_order = (SELECT CAST(json_extract(value, '$.rank') AS INTEGER) FROM json_each(?) WHERE json_extract(value, '$.id') = library_categories_v2.source_id)
+    WHERE library_id = ? AND ${version} AND module_source_id = ?
+      AND source_id IN (SELECT json_extract(value, '$.id') FROM json_each(?))
+      AND NOT EXISTS (SELECT 1 FROM subtree WHERE id = ?)
+      AND (? = ? OR EXISTS (SELECT 1 FROM library_categories_v2 AS parent WHERE parent.library_id = ? AND parent.${version} AND parent.source_id = ? AND parent.module_source_id = ?))`)
+    .bind(...bindings, id, ...bindings, id, parentId, id, hash, ranks, ...bindings, moduleId, ranks, parentId,
+      parentId, moduleId, ...bindings, parentId, moduleId).run();
+  if (!result.meta.changes) throw new Response(JSON.stringify({ error: "目录已改变，无法移入这个位置，请重试" }), { status: 409, headers: { "Content-Type": "application/json" } });
 }
 
 export async function categoryInsertStatement(category: Category, user: AuthUser, context: LibraryContext, sortOrder: number, ignoreExisting = false) {

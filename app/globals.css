@@ -493,15 +493,15 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .library-management-grid .manage-list span { min-width:0; }
 .library-management-grid .manage-list button { flex-shrink:0; margin-left:auto; padding-left:12px; }
 .library-module,.tree-category { position:relative; border-radius:calc(8px*var(--radius-scale)); }
-.library-module[draggable="true"] .module-root,.tree-category[draggable="true"]>.tree-branch-row>.tree-row,.library-management-grid .manage-list>div[draggable="true"] { cursor:grab; }
-.library-module[draggable="true"] .module-root:active,.tree-category[draggable="true"]>.tree-branch-row>.tree-row:active,.library-management-grid .manage-list>div[draggable="true"]:active { cursor:grabbing; }
-.library-module[data-dragging],.tree-category[data-dragging],.library-management-grid [data-dragging] { opacity:.45; }
+.library-module[data-directory-draggable] .module-root,.tree-category[data-directory-draggable]>.tree-branch-row>.tree-row,.library-management-grid .manage-list>div[data-directory-draggable] { cursor:grab; }
+.library-module[data-directory-draggable] .module-root:active,.tree-category[data-directory-draggable]>.tree-branch-row>.tree-row:active,.library-management-grid .manage-list>div[data-directory-draggable]:active { cursor:grabbing; }
+.library-module[data-dragging],.tree-category[data-dragging],.library-management-grid [data-dragging] { opacity:.32; }
 .library-module[data-drop-position="before"],.tree-category[data-drop-position="before"],.library-management-grid [data-drop-position="before"] { box-shadow:inset 0 3px var(--green); }
 .library-module[data-drop-position="after"],.tree-category[data-drop-position="after"],.library-management-grid [data-drop-position="after"] { box-shadow:inset 0 -3px var(--green); }
 .module-manage-list { display:grid; gap:8px; max-height:55vh; overflow:auto; }
 .module-manage-list>div { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-height:58px; padding:9px 11px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); }
-.module-manage-list>div[draggable="true"] { cursor:grab; }
-.module-manage-list>div[draggable="true"]:active { cursor:grabbing; }
+.module-manage-list>div[data-directory-draggable] { cursor:grab; }
+.module-manage-list>div[data-directory-draggable]:active { cursor:grabbing; }
 .module-manage-list b,.copy-empty b { font-size:12px; }
 .module-manage-list small { overflow:hidden; color:var(--muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .module-manage-list>div>div { display:flex; align-items:center; gap:4px; }
@@ -510,6 +510,12 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .module-manage-list>div[data-active] { border-color:var(--green); background:var(--green-soft); }
 .module-manage-list button.danger-text { color:color-mix(in srgb, var(--danger) 78%, var(--line)); }
 .module-manage-list button:disabled,.danger-button:disabled { opacity:.4; cursor:not-allowed; }
+.tree-category[data-drop-position="inside"]>.tree-branch-row>.tree-row,.library-module[data-drop-position="inside"] .module-root,.library-management-grid [data-drop-position="inside"] { background:var(--green-soft); outline:2px solid var(--green); outline-offset:-2px; }
+.directory-drag-active,.directory-drag-active * { cursor:grabbing!important; user-select:none!important; }
+.directory-drag-preview { position:fixed; z-index:1000; top:0; left:0; width:max-content; max-width:270px; display:grid; gap:5px; padding:11px 15px; border:1px solid color-mix(in srgb,var(--green) 45%,var(--line)); border-radius:10px; background:color-mix(in srgb,var(--surface) 94%,transparent); color:var(--ink); box-shadow:0 12px 32px #0003; backdrop-filter:blur(12px); pointer-events:none; will-change:transform; }
+.directory-drag-preview strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:600; }
+.directory-drag-preview span { color:var(--green); font-size:12px; }
+.directory-drag-preview[data-invalid] span { color:var(--muted); }
 .modal-backdrop-raised { z-index:60; }
 .copy-modal { width:min(520px,100%); }
 .copy-empty { min-height:210px; display:grid; place-content:center; justify-items:center; text-align:center; }

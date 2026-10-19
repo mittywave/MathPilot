@@ -186,28 +186,49 @@ test("one shared library: every teacher reads and edits it, only administrators 
     const order = (await jsonRequest(base, "/api/library", { cookie: two })).payload.modules.map((item) => item.id).filter((id) => id !== tempId);
     assert.equal((await jsonRequest(base, "/api/modules", { cookie: two, method: "POST", body: { order: [tempId, ...order] } })).response.status, 200);
 
-    // Sorting a knowledge branch changes only sibling order, never ownership or hierarchy.
-    for (const [id, parentId] of [["shared-peer", moduleId], ["shared-peer-two", moduleId], ["shared-child-a", "shared-category"], ["shared-child-b", "shared-category"], ["shared-grandchild", "shared-child-a"]]) {
+    // A move can reorder siblings or reparent a whole branch without changing questions.
+    for (const [id, parentId] of [["shared-peer", moduleId], ["shared-peer-two", moduleId], ["shared-child-a", "shared-category"], ["shared-child-b", "shared-category"], ["shared-grandchild", "shared-child-a"], ["race-a", moduleId], ["race-b", moduleId]]) {
       assert.equal((await jsonRequest(base, "/api/categories", { cookie: one, method: "POST", body: { category: { id, name: id, moduleId, parentId, createdAt: 1 } } })).response.status, 201);
     }
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: question("branch-question", moduleId, "shared-grandchild", "子分类里的题目") } })).response.status, 201);
     const beforeSort = await jsonRequest(base, "/api/library", { cookie: one });
-    const roots = ["shared-peer", "shared-peer-two", "shared-category"];
-    assert.equal((await jsonRequest(base, "/api/categories", { method: "POST", body: { order: roots } })).response.status, 401);
-    assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: roots } })).response.status, 200, "another teacher can order shared categories");
-    // Old/imported categories can have tied ranks; the requested order must still persist.
+    const move = (id, parentId, beforeId = null, cookie = two) => jsonRequest(base, "/api/categories", { cookie, method: "POST", body: { move: { id, parentId, beforeId } } });
+    assert.equal((await move("shared-peer", moduleId, "shared-category", "")).response.status, 401);
+    assert.equal((await move("shared-peer", moduleId, "shared-category")).response.status, 200, "another teacher can move shared categories");
     command(["d1", "execute", "DB", "--local", "--persist-to", state, "--config", join(ROOT, "wrangler.jsonc"), "--command", "UPDATE library_categories_v2 SET sort_order=0 WHERE source_id IN ('shared-child-a','shared-child-b')"]);
-    const children = ["shared-child-b", "shared-child-a"];
-    assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: children } })).response.status, 200);
+    assert.equal((await move("shared-child-b", "shared-category", "shared-child-a")).response.status, 200, "tied legacy ranks can still be ordered");
     const sorted = await jsonRequest(base, "/api/library", { cookie: one });
-    assert.deepEqual(sorted.payload.categories.filter(item => item.moduleId === moduleId && item.parentId === moduleId).map(item => item.id), roots);
-    assert.deepEqual(sorted.payload.categories.filter(item => item.parentId === "shared-category").map(item => item.id), children);
-    assert.deepEqual([...sorted.payload.categories].sort((a, b) => a.id.localeCompare(b.id)), [...beforeSort.payload.categories].sort((a, b) => a.id.localeCompare(b.id)), "all category identities and parents remain unchanged");
-    assert.deepEqual(sorted.payload.questions, beforeSort.payload.questions, "questions keep their categories and IDs");
-    assert.notEqual(sorted.response.headers.get("etag"), beforeSort.response.headers.get("etag"), "a refresh must observe the new order");
-    for (const invalid of [[], ["shared-child-a"], ["shared-child-a", "shared-child-a"], ["shared-child-a", "missing"], ["shared-child-a", "shared-peer"], ["shared-child-a", "temp-category"]]) {
-      assert.equal((await jsonRequest(base, "/api/categories", { cookie: two, method: "POST", body: { order: invalid } })).response.status, 400, `reject incomplete or unrelated siblings: ${invalid}`);
+    assert.deepEqual(sorted.payload.categories.filter(item => item.moduleId === moduleId && item.parentId === moduleId).map(item => item.id), ["shared-peer", "shared-category", "shared-peer-two", "race-a", "race-b"]);
+    assert.deepEqual(sorted.payload.categories.filter(item => item.parentId === "shared-category").map(item => item.id), ["shared-child-b", "shared-child-a"]);
+    assert.deepEqual([...sorted.payload.categories].sort((a, b) => a.id.localeCompare(b.id)), [...beforeSort.payload.categories].sort((a, b) => a.id.localeCompare(b.id)));
+    assert.notEqual(sorted.response.headers.get("etag"), beforeSort.response.headers.get("etag"));
+
+    assert.equal((await move("shared-child-a", "shared-peer")).response.status, 200, "move a parent with its descendants into a different category");
+    const reparented = (await jsonRequest(base, "/api/library", { cookie: one })).payload;
+    assert.equal(reparented.categories.find(item => item.id === "shared-child-a").parentId, "shared-peer");
+    assert.equal(reparented.categories.find(item => item.id === "shared-grandchild").parentId, "shared-child-a");
+    assert.deepEqual(reparented.questions, beforeSort.payload.questions, "every question, image, ID and category reference stays intact");
+    for (const [id, parentId, beforeId, status] of [
+      ["shared-peer", "shared-peer", null, 400], ["shared-peer", "shared-grandchild", null, 400],
+      ["shared-child-b", "missing", null, 400], ["shared-child-b", tempId, null, 400],
+      ["shared-child-b", "temp-category", null, 400], ["missing", moduleId, null, 404],
+      ["shared-child-b", "shared-peer", "missing", 409], ["shared-child-b", "shared-peer", "temp-category", 409],
+    ]) assert.equal((await move(id, parentId, beforeId)).response.status, status);
+    assert.deepEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.categories, reparented.categories, "invalid moves never partially change the directory");
+    assert.equal((await move("shared-child-a", moduleId, "shared-category")).response.status, 200, "a branch can return to the module root");
+    const detached = (await jsonRequest(base, "/api/library", { cookie: one })).payload;
+    assert.equal(detached.categories.find(item => item.id === "shared-child-a").parentId, moduleId);
+    assert.equal(detached.categories.find(item => item.id === "shared-grandchild").parentId, "shared-child-a");
+
+    const competing = await Promise.all([move("race-a", "race-b"), move("race-b", "race-a")]);
+    assert.equal(competing.filter(result => result.response.status === 200).length, 1, "only one of two mutually cyclic concurrent moves can commit");
+    assert.ok(competing.every(result => [200, 400, 409].includes(result.response.status)));
+    const raced = (await jsonRequest(base, "/api/library", { cookie: one })).payload;
+    for (const node of raced.categories) {
+      const ancestors = new Set([node.id]); let parent = raced.categories.find(item => item.id === node.parentId);
+      while (parent) { assert.equal(ancestors.has(parent.id), false, "the directory has no cycles"); ancestors.add(parent.id); parent = raced.categories.find(item => item.id === parent.parentId); }
     }
-    assert.deepEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.categories, sorted.payload.categories, "invalid orders must leave every category unchanged");
+    assert.deepEqual(raced.questions, beforeSort.payload.questions);
 
     // Deleting is reserved for administrators.
     assert.equal((await jsonRequest(base, "/api/questions/shared-question", { cookie: two, method: "DELETE" })).response.status, 403);
@@ -229,7 +250,7 @@ test("one shared library: every teacher reads and edits it, only administrators 
     const deletedModule = await jsonRequest(base, `/api/modules/${tempId}`, { cookie: admin, method: "DELETE", body: { confirmation: "待删模块" } });
     assert.deepEqual({ questions: deletedModule.payload.questionCount, categories: deletedModule.payload.categoryCount }, { questions: 1, categories: 1 });
     const after = await jsonRequest(base, "/api/library", { cookie: one });
-    assert.deepEqual(after.payload.questions.map((item) => item.id), ["shared-question"]);
+    assert.deepEqual(after.payload.questions.map((item) => item.id).sort(), ["branch-question", "shared-question"]);
     assert.deepEqual(after.payload.modules.map((item) => item.sortOrder), after.payload.modules.map((_, index) => index), "module order closes the gap");
 
     // Handouts are shared the same way.
