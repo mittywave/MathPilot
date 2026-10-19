@@ -79,10 +79,10 @@ function categoryKnowledge(index: KnowledgeGraphIndex, categories: Category[]) {
   return known;
 }
 
-// 题库 · 右栏: the published 知识图谱 beside the questions. The question the pointer rests on, or else the category picked
+// 题库 · 右栏: the published 知识图谱 beside the questions. The question clicked, or else the category picked
 // in the tree, opens its chain (prerequisites below, what it unlocks above); the tree lights the categories it belongs to.
-function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse }: {
-  focus: KnowledgeMapFocus; moduleId: string; categories: Category[]; onLight: (light: TreeLight | null) => void; onCollapse: () => void;
+function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse, onReset }: {
+  focus: KnowledgeMapFocus; moduleId: string; categories: Category[]; onLight: (light: TreeLight | null) => void; onCollapse: () => void; onReset: () => void;
 }) {
   const shellRef = useRef<HTMLElement>(null);
   const [graph, setGraph] = useState<PublishedKnowledgeGraph | null>(null);
@@ -177,9 +177,10 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse 
 
   const pickKey = useCallback((key: string) => setPicked({ focus: focusId, key }), [focusId]);
   const pick = useCallback((position: number) => {
-    const key = position >= 0 ? view?.keys[position] ?? "" : "";
+    if (position < 0) { setPicked(null); onReset(); return; }
+    const key = view?.keys[position];
     if (key) pickKey(key);
-  }, [pickKey, view]);
+  }, [onReset, pickKey, view]);
 
   const describe = useCallback((position: number): CloudTip | null => {
     const key = view?.keys[position]; const node = key ? index?.nodeByKey.get(key) : null;
@@ -210,7 +211,7 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse 
 
   const badge = focus.kind === "question" ? focus.question.code ? `ID ${focus.question.code}` : `第 ${focus.number} 题` : focus.id === moduleId ? "" : focus.name;
   const note = !index ? "" : domain ? `${focus.kind === "question" ? "这道题只标到领域" : "对应领域"}「${domain.label}」`
-    : keys.length ? "" : focus.kind === "question" ? "这道题还没有知识点标签" : focus.id === moduleId ? "鼠标停在题目上，或点左侧分类，图谱会转到对应的知识模块" : `「${focus.name}」没有对应的知识模块`;
+    : keys.length ? "" : focus.kind === "question" ? "这道题还没有知识点标签" : focus.id === moduleId ? "点击题目或左侧分类查看知识链，点击图谱空白处返回全景" : `「${focus.name}」没有对应的知识模块`;
 
   return <aside ref={shellRef} className="kgl-shell" aria-label="知识图谱">
     {view && highlight && <GraphCloud model={view.model} highlight={highlight} chain={cloudChain} spin={!cloudChain} palette={site.cloud} command={command} shellRef={shellRef}
@@ -236,7 +237,7 @@ function LibraryKnowledgeMap({ focus, moduleId, categories, onLight, onCollapse 
   </aside>;
 }
 
-// The library page re-renders on every keystroke and pointer rest; the graph only follows its own inputs.
+// The library page re-renders on every keystroke and selection; the graph only follows its own inputs.
 export default memo(LibraryKnowledgeMap);
 
 function PanelIcon({ open }: { open: boolean }) {
