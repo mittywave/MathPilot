@@ -32,7 +32,7 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 .mp-intro > section, .mp-intro > footer { position:relative; z-index:1; }
 .mp-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
-/* 01 功能: one screen of the app's screens streaming round a curved row; the ∞ becomes its rails */
+/* 02 功能: the app's screens streaming round a curved row */
 .mp-showcase { height:100svh; min-height:680px; border-top:1px solid var(--line); }
 .mp-row { height:100%; }
 .mp-row .mp-head { position:relative; margin:0; padding:clamp(64px,10svh,120px) clamp(20px,3.2vw,48px) 0; }
@@ -45,24 +45,23 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 .mp-section em, .mp-showcase em, .mp-closing em { font-family:var(--serif); font-style:normal; font-weight:400; color:var(--acc); }
 .mp-lead { max-width:620px; margin:24px 0 0; font-size:17px; line-height:1.8; color:var(--soft); text-wrap:balance; }
 
-.mp-loop { position:relative; max-width:1240px; margin:0 auto; aspect-ratio:1200 / 620; }
-.mp-loop svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
-.mp-loop-glyph { font-family:var(--serif); font-size:120px; fill:currentColor; opacity:.07; text-anchor:middle; dominant-baseline:central; }
-/* --ribbon: how much of the metal ∞ lies on the drawn line (set while the sculpture follows the page) */
-.mp-loop-line { fill:none; stroke:currentColor; stroke-width:1.2; opacity:calc(.5 * (1 - var(--ribbon, 0))); }
-.mp-loop-leader { stroke:currentColor; stroke-width:1; stroke-dasharray:3 5; opacity:.45; }
-.mp-loop-node { fill:var(--bg); stroke:currentColor; stroke-width:1.4; }
-.mp-loop-cross, .mp-loop-runner { fill:var(--acc); }
-.mp-steps { margin:0; padding:0; list-style:none; }
-.mp-step { position:absolute; display:flex; flex-direction:column; gap:4px; width:16%; }
-.mp-step.is-above { align-items:center; text-align:center; transform:translate(-50%, calc(-100% - 22px)); }
-.mp-step.is-below { align-items:center; text-align:center; transform:translate(-50%, 22px); }
-.mp-step.is-left { align-items:flex-end; text-align:right; transform:translate(calc(-100% - 26px), -50%); }
-.mp-step.is-right { align-items:flex-start; text-align:left; transform:translate(26px, -50%); }
-.mp-step.is-center { align-items:center; width:20%; text-align:center; transform:translate(-50%, 0); }
-.mp-step-no { font-family:var(--serif); font-size:14px; color:var(--acc); }
-.mp-step strong { font-size:20px; font-weight:600; letter-spacing:.02em; }
-.mp-step-text { font-size:13.5px; line-height:1.65; color:var(--soft); text-wrap:balance; }
+/* 01 闭环: the seven steps on a wheel (app/components/WorksWheel.tsx) that the page's scroll turns, one step at the front
+   after another, until they close into a ring round 教与学; --wheel-open is 1 on the drum and 0 in the ring. */
+.mp-wheel { border-top:1px solid var(--line); color:var(--fg); }
+/* the kicker at the top left, the lead at the bottom left, clear of the ring */
+.mp-wheel-head { position:absolute; inset:clamp(64px,10svh,120px) auto clamp(48px,8svh,96px) clamp(20px,3.2vw,48px); display:flex; flex-direction:column; justify-content:space-between; pointer-events:none; }
+.mp-wheel-head .mp-kicker { margin:0; }
+.mp-wheel-head .mp-lead { max-width:340px; margin:0; font-size:16px; opacity:calc(1 - var(--wheel-open, 0)); }
+.mp-wheel .works-wheel-label { font-weight:500; letter-spacing:.06em; }
+.mp-wheel .works-wheel-title { font-weight:500; letter-spacing:.02em; }
+.mp-wheel .works-wheel-text { margin:.9em 0 0; line-height:1.8; color:var(--soft); text-wrap:balance; }
+.mp-wheel .works-wheel-index { letter-spacing:.06em; }
+/* a step's card: its name set large in the ∞'s metal (the stops FormulaSand gives the formulas) */
+.mp-step-face { position:absolute; inset:0; display:grid; place-items:center; container-type:size; border:1px solid var(--line); border-radius:inherit; background:color-mix(in srgb, var(--fg) 3%, var(--bg)); }
+.mp-step-face-no { position:absolute; top:9cqh; left:7cqw; font-family:var(--serif); font-size:8cqh; color:var(--acc); }
+.mp-step-face-name { padding-left:.06em; font-family:var(--serif); font-size:36cqh; line-height:1; letter-spacing:.06em; color:transparent;
+  background:linear-gradient(180deg, #6A655C 0%, #989183 30%, #BDB7A9 46%, #8C8579 62%, #5E5950 100%); -webkit-background-clip:text; background-clip:text; }
+.mp-intro[data-mode="dark"] .mp-step-face-name { background-image:linear-gradient(180deg, #A39E94 0%, #D6D3CA 30%, #F4F2ED 46%, #BAB6AA 62%, #8C877D 100%); }
 
 .mp-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:clamp(40px,4vw,64px) clamp(24px,3vw,56px); margin:0; padding:0; list-style:none; }
 .mp-cell { padding-top:22px; border-top:1px solid var(--line); }
@@ -163,7 +162,6 @@ html:has(.mp-intro[data-entering]) { overflow:hidden; }
 @media (prefers-reduced-motion:reduce) {
   html:has(.mp-intro) { scroll-behavior:auto; }
   .mp-intro[data-reveal="on"] .mp-reveal { opacity:1; transform:none; transition:none; }
-  .mp-loop-runner { display:none; }
   .mp-veil, .mp-login-card, .mp-login-card > * { animation-duration:.01s; animation-delay:0s; }
   .mp-formulas { transition:none; }
 }

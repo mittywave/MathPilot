@@ -10,10 +10,11 @@
  *
  * Taken from 21st.dev as published, with local changes: `brand` accepts a node (the MathPilot
  * wordmark), `onThemeChange` lets the rest of the page follow the theme switch, and `scrollForms`
- * keeps the sculpture on screen while the page scrolls, bent into other shapes along its ribbon,
- * down to the frame of the login window. The engine is exported for the formulas behind that
- * window, a picture of many pieces that each drift on their own. The sun/moon icons of the theme
- * switch live in ThemeIcons, shared with the workbench's toggle.
+ * places the sculpture on a layer fixed behind the page as the page scrolls, and bends it along
+ * its ribbon into the frame of a window (the login window, the workbench's frame). The engine is
+ * exported for the formulas behind that window, a picture of many pieces that each drift on their
+ * own, and rests while the sculpture is out of sight. The sun/moon icons of the theme switch live
+ * in ThemeIcons, shared with the workbench's toggle.
  */
 
 import * as React from "react"
@@ -32,14 +33,12 @@ const MAX_PIECES = 32
 // points in the table that lays the window's frame out (reachTable)
 const REACH = 256
 
-/** A shape the sculpture can take, in viewport px. "image" is the picture itself, its pieces moved if given. The others
- *  bend the material along the sculpture's centre line (`ribbon`): a thin lemniscate; two rails on the cylinder of a
- *  curved row, where the ∞ opens at its crossing and its upper arcs become the top rail, its lower arcs the bottom one;
- *  or the frame of a window, opened the same way (upper arcs along the top, lower arcs along the bottom, the tips at the
- *  sides), with `fill` of the grains settled inside it as dust. */
+/** A shape the sculpture can take, in viewport px. "image" is the picture itself, its pieces moved if given. "window"
+ *  bends the material along the sculpture's centre line (`ribbon`) into the frame of a window: the ∞ opens at its
+ *  crossing, its upper arcs run along the top, its lower arcs along the bottom and the tips meet at the sides, with
+ *  `fill` of the grains settled inside it as dust. */
 export type SculptureShape =
   | { kind: "image"; rect: Rect; pieces?: SculpturePiece[] }
-  | { kind: "lemniscate"; cx: number; cy: number; a: number; yScale: number; halfWidth: number }
   | {
       kind: "window"
       rect: Rect
@@ -50,31 +49,16 @@ export type SculptureShape =
       /** share of the grains (0 … 1) spread over the inside */
       fill: number
     }
-  | {
-      kind: "rails"
-      /** the row's centre x and axis y, the cylinder radius, and the camera distance in radii */
-      cx: number
-      axis: number
-      radius: number
-      camera: number
-      /** each rail's offset from the axis (the top one negative) and half width, and how far round (radians) they reach */
-      top: number
-      bottom: number
-      halfWidth: number
-      edge: number
-      /** the rails fade out over `fade` px inside left … right */
-      left: number
-      right: number
-      fade: number
-    }
 
-/** The sculpture between two shapes: `mix` 0 is `from`, 1 is `to`. `moving` keeps the animation running. */
+/** The sculpture between two shapes: `mix` 0 is `from`, 1 is `to`. `moving` keeps the animation running; `away` says
+ *  the shape is out of sight, and the engine rests until the page moves or the pointer stirs again. */
 export interface SculptureMorph {
   from: SculptureShape
   to: SculptureShape
   mix: number
   alpha?: number
   moving?: boolean
+  away?: boolean
 }
 
 /** The sculpture's centre line in its image, t ∈ [0, 2π) in image px, and how far the ribbon reaches either side. */
@@ -162,8 +146,8 @@ float energyAt(vec2 rectPx, vec2 mouse, float radius, float presence, float wake
 
 /* Shapes: where a grain sits in shape A and in shape B, and how far it has travelled between them. Every grain knows
    its place along the centre line (uRib: t, its offset in half ribbon widths, how much material it stands for), so each
-   shape keeps the strands in order. Kinds: 0 the picture (its pieces moved by uPieceAt), 1 a thin lemniscate, 2 the
-   rails of a curved row, 3 the frame of a window (laid out by the reach table in uRib's last row). */
+   shape keeps the strands in order. Kinds: 0 the picture (its pieces moved by uPieceAt), 1 the frame of a window (laid
+   out by the reach table in uRib's last row). */
 const SHAPES = `
 uniform sampler2D uRib;
 uniform int uPieces;
@@ -173,17 +157,14 @@ uniform int uKindA;
 uniform int uKindB;
 uniform vec4 uA0;
 uniform vec4 uA1;
-uniform vec4 uA2;
 uniform vec4 uB0;
 uniform vec4 uB1;
-uniform vec4 uB2;
 uniform float uMix;
 uniform float uStagger;
 uniform float uSwirl;
 uniform float uCirculate;
 const float PI = 3.14159265;
-vec2 lemni(float t, vec4 p){ float s = sin(t), c = cos(t), d = 1.0 + s*s; return p.xy + p.z*vec2(c/d, p.w*s*c/d); }
-// loose fibres and dust, beyond the ribbon's edge, are drawn in close to the thin shapes
+// loose fibres and dust, beyond the ribbon's edge, are drawn in close to the frame's line
 float tighten(float n){ float a = abs(n); return a <= 1.0 ? n : sign(n)*(1.0 + (a - 1.0)*0.3); }
 // how far the piece of the picture a grain belongs to has moved
 vec2 pieceAt(vec2 uv){
@@ -195,64 +176,39 @@ vec2 pieceAt(vec2 uv){
   return vec2(0.0);
 }
 // xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
-vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec4 p2, vec2 uv, vec4 rib){
+vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec2 uv, vec4 rib){
   if(kind == 0) return vec4(p0.xy + uv*p0.zw + pieceAt(uv), 1.0, 1.0);
   float t = rib.x;
   float n = tighten(rib.y);
-  if(kind == 3){
-    vec2 hs = p0.zw*0.5;
-    // a share of the grains, picked at random, settles inside as dust
-    if(hash(uv*vec2(613.7, 287.3)) < p1.w){
-      vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
-      return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
-    }
-    // the rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
-    // of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
-    // grains that lie before this one, from the reach table
-    float u = mod(t + PI*0.5, 2.0*PI) - PI*0.5;
-    float quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
-    float reach = quarter < 0.5 ? u/(PI*0.5) + 1.0 : quarter < 1.5 ? 1.0 - u/(PI*0.5) : quarter < 2.5 ? u/(PI*0.5) - 1.0 : 3.0 - u/(PI*0.5);
-    float x = clamp(reach, 0.0, 1.0)*${REACH - 1}.0;
-    int row = textureSize(uRib, 0).y - 1, k = int(x);
-    vec4 pick = vec4(equal(vec4(quarter), vec4(0.0, 1.0, 2.0, 3.0)));
-    float l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
-    // where two quarters meet their strands lie differently across the band, so there it is spread evenly instead
-    float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
-    n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
-    float R = min(p1.x, min(hs.x, hs.y));
-    float a = hs.x - R, b = PI*0.5*R, h = hs.y - R;
-    float s = l*(a + b + h);
-    vec2 pt; vec2 nm;
-    if(s < a){ pt = vec2(s, -hs.y); nm = vec2(0.0, -1.0); }
-    else if(s < a + b){ float ph = (s - a)/max(R, 0.001); nm = vec2(sin(ph), -cos(ph)); pt = vec2(a, -h) + nm*R; }
-    else { pt = vec2(hs.x, -h + (s - a - b)); nm = vec2(1.0, 0.0); }
-    // quarters 0 and 1 are the right lobe, 0 and 2 its upper arcs
-    vec2 side = vec2(quarter < 1.5 ? 1.0 : -1.0, mod(quarter, 2.0) < 0.5 ? 1.0 : -1.0);
-    return vec4(p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side, 1.0, 1.0);
+  vec2 hs = p0.zw*0.5;
+  // a share of the grains, picked at random, settles inside as dust
+  if(hash(uv*vec2(613.7, 287.3)) < p1.w){
+    vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
+    return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
   }
-  if(kind == 1){
-    vec2 tg = lemni(t + 0.002, p0) - lemni(t - 0.002, p0);
-    float c = cos(t);
-    return vec4(lemni(t, p0) + normalize(vec2(-tg.y, tg.x))*n*p1.x*(0.4 + 0.6*c*c), 1.0, rib.z);
-  }
-  // rails: u runs over the four arcs; xi is the place along a rail, -1 at the left end, 0 where the crossing opened
+  // the rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
+  // of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
+  // grains that lie before this one, from the reach table
   float u = mod(t + PI*0.5, 2.0*PI) - PI*0.5;
-  float xi; float dir; float top;
-  if(u < 0.0){ xi = u/(PI*0.5) + 1.0; dir = 1.0; top = 1.0; }
-  else if(u < PI*0.5){ xi = 1.0 - u/(PI*0.5); dir = -1.0; top = 0.0; }
-  else if(u < PI){ xi = (PI*0.5 - u)/(PI*0.5); dir = -1.0; top = 1.0; }
-  else { xi = (u - PI)/(PI*0.5) - 1.0; dir = 1.0; top = 0.0; }
-  // the two halves of a rail reach a little past the middle into each other, so no seam shows where they meet
-  float th = (xi*1.012 - 0.012*sign(xi))*p1.w;
-  float k = p0.w - 1.0 + cos(th);
-  float s = p0.w/k;
-  float ds = p0.w*sin(th)/(k*k);
-  float y = top > 0.5 ? p1.x : p1.y;
-  vec2 pos = vec2(p0.x + p0.z*sin(th)*s, p0.y + y*s);
-  vec2 tg = vec2(p0.z*(cos(th)*s + sin(th)*ds), y*ds)*dir;
-  pos += normalize(vec2(-tg.y, tg.x))*n*p1.z*s;
-  float a = smoothstep(p2.x, p2.x + p2.z, pos.x)*(1.0 - smoothstep(p2.y - p2.z, p2.y, pos.x));
-  return vec4(pos, a, rib.z);
+  float quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
+  float reach = quarter < 0.5 ? u/(PI*0.5) + 1.0 : quarter < 1.5 ? 1.0 - u/(PI*0.5) : quarter < 2.5 ? u/(PI*0.5) - 1.0 : 3.0 - u/(PI*0.5);
+  float x = clamp(reach, 0.0, 1.0)*${REACH - 1}.0;
+  int row = textureSize(uRib, 0).y - 1, k = int(x);
+  vec4 pick = vec4(equal(vec4(quarter), vec4(0.0, 1.0, 2.0, 3.0)));
+  float l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
+  // where two quarters meet their strands lie differently across the band, so there it is spread evenly instead
+  float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
+  n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
+  float R = min(p1.x, min(hs.x, hs.y));
+  float a = hs.x - R, b = PI*0.5*R, h = hs.y - R;
+  float s = l*(a + b + h);
+  vec2 pt; vec2 nm;
+  if(s < a){ pt = vec2(s, -hs.y); nm = vec2(0.0, -1.0); }
+  else if(s < a + b){ float ph = (s - a)/max(R, 0.001); nm = vec2(sin(ph), -cos(ph)); pt = vec2(a, -h) + nm*R; }
+  else { pt = vec2(hs.x, -h + (s - a - b)); nm = vec2(1.0, 0.0); }
+  // quarters 0 and 1 are the right lobe, 0 and 2 its upper arcs
+  vec2 side = vec2(quarter < 1.5 ? 1.0 : -1.0, mod(quarter, 2.0) < 0.5 ? 1.0 : -1.0);
+  return vec4(p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side, 1.0, 1.0);
 }
 // the lobe tips lead and the crossing follows; grains next to each other keep together, so the ribbon stays a ribbon
 float travel(float t, float sd){
@@ -261,8 +217,8 @@ float travel(float t, float sd){
   return e*e*e*(e*(e*6.0 - 15.0) + 10.0);
 }
 vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
-  vec4 a = shapeAt(uKindA, uA0, uA1, uA2, hm.xy, rib);
-  vec4 b = shapeAt(uKindB, uB0, uB1, uB2, hm.xy, rib);
+  vec4 a = shapeAt(uKindA, uA0, uA1, hm.xy, rib);
+  vec4 b = shapeAt(uKindB, uB0, uB1, hm.xy, rib);
   // Short, overlapping journeys along the ribbon: each grain fades before wrapping back to its start.
   // Keeping the journeys local preserves the photographed strands and the crossing's two directions.
   float phase = fract(hm.z + uTime*0.28);
@@ -679,7 +635,7 @@ function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, i
   return out
 }
 
-/** The window's frame lays each quarter of the centre line (the arcs the rails use, crossing to tip) out evenly by
+/** The window's frame lays each quarter of the centre line (an arc of the ∞, crossing to tip) out evenly by
  *  count. How far along its quarter a grain lies follows from its t alone, so this table over that reach (0 at the
  *  crossing, 1 at the tip) holds the share of the quarter's grains that lie before, one channel per quarter, at REACH
  *  points. */
@@ -755,6 +711,7 @@ export class LiquidEngine {
   private alphaMode = false
   private imgBg: [number, number, number] = [0.918, 0.914, 0.906]
   private flowing = 0
+  private away = false
 
   private aspect = 2.5
   private rect: Rect = { x: 0, y: 0, w: 1, h: 1 }
@@ -1118,13 +1075,9 @@ export class LiquidEngine {
     return this.shape
   }
 
-  // grains are as big as the shape's own grid: the picture's, finer on the thin shapes
+  // grains are as big as the shape's own grid: the picture's, finer along a frame's line
   private dotFor(s: SculptureShape) {
-    const span =
-      s.kind === "image" ? s.rect.w
-      : s.kind === "lemniscate" ? s.a * 2.1
-      : s.kind === "window" ? (s.rect.w + s.rect.h) * 0.9
-      : (s.right - s.left) * 0.85
+    const span = s.kind === "image" ? s.rect.w : (s.rect.w + s.rect.h) * 0.9
     return (span / this.gridW) * 1.45 * clamp(this.opts.dotSize, 0.2, 3)
   }
 
@@ -1132,27 +1085,11 @@ export class LiquidEngine {
     const gl = this.gl
     const rm = this.opts.reducedMotion
     for (const [slot, s] of [["A", m.from], ["B", m.to]] as const) {
-      let kind = 0
-      let p0 = [0, 0, 0, 0], p1 = [0, 0, 0, 0], p2 = [0, 0, 0, 0]
-      if (s.kind === "image") p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
-      else if (s.kind === "lemniscate") {
-        kind = 1
-        p0 = [s.cx, s.cy, s.a, s.yScale]
-        p1 = [s.halfWidth, 0, 0, 0]
-      } else if (s.kind === "window") {
-        kind = 3
-        p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
-        p1 = [s.radius, s.halfWidth, s.outset, clamp(s.fill, 0, 1)]
-      } else {
-        kind = 2
-        p0 = [s.cx, s.axis, s.radius, s.camera]
-        p1 = [s.top, s.bottom, s.halfWidth, s.edge]
-        p2 = [s.left, s.right, s.fade, 0]
-      }
-      gl.uniform1i(P.u["uKind" + slot], kind)
+      const p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
+      const p1 = s.kind === "window" ? [s.radius, s.halfWidth, s.outset, clamp(s.fill, 0, 1)] : [0, 0, 0, 0]
+      gl.uniform1i(P.u["uKind" + slot], s.kind === "window" ? 1 : 0)
       gl.uniform4fv(P.u[`u${slot}0`], p0)
       gl.uniform4fv(P.u[`u${slot}1`], p1)
-      gl.uniform4fv(P.u[`u${slot}2`], p2)
     }
     // one picture's pieces at a time: a drifting picture stays itself, it only ever changes into the other shapes
     const pieces = (m.from.kind === "image" && m.from.pieces) || (m.to.kind === "image" && m.to.pieces) || []
@@ -1170,7 +1107,7 @@ export class LiquidEngine {
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
     gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
-    // Fade circulation away while the image bends into rails or the thin loop; their original morph stays intact.
+    // Fade circulation away while the image bends into a frame; the morph itself stays intact.
     const image = Math.max(m.from.kind === "image" ? 1 - smooth(0, 0.04, m.mix) : 0, m.to.kind === "image" ? smooth(0.96, 1, m.mix) : 0)
     gl.uniform1f(P.u.uCirculate, this.ribbon && this.opts.ambient && !rm ? image * clamp(this.opts.ambientIntensity, 0, 2) : 0)
   }
@@ -1226,7 +1163,17 @@ export class LiquidEngine {
     this.flowing += (this.presenceTarget - this.flowing) * (1 - Math.pow(1 - fk, dt))
     if (this.flowing < 0.002 && this.presenceTarget === 0) this.flowing = 0
     if (this.introT < 1) this.introT = Math.min(1, this.introT + Math.min(rawMs, 100) / 3200)
-    const moving = !!this.readMorph(dt).moving
+    const morph = this.readMorph(dt)
+    // out of sight: drawn once where it now is (off the screen), then the engine rests until the page moves or the
+    // pointer stirs again, each of which asks for one frame like this one
+    if (morph.away) {
+      if (!this.away) this.draw()
+      this.away = true
+      this.stop()
+      return
+    }
+    this.away = false
+    const moving = !!morph.moving
 
     const interacting = this.presence > 0.001 || this.burst > 0
     // settle is counted in simulated frames, so slow devices never snap mid-return
