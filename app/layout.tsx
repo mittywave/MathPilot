@@ -11,6 +11,27 @@ export const metadata: Metadata = {
   icons: { icon: [{ url: "/favicon.svg?v=infinity", type: "image/svg+xml" }], shortcut: "/favicon.svg?v=infinity" },
 };
 
+// Arriving from the product page's 进入工作台 (?from=intro, the 题库's entrance marker), the page joins the view
+// transition the product page opted into, so the workbench fades in where the ∞'s sand lay. While that runs <html>
+// carries data-entering, and "mp-entered" says when it is over (the 题库 holds its entrance till then).
+const entranceScript = `(() => {
+  if (new URLSearchParams(location.search).get("from") !== "intro") return;
+  const optIn = document.createElement("style");
+  optIn.textContent = "@view-transition{navigation:auto}";
+  document.head.append(optIn);
+  addEventListener("pagereveal", (event) => {
+    const transition = event.viewTransition;
+    if (!transition) return optIn.remove();
+    const root = document.documentElement;
+    root.dataset.entering = "";
+    transition.finished.finally(() => {
+      optIn.remove();
+      delete root.dataset.entering;
+      dispatchEvent(new Event("mp-entered"));
+    });
+  }, { once: true });
+})();`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: appearanceBootstrapScript }} /></head><body>{children}<DialogEscape /></body></html>;
+  return <html lang="zh-CN" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: appearanceBootstrapScript + entranceScript }} /></head><body>{children}<DialogEscape /></body></html>;
 }

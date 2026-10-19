@@ -4,7 +4,7 @@
    --green 沿用旧名，表示主强调色；--accent-strong 是实心按钮底色，配 --on-accent 文字；--inverse 是始终深色的浮条（组卷条、提示）。 */
 /* 两套基调都取自介绍页（app/(home)/intro.css）：浅色是暖石灰底 + 墨绿，深色是炭黑底 + 灰绿；实心按钮像介绍页的“进入工作台”，浅色用墨黑、深色用米白。
    语义色（成功/警告/错误…）降低饱和度，和石灰、炭黑底放在一起不跳。 */
-:root { color-scheme:light; --radius-scale:1; --topbar-h:56px;
+:root { color-scheme:light; --radius-scale:1; --topbar-h:56px; --directory-rail:56px; --kgl-rail:44px; /* 题库收起的两条窄栏，介绍页进入工作台的沙线也落在这里 */
   --page:#ebe9e5; --surface:#f7f6f3; --surface-soft:#e3e1dc; --ink:#151514; --muted:#63625d; --line:#d9d6d0;
   --green:#3e5e4c; --green-soft:#dfe6e0; --accent-strong:#1b1b1a; --on-accent:#f1efea; --inverse:#1b1b1a; --on-inverse:#f1efea; --shadow-tint:#151514;
   --success:#3f7a57; --success-soft:#e1e9e2; --warn:#b0802f; --warn-soft:#f2e9d6; --warn-strong:#84601f; --danger:#a3503b; --danger-soft:#f2e2db; --danger-strong:#a8392d; --danger-fill:#9e4a36; --on-fill:#fff;
@@ -471,6 +471,12 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 @media (prefers-reduced-motion:no-preference) {
   html,body,.topbar,.sidebar,.question-card,.modal,.appearance-toggle { transition:background-color .2s ease,color .2s ease,border-color .2s ease; }
 }
+/* 从介绍页进入工作台（app/layout.tsx 开启的跨页视图过渡）：∞ 停成的沙线和沙尘淡去，工作台在同一位置淡入，像沙凝成实线 */
+::view-transition-old(root) { animation:.45s ease both view-fade-out; }
+::view-transition-new(root) { animation:.45s ease both view-fade-in; }
+@keyframes view-fade-out { to { opacity:0; } }
+@keyframes view-fade-in { from { opacity:0; } }
+@media (prefers-reduced-motion:reduce) { ::view-transition-old(root),::view-transition-new(root) { animation:none; } }
 .publication-progress>i { width:120px; height:4px; overflow:hidden; border-radius:calc(4px*var(--radius-scale)); background:var(--surface-soft); }
 .publication-progress>i>em { display:block; height:100%; border-radius:calc(4px*var(--radius-scale)); background:var(--green); transition:width .2s ease; }
 .publication-progress.failed { color:var(--danger); }
@@ -1259,7 +1265,7 @@ html[data-style="cute"] body { background-image:radial-gradient(circle at 50% -1
 .library-content .question-card{position:relative}
 /* 题库 · 右栏知识图谱: a third column, folded to a thin rail on demand; the selection dock centres on the questions. */
 /* The column glides between the rail and the panel width; the dock slides along with it. */
-body:has(.kgl-dock){--kgl-full:clamp(360px,27vw,480px);--kgl-col:44px;--kgl-ease:cubic-bezier(.32,.72,0,1);--kgl-ms:.48s}
+body:has(.kgl-dock){--kgl-full:clamp(360px,27vw,480px);--kgl-col:var(--kgl-rail);--kgl-ease:cubic-bezier(.32,.72,0,1);--kgl-ms:.48s}
 body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 .workspace:has(>.kgl-dock){grid-template-columns:260px minmax(0,1fr) auto}
 .library-content .question-card.active{outline:2px solid color-mix(in srgb,var(--green) 40%,transparent);outline-offset:2px}
@@ -1295,7 +1301,7 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 /* Keep the directory mounted at its full width: only its rail contracts, so labels never squash and scroll is retained. */
 @media(min-width:851px){
   .app-shell:has(>.library-workspace){--directory-full:260px;--directory-col:var(--directory-full);--directory-ease:cubic-bezier(.22,.8,.22,1);--directory-ms:.6s}
-  .app-shell:has(>.directory-closed){--directory-col:56px}
+  .app-shell:has(>.directory-closed){--directory-col:var(--directory-rail)}
   .workspace.library-workspace{grid-template-columns:auto minmax(0,1fr)}
   .workspace.library-workspace:has(>.kgl-dock){grid-template-columns:auto minmax(0,1fr) auto}
   .library-sidebar{width:var(--directory-col);min-width:0;padding:0;overflow:clip;isolation:isolate}

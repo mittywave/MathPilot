@@ -438,9 +438,10 @@ export default function Home() {
     if (showSelected || showWrongBook) { introEntrancePending.current = false; return; }
     if (libraryLoading) return;
     // Paint the questions between two folded rails before opening them together. This entrance is transient:
-    // it does not overwrite either saved preference, and a manual toggle takes over immediately.
+    // it does not overwrite either saved preference, and a manual toggle takes over immediately. While the page is
+    // still fading in over the product page's sand (app/layout.tsx), the rails wait for that to finish.
     let timer = 0;
-    const frame = window.requestAnimationFrame(() => {
+    const unfold = () => {
       timer = window.setTimeout(() => {
         if (!introEntrancePending.current) return;
         introEntrancePending.current = false;
@@ -449,8 +450,12 @@ export default function Home() {
         setMapMounted(true);
         setMapOpen(true);
       }, 200);
+    };
+    const frame = window.requestAnimationFrame(() => {
+      if (document.documentElement.hasAttribute("data-entering")) window.addEventListener("mp-entered", unfold, { once: true });
+      else unfold();
     });
-    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); window.removeEventListener("mp-entered", unfold); };
   }, [libraryLoading, showSelected, showWrongBook]);
   const [treeLight, setTreeLight] = useState<TreeLight | null>(null);
   const mapQuestion = showKnowledgeMap && mapMounted && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;

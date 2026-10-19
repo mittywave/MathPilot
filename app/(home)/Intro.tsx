@@ -1,10 +1,11 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import SculptureHero, { type Rect, type SculptureMorph, type SculptureShape } from "../components/LiquidSculptureHero";
 import TiltedGridHero, { arc, CAMERA, MAX_WIDTH } from "../components/TiltedGridHero";
 import { BrandWordmark } from "../components/SiteHeader";
 import { LoginForm } from "../components/LoginForm";
 import { fetchMe, loginPath } from "../../lib/api-client";
+import { saveAppearance } from "../../lib/appearance";
 import FormulaSand from "./FormulaSand";
 import "./intro.css";
 
@@ -95,19 +96,42 @@ const SCATTER_MS = 1300;
 // the window's frame of sand, round the outside of its glass (.mp-login-card has the same corner radius)
 const FRAME = { radius: 26, halfWidth: 3.5, outset: 7, fill: 0.3 };
 type Gather = { from: number; to: number; start: number };
-// how far the ∞ has gathered into the window (0 … 1); a move starts on the first frame drawn after it was asked for
-const gatheredAt = (g: Gather, now: number) => {
+// how far the ∞ has gathered (0 … 1), taking `ms` there and SCATTER_MS back; a move starts on the first frame drawn
+// after it was asked for
+const gatheredAt = (g: Gather, now: number, ms = GATHER_MS) => {
   if (g.start < 0) return g.from;
-  const t = Math.min(1, (now - g.start) / (g.to > g.from ? GATHER_MS : SCATTER_MS));
+  const t = Math.min(1, (now - g.start) / (g.to > g.from ? ms : SCATTER_MS));
   return g.from + (g.to - g.from) * t * t * (3 - 2 * t);
 };
 // 进入工作台 opens the library with its entrance (both side panels unfold once); a guest from here gets it too
 const WORKBENCH = "/library?from=intro";
+// On the way into the workbench the ∞ opens into its frame: the upper arcs along the top bar's rule and down the two
+// folded rails the 题库 opens with, the lower arcs pouring off the bottom of the screen, a few grains left as
+// dust where the questions will be. The workbench then fades in over the sand (a view transition across the two pages,
+// opted into by app/layout.tsx), its lines where the sand lay. The page is left a little before the sand settles,
+// which hides the time the next one takes to arrive.
+const ENTER_MS = 1000;
+const ENTER_LEAD_MS = 100;
+const GATE = { radius: 0, halfWidth: 2.5, outset: 0, fill: 0.06 };
+// the frame's insets from the top and the sides of the screen, in px (negative: just off the screen)
+type Entry = Gather & { top: number; left: number; right: number };
+const OFF_SCREEN = -8;
+const viewTransition = "@view-transition{navigation:auto}";
 // only paths on this site, never back to the login page
 const nextOf = (value?: string | null) =>
   value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") && !value.startsWith("/login") ? value : "/library";
 // the sculpture draws a new frame whenever the page moves
 const redraw = () => window.dispatchEvent(new Event("scroll"));
+// The page wears the site's light/dark setting, the one the workbench's switch keeps (lib/appearance.ts puts it on
+// <html> before the first paint). The server knows nothing of it: the page is rendered light, and right after hydration
+// takes the setting (intro.css keeps it out of sight on a dark setting until then).
+const followTheme = (changed: () => void) => {
+  const observer = new MutationObserver(changed);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => observer.disconnect();
+};
+const themeNow = () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+const themeOnServer = () => null;
 
 const number = (index: number) => String(index + 1).padStart(2, "0");
 
@@ -119,7 +143,8 @@ function Arrow() {
 
 /** The product page; with `login` (where to go once signed in) its login window is open from the start. */
 export default function IntroPage({ login: opened }: { login?: string }) {
-  const [mode, setMode] = useState<"light" | "dark">("light");
+  const mode = useSyncExternalStore(followTheme, themeNow, themeOnServer);
+  const shade = mode ?? "light";
   const root = useRef<HTMLDivElement>(null);
   const row = useRef<HTMLElement>(null);
   const loop = useRef<HTMLDivElement>(null);
@@ -138,6 +163,62 @@ export default function IntroPage({ login: opened }: { login?: string }) {
   const pushed = useRef(false);
   // what had the focus before the window opened, and gets it back afterwards
   const opener = useRef<HTMLElement | null>(null);
+  const signedIn = useRef(false);
+  // the ∞ opening into the workbench's frame, and where the page is going meanwhile
+  const entry = useRef<Entry>({ from: 0, to: 0, start: -1, top: 0, left: 0, right: 0 });
+  const [entering, setEntering] = useState(false);
+  const leaving = useRef<{ href: string; replace: boolean; timer: number; optIn: HTMLStyleElement } | null>(null);
+
+  // asked again (a click while the next page is slow to come, or after the browser stopped it), the page goes again
+  const go = useCallback(() => {
+    const away = leaving.current;
+    if (!away) return;
+    window.clearTimeout(away.timer);
+    if (away.replace) window.location.replace(away.href);
+    else window.location.assign(away.href);
+  }, []);
+  // staying after all (Esc, or back here with the page kept whole by the browser): the sand flows back from the frame
+  // and the page returns
+  const stay = useCallback(() => {
+    const away = leaving.current;
+    if (!away) return;
+    window.clearTimeout(away.timer);
+    away.optIn.remove();
+    leaving.current = null;
+    entry.current = { ...entry.current, from: gatheredAt(entry.current, performance.now(), ENTER_MS), to: 0, start: -1 };
+    setEntering(false);
+    redraw();
+  }, []);
+  // 进入工作台: the sand opens into the workbench's frame, then the page goes. Without the moving sand (no WebGL, or less
+  // motion asked for) it goes at once.
+  const enterWorkbench = useCallback((href: string, { replace = false, member = signedIn.current } = {}) => {
+    if (leaving.current) return go();
+    const page = root.current;
+    if (page?.querySelector<HTMLElement>(".sh-root")?.dataset.gl !== "on" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      if (replace) window.location.replace(href);
+      else window.location.assign(href);
+      return;
+    }
+    const now = performance.now();
+    // the login window's sand stays where it is now; the frame is drawn from there
+    const into = gatheredAt(gather.current, now);
+    gather.current = { from: into, to: into, start: -1 };
+    // the 题库 opens with its rails folded (globals.css): the directory's on the left, and the knowledge map's on the
+    // right for members; other pages, and the 题库 on a narrow screen, only have the top bar's rule
+    const css = getComputedStyle(document.documentElement);
+    const px = (name: string) => parseFloat(css.getPropertyValue(name)) || 0;
+    const rails = new URL(href, window.location.href).pathname === "/library" && window.innerWidth > 850;
+    entry.current = {
+      from: gatheredAt(entry.current, now, ENTER_MS), to: 1, start: -1, top: px("--topbar-h"),
+      left: rails ? px("--directory-rail") : OFF_SCREEN, right: rails && member ? px("--kgl-rail") : OFF_SCREEN,
+    };
+    const optIn = document.createElement("style");
+    optIn.textContent = viewTransition;
+    document.head.append(optIn);
+    leaving.current = { href, replace, optIn, timer: window.setTimeout(go, ENTER_MS - ENTER_LEAD_MS) };
+    setEntering(true);
+    redraw();
+  }, [go]);
 
   const openLogin = useCallback((next: string, push: boolean) => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -151,7 +232,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     redraw();
   }, []);
   const closeLogin = useCallback((fromHistory: boolean) => {
-    if (!shown.current || shown.current.leaving) return;
+    if (!shown.current || shown.current.leaving || leaving.current) return;
     gather.current = { from: gatheredAt(gather.current, performance.now()), to: 0, start: -1 };
     shown.current = { ...shown.current, leaving: true };
     setLogin(shown.current);
@@ -184,17 +265,44 @@ export default function IntroPage({ login: opened }: { login?: string }) {
   useEffect(() => {
     fetchMe().then(({ user }) => {
       if (!user) return;
+      signedIn.current = true;
       setWorkbench(WORKBENCH);
       // signed in already (on this Mac, always): no window, straight on
-      if (shown.current) window.location.replace(shown.current.next);
+      if (shown.current) enterWorkbench(shown.current.next, { replace: true });
     }).catch(() => {});
-  }, []);
+  }, [enterWorkbench]);
+  // On the way into the workbench a click or a key goes at once, and Esc stays.
+  useEffect(() => {
+    if (!entering) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return go();
+      window.stop();
+      stay();
+    };
+    window.addEventListener("pointerdown", go);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", go);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [entering, go, stay]);
+  useEffect(() => {
+    const onShow = (event: PageTransitionEvent) => { if (event.persisted) stay(); };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, [stay]);
   // every 进入工作台 still points at /login, so it works before the page has loaded; here it opens the window in place
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const link = (event.target as Element | null)?.closest?.("a[href]");
       const href = link?.getAttribute("href");
+      // signed in, or a guest from the window: into the 题库
+      if (href?.startsWith("/library")) {
+        event.preventDefault();
+        enterWorkbench(href);
+        return;
+      }
       if (!href?.startsWith("/login")) return;
       event.preventDefault();
       if (!shown.current || shown.current.leaving) openLogin(nextOf(new URL(href, window.location.href).searchParams.get("next")), true);
@@ -213,7 +321,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       window.removeEventListener("popstate", onHistory);
       window.removeEventListener("keydown", onKey);
     };
-  }, [openLogin, closeLogin]);
+  }, [openLogin, closeLogin, enterWorkbench]);
   // Sections rise in as they scroll into view; without script they are simply shown.
   useEffect(() => {
     const page = root.current;
@@ -260,22 +368,32 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     loopLine.current?.style.setProperty("--ribbon", String(leg === 1 ? mix : leg === 2 ? 1 - mix : 0));
     const alpha = 1 - LEGS[leg].dip * Math.sin(Math.PI * mix);
     // the login window: from the shape it has on the page (the scroll stands still meanwhile) into the window's frame
-    const now = performance.now(), g = gather.current;
+    const now = performance.now(), g = gather.current, e = entry.current;
     if (g.start < 0 && g.to !== g.from) g.start = now;
+    if (e.start < 0 && e.to !== e.from) e.start = now;
     const into = gatheredAt(g, now);
     const box = glass.current?.getBoundingClientRect();
+    let form: SculptureMorph = { from: shapes[leg], to: shapes[leg + 1], mix, alpha, moving };
     if (into > 0 && box) {
       const frame: SculptureShape = { kind: "window", rect: { x: box.left, y: box.top, w: box.width, h: box.height }, ...FRAME };
-      return {
+      form = {
         from: mix < 0.5 ? shapes[leg] : shapes[leg + 1], to: frame, mix: into,
         alpha: alpha + (1 - alpha) * into, moving: moving || into !== g.to,
       };
     }
-    return { from: shapes[leg], to: shapes[leg + 1], mix, alpha, moving };
+    // into the workbench: from that shape into its frame, which reaches twice the screen's height below the top bar so
+    // that the lower arcs, laid along its bottom half, pour off the screen
+    const out = gatheredAt(e, now, ENTER_MS);
+    if (out <= 0) return form;
+    const gate: SculptureShape = {
+      kind: "window", rect: { x: e.left, y: e.top, w: view.w - e.left - e.right, h: 2 * (view.h - e.top) }, ...GATE,
+    };
+    const was = form.alpha ?? 1;
+    return { from: form.mix < 0.5 ? form.from : form.to, to: gate, mix: out, alpha: was + (1 - was) * out, moving: form.moving || out !== e.to };
   };
 
-  return <div ref={root} className="mp-intro" data-mode={mode} data-login={login ? (login.leaving ? "out" : "in") : undefined}
-    data-opened={opened !== undefined ? "" : undefined}>
+  return <div ref={root} className="mp-intro" data-mode={mode ?? undefined} data-login={login ? (login.leaving ? "out" : "in") : undefined}
+    data-opened={opened !== undefined ? "" : undefined} data-entering={entering ? "" : undefined}>
     <SculptureHero
       src={picture("light")} darkSrc={picture("dark")}
       mobileSrc={picture("light")} mobileDarkSrc={picture("dark")}
@@ -294,13 +412,14 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       backdropText="教学"
       sculptureScale={0.86}
       ambient
-      // with the window open the cursor only ripples the window's frame, which keeps its shape
-      strength={login ? 0.25 : 1}
+      // with the window open the cursor only ripples the window's frame, which keeps its shape; into the workbench it
+      // leaves the sand alone
+      strength={entering ? 0 : login ? 0.25 : 1}
       scrollForms={scrollForms}
       ribbon={RIBBON}
-      theme={mode}
-      onThemeChange={setMode}
-      accentColor={mode === "dark" ? "#9DBFAA" : "#3E5E4C"}
+      theme={shade}
+      onThemeChange={(next) => saveAppearance(next === "dark" ? "tech" : "light")}
+      accentColor={shade === "dark" ? "#9DBFAA" : "#3E5E4C"}
       headingFont={SANS}
       accentFont={SERIF}
       bodyFont={SANS}
@@ -367,7 +486,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     <section ref={closing} className="mp-closing">
       {/* the sculpture comes to rest here; without WebGL this picture stands in for it */}
       {/* eslint-disable-next-line @next/next/no-img-element -- a stand-in the canvas draws over at the same place */}
-      <img ref={closingArt} className="mp-closing-art" src={picture(mode)} alt="" />
+      <img ref={closingArt} className="mp-closing-art" src={picture(shade)} alt="" />
       <h2 className="mp-reveal">从下一份作业<em>开始。</em></h2>
       <a className="mp-btn" href={workbench}>进入工作台<Arrow /></a>
     </section>
@@ -378,9 +497,10 @@ export default function IntroPage({ login: opened }: { login?: string }) {
 
     {login && <>
       <div className="mp-veil" aria-hidden="true" />
-      <FormulaSand mode={mode} clear={glass} />
+      {mode && <FormulaSand mode={mode} clear={glass} />}
       <div className="mp-login" role="dialog" aria-modal="true" aria-labelledby="mp-login-title" inert={login.leaving}>
-        <LoginForm ref={glass} next={login.next} guest={login.next === WORKBENCH ? WORKBENCH : "/library"} onClose={() => closeLogin(false)} />
+        <LoginForm ref={glass} next={login.next} guest={login.next === WORKBENCH ? WORKBENCH : "/library"} onClose={() => closeLogin(false)}
+          onDone={(next) => enterWorkbench(next, { member: true })} />
       </div>
     </>}
   </div>;
