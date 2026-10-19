@@ -146,6 +146,7 @@ uniform vec4 uB2;
 uniform float uMix;
 uniform float uStagger;
 uniform float uSwirl;
+uniform float uCirculate;
 const float PI = 3.14159265;
 vec2 lemni(float t, vec4 p){ float s = sin(t), c = cos(t), d = 1.0 + s*s; return p.xy + p.z*vec2(c/d, p.w*s*c/d); }
 // loose fibres and dust, beyond the ribbon's edge, are drawn in close to the thin shapes
@@ -188,6 +189,12 @@ float travel(float t, float sd){
 vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
   vec4 a = shapeAt(uKindA, uA0, uA1, uA2, hm.xy, rib);
   vec4 b = shapeAt(uKindB, uB0, uB1, uB2, hm.xy, rib);
+  // Short, overlapping journeys along the ribbon: each grain fades before wrapping back to its start.
+  // Keeping the journeys local preserves the photographed strands and the crossing's two directions.
+  float phase = fract(hm.z + uTime*0.28);
+  vec2 drift = vec2(cos(rib.w), sin(rib.w))*(phase - 0.5)*0.06*uCirculate;
+  if(uKindA == 0) a.xy += drift*uA0.z;
+  if(uKindB == 0) b.xy += drift*uB0.z;
   e = travel(rib.x, hm.z);
   vec2 p = mix(a.xy, b.xy, e);
   // on the way the material billows, like liquid poured from one mould into the next
@@ -359,6 +366,8 @@ void main(){
   float lift = smoothstep(0.35, 2.5, length(st.xy));
   // between two shapes (uMorphVis) every grain is drawn; in the picture only the disturbed ones
   float a = max(max(E, lift), max(max(uRest, 1.0-uIntroVis), uMorphVis))*shown*uAlpha;
+  float phase = fract(hm.z + uTime*0.28);
+  a *= mix(1.0, smoothstep(0.0, 0.15, phase)*(1.0 - smoothstep(0.85, 1.0, phase)), min(uCirculate, 1.0));
   if(a < 0.01 || hm.w <= 0.0){ gl_Position = vec4(2.0,2.0,2.0,1.0); return; }
 
   vec2 base = home + st.xy;
@@ -504,9 +513,8 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string): Prog {
 const TEX_W = 1024
 const SETTLE_FRAMES = 270
 
-/** Where every grain sits along the sculpture's centre line, 4 floats each: t, its offset in half widths of the ribbon
- *  as drawn there, and how big it is drawn in the bent shapes (bigger where the line has few grains, as where two of
- *  its passes share the grains of their crossing). */
+/** Where every grain sits along the sculpture's centre line, 4 floats each: t, its offset in half widths of the ribbon,
+ *  its size in bent shapes, and the image-space tangent angle. Bigger grains fill sparse stretches of bent shapes. */
 function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, ih: number, ribbon: SculptureRibbon) {
   const out = new Float32Array(size * 4)
   const M = 1024
@@ -572,6 +580,7 @@ function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, i
     if (Math.abs(off) < 2 * hw[best]) spread[bin[i]].push(Math.abs(off))
     out[i * 4] = u * Math.PI * 2
     out[i * 4 + 1] = off
+    out[i * 4 + 3] = Math.atan2(-nx[best], ny[best])
   }
   // The ribbon as drawn twists and frays, so its real width changes along the line: measure it (the offsets' 85th
   // percentile, for an even spread across the width) and give offsets in that width, so the bent shapes come out as
@@ -1037,6 +1046,9 @@ class LiquidEngine {
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
     gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
+    // Fade circulation away while the image bends into rails or the thin loop; their original morph stays intact.
+    const image = Math.max(m.from.kind === "image" ? 1 - smooth(0, 0.04, m.mix) : 0, m.to.kind === "image" ? smooth(0.96, 1, m.mix) : 0)
+    gl.uniform1f(P.u.uCirculate, this.ribbon && this.opts.ambient && !rm ? image * clamp(this.opts.ambientIntensity, 0, 2) : 0)
   }
 
   private wake() {
@@ -1211,9 +1223,9 @@ class LiquidEngine {
     const alpha = clamp(m.alpha ?? 1, 0, 1)
     const rm = o.reducedMotion
     const introVis = rm || !o.intro ? 1 : Math.pow(this.introT, 2.2)
-    const base = o.ambient && !rm ? clamp(o.ambientIntensity, 0, 2) : 0
+    const base = o.ambient && !rm && !this.ribbon ? clamp(o.ambientIntensity, 0, 2) : 0
     const amb = base + this.flowing * 0.85 * clamp(o.liquid, 0, 2) * (rm ? 0.3 : 1)
-    const rest = o.restStyle === "particles" ? 1 : 0
+    const rest = o.restStyle === "particles" ? 1 : this.ribbon && o.ambient && !rm ? 0.32 * clamp(o.ambientIntensity, 0, 1) : 0
     const [br, bg, bb] = o.bg
     const [ir, ig, ib] = this.imgBg
     const dpr = this.canvas.width / this.cssW

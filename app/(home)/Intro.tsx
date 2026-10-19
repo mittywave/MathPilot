@@ -171,6 +171,7 @@ export default function IntroPage() {
       hintTouch="触碰这道 ∞"
       backdropText="教学"
       sculptureScale={0.86}
+      ambient
       scrollForms={scrollForms}
       ribbon={RIBBON}
       theme={mode}
