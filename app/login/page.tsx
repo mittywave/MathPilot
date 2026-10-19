@@ -33,7 +33,7 @@ export default function LoginPage() {
     <main className="relative w-screen h-screen overflow-hidden bg-[#111110]">
       <SmokeyBackground className="absolute inset-0" />
       <div className="relative z-10 flex items-center justify-center w-full h-full p-4">
-        {next && <LoginForm next={next} guest={LIBRARY} />}
+        {next && <LoginForm next={next} guest={next === "/library?from=intro" ? next : LIBRARY} />}
       </div>
     </main>
   );

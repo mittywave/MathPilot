@@ -102,9 +102,9 @@ export default function IntroPage() {
   const closingArt = useRef<HTMLImageElement>(null);
   const scrolled = useRef(-1);
   // 进入工作台 opens the 题库; whoever is not signed in passes the login page first
-  const [workbench, setWorkbench] = useState(loginPath());
+  const [workbench, setWorkbench] = useState(loginPath("/library?from=intro"));
   useEffect(() => {
-    fetchMe().then(({ user }) => { if (user) setWorkbench("/library"); }).catch(() => {});
+    fetchMe().then(({ user }) => { if (user) setWorkbench("/library?from=intro"); }).catch(() => {});
   }, []);
   // Sections rise in as they scroll into view; without script they are simply shown.
   useEffect(() => {

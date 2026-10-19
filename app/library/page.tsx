@@ -96,7 +96,10 @@ const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index,
 
 export default function Home() {
   // The section a link opens (学生档案, 组卷篮) is drawn from the first paint; the server renders the same address.
-  const initialView = useSearchParams().get("view");
+  const searchParams = useSearchParams();
+  const initialView = searchParams.get("view");
+  const [fromIntro] = useState(searchParams.get("from") === "intro" && !initialView);
+  const introEntrancePending = useRef(fromIntro);
   const [alevelPageLocale, setAlevelPageLocale] = useState<AlevelPageLocale>("zh");
   const [modules, setModules] = useState<LibraryModule[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -146,7 +149,7 @@ export default function Home() {
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLDivElement>(null);
-  const [directoryOpen, setDirectoryOpen] = useState(true);
+  const [directoryOpen, setDirectoryOpen] = useState(!fromIntro);
   const [directoryMotion, setDirectoryMotion] = useState<"opening" | "closing" | null>(null);
   const [showWrongBook, setShowWrongBook] = useState(initialView === "wrong-book");
   const [students, setStudents] = useState<StudentSummary[]>([]);
@@ -210,7 +213,9 @@ export default function Home() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try { setAlevelPageLocale(window.localStorage.getItem(ALEVEL_PAGE_LOCALE_KEY) === "en" ? "en" : "zh"); } catch { /* 本地存储不可用时保持中文默认值 */ }
-      try { setDirectoryOpen(window.localStorage.getItem(LIBRARY_DIRECTORY_KEY) !== "closed"); } catch { /* 本地存储不可用时保持目录展开 */ }
+      if (!fromIntro) {
+        try { setDirectoryOpen(window.localStorage.getItem(LIBRARY_DIRECTORY_KEY) !== "closed"); } catch { /* 本地存储不可用时保持目录展开 */ }
+      }
       const linked = new URLSearchParams(window.location.search).get("tab");
       let remembered: string | null = null;
       try { remembered = window.localStorage.getItem(ARCHIVE_TAB_KEY); } catch { /* 本地存储不可用时打开“作业” */ }
@@ -218,11 +223,12 @@ export default function Home() {
       if (tab) setArchiveTab(tab);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [fromIntro]);
 
   useEffect(() => {
     if (authLoading) return;
     const url = new URL(window.location.href);
+    if (fromIntro) url.searchParams.delete("from");
     if (showWrongBook) {
       url.searchParams.set("view", "wrong-book");
       if (activeClassName !== null) { url.searchParams.set("class", activeClassName); url.searchParams.delete("studentId"); }
@@ -234,7 +240,7 @@ export default function Home() {
       url.searchParams.delete("studentId"); url.searchParams.delete("tab"); url.searchParams.delete("class");
     }
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [authLoading, showWrongBook, activeStudentId, activeClassName, archiveTab, showSelected]);
+  }, [authLoading, fromIntro, showWrongBook, activeStudentId, activeClassName, archiveTab, showSelected]);
 
   function chooseAlevelPageLocale(locale: AlevelPageLocale) {
     setAlevelPageLocale(locale);
@@ -412,11 +418,12 @@ export default function Home() {
   const showKnowledgeMap = Boolean(authUser && activeModule) && !showSelected && !showWrongBook && !isAlevelPage;
   const [mapQuestionId, setMapQuestionId] = useState("");
   // Folded or open is remembered per browser; the panel is only drawn in the browser, so reading it here is safe.
-  const [mapOpen, setMapOpen] = useState(() => { try { return window.localStorage.getItem(KNOWLEDGE_MAP_KEY) !== "closed"; } catch { return true; } });
+  const [mapOpen, setMapOpen] = useState(() => { if (fromIntro) return false; try { return window.localStorage.getItem(KNOWLEDGE_MAP_KEY) !== "closed"; } catch { return true; } });
   // Folding slides the panel out before it leaves, so it stays mounted (frozen on what it showed) until the column has narrowed.
   const [mapMounted, setMapMounted] = useState(mapOpen);
   const mapFoldTimer = useRef(0);
   const chooseMapOpen = useCallback((open: boolean) => {
+    introEntrancePending.current = false;
     setMapOpen(open);
     window.clearTimeout(mapFoldTimer.current);
     if (open) setMapMounted(true);
@@ -425,6 +432,25 @@ export default function Home() {
   }, []);
   const collapseMap = useCallback(() => chooseMapOpen(false), [chooseMapOpen]);
   const expandMap = useCallback(() => chooseMapOpen(true), [chooseMapOpen]);
+  useEffect(() => {
+    if (!introEntrancePending.current) return;
+    if (showSelected || showWrongBook) { introEntrancePending.current = false; return; }
+    if (libraryLoading) return;
+    // Paint the questions between two folded rails before opening them together. This entrance is transient:
+    // it does not overwrite either saved preference, and a manual toggle takes over immediately.
+    let timer = 0;
+    const frame = window.requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        if (!introEntrancePending.current) return;
+        introEntrancePending.current = false;
+        setDirectoryOpen(true);
+        setDirectoryMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? null : "opening");
+        setMapMounted(true);
+        setMapOpen(true);
+      }, 200);
+    });
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timer); };
+  }, [libraryLoading, showSelected, showWrongBook]);
   const [treeLight, setTreeLight] = useState<TreeLight | null>(null);
   const hoverTimer = useRef(0);
   const mapQuestion = showKnowledgeMap && mapMounted && mapQuestionId ? filteredQuestions.find((question) => question.id === mapQuestionId) ?? null : null;
@@ -854,6 +880,7 @@ export default function Home() {
             <div className="student-list">{students.length ? students.map((student) => <button key={student.id} className={`student-card ${activeClassName === null && student.id === activeStudentId ? "active" : ""}`} onClick={() => selectStudent(student.id)}><span>{student.name.slice(0, 1)}</span><div><b><span>{student.name}</span>{studentHomeworkProgress[student.id] && <i className={studentHomeworkProgress[student.id] === "grading" ? "busy" : undefined} title={studentHomeworkProgress[student.id] === "grading" ? "有作业正在批改" : "有尚未完成的布置作业"}>{studentHomeworkProgress[student.id] === "grading" ? "批改中" : "作业中"}</i>}</b><small>{student.className || "独立学生"}</small></div>{student.wrongCount > 0 && <em>错题 {student.wrongCount}</em>}</button>) : !studentsLoading && <div className="student-list-empty"><span>人</span><b>还没有学生档案</b><p>先创建学生，再上传他的已完成作业。</p></div>}</div>
           </> : <>
           <button className="directory-toggle" title={directoryLabel} aria-label={directoryLabel} aria-expanded={directoryOpen} aria-controls="library-directory" onClick={() => {
+            introEntrancePending.current = false;
             const open = !directoryOpen;
             setDirectoryOpen(open);
             setDirectoryMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? null : open ? "opening" : "closing");
