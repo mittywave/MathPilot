@@ -362,7 +362,8 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       eyebrow="MathPilot — 数学教研工作台"
       headline={"教与学，\n循环不息。"}
       headlineAccent="循环不息。"
-      body="题库、讲义、作业批改和学生档案连成一个闭环：每一次批改的结果，都会回到下一次备课里。"
+      // no line beside the headline: the buttons stand on their own (left out, the component shows its sample copy)
+      body=""
       primaryCta={{ label: "进入工作台", href: workbench }}
       secondaryCta={{ label: "看看这个闭环", href: "#loop" }}
       hint="移动鼠标，拨动这道 ∞"
