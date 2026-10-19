@@ -22,7 +22,7 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 /* Hero: Chinese copy needs upright accents and more leading than the Latin original. */
 .mp-intro .sh-h1 { line-height:1.1; letter-spacing:-.01em; }
 .mp-intro .sh-accent { font-style:normal; letter-spacing:0; }
-.mp-intro .sh-body { line-height:1.75; letter-spacing:0; }
+.mp-intro .sh-body { line-height:1.75; letter-spacing:0; text-wrap:balance; }
 .mp-intro .sh-link, .mp-intro .sh-navcta { font-size:14px; letter-spacing:.02em; }
 .mp-intro .sh-backdrop { font-family:var(--serif); font-weight:400; letter-spacing:0; }
 .mp-intro .sh-brand { display:block; transform:translateY(3px); } /* the wordmark's arrow hangs below the letters */

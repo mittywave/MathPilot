@@ -1436,6 +1436,10 @@ export interface SculptureHeroProps {
   secondaryCta?: SculptureHeroLink
   hint?: string
   hintTouch?: string
+  /** The small line at the left end of the bottom rule. */
+  tagline?: string
+  /** The link at the right end of the bottom rule, down to what follows the hero. */
+  scrollCue?: SculptureHeroLink
 
   /** Light-theme background. */
   background?: string
@@ -1455,9 +1459,8 @@ export interface SculptureHeroProps {
   /** Load the default Google Fonts (Geist + Instrument Serif, both OFL). */
   loadFonts?: boolean
 
-  /** 1 = default size for the breakpoint. */
+  /** 1 = the default size beside the copy. */
   sculptureScale?: number
-  mobileSculptureScale?: number
   /** Offset in % of the hero width / height. */
   sculptureX?: number
   sculptureY?: number
@@ -1543,36 +1546,15 @@ const DEFAULTS = {
    Layout
    ──────────────────────────────────────────────────────────────────── */
 
-/** The sculpture sits centred in the band between the nav and the copy,
- *  as wide as the hero (it may bleed off the sides on small screens). */
-function computeRect(
-  w: number,
-  h: number,
-  aspect: number,
-  band: { top: number; bottom: number },
-  p: { scale: number; mobileScale: number; x: number; y: number }
-): Rect {
-  const bandH = Math.max(80, band.bottom - band.top)
-  let rw: number
-  let maxH: number
-  if (w >= 1024) {
-    rw = w * 1.02 * p.scale
-    maxH = bandH * 1.1 * p.scale
-  } else if (w >= 640) {
-    rw = w * 1.3 * p.scale
-    maxH = bandH * 1.15 * p.scale
-  } else if (aspect < 1.3) {
-    // portrait image for phones: fills the width, may tuck under the headline
-    rw = w * 1.0 * p.mobileScale
-    maxH = bandH * 1.0 * p.mobileScale
-  } else {
-    rw = w * 1.9 * p.mobileScale
-    maxH = bandH * 1.2 * p.mobileScale
-  }
+/** The sculpture sits centred in its column beside the copy (above the copy on narrow screens), a little wider than
+ *  the column: the picture's own margins and the stray grains reach past it. */
+function computeRect(w: number, h: number, aspect: number, box: Rect, p: { scale: number; x: number; y: number }): Rect {
+  let rw = box.w * 1.08 * p.scale
+  const maxH = Math.max(80, box.h) * p.scale
   if (rw / aspect > maxH) rw = maxH * aspect
   const rh = rw / aspect
-  const cx = w * (0.5 + p.x / 100)
-  const cy = (band.top + band.bottom) / 2 + h * (p.y / 100)
+  const cx = box.x + box.w / 2 + w * (p.x / 100)
+  const cy = box.y + box.h / 2 + h * (p.y / 100)
   return { x: cx - rw / 2, y: cy - rh / 2, w: rw, h: rh }
 }
 
@@ -1596,7 +1578,7 @@ const CSS = `
 .sh-fixed[data-gl="on"] .sh-canvas{opacity:1}
 .sh-fixed[data-swap="1"] .sh-canvas{opacity:0;transition-duration:.25s}
 .sh-root.sh-follow{z-index:1;background:transparent}
-.sh-backdrop{position:absolute;left:50%;z-index:0;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;user-select:none;
+.sh-backdrop{position:absolute;z-index:0;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;user-select:none;
   font-family:var(--sh-head);font-weight:600;letter-spacing:-.06em;line-height:.8;color:color-mix(in srgb,var(--sh-fg) 5%,transparent)}
 .sh-nav{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:24px;
   padding:26px clamp(20px,3.2cqw,48px) 0}
@@ -1616,34 +1598,41 @@ const CSS = `
 .sh-hint::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;animation:sh-pulse 2.4s ease-in-out infinite}
 .sh-root[data-touched="1"] .sh-hint{opacity:0}
 @keyframes sh-pulse{0%,100%{transform:scale(.6);opacity:.45}50%{transform:scale(1);opacity:1}}
-.sh-spacer{flex:1 1 auto;min-height:0}
-.sh-content{position:relative;z-index:2;display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);align-items:end;
-  gap:clamp(24px,4cqw,72px);padding:0 clamp(20px,3.2cqw,48px) clamp(28px,3.4cqw,52px)}
+.sh-content{position:relative;z-index:2;flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  align-items:center;gap:clamp(24px,4cqw,72px);padding:clamp(16px,3cqh,40px) clamp(20px,3.2cqw,48px)}
+.sh-art{align-self:stretch}
 .sh-eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.62;margin:0 0 clamp(14px,1.6cqw,22px);
   display:flex;align-items:center;gap:12px}
 .sh-eyebrow::before{content:"";width:28px;height:1px;background:currentColor;opacity:.7}
-.sh-h1{font-family:var(--sh-head);font-weight:500;font-size:clamp(40px,min(6.6cqw,11.5cqh),124px);line-height:.92;letter-spacing:-.045em;margin:0;
+.sh-h1{font-family:var(--sh-head);font-weight:500;font-size:clamp(40px,min(5cqw,9cqh),96px);line-height:.92;letter-spacing:-.045em;margin:0;
   text-wrap:balance}
 .sh-h1 .sh-line{display:block}
 .sh-accent{font-family:var(--sh-accent);font-style:italic;font-weight:400;letter-spacing:-.02em;color:var(--sh-acc)}
-.sh-aside{max-width:400px;justify-self:end;padding-bottom:.6em}
-.sh-body{font-size:clamp(15px,1.1cqw,17px);line-height:1.5;letter-spacing:-.01em;margin:0 0 26px;opacity:.78;text-wrap:pretty}
-.sh-ctas{display:flex;flex-wrap:wrap;align-items:center;gap:22px}
+.sh-body{max-width:36em;font-size:clamp(15px,1.1cqw,17px);line-height:1.5;letter-spacing:-.01em;margin:clamp(20px,2.2cqw,32px) 0 0;opacity:.78;
+  text-wrap:pretty}
+.sh-ctas{display:flex;flex-wrap:wrap;align-items:center;gap:22px;margin-top:clamp(24px,2.4cqw,34px)}
 .sh-btn{display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 22px;border-radius:999px;background:var(--sh-fg);
   color:var(--sh-bg);text-decoration:none;font-size:14.5px;font-weight:500;letter-spacing:-.01em;transition:transform .3s cubic-bezier(.2,.7,.2,1),opacity .2s}
 .sh-btn:hover{transform:translateY(-1px)}
-.sh-btn svg,.sh-txt svg{transition:transform .3s cubic-bezier(.2,.7,.2,1)}
-.sh-btn:hover svg,.sh-txt:hover svg{transform:translateX(3px)}
+.sh-btn svg,.sh-txt svg,.sh-scroll svg{transition:transform .3s cubic-bezier(.2,.7,.2,1)}
+.sh-btn:hover svg,.sh-txt:hover svg,.sh-scroll:hover svg{transform:translateX(3px)}
 .sh-txt{display:inline-flex;align-items:center;gap:8px;color:inherit;text-decoration:none;font-size:14.5px;font-weight:500;
   letter-spacing:-.01em;padding:4px 0;border-bottom:1px solid color-mix(in srgb,var(--sh-fg) 30%,transparent)}
 .sh-root a:focus-visible{outline:2px solid var(--sh-fg);outline-offset:4px}
+.sh-foot{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:24px;margin:0 clamp(20px,3.2cqw,48px);
+  padding:clamp(24px,8cqh,80px) 0 clamp(22px,6cqh,60px);border-top:1px solid color-mix(in srgb,var(--sh-fg) 14%,transparent);
+  font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+.sh-tagline{opacity:.55}
+.sh-scroll{display:inline-flex;align-items:center;gap:10px;margin-left:auto;color:inherit;text-decoration:none;opacity:.55;transition:opacity .2s}
+.sh-scroll:hover{opacity:1}
+.sh-scroll svg{rotate:90deg}
 .sh-credit{position:absolute;z-index:2;right:clamp(20px,3.2cqw,48px);bottom:10px;font-size:10px;letter-spacing:.06em;
   color:inherit;opacity:.38;text-decoration:none}
 .sh-credit:hover{opacity:.8}
 @container (max-width:1023px){
-  .sh-content{grid-template-columns:1fr;gap:28px}
-  .sh-aside{justify-self:start;max-width:520px;padding-bottom:0}
-  .sh-h1{font-size:clamp(40px,min(9.5cqw,9cqh),96px)}
+  .sh-content{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto;gap:28px}
+  .sh-art{order:-1}
+  .sh-h1{font-size:clamp(40px,min(7.5cqw,7cqh),80px)}
 }
 @container (max-width:767px){
   .sh-links li:not(.sh-keep){display:none}
@@ -1655,12 +1644,12 @@ const CSS = `
   .sh-eyebrow{font-size:11px}
   .sh-ctas{gap:18px}
   .sh-btn{height:48px}
-  .sh-content{padding-bottom:40px}
+  .sh-foot{font-size:11px}
   .sh-credit{right:auto;left:50%;transform:translateX(-50%)}
 }
 @media (prefers-reduced-motion:reduce){
   .sh-hint::before{animation:none}
-  .sh-canvas,.sh-fallback,.sh-btn,.sh-btn svg,.sh-txt svg{transition:none}
+  .sh-canvas,.sh-fallback,.sh-btn,.sh-btn svg,.sh-txt svg,.sh-scroll svg{transition:none}
 }
 `
 
@@ -1741,6 +1730,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
     secondaryCta = DEFAULTS.secondaryCta,
     hint = DEFAULTS.hint,
     hintTouch = DEFAULTS.hintTouch,
+    tagline,
+    scrollCue,
     background: lightBackground = DEFAULTS.background,
     darkBackground = DEFAULTS.darkBackground,
     theme = "light",
@@ -1753,7 +1744,6 @@ export default function SculptureHero(props: SculptureHeroProps) {
     bodyFont = DEFAULTS.bodyFont,
     loadFonts = true,
     sculptureScale = 1,
-    mobileSculptureScale = 1,
     sculptureX = 0,
     sculptureY = 0,
     interactive = true,
@@ -1790,14 +1780,13 @@ export default function SculptureHero(props: SculptureHeroProps) {
   const ribbonRef = React.useRef(ribbon)
   const imgRef = React.useRef<HTMLImageElement>(null)
   const hintRef = React.useRef<HTMLDivElement>(null)
-  const navRef = React.useRef<HTMLElement>(null)
-  const contentRef = React.useRef<HTMLDivElement>(null)
+  const artRef = React.useRef<HTMLDivElement>(null)
   const backdropRef = React.useRef<HTMLDivElement>(null)
   const engineRef = React.useRef<LiquidEngine | null>(null)
   const aspectRef = React.useRef(1983 / 793)
   const [isTouch, setIsTouch] = React.useState(false)
 
-  const layout = React.useRef({ scale: sculptureScale, mobileScale: mobileSculptureScale, x: sculptureX, y: sculptureY })
+  const layout = React.useRef({ scale: sculptureScale, x: sculptureX, y: sculptureY })
 
   const [mode, setMode] = React.useState<"light" | "dark">(theme)
   // a new theme prop wins over the switch; adjusted during render rather than in an effect
@@ -1850,7 +1839,6 @@ export default function SculptureHero(props: SculptureHeroProps) {
   React.useLayoutEffect(() => {
     layout.current = {
       scale: clamp(sculptureScale, 0.3, 3),
-      mobileScale: clamp(mobileSculptureScale, 0.3, 3),
       x: sculptureX,
       y: sculptureY,
     }
@@ -1865,7 +1853,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
 
   const relayout = React.useCallback(() => {
     const root = rootRef.current
-    if (!root) return
+    const art = artRef.current
+    if (!root || !art) return
     const w = root.clientWidth
     const h = root.clientHeight
     const mob = w < 640
@@ -1873,24 +1862,21 @@ export default function SculptureHero(props: SculptureHeroProps) {
       mobileRef.current = mob
       setIsMobile(mob)
     }
-    const nav = navRef.current
-    const content = contentRef.current
-    const band = {
-      top: nav ? nav.offsetTop + nav.offsetHeight + 8 : 16,
-      bottom: content ? content.offsetTop - 8 : h,
-    }
-    // a portrait sculpture on phones dissolves into the top of the copy
-    if (mob && aspectRef.current < 1.3 && content) band.bottom += content.offsetHeight * 0.3
-    const rect = computeRect(w, h, aspectRef.current, band, layout.current)
+    // the sculpture's column, in the hero's coordinates
+    const b = root.getBoundingClientRect()
+    const a = art.getBoundingClientRect()
+    const box = { x: a.left - b.left, y: a.top - b.top, w: a.width, h: a.height }
+    const rect = computeRect(w, h, aspectRef.current, box, layout.current)
     heroRect.current = rect
     const fixed = fixedRef.current
     const bd = backdropRef.current
     if (bd) {
       const chars = Math.max(1, (bd.textContent || "").length)
-      bd.style.fontSize = Math.min((band.bottom - band.top) * 0.95, (w * 0.92) / (chars * 0.56)) + "px"
-      bd.style.top = (band.top + band.bottom) / 2 + "px"
+      bd.style.fontSize = Math.min(rect.h, (rect.w * 0.92) / (chars * 0.56)) + "px"
+      bd.style.left = rect.x + rect.w / 2 + "px"
+      bd.style.top = rect.y + rect.h / 2 + "px"
       // on the fixed layer the word still scrolls away with the hero
-      if (fixed) bd.style.translate = `0 ${root.getBoundingClientRect().top}px`
+      if (fixed) bd.style.translate = `0 ${b.top}px`
     }
     const img = imgRef.current
     if (img) {
@@ -1903,10 +1889,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
     }
     const hintEl = hintRef.current
     if (hintEl) {
-      // the portrait phone sculpture runs into the copy: no room for the cue there
-      hintEl.style.display = mob && aspectRef.current < 1.3 ? "none" : ""
       hintEl.style.left = clamp(rect.x + rect.w / 2, 80, w - 80) + "px"
-      hintEl.style.top = Math.min(rect.y + rect.h * 0.95, band.bottom - 20) + "px"
+      hintEl.style.top = Math.min(rect.y + rect.h * 0.95, box.y + box.h - 20) + "px"
     }
     if (fixed) engineRef.current?.resize(fixed.clientWidth, fixed.clientHeight, rect)
     else engineRef.current?.resize(w, h, rect)
@@ -1948,9 +1932,8 @@ export default function SculptureHero(props: SculptureHeroProps) {
 
     const ro = new ResizeObserver(() => relayout())
     ro.observe(root)
-    // the band moves when fonts load or the copy reflows
-    if (navRef.current) ro.observe(navRef.current)
-    if (contentRef.current) ro.observe(contentRef.current)
+    // the column moves when fonts load or the copy reflows
+    if (artRef.current) ro.observe(artRef.current)
     // a fixed canvas is always on screen; the hero's own rests while the hero is scrolled away
     const io = fixed
       ? null
@@ -2086,7 +2069,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
 
   React.useLayoutEffect(() => {
     relayout()
-  }, [sculptureScale, mobileSculptureScale, sculptureX, sculptureY, relayout])
+  }, [sculptureScale, sculptureX, sculptureY, relayout])
 
   const vars = {
     "--sh-bg": background,
@@ -2127,7 +2110,7 @@ export default function SculptureHero(props: SculptureHeroProps) {
         <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>{imageAlt}</span>
 
         {showNav && (
-          <nav ref={navRef} className="sh-nav" aria-label="Primary">
+          <nav className="sh-nav" aria-label="Primary">
             <a className="sh-brand" href="#top">
               {brand}
             </a>
@@ -2172,31 +2155,43 @@ export default function SculptureHero(props: SculptureHeroProps) {
           </div>
         ) : null}
 
-        <div className="sh-spacer" />
-
-        <div ref={contentRef} className="sh-content">
+        <div className="sh-content">
           <div>
             {eyebrow ? <p className="sh-eyebrow">{eyebrow}</p> : null}
             <h1 className="sh-h1">{renderHeadline(headline, headlineAccent)}</h1>
-          </div>
-          <div className="sh-aside">
             {body ? <p className="sh-body">{body}</p> : null}
-            <div className="sh-ctas">
-              {primaryCta && primaryCta.label ? (
-                <a className="sh-btn" href={primaryCta.href}>
-                  {primaryCta.label}
-                  <Arrow />
-                </a>
-              ) : null}
-              {secondaryCta && secondaryCta.label ? (
-                <a className="sh-txt" href={secondaryCta.href}>
-                  {secondaryCta.label}
-                  <Arrow />
-                </a>
-              ) : null}
-            </div>
+            {primaryCta?.label || secondaryCta?.label ? (
+              <div className="sh-ctas">
+                {primaryCta?.label ? (
+                  <a className="sh-btn" href={primaryCta.href}>
+                    {primaryCta.label}
+                    <Arrow />
+                  </a>
+                ) : null}
+                {secondaryCta?.label ? (
+                  <a className="sh-txt" href={secondaryCta.href}>
+                    {secondaryCta.label}
+                    <Arrow />
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
           </div>
+          {/* the sculpture's place beside the copy; the canvas draws it there */}
+          <div ref={artRef} className="sh-art" />
         </div>
+
+        {tagline || scrollCue?.label ? (
+          <div className="sh-foot">
+            {tagline ? <span className="sh-tagline">{tagline}</span> : null}
+            {scrollCue?.label ? (
+              <a className="sh-scroll" href={scrollCue.href}>
+                {scrollCue.label}
+                <Arrow />
+              </a>
+            ) : null}
+          </div>
+        ) : null}
 
         {showCredit && (
           <a className="sh-credit" href="https://guglielmogiannattasio.it" target="_blank" rel="noopener noreferrer">

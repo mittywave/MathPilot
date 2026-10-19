@@ -11,8 +11,8 @@ import FormulaSand from "./FormulaSand";
 import "./intro.css";
 
 // MathPilot product page, the site's home. The hero is the liquid particle sculpture, the ∞ of the tab icon (the
-// pictures come from scripts/intro-infinity.html). It stays where the page puts it: it leaves with the hero and is
-// back above the last words. In between, the teaching loop turns as a wheel and the app's screens stream past in a
+// pictures come from scripts/intro-infinity.html), beside the opening words. It stays where the page puts it: it
+// leaves with the hero and is back above the last words. In between, the teaching loop turns as a wheel and the app's screens stream past in a
 // curved row.
 //
 // 进入工作台 without an account stays on this page: the page gives way to the formulas that changed the world, made of
@@ -362,16 +362,16 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       eyebrow="MathPilot — 数学教研工作台"
       headline={"教与学，\n循环不息。"}
       headlineAccent="循环不息。"
-      // nothing beside the headline, no buttons and no credit: the nav and the closing lead on (left out, the component
-      // shows its own sample copy and buttons)
-      body=""
-      primaryCta={{ label: "", href: "" }}
-      secondaryCta={{ label: "", href: "" }}
+      body="为数学教师与教研团队打造的智能工作台，让教学创作、内容管理与 AI 协作自然衔接。"
+      primaryCta={{ label: "进入工作台", href: workbench }}
+      secondaryCta={{ label: "了解功能", href: "#features" }}
+      tagline="Intelligent mathematics workspace"
+      scrollCue={{ label: "Scroll to explore", href: "#loop" }}
+      // left out, the component shows its author's credit
       showCredit={false}
       hint="移动鼠标，拨动这道 ∞"
       hintTouch="触碰这道 ∞"
       backdropText="教学"
-      sculptureScale={0.86}
       ambient
       // with the window open the cursor only ripples the window's frame, which keeps its shape; into the workbench it
       // leaves the sand alone
