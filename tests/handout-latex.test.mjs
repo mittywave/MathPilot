@@ -243,3 +243,20 @@ test("basket sections flow naturally, keep global question anchors/numbers, and 
     }
   }
 });
+
+test("Word picture choices stay with their letters at printed size, without duplicate standalone figures", () => {
+  const choices = ['a','b','c','d'];
+  const q = {...base,id:'pictures',type:'单选题',stem:'选择图形',options:[],
+    optionsDocxXml:[wordParagraph(choices.map((id,i)=>wordText(String.fromCharCode(65+i)+'．')+wordPicture(id,432000,360000)).join('<w:r><w:tab/></w:r>'))],
+    optionsDocxAssets:Object.fromEntries(choices.map(id=>[id,'fig://'+id])),contentImages:choices.map(id=>'fig://'+id)};
+  const build = question => buildHandoutLatex({title:'图片选项',answers:'none',sheet:'练习',questions:[question]},source=>'figures/'+source.slice(6)+'.png');
+  const latex=build(q);
+  assert.match(latex,/\\begin\{handoutchoices\}\{4\}/);
+  for(const [i,id] of choices.entries()){
+    assert.ok(latex.includes(`\\handoutchoice{${String.fromCharCode(65+i)}.}{\\handoutfigure[.45\\textheight]{12.0mm}{figures/${id}.png}}`));
+    assert.equal(latex.split(`figures/${id}.png`).length-1,1);
+  }
+  assert.doesNotMatch(latex,/\\handoutfigures\{/);
+  assert.match(build({...q,optionsDocxXml:[wordParagraph(wordText('A．')+wordPicture('a',1800000,360000)+wordText('B．文字'))]}),/\\begin\{handoutchoices\}\{2\}/,'wide picture choices use two columns');
+  assert.match(build({...q,optionsDocxXml:[wordParagraph(wordText('A．')+wordPicture('a',7200000,360000))]}),/\{150\.0mm\}/,'oversized source pictures fit the printable line');
+});

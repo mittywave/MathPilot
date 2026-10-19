@@ -36,7 +36,7 @@ export async function buildHandoutLatexProject(input: HandoutLatexInput): Promis
   const files: Record<string, Uint8Array> = {};
   const names = new Map<string, string>();
   // Word-imported pictures print where the document had them, so the stem's and (with answers) the analysis's are fetched too.
-  const questionFigures = (question: Question) => [...questionImages(question), ...Object.values(question.stemDocxAssets ?? {}), ...(input.answers === "none" ? [] : Object.values(question.analysisDocxAssets ?? {}))];
+  const questionFigures = (question: Question) => [...questionImages(question), ...Object.values(question.stemDocxAssets ?? {}), ...Object.values(question.optionsDocxAssets ?? {}), ...(input.answers === "none" ? [] : Object.values(question.analysisDocxAssets ?? {}))];
   const figureQuestions = new Map(("questions" in input ? input.questions : input.modules.flatMap((module) => HANDOUT_BANDS.flatMap((band) => module.bands[band])))
     .filter((question) => question.diagramImage).map((question) => [question.diagramImage!, question]));
   const sources = [...new Set("questions" in input ? input.questions.flatMap(questionFigures)

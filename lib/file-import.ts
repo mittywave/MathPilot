@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { docxInferredQuestionType, docxPrintedQuestionId, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
+import { docxInferredQuestionType, docxNumberedQuestion, docxPrintedQuestionId, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, splitDocxOptionBlocks } from "./docx-import-rules.mjs";
 import { docxMathLatex } from "./docx-web-content";
 import { markDocxUnderline } from "./question-presentation-rules.mjs";
 import type { QuestionType } from "./types";
@@ -165,9 +165,9 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentQuestion = null; continue; }
     if (index > 0 && block.text === blocks[0]?.text) continue;
     if (currentQuestion?.heading && block.kind === "p" && docxTitleLine(block.text, block.xml)) { currentQuestion = null; continue; }
-    const numberMatch = block.kind === "p" && !currentQuestion?.heading ? block.text.match(/^\s*(\d{1,3})(?:[．、]|\.(?!\d))\s*([\s\S]*)$/) : null;
+    const numberMatch = block.kind === "p" && !currentQuestion?.heading ? docxNumberedQuestion(block.text) : null;
     if (numberMatch && currentType) {
-      currentQuestion = parsedQuestion(numberMatch[1], currentType, numberMatch[2].trim(), false, [block]);
+      currentQuestion = parsedQuestion(numberMatch.number, currentType, numberMatch.stem, false, [block]);
       if (block.printedId) currentQuestion.code = block.printedId;
       questions.push(currentQuestion); continue;
     }
@@ -207,9 +207,9 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     const block = blocks[index]; const paragraph = block.text;
     // A line beginning with a decimal (0.71x...) continues the current answer,
     // not a new question 0; the same boundary rule is used for stems above.
-    const numberMatch = block.kind === "p" ? paragraph.match(/^\s*(\d{1,3})(?:[．、]|\.(?!\d))\s*([\s\S]*)$/) : null;
-    const number = numberMatch?.[1];
-    if (number) { currentNumber = number; collectingAnalysis = false; repeatedQuestionText[number] = numberMatch?.[2].trim() ?? ""; }
+    const numberMatch = block.kind === "p" ? docxNumberedQuestion(paragraph) : null;
+    const number = numberMatch?.number;
+    if (number) { currentNumber = number; collectingAnalysis = false; repeatedQuestionText[number] = numberMatch?.stem ?? ""; }
     const choice = paragraph.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase();
     if (currentNumber && choice) answers[currentNumber] = choice;
     if (/^【(?:分析|解答|点评)】/.test(paragraph)) collectingAnalysis = true;

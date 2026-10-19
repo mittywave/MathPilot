@@ -5,7 +5,9 @@ const geometrySignals = /(?:△|∠|三角形|四边形|平行四边形|梯形|�
 
 export function questionImages(question: Question) {
   const images = [...(question.contentImages ?? []), ...(question.diagramImage ? [question.diagramImage] : [])];
-  return images.filter((image, index) => images.indexOf(image) === index);
+  const optionImages = new Set(question.optionsDocxXml?.length ? Object.values(question.optionsDocxAssets ?? {}) : []);
+  const stemImages = new Set(Object.values(question.stemDocxAssets ?? {}));
+  return images.filter((image, index) => images.indexOf(image) === index && (!optionImages.has(image) || stemImages.has(image)));
 }
 
 export function isGeometryQuestion(question: Question) {

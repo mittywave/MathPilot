@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { docxInferredQuestionType, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, normalizedDocxPageLookup, splitDocxOptionBlocks } from "../lib/docx-import-rules.mjs";
+import { docxInferredQuestionType, docxNumberedQuestion, docxQuestionHeading, docxStudioRole, docxTitleLine, docxVmlPicturesToDrawing, isDocxOptionBlock, normalizedDocxPageLookup, splitDocxOptionBlocks } from "../lib/docx-import-rules.mjs";
 import { crossPageRepeat, numberedImportTarget, orderedImportTimestamp, retainedQuestionCreatedAt } from "../lib/question-order-rules.mjs";
 
 test("splits four DOCX options stored in one paragraph", () => {
@@ -105,4 +105,18 @@ test("VML pictures become inline DrawingML pictures of the same size", () => {
   assert.equal(word.overlays, 0); assert.match(word.xml, /cx="1828800" cy="914400"/);
   const noPicture = '<w:p><w:r><w:pict><v:line from="0,0" to="1,1"/></w:pict></w:r></w:p>';
   assert.deepEqual(docxVmlPicturesToDrawing(noPicture), { xml: noPicture, pictures: 0, overlays: 0 });
+});
+
+
+test("image-only options retain their slots alongside text options", () => {
+  assert.deepEqual(splitDocxOptionBlocks(["A． B． C． D．"]), ["", "", "", ""]);
+  assert.deepEqual(splitDocxOptionBlocks(["A．", "B．文字", "C．", "D．末项"]), ["", "文字", "", "末项"]);
+});
+
+test("numeric enumeration in a solution is not a question boundary", () => {
+  for (const text of ["0、4、8、12、…，方向相同", "1、5、9、13、…", " 2 、 6 、 10 、 14", "3、7、11、15、…"]) assert.equal(docxNumberedQuestion(text), null);
+  assert.deepEqual(docxNumberedQuestion("6．探索规律"), {number:"6",stem:"探索规律"});
+  assert.deepEqual(docxNumberedQuestion("12、求数列的和"), {number:"12",stem:"求数列的和"});
+  assert.deepEqual(docxNumberedQuestion("7. 2025+2026 的结果"), {number:"7",stem:"2025+2026 的结果"});
+  assert.equal(docxNumberedQuestion("0.71x=2"), null);
 });
