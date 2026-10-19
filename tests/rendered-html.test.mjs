@@ -57,7 +57,15 @@ test("server-renders the cloud question-bank guest shell", async () => {
 test("opens on the product introduction and sends old library links to /library", async () => {
   const home = await render("/");
   assert.equal(home.status, 200);
-  assert.match(await home.text(), /教与学/);
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /教与学/);
+  assert.doesNotMatch(homeHtml, /role="dialog"/, "the login window stays closed on the home page");
+  const login = await render("/login?next=%2Ftools%2Fhomework");
+  assert.equal(login.status, 200);
+  const loginHtml = await login.text();
+  assert.match(loginHtml, /教与学/, "/login is the product page …");
+  assert.match(loginHtml, /<div[^>]*class="mp-login"[^>]*role="dialog"/, "… with its login window open");
+  assert.match(loginHtml, /欢迎回来/);
   const old = await render("/?view=wrong-book&tab=homework");
   assert.equal(old.status, 307);
   const target = new URL(old.headers.get("location") ?? "", "http://localhost");

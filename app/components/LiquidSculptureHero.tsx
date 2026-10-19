@@ -10,7 +10,9 @@
  *
  * Taken from 21st.dev as published, with local changes: `brand` accepts a node (the MathPilot
  * wordmark), `onThemeChange` lets the rest of the page follow the theme switch, and `scrollForms`
- * keeps the sculpture on screen while the page scrolls, bent into other shapes along its ribbon.
+ * keeps the sculpture on screen while the page scrolls, bent into other shapes along its ribbon,
+ * down to the frame of the login window. The engine is exported for the formulas behind that
+ * window, a picture of many pieces that each drift on their own.
  */
 
 import * as React from "react"
@@ -21,12 +23,31 @@ import * as React from "react"
 
 export type Rect = { x: number; y: number; w: number; h: number }
 
-/** A shape the sculpture can take, in viewport px. "image" is the picture itself. The others bend the material along
- *  the sculpture's centre line (`ribbon`): a thin lemniscate, or two rails on the cylinder of a curved row, where the ∞
- *  opens at its crossing and its upper arcs become the top rail, its lower arcs the bottom one. */
+/** A part of the picture (`box`, in its own 0 … 1 units) moved by `x`, `y` px. Only the grains move, so pieces are
+ *  for pictures drawn as particles at rest (`restStyle: "particles"`); boxes must not overlap. */
+export type SculpturePiece = { box: Rect; x: number; y: number }
+const MAX_PIECES = 32
+// points in the table that lays the window's frame out (reachTable)
+const REACH = 256
+
+/** A shape the sculpture can take, in viewport px. "image" is the picture itself, its pieces moved if given. The others
+ *  bend the material along the sculpture's centre line (`ribbon`): a thin lemniscate; two rails on the cylinder of a
+ *  curved row, where the ∞ opens at its crossing and its upper arcs become the top rail, its lower arcs the bottom one;
+ *  or the frame of a window, opened the same way (upper arcs along the top, lower arcs along the bottom, the tips at the
+ *  sides), with `fill` of the grains settled inside it as dust. */
 export type SculptureShape =
-  | { kind: "image"; rect: Rect }
+  | { kind: "image"; rect: Rect; pieces?: SculpturePiece[] }
   | { kind: "lemniscate"; cx: number; cy: number; a: number; yScale: number; halfWidth: number }
+  | {
+      kind: "window"
+      rect: Rect
+      /** corner radius, the frame's half width and how far its middle sits outside `rect`, in px */
+      radius: number
+      halfWidth: number
+      outset: number
+      /** share of the grains (0 … 1) spread over the inside */
+      fill: number
+    }
   | {
       kind: "rails"
       /** the row's centre x and axis y, the cylinder radius, and the camera distance in radii */
@@ -60,7 +81,7 @@ export interface SculptureRibbon {
   halfWidth: (t: number) => number
 }
 
-interface EngineOptions {
+export interface EngineOptions {
   interactive: boolean
   strength: number
   radius: number
@@ -82,6 +103,11 @@ interface EngineOptions {
   /** 0 – 2: how much the whole sculpture flows while the cursor is over it */
   liquid: number
 }
+
+/** What the engine samples its grains from. */
+type Picture = HTMLImageElement | HTMLCanvasElement
+const pictureWidth = (p: Picture) => (p instanceof HTMLImageElement ? p.naturalWidth : p.width)
+const pictureHeight = (p: Picture) => (p instanceof HTMLImageElement ? p.naturalHeight : p.height)
 
 function clamp(v: number, a: number, b: number) {
   return Math.min(b, Math.max(a, v))
@@ -132,9 +158,13 @@ float energyAt(vec2 rectPx, vec2 mouse, float radius, float presence, float wake
 
 /* Shapes: where a grain sits in shape A and in shape B, and how far it has travelled between them. Every grain knows
    its place along the centre line (uRib: t, its offset in half ribbon widths, how much material it stands for), so each
-   shape keeps the strands in order. Kinds: 0 the picture, 1 a thin lemniscate, 2 the rails of a curved row. */
+   shape keeps the strands in order. Kinds: 0 the picture (its pieces moved by uPieceAt), 1 a thin lemniscate, 2 the
+   rails of a curved row, 3 the frame of a window (laid out by the reach table in uRib's last row). */
 const SHAPES = `
 uniform sampler2D uRib;
+uniform int uPieces;
+uniform vec4 uPieceBox[${MAX_PIECES}];
+uniform vec2 uPieceAt[${MAX_PIECES}];
 uniform int uKindA;
 uniform int uKindB;
 uniform vec4 uA0;
@@ -151,11 +181,51 @@ const float PI = 3.14159265;
 vec2 lemni(float t, vec4 p){ float s = sin(t), c = cos(t), d = 1.0 + s*s; return p.xy + p.z*vec2(c/d, p.w*s*c/d); }
 // loose fibres and dust, beyond the ribbon's edge, are drawn in close to the thin shapes
 float tighten(float n){ float a = abs(n); return a <= 1.0 ? n : sign(n)*(1.0 + (a - 1.0)*0.3); }
+// how far the piece of the picture a grain belongs to has moved
+vec2 pieceAt(vec2 uv){
+  for(int k = 0; k < ${MAX_PIECES}; k++){
+    if(k >= uPieces) break;
+    vec4 b = uPieceBox[k];
+    if(uv.x >= b.x && uv.y >= b.y && uv.x <= b.x + b.z && uv.y <= b.y + b.w) return uPieceAt[k];
+  }
+  return vec2(0.0);
+}
 // xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
 vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec4 p2, vec2 uv, vec4 rib){
-  if(kind == 0) return vec4(p0.xy + uv*p0.zw, 1.0, 1.0);
+  if(kind == 0) return vec4(p0.xy + uv*p0.zw + pieceAt(uv), 1.0, 1.0);
   float t = rib.x;
   float n = tighten(rib.y);
+  if(kind == 3){
+    vec2 hs = p0.zw*0.5;
+    // a share of the grains, picked at random, settles inside as dust
+    if(hash(uv*vec2(613.7, 287.3)) < p1.w){
+      vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
+      return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
+    }
+    // the rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
+    // of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
+    // grains that lie before this one, from the reach table
+    float u = mod(t + PI*0.5, 2.0*PI) - PI*0.5;
+    float quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
+    float reach = quarter < 0.5 ? u/(PI*0.5) + 1.0 : quarter < 1.5 ? 1.0 - u/(PI*0.5) : quarter < 2.5 ? u/(PI*0.5) - 1.0 : 3.0 - u/(PI*0.5);
+    float x = clamp(reach, 0.0, 1.0)*${REACH - 1}.0;
+    int row = textureSize(uRib, 0).y - 1, k = int(x);
+    vec4 pick = vec4(equal(vec4(quarter), vec4(0.0, 1.0, 2.0, 3.0)));
+    float l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
+    // where two quarters meet their strands lie differently across the band, so there it is spread evenly instead
+    float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
+    n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
+    float R = min(p1.x, min(hs.x, hs.y));
+    float a = hs.x - R, b = PI*0.5*R, h = hs.y - R;
+    float s = l*(a + b + h);
+    vec2 pt; vec2 nm;
+    if(s < a){ pt = vec2(s, -hs.y); nm = vec2(0.0, -1.0); }
+    else if(s < a + b){ float ph = (s - a)/max(R, 0.001); nm = vec2(sin(ph), -cos(ph)); pt = vec2(a, -h) + nm*R; }
+    else { pt = vec2(hs.x, -h + (s - a - b)); nm = vec2(1.0, 0.0); }
+    // quarters 0 and 1 are the right lobe, 0 and 2 its upper arcs
+    vec2 side = vec2(quarter < 1.5 ? 1.0 : -1.0, mod(quarter, 2.0) < 0.5 ? 1.0 : -1.0);
+    return vec4(p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side, 1.0, 1.0);
+  }
   if(kind == 1){
     vec2 tg = lemni(t + 0.002, p0) - lemni(t - 0.002, p0);
     float c = cos(t);
@@ -605,13 +675,37 @@ function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, i
   return out
 }
 
+/** The window's frame lays each quarter of the centre line (the arcs the rails use, crossing to tip) out evenly by
+ *  count. How far along its quarter a grain lies follows from its t alone, so this table over that reach (0 at the
+ *  crossing, 1 at the tip) holds the share of the quarter's grains that lie before, one channel per quarter, at REACH
+ *  points. */
+function reachTable(rib: Float32Array, n: number) {
+  const table = new Float32Array(TEX_W * 4)
+  const quarters: number[][] = [[], [], [], []]
+  const quarterTurn = Math.PI / 2
+  for (let i = 0; i < n; i++) {
+    const v = ((rib[i * 4] + quarterTurn) % (Math.PI * 2)) - quarterTurn
+    const q = v < 0 ? 0 : v < quarterTurn ? 1 : v < Math.PI ? 2 : 3
+    quarters[q].push(q === 0 ? v / quarterTurn + 1 : q === 1 ? 1 - v / quarterTurn : q === 2 ? v / quarterTurn - 1 : 3 - v / quarterTurn)
+  }
+  quarters.forEach((reach, q) => {
+    reach.sort((a, b) => a - b)
+    for (let k = 0, before = 0; k < REACH; k++) {
+      while (before < reach.length && reach[before] < k / (REACH - 1)) before++
+      table[k * 4 + q] = reach.length ? before / reach.length : k / (REACH - 1)
+    }
+  })
+  return table
+}
+
 const smooth = (a: number, b: number, x: number) => {
   const t = clamp((x - a) / (b - a), 0, 1)
   return t * t * (3 - 2 * t)
 }
 
-class LiquidEngine {
-  lastImage: HTMLImageElement | null = null
+/** The particle engine, also driven on its own: a canvas, a picture (an image or a canvas drawn for it) and the pointer. */
+export class LiquidEngine {
+  lastImage: Picture | null = null
   /** Called once, after the first frame has actually been drawn. */
   onFirstFrame: (() => void) | null = null
   /** The shape to draw, asked every frame (dt in 60 fps frames). Without it the picture stays at `rect`. */
@@ -645,6 +739,8 @@ class LiquidEngine {
   private colTex: WebGLTexture | null = null
   private ribTex: WebGLTexture | null = null
   private shape: SculptureMorph | null = null
+  private pieceBox = new Float32Array(MAX_PIECES * 4)
+  private pieceAt = new Float32Array(MAX_PIECES * 2)
   private stateTex: WebGLTexture[] = []
   private stateFb: WebGLFramebuffer[] = []
   private stateIdx = 0
@@ -792,11 +888,11 @@ class LiquidEngine {
     this.stateDirty = false
   }
 
-  setImage(img: HTMLImageElement) {
+  setImage(img: Picture) {
     if (this.destroyed || this.lost) return
     const gl = this.gl
     this.lastImage = img
-    this.aspect = img.naturalWidth / img.naturalHeight || 2.5
+    this.aspect = pictureWidth(img) / pictureHeight(img) || 2.5
     this.clearFlow()
     if (this.imgTex) gl.deleteTexture(this.imgTex)
     this.imgTex = gl.createTexture()
@@ -815,7 +911,7 @@ class LiquidEngine {
   }
 
   /** One particle per material pixel of a grid laid over the image. */
-  private buildParticles(img: HTMLImageElement) {
+  private buildParticles(img: Picture) {
     const gl = this.gl
     const baseGrid = this.lowPower ? 640 : 1000
     const gw = Math.round(baseGrid * Math.sqrt(clamp(this.opts.density, 0.15, 2)))
@@ -882,9 +978,12 @@ class LiquidEngine {
     homeArr.set(home)
     const colArr = new Uint8Array(total * 4)
     colArr.set(col)
-    const ribArr = this.ribbon
-      ? ribbonCoords(homeArr, n, total, img.naturalWidth, img.naturalHeight, this.ribbon)
-      : new Float32Array(total * 4)
+    // one row more than the grains take: the reach table for the window's frame
+    const ribArr = new Float32Array((total + TEX_W) * 4)
+    if (this.ribbon) {
+      ribArr.set(ribbonCoords(homeArr, n, total, pictureWidth(img), pictureHeight(img), this.ribbon))
+      ribArr.set(reachTable(ribArr, n), total * 4)
+    }
 
     for (const t of [this.homeTex, this.colTex, this.ribTex, ...this.stateTex]) if (t) gl.deleteTexture(t)
     for (const f of this.stateFb) gl.deleteFramebuffer(f)
@@ -892,7 +991,7 @@ class LiquidEngine {
     this.stateFb = []
     this.homeTex = this.makeTex(gl.RGBA32F, TEX_W, this.texH, gl.RGBA, gl.FLOAT, homeArr, gl.NEAREST)
     this.colTex = this.makeTex(gl.RGBA8, TEX_W, this.texH, gl.RGBA, gl.UNSIGNED_BYTE, colArr, gl.NEAREST)
-    this.ribTex = this.makeTex(gl.RGBA32F, TEX_W, this.texH, gl.RGBA, gl.FLOAT, ribArr, gl.NEAREST)
+    this.ribTex = this.makeTex(gl.RGBA32F, TEX_W, this.texH + 1, gl.RGBA, gl.FLOAT, ribArr, gl.NEAREST)
     for (let i = 0; i < 2; i++) {
       const t = this.makeTex(this.stateFormat.internal, TEX_W, this.texH, gl.RGBA, this.stateFormat.type, null, gl.NEAREST)
       const fb = gl.createFramebuffer()!
@@ -1017,7 +1116,11 @@ class LiquidEngine {
 
   // grains are as big as the shape's own grid: the picture's, finer on the thin shapes
   private dotFor(s: SculptureShape) {
-    const span = s.kind === "image" ? s.rect.w : s.kind === "lemniscate" ? s.a * 2.1 : (s.right - s.left) * 0.85
+    const span =
+      s.kind === "image" ? s.rect.w
+      : s.kind === "lemniscate" ? s.a * 2.1
+      : s.kind === "window" ? (s.rect.w + s.rect.h) * 0.9
+      : (s.right - s.left) * 0.85
     return (span / this.gridW) * 1.45 * clamp(this.opts.dotSize, 0.2, 3)
   }
 
@@ -1032,6 +1135,10 @@ class LiquidEngine {
         kind = 1
         p0 = [s.cx, s.cy, s.a, s.yScale]
         p1 = [s.halfWidth, 0, 0, 0]
+      } else if (s.kind === "window") {
+        kind = 3
+        p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
+        p1 = [s.radius, s.halfWidth, s.outset, clamp(s.fill, 0, 1)]
       } else {
         kind = 2
         p0 = [s.cx, s.axis, s.radius, s.camera]
@@ -1042,6 +1149,19 @@ class LiquidEngine {
       gl.uniform4fv(P.u[`u${slot}0`], p0)
       gl.uniform4fv(P.u[`u${slot}1`], p1)
       gl.uniform4fv(P.u[`u${slot}2`], p2)
+    }
+    // one picture's pieces at a time: a drifting picture stays itself, it only ever changes into the other shapes
+    const pieces = (m.from.kind === "image" && m.from.pieces) || (m.to.kind === "image" && m.to.pieces) || []
+    const count = Math.min(pieces.length, MAX_PIECES)
+    gl.uniform1i(P.u.uPieces, count)
+    if (count) {
+      for (let k = 0; k < count; k++) {
+        const { box, x, y } = pieces[k]
+        this.pieceBox.set([box.x, box.y, box.w, box.h], k * 4)
+        this.pieceAt.set([x, y], k * 2)
+      }
+      gl.uniform4fv(P.u["uPieceBox[0]"], this.pieceBox)
+      gl.uniform2fv(P.u["uPieceAt[0]"], this.pieceAt)
     }
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
