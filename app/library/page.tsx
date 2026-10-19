@@ -1,11 +1,11 @@
 "use client";
 
-import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type DragEvent, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Fragment, lazy, memo, useCallback, type CSSProperties, type MouseEvent, type SetStateAction, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PaperCenter, PaperDirectory, PaperImportDialog } from "../components/PaperCenter";
 import { jobsApi } from "../components/RecognitionJobs";
 import type { PaperFolder, PaperDetail } from "../../lib/types";
-import { CategoryTree, FolderIcon, type TreeLight } from "../components/CategoryTree";
+import { CategoryTree, FolderIcon, useDirectoryDrag, type DirectoryDrop, type TreeLight } from "../components/CategoryTree";
 import { DocxContent } from "../components/DocxContent";
 import { MathText } from "../components/MathText";
 import { StudioSolution } from "../components/StudioSolution";
@@ -26,7 +26,7 @@ import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../compo
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../lib/library-tree";
-import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, reorderCloudCategories, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
+import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, moveCloudCategory, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
 import { randomClientId } from "../../lib/client-random-id.mjs";
 import { WRONG_QUESTION_DELETED, type AuthUser, type Category, type HomeworkProgress, type LibraryData, type LibraryModule, type Question, type QuestionType, type Student, type StudentSummary, type TypesetSettings, type WrongQuestionCatalogItem, type WrongQuestionEntry } from "../../lib/types";
@@ -159,7 +159,7 @@ export default function Home() {
   const [moduleDraft, setModuleDraft] = useState<LibraryModule | null>(null);
   const [moduleName, setModuleName] = useState("");
   const [moduleSubtitle, setModuleSubtitle] = useState("");
-  const [directoryDrag, setDirectoryDrag] = useState<{ source: string; target: string; kind: "module" | "category" } | null>(null);
+  const [directorySaving, setDirectorySaving] = useState(false);
   const [confirmDialog, confirm] = useConfirm();
   const deleting = useRef(false);
   const moduleManager = useRef<HTMLButtonElement>(null);
@@ -192,6 +192,7 @@ export default function Home() {
   const onNotice = useCallback((text: string, tone: "success" | "error" = "success") => show({ text, tone }), [show]);
   // 机构共用一个题库：登录老师都能录题、改题、建分类；删除只开放给管理员。
   const canManageLibrary = Boolean(authUser);
+  const directoryDragProps = useDirectoryDrag({ modules, categories, enabled: canManageLibrary && !directorySaving, onDrop: drop => { void moveDirectoryItem(drop); } });
   const canDelete = authUser?.role === "admin";
   const activeStudent = students.find((item) => item.id === activeStudentId) ?? null;
   const classStudents = activeClassName === null ? [] : students.filter((student) => student.className === activeClassName);
@@ -884,61 +885,35 @@ export default function Home() {
     catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "模块排序失败", tone: "error" }); }
   }
 
-  async function dropDirectoryItem(targetId: string, siblings: string[], kind: "module" | "category") {
-    const sourceId = directoryDrag?.kind === kind ? directoryDrag.source : "";
-    setDirectoryDrag(null);
-    const sourceIndex = siblings.indexOf(sourceId), targetIndex = siblings.indexOf(targetId);
-    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
-    const order = siblings.filter(id => id !== sourceId); order.splice(targetIndex, 0, sourceId);
+  async function moveDirectoryItem(drop: DirectoryDrop) {
+    if (directorySaving) return;
+    setDirectorySaving(true);
     try {
-      if (kind === "module") {
-        setModules(order.map((id, sortOrder) => ({ ...modules.find(item => item.id === id)!, sortOrder })));
-        await reorderCloudModules(order);
+      if (drop.kind === "module") {
+        const source = modules.find(item => item.id === drop.id);
+        const next = modules.filter(item => item.id !== drop.id);
+        const targetIndex = next.findIndex(item => item.id === drop.targetId);
+        if (!source || targetIndex < 0) return;
+        next.splice(targetIndex + (drop.position === "after" ? 1 : 0), 0, source);
+        const ordered = next.map((item, sortOrder) => ({ ...item, sortOrder }));
+        setModules(ordered); await reorderCloudModules(ordered.map(item => item.id));
       } else {
-        const reordered = order.map(id => categories.find(item => item.id === id)!);
-        const ids = new Set(order);
-        setCategories(current => { let index = 0; return current.map(item => ids.has(item.id) ? reordered[index++] : item); });
-        await reorderCloudCategories(order);
+        const source = categories.find(item => item.id === drop.id);
+        const target = categories.find(item => item.id === drop.targetId);
+        if (!source || (drop.targetKind === "category" && !target)) return;
+        const parentId = drop.position === "inside" ? drop.targetId : target!.parentId || source.moduleId!;
+        const siblings = categories.filter(item => item.moduleId === source.moduleId && (item.parentId || item.moduleId) === parentId && item.id !== source.id);
+        const targetIndex = siblings.findIndex(item => item.id === drop.targetId);
+        const index = drop.position === "inside" ? siblings.length : targetIndex + (drop.position === "after" ? 1 : 0);
+        if (index < 0) return;
+        const beforeId = siblings[index]?.id ?? null;
+        const reordered = [...siblings]; reordered.splice(index, 0, { ...source, parentId });
+        const destinationIds = new Set(reordered.map(item => item.id));
+        setCategories(current => [...current.filter(item => !destinationIds.has(item.id)), ...reordered]);
+        await moveCloudCategory({ id: source.id, parentId, beforeId });
       }
-    } catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "目录排序失败", tone: "error" }); }
-  }
-
-  function directoryDragProps(id: string, kind: "module" | "category" = "module") {
-    const category = kind === "category" ? categories.find(item => item.id === id) : null;
-    const siblings = (category ? categories.filter(item => item.moduleId === category.moduleId && (item.parentId || item.moduleId) === (category.parentId || category.moduleId)) : modules).map(item => item.id);
-    const sourceIndex = directoryDrag?.kind === kind ? siblings.indexOf(directoryDrag.source) : -1;
-    const acceptDrop = (event: DragEvent<HTMLDivElement>) => {
-      if (!directoryDrag || directoryDrag.kind !== kind) return;
-      if (sourceIndex < 0) {
-        event.dataTransfer.dropEffect = "none";
-        if (directoryDrag.target) setDirectoryDrag({ ...directoryDrag, target: "" });
-        return;
-      }
-      event.stopPropagation();
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      if (directoryDrag.target !== id) setDirectoryDrag({ ...directoryDrag, target: id });
-    };
-    return {
-      draggable: canManageLibrary,
-      title: canManageLibrary ? kind === "category" ? "拖动调整同级知识点顺序" : "拖动调整模块顺序" : undefined,
-      "data-dragging": directoryDrag?.kind === kind && directoryDrag.source === id || undefined,
-      "data-drop-position": sourceIndex >= 0 && directoryDrag?.target === id && directoryDrag.source !== id ? sourceIndex < siblings.indexOf(id) ? "after" : "before" : undefined,
-      onDragStart: (event: DragEvent<HTMLDivElement>) => {
-        event.stopPropagation();
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", id);
-        setDirectoryDrag({ source: id, target: id, kind });
-      },
-      onDragEnter: acceptDrop,
-      onDragOver: acceptDrop,
-      onDrop: (event: DragEvent<HTMLDivElement>) => {
-        if (directoryDrag?.kind !== kind || sourceIndex < 0) return;
-        event.stopPropagation(); event.preventDefault();
-        void dropDirectoryItem(id, siblings, kind);
-      },
-      onDragEnd: (event: DragEvent<HTMLDivElement>) => { event.stopPropagation(); setDirectoryDrag(null); },
-    };
+    } catch (error) { await refreshLibrary(true); show({ text: error instanceof Error ? error.message : "目录移动失败", tone: "error" }); }
+    finally { setDirectorySaving(false); }
   }
 
   async function removeModule(module: LibraryModule) {
@@ -1001,8 +976,8 @@ export default function Home() {
           <div className={`paper-directory-flip${paperView === "papers" ? " is-papers" : ""}`}>
           <div id="library-directory" className="library-directory paper-directory-face paper-directory-front" inert={!directoryOpen || paperView === "papers"} aria-hidden={!directoryOpen || paperView === "papers"}>
           <div className="sidebar-heading"><button className="paper-view-toggle eyebrow" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}>{pageCopy.moduleSwitcher}<span aria-hidden="true">⇄</span></button></div>
-          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => <div key={examModule.id} className="library-module" {...directoryDragProps(examModule.id)} title={canManageLibrary ? "拖动调整模块顺序" : undefined}>
-            {examModule.id === activeModule?.id ? <CategoryTree collapsible dragProps={canManageLibrary ? id => directoryDragProps(id, "category") : undefined} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>}
+          <div className="tree" aria-label={pageCopy.moduleSwitcher}>{modules.map(examModule => <div key={examModule.id} className="library-module" {...directoryDragProps(examModule.id)}>
+            {examModule.id === activeModule?.id ? <CategoryTree collapsible dragProps={canManageLibrary ? (id, expand) => directoryDragProps(id, "category", expand) : undefined} module={examModule} categories={categories} activeId={activeCategory} countFor={countFor} light={showKnowledgeMap && mapOpen ? treeLight : null} onSelect={(id) => { leavePaperForCategory(); setActiveCategory(id); setMapQuestionId(""); setTypeFilter("全部"); setShowSelected(false); window.scrollTo(0,0); }} /> : <button className="tree-row module-root" onClick={() => { switchExamModule(examModule.id); window.scrollTo(0,0); }}><span className="tree-dot" aria-hidden="true"><FolderIcon /></span><span className="tree-name">{examModule.name}</span><span className="count">{countFor(examModule.id)}</span></button>}
           </div>)}</div>
           {canManageLibrary ? <button className="manage-button" ref={moduleManager} onClick={() => setManagementDialog("manage")}>{pageCopy.manageLibrary}</button> : <button className="manage-button" onClick={goLogin}>{pageCopy.loginToDownload}</button>}
           </div>
