@@ -463,6 +463,11 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   const [picker, setPicker] = useState<PickerMode | null>(() => focusModule ? { kind: "add", sectionId: focusModule, band: "example" } : null);
   // 讲义、小测、作业 share one page; the address keeps the open one, so a reload or a link lands on it.
   const [sheet, setSheet] = useState<HandoutSheet>(() => HANDOUT_SHEETS.find((item) => item.value === new URLSearchParams(window.location.search).get("sheet"))?.value ?? "handout");
+  const [panels, setPanels] = useState(() => {
+    try { const saved = JSON.parse(readStored("mathpilot-handout-panels") || "{}"); return { bank: saved.bank !== false, outline: saved.outline !== false }; }
+    catch { return { bank: true, outline: true }; }
+  });
+  const [outlineTarget, setOutlineTarget] = useState("");
   const bankPane = useRef<HTMLDivElement>(null);
   const [entry, setEntry] = useState<EntryState | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -493,6 +498,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   }, [id, sheet]);
 
   useEffect(() => { document.title = `${doc?.title || "讲义"} · 讲义编撰 · MathPilot`; }, [doc?.title]);
+  useEffect(() => { writeStored("mathpilot-handout-panels", JSON.stringify(panels)); }, [panels]);
 
   const opened = Boolean(doc);
   useEffect(() => {
@@ -572,12 +578,21 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
   }
 
   function openSheet(next: HandoutSheet) {
-    setSheet(next); setPicker(null);
+    setSheet(next); setPicker(null); setOutlineTarget("");
   }
 
   function choosePicker(mode: PickerMode) {
+    setPanels((current) => ({ ...current, bank: true }));
     setPicker(mode);
     bankPane.current?.scrollIntoView({ block: "nearest" });
+  }
+
+  function locateOutline(targetId: string) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    setOutlineTarget(targetId);
+    target.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+    target.focus({ preventScroll: true });
   }
 
   function changeBand(itemId: string, band: HandoutBand) {
@@ -771,7 +786,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = numbers.get(item.id) ?? ""; const name = band === "practice" ? `练习 ${label}` : label;
     const points = question ? questionPoints(question) : [];
-    return <article className={`handout-question${dropMark(item)}`} key={item.id} {...cardDrop(item)}>
+    return <article className={`handout-question${dropMark(item)}`} key={item.id} id={`question-${item.id}`} tabIndex={-1} {...cardDrop(item)}>
       {dragHandle(item, name)}
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
@@ -796,7 +811,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     const question = resolve(item.questionId);
     const temporary = doc.temporaryQuestions.some((entry) => entry.id === item.questionId);
     const label = String(index + 1); const list = sheetLabel(item.kind); const name = `${list} ${label}`;
-    return <article className={`handout-question${dropMark(item)}`} key={item.id} {...cardDrop(item)}>
+    return <article className={`handout-question${dropMark(item)}`} key={item.id} id={`question-${item.id}`} tabIndex={-1} {...cardDrop(item)}>
       {dragHandle(item, name)}
       {question ? <QuestionBody question={question} number={label} /> : <p className="handout-missing">{libraryReady ? "原题已删除或无权访问，可替换或移出。" : "正在读取题目…"}</p>}
       <div className="handout-question-foot">
@@ -826,9 +841,14 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
       <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </header>
-    {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>至少一道题</button></p>}
-    <div className="handout-workspace">
+    {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{setPanels(current=>({...current,bank:true}));requestAnimationFrame(()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});});}}>至少一道题</button></p>}
+    <div className={`handout-workspace${panels.bank ? "" : " bank-closed"}${panels.outline ? "" : " outline-closed"}`}>
       <div className="handout-bank-pane" ref={bankPane}>
+        <button type="button" className="handout-panel-toggle" title={panels.bank ? "收起题库" : "展开题库"} aria-label={panels.bank ? "收起题库" : "展开题库"} aria-expanded={panels.bank} aria-controls="handout-bank-content" onClick={() => setPanels(current => ({ ...current, bank: !current.bank }))}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="handout-panel-chevron" d="m16 9-3 3 3 3" /></svg>
+          <span className="handout-panel-label" aria-hidden="true">题库</span>
+        </button>
+        <div id="handout-bank-content" className="handout-bank-content" inert={!panels.bank} aria-hidden={!panels.bank}>
         <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
           source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
           onEdit={openEditEntry} onRemove={async (questionId) => {
@@ -836,9 +856,10 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
             if (await confirm({ title: "删除临时题", body: "从当前讲义的临时题库删除这道题，无法恢复。已保存到正式题库的内容不受影响。", confirmLabel: "删除临时题", danger: true })) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
           }}
           sections={moduleOptions} />
+        </div>
       </div>
       <div className="handout-draft" aria-label="讲义编辑">
-    <div className="handout-draft-head">
+    <div className="handout-draft-head" id="handout-heading" tabIndex={-1}>
       <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush().catch(() => {})} />
       <div className="handout-sheets" role="tablist" aria-label="本讲资料">
         {HANDOUT_SHEETS.map((item) => <button key={item.value} role="tab" aria-selected={sheet === item.value} onClick={() => openSheet(item.value)}>
@@ -860,7 +881,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     </section> : <>
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
-      return <section className="handout-module" key={section.id} id={`module-${section.id}`} aria-label={badge}>
+      return <section className="handout-module" key={section.id} id={`module-${section.id}`} tabIndex={-1} aria-label={badge}>
         <div className="handout-module-head">
           <span className="handout-module-no" aria-hidden="true">{heading.numeral}</span>
           <input aria-label={`${badge}名称`} value={section.title} placeholder="模块名称，如：平行四边形的性质" onChange={(event) => updateSection(section.id, { title: event.target.value })} onBlur={() => void flush().catch(() => {})} />
@@ -873,7 +894,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           </PaperMoreMenu>
         </div>
 
-        <div className={`handout-lane knowledge${dropNote === section.id ? " dropping" : ""}`}
+        <div className={`handout-lane knowledge${dropNote === section.id ? " dropping" : ""}`} id={`knowledge-${section.id}`} tabIndex={-1}
           onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void importNoteScreenshot(section.id, file); } }}
           onDragOver={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); setDropNote(section.id); }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropNote(null); }}
@@ -908,6 +929,30 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
     </>}
 
       </div>
+      <aside className="handout-outline-pane" aria-label={`${sheetLabel(sheet)}结构侧栏`}>
+        <button type="button" className="handout-panel-toggle" title={`${panels.outline ? "收起" : "展开"}${sheetLabel(sheet)}结构`} aria-label={`${panels.outline ? "收起" : "展开"}${sheetLabel(sheet)}结构`} aria-expanded={panels.outline} aria-controls="handout-outline-content" onClick={() => setPanels(current => ({ ...current, outline: !current.outline }))}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /><path className="handout-panel-chevron" d="m8 9 3 3-3 3" /></svg>
+          <span className="handout-panel-label" aria-hidden="true">{sheetLabel(sheet)}结构</span>
+        </button>
+        <nav id="handout-outline-content" className="handout-outline-content" aria-label={`${sheetLabel(sheet)}结构`} inert={!panels.outline} aria-hidden={!panels.outline}>
+          <header><h2>{sheetLabel(sheet)}结构</h2><span>{questionCount} 题</span></header>
+          <div className="handout-outline-scroll">
+            <button type="button" className="handout-outline-title" aria-current={outlineTarget === "handout-heading" ? "location" : undefined} onClick={() => locateOutline("handout-heading")}>{doc.title || "未命名讲义"}</button>
+            {sheet === "handout" ? modules.map(({ section, bands }, index) => {
+              const heading = moduleHeading(section.title, index);
+              return <section className="handout-outline-module" key={section.id}>
+                <button type="button" className="handout-outline-heading" aria-label={`定位模块${heading.numeral}：${heading.title || "未命名模块"}`} aria-current={outlineTarget === `module-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`module-${section.id}`)}><span>{heading.numeral}</span><b>{heading.title || "未命名模块"}</b></button>
+                <button type="button" className="handout-outline-note" aria-label={`定位模块${heading.numeral}知识点`} aria-current={outlineTarget === `knowledge-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`knowledge-${section.id}`)}>知识点</button>
+                {HANDOUT_BANDS.filter(band => bands[band].length).map(band => <div className="handout-outline-band" key={band}>
+                  <span>{HANDOUT_PARTS[band].label}</span>
+                  <div className="basket-outline-questions">{bands[band].map(item => <button type="button" className="handout-outline-number" key={item.id} aria-label={`定位模块${heading.numeral}${HANDOUT_PARTS[band].label} ${numbers.get(item.id)}`} aria-current={outlineTarget === `question-${item.id}` ? "location" : undefined} onClick={() => locateOutline(`question-${item.id}`)}>{numbers.get(item.id)}</button>)}</div>
+                </div>)}
+              </section>;
+            }) : <div className="basket-outline-questions">{listed.map((item, index) => <button type="button" className="handout-outline-number" key={item.id} aria-label={`定位${sheetLabel(sheet)}第 ${index + 1} 题`} aria-current={outlineTarget === `question-${item.id}` ? "location" : undefined} onClick={() => locateOutline(`question-${item.id}`)}>{index + 1}</button>)}</div>}
+            {!questionCount && <p className="handout-muted">尚未加入题目</p>}
+          </div>
+        </nav>
+      </aside>
     </div>
 
     <input ref={noteFile} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file && noteTarget.current) void importNoteScreenshot(noteTarget.current, file); event.target.value = ""; }} />
