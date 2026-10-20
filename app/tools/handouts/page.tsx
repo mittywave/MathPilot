@@ -1,5 +1,5 @@
 "use client";
-import { type DragEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, loginPath, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, dropHandoutItem, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
@@ -458,6 +458,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const refreshLibrary = useCallback(() => fetchLibrary().then(setLibrary), []);
   const [bankSource, setBankSource] = useState<"library" | "temporary">("library");
+  const [treeOpen, setTreeOpen] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   // A link from the course knowledge graph (?module=) opens the handout at that module, ready to add questions to it.
   const [focusModule] = useState(() => new URLSearchParams(window.location.search).get("module"));
@@ -465,9 +466,13 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   // 讲义、小测、作业 share one page; the address keeps the open one, so a reload or a link lands on it.
   const [sheet, setSheet] = useState<HandoutSheet>(() => HANDOUT_SHEETS.find((item) => item.value === new URLSearchParams(window.location.search).get("sheet"))?.value ?? "handout");
   const [panels, setPanels] = useState(() => {
-    try { const saved = JSON.parse(readStored("mathpilot-handout-panels") || "{}"); return { bank: saved.bank !== false, outline: saved.outline !== false }; }
-    catch { return { bank: true, outline: true }; }
+    try {
+      const saved = JSON.parse(readStored("mathpilot-handout-panels") || "{}");
+      return { bank: saved.bank !== false, outline: saved.outline !== false, bankWidth: Number.isFinite(saved.bankWidth) && saved.bankWidth > 0 ? saved.bankWidth as number : null, outlineWidth: Number.isFinite(saved.outlineWidth) && saved.outlineWidth > 0 ? saved.outlineWidth as number : 248 };
+    } catch { return { bank: true, outline: true, bankWidth: null, outlineWidth: 248 }; }
   });
+  const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth);
+  const panelDrag = useRef<{ side: "bank" | "outline"; pointerId: number; startX: number; startWidth: number; bankWidth: number; outlineWidth: number; moved: boolean } | null>(null);
   const [outlineTarget, setOutlineTarget] = useState("");
   const bankPane = useRef<HTMLDivElement>(null);
   const [entry, setEntry] = useState<EntryState | null>(null);
@@ -509,6 +514,13 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   useEffect(() => { writeStored("mathpilot-handout-panels", JSON.stringify(panels)); }, [panels]);
 
   const opened = Boolean(doc);
+  useEffect(() => {
+    const workspace = bankPane.current?.parentElement;
+    if (!opened || !workspace) return;
+    const observer = new ResizeObserver(([entry]) => setWorkspaceWidth(entry.contentRect.width));
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [opened]);
   useEffect(() => {
     if (opened && focusModule) document.getElementById(`module-${focusModule}`)?.scrollIntoView({ block: "start" });
   }, [opened, focusModule]);
@@ -601,6 +613,70 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     setOutlineTarget(targetId);
     target.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
     target.focus({ preventScroll: true });
+  }
+
+  // Clamp preferences to this window without replacing the remembered widths.
+  const minBank = Math.min(treeOpen ? 420 : 280, workspaceWidth * .4), minOutline = Math.min(200, workspaceWidth * .2), minDraft = Math.min(440, workspaceWidth * .4);
+  const outlineFull = Math.max(minOutline, Math.min(panels.outlineWidth, workspaceWidth - (panels.bank ? minBank : 56) - minDraft));
+  const outlineWidth = panels.outline ? outlineFull : 48;
+  const bankFull = Math.max(minBank, Math.min(panels.bankWidth ?? (workspaceWidth - outlineWidth) * .4, workspaceWidth - outlineWidth - minDraft));
+  const bankWidth = panels.bank ? bankFull : 56;
+  const bankMax = Math.max(minBank, workspaceWidth - outlineWidth - minDraft), outlineMax = Math.max(minOutline, workspaceWidth - bankWidth - minDraft);
+
+  function startPanelResize(event: ReactPointerEvent<HTMLDivElement>, side: "bank" | "outline") {
+    if (event.button !== 0 || panelDrag.current) return;
+    event.preventDefault();
+    const workspace = event.currentTarget.parentElement!;
+    const bank = panels.bank ? workspace.querySelector(".handout-bank-pane")!.getBoundingClientRect().width : bankFull;
+    const outline = panels.outline ? workspace.querySelector(".handout-outline-pane")!.getBoundingClientRect().width : outlineFull;
+    panelDrag.current = { side, pointerId: event.pointerId, startX: event.clientX, startWidth: side === "bank" ? bank : outline, bankWidth: bank, outlineWidth: outline, moved: false };
+    workspace.dataset.resizing = side;
+    workspace.style.setProperty("--handout-bank-full", `${bank}px`);
+    workspace.style.setProperty("--handout-outline-full", `${outline}px`);
+    event.currentTarget.focus({ preventScroll: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function movePanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = panelDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const delta = (event.clientX - drag.startX) * (drag.side === "bank" ? 1 : -1);
+    if (Math.abs(delta) < 1 && !drag.moved) return;
+    const width = Math.max(drag.side === "bank" ? minBank : minOutline, Math.min(drag.side === "bank" ? bankMax : outlineMax, Math.round(drag.startWidth + delta)));
+    if (drag.side === "bank") drag.bankWidth = width; else drag.outlineWidth = width;
+    drag.moved = true;
+    // Only resize the DOM while dragging; the math cards do not need to render again.
+    event.currentTarget.parentElement!.style.setProperty(`--handout-${drag.side}-full`, `${width}px`);
+    event.currentTarget.setAttribute("aria-valuenow", String(Math.round(width)));
+    event.currentTarget.setAttribute("aria-valuetext", `${drag.side === "bank" ? "题库" : "结构栏"}宽度 ${Math.round(width)} 像素`);
+  }
+
+  function endPanelResize(element: HTMLDivElement, cancel = false) {
+    const drag = panelDrag.current;
+    if (!drag) return;
+    panelDrag.current = null;
+    const workspace = element.parentElement!;
+    if (cancel || !drag.moved) {
+      workspace.style.setProperty("--handout-bank-full", `${bankFull}px`);
+      workspace.style.setProperty("--handout-outline-full", `${outlineFull}px`);
+      const width = Math.round(drag.side === "bank" ? bankFull : outlineFull);
+      element.setAttribute("aria-valuenow", String(width));
+      element.setAttribute("aria-valuetext", `${drag.side === "bank" ? "题库" : "结构栏"}宽度 ${width} 像素`);
+    } else {
+      setPanels(current => ({ ...current, bankWidth: drag.side === "bank" || current.bank ? drag.bankWidth : current.bankWidth, outlineWidth: drag.side === "outline" ? drag.outlineWidth : current.outlineWidth }));
+    }
+    delete workspace.dataset.resizing;
+    if (element.hasPointerCapture(drag.pointerId)) element.releasePointerCapture(drag.pointerId);
+  }
+
+  function keyPanelResize(event: ReactKeyboardEvent<HTMLDivElement>, side: "bank" | "outline") {
+    if (event.key === "Escape" && panelDrag.current) { event.preventDefault(); endPanelResize(event.currentTarget, true); return; }
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || panelDrag.current) return;
+    event.preventDefault();
+    const min = side === "bank" ? minBank : minOutline, max = side === "bank" ? bankMax : outlineMax;
+    const delta = (event.key === "ArrowLeft" ? -1 : 1) * (side === "bank" ? 1 : -1) * (event.shiftKey ? 40 : 16);
+    const width = event.key === "Home" ? min : event.key === "End" ? max : Math.max(min, Math.min(max, (side === "bank" ? bankFull : outlineFull) + delta));
+    setPanels(current => ({ ...current, bankWidth: side === "bank" ? width : current.bank ? bankFull : current.bankWidth, outlineWidth: side === "outline" ? width : current.outlineWidth }));
   }
 
   function changeBand(itemId: string, band: HandoutBand) {
@@ -850,14 +926,14 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
       <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </header>
     {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{setPanels(current=>({...current,bank:true}));requestAnimationFrame(()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});});}}>至少一道题</button></p>}
-    <div className={`handout-workspace${panels.bank ? "" : " bank-closed"}${panels.outline ? "" : " outline-closed"}`}>
+    <div className={`handout-workspace${panels.bank ? "" : " bank-closed"}${panels.outline ? "" : " outline-closed"}`} style={{ "--handout-bank-full": `${bankFull}px`, "--handout-outline-full": `${outlineFull}px` } as CSSProperties}>
       <div className="handout-bank-pane" ref={bankPane}>
         <button type="button" className="handout-panel-toggle" title={panels.bank ? "收起题库" : "展开题库"} aria-label={panels.bank ? "收起题库" : "展开题库"} aria-expanded={panels.bank} aria-controls="handout-bank-content" onClick={() => setPanels(current => ({ ...current, bank: !current.bank }))}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /><path className="handout-panel-chevron" d="m16 9-3 3 3 3" /></svg>
           <span className="handout-panel-label" aria-hidden="true">题库</span>
         </button>
         <div id="handout-bank-content" className="handout-bank-content" inert={!panels.bank} aria-hidden={!panels.bank}>
-        <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
+        <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} treeOpen={treeOpen} onTreeOpenChange={setTreeOpen} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
           source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
           onEdit={openEditEntry} onRemove={async (questionId) => {
             if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }
@@ -866,7 +942,11 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
           sections={moduleOptions} />
         </div>
       </div>
-      <div className="handout-draft" aria-label="讲义编辑">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- A focusable window separator supports pointer and keyboard resizing. */}
+      <div className="handout-splitter bank" role="separator" aria-label="调整题库与正文宽度" aria-orientation="vertical" aria-valuemin={Math.round(minBank)} aria-valuemax={Math.round(bankMax)} aria-valuenow={Math.round(bankFull)} aria-valuetext={`题库宽度 ${Math.round(bankFull)} 像素`} aria-controls="handout-bank-content handout-draft" tabIndex={0} hidden={!panels.bank} title="拖动调整题库宽度；双击恢复默认；方向键微调"
+        onPointerDown={event => startPanelResize(event, "bank")} onPointerMove={movePanelResize} onPointerUp={event => endPanelResize(event.currentTarget)} onPointerCancel={event => endPanelResize(event.currentTarget, true)} onLostPointerCapture={event => endPanelResize(event.currentTarget, true)}
+        onDoubleClick={() => setPanels(current => ({ ...current, bankWidth: null }))} onKeyDown={event => keyPanelResize(event, "bank")} />
+      <div className="handout-draft" id="handout-draft" aria-label="讲义编辑">
     <div className="handout-draft-head" id="handout-heading" tabIndex={-1}>
       <input className="handout-title" aria-label="讲义标题" value={doc.title} onFocus={(event) => { if (event.target.value === DEFAULT_HANDOUT_TITLE) event.target.select(); }} onChange={(event) => edit({ title: event.target.value }, false)} onBlur={() => void flush().catch(() => {})} />
       <div className="handout-sheets" role="tablist" aria-label="本讲资料">
@@ -937,6 +1017,10 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     </>}
 
       </div>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- A focusable window separator supports pointer and keyboard resizing. */}
+      <div className="handout-splitter outline" role="separator" aria-label="调整正文与结构栏宽度" aria-orientation="vertical" aria-valuemin={Math.round(minOutline)} aria-valuemax={Math.round(outlineMax)} aria-valuenow={Math.round(outlineFull)} aria-valuetext={`结构栏宽度 ${Math.round(outlineFull)} 像素`} aria-controls="handout-draft handout-outline-content" tabIndex={0} hidden={!panels.outline} title="拖动调整结构栏宽度；双击恢复默认；方向键微调"
+        onPointerDown={event => startPanelResize(event, "outline")} onPointerMove={movePanelResize} onPointerUp={event => endPanelResize(event.currentTarget)} onPointerCancel={event => endPanelResize(event.currentTarget, true)} onLostPointerCapture={event => endPanelResize(event.currentTarget, true)}
+        onDoubleClick={() => setPanels(current => ({ ...current, outlineWidth: 248 }))} onKeyDown={event => keyPanelResize(event, "outline")} />
       <aside className="handout-outline-pane" aria-label={`${sheetLabel(sheet)}结构侧栏`}>
         <button type="button" className="handout-panel-toggle" title={`${panels.outline ? "收起" : "展开"}${sheetLabel(sheet)}结构`} aria-label={`${panels.outline ? "收起" : "展开"}${sheetLabel(sheet)}结构`} aria-expanded={panels.outline} aria-controls="handout-outline-content" onClick={() => setPanels(current => ({ ...current, outline: !current.outline }))}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M15 4v16" /><path className="handout-panel-chevron" d="m8 9 3 3-3 3" /></svg>

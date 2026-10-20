@@ -23,10 +23,12 @@ function pickerPaperLocation() {
 // The same bank stays open while adding to different lanes or replacing a question.
 // For a 小测 or 作业 the chosen module is the one the new questions test, and there is no band to choose.
 // taken: already in the open sheet, so not offered again; usedIn: where else in this 讲 a question is used.
-export function QuestionPicker({ library, user, onLibraryChanged, mode, sheet, taken, usedIn, onPick, sections, onModeChange, source, onSourceChange, temporaryQuestions, onImport, onArchive, onEdit, onRemove, onNotice }: {
+export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTreeOpenChange: setTreeOpen, mode, sheet, taken, usedIn, onPick, sections, onModeChange, source, onSourceChange, temporaryQuestions, onImport, onArchive, onEdit, onRemove, onNotice }: {
   library: LibraryData | null;
   user: AuthUser;
   onLibraryChanged: () => Promise<void>;
+  treeOpen: boolean;
+  onTreeOpenChange: (open: boolean) => void;
   mode: PickerMode;
   sheet: HandoutSheet;
   taken: Set<string>;
@@ -48,7 +50,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, mode, sheet, t
   const [scope, setScope] = useState<{ moduleId: string; categoryId: string }>(() => {
     try { const value = JSON.parse(localStorage.getItem("mathpilot-picker-scope") || "{}"); return { moduleId: typeof value.moduleId === "string" ? value.moduleId : "", categoryId: typeof value.categoryId === "string" ? value.categoryId : "" }; } catch { return { moduleId: "", categoryId: "" }; }
   });
-  const [treeOpen, setTreeOpen] = useState(false);
   const [paperLocation, setPaperLocation] = useState(pickerPaperLocation);
   const [paperVisited, setPaperVisited] = useState(paperLocation.view !== "modules");
   const [paperFolders, setPaperFolders] = useState<PaperFolder[]>([]);
@@ -93,7 +94,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, mode, sheet, t
     const update = () => setTreeOpen(wide.matches);
     update(); wide.addEventListener("change", update);
     return () => wide.removeEventListener("change", update);
-  }, []);
+  }, [setTreeOpen]);
   const [type, setType] = useState<"全部" | QuestionType>("全部");
   const [keyword, setKeyword] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
