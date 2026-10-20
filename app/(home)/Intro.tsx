@@ -106,6 +106,9 @@ const GATHER_MS = 1800;
 const SCATTER_MS = 1300;
 // the window's frame of sand, round the outside of its glass (.mp-login-card has the same corner radius)
 const FRAME = { radius: 26, halfWidth: 3.5, outset: 7, fill: 0.3 };
+// the sand's frame round the card resting at the front of the 闭环 wheel (its cards have rounded-lg corners)
+const CARD_FRAME = { radius: 8, halfWidth: 2.5, outset: 5, fill: 0 };
+const ease = (t: number) => t * t * (3 - 2 * t);
 type Gather = { from: number; to: number; start: number };
 // how far the ∞ has gathered (0 … 1), taking `ms` there and SCATTER_MS back; a move starts on the first frame drawn
 // after it was asked for
@@ -164,7 +167,11 @@ export default function IntroPage({ login: opened }: { login?: string }) {
   }));
   const root = useRef<HTMLDivElement>(null);
   const closingArt = useRef<HTMLImageElement>(null);
+  const ringArt = useRef<HTMLDivElement>(null);
+  const loopRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(-1);
+  const turned = useRef(-1);
+  const rested = useRef<DOMRect | null>(null);
   // 进入工作台 opens the 题库; whoever is not signed in gets the login window first
   const [workbench, setWorkbench] = useState(loginPath(WORKBENCH));
   const initial = opened === undefined ? null : { next: nextOf(opened), leaving: false };
@@ -347,6 +354,32 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     return () => observer.disconnect();
   }, []);
 
+  // While the 闭环 section is on the screen the sand belongs to it. Coming in, the hero's ∞ pours down into a frame round
+  // the card at the front; as the wheel turns the frame flows from each card into the next; when the cards close into
+  // the ring it gathers into an ∞ in the middle, over 教学 (ringArt), which then scrolls away with the section.
+  const loopForms = (hero: Rect, view: { w: number; h: number }) => {
+    const section = loopRef.current ??= document.getElementById("loop");
+    const ring = ringArt.current?.getBoundingClientRect();
+    if (!section || !ring) return null;
+    const box = section.getBoundingClientRect();
+    if (box.top >= view.h || box.bottom <= 0) return null;
+    const turn = parseFloat((section.firstElementChild as HTMLElement | null)?.style.getPropertyValue("--wheel-turn") ?? "") || 0;
+    const cards = [...section.querySelectorAll(".mp-step-demo")].map((video) => video.parentElement!.getBoundingClientRect());
+    const last = cards.length - 1;
+    const frame = (r: DOMRect): SculptureShape => ({ kind: "window", rect: { x: r.left, y: r.top, w: r.width, h: r.height }, ...CARD_FRAME });
+    // where a card rests at the front, read while one does; the frame waits there between turns
+    const at = Math.round(turn);
+    if (Math.abs(turn - at) < 0.01 && at <= last) rested.current = cards[at];
+    const rest = rested.current ?? cards[0];
+    const centre: SculptureShape = { kind: "image", rect: { x: ring.left, y: ring.top, w: ring.width, h: ring.height } };
+    let form: SculptureMorph;
+    if (box.top > 0) form = { from: { kind: "image", rect: hero }, to: frame(cards[0]), mix: ease(Math.min(1, 1 - box.top / view.h)) };
+    else if (turn >= last) form = { from: frame(cards[last]), to: centre, mix: ease(Math.min(1, turn - last)) };
+    // turning, it slides down to meet the next card coming up from below and rides back up with it
+    else form = { from: frame(rest), to: frame(cards[Math.floor(turn) + 1]), mix: turn - Math.floor(turn) };
+    return { form, turn };
+  };
+
   // Asked by the sculpture every frame: which two shapes it is between, and how far along. On the page the ∞ stays where
   // the page puts it: it scrolls away with the hero, and the one above the last words scrolls in with them. It is the
   // hero's until the page is nearer the last words, both out of sight where that changes, and while neither is on the
@@ -357,9 +390,11 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     const place: SculptureShape = art && middle(art.top, art.height) < middle(hero.y, hero.h)
       ? { kind: "image", rect: { x: art.left, y: art.top, w: art.width, h: art.height } }
       : { kind: "image", rect: hero };
-    // drawn every frame while the page scrolls, so it keeps step with the page
-    const moving = window.scrollY !== scrolled.current;
+    const wheel = loopForms(hero, view);
+    // drawn every frame while the page scrolls or the wheel turns, so it keeps step with them
+    const moving = window.scrollY !== scrolled.current || wheel?.turn !== turned.current;
     scrolled.current = window.scrollY;
+    turned.current = wheel?.turn ?? -1;
     // the login window: from the shape it has on the page (the page stands still meanwhile) into the window's frame
     const now = performance.now(), g = gather.current, e = entry.current;
     if (g.start < 0 && g.to !== g.from) g.start = now;
@@ -368,12 +403,12 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     const out = gatheredAt(e, now, ENTER_MS);
     // out of sight, and not on its way into a window or back (stirred grains stray a little past the picture)
     const { x, y, w, h } = place.rect;
-    const away = !g.to && !e.to && !into && !out && (y + h * 1.1 < 0 || y - h * 0.1 > view.h || x + w < 0 || x > view.w);
+    const away = !wheel && !g.to && !e.to && !into && !out && (y + h * 1.1 < 0 || y - h * 0.1 > view.h || x + w < 0 || x > view.w);
     const box = glass.current?.getBoundingClientRect();
-    let form: SculptureMorph = { from: place, to: place, mix: 0, moving, away };
+    let form: SculptureMorph = wheel ? { ...wheel.form, moving } : { from: place, to: place, mix: 0, moving, away };
     if (into > 0 && box) {
       const frame: SculptureShape = { kind: "window", rect: { x: box.left, y: box.top, w: box.width, h: box.height }, ...FRAME };
-      form = { from: place, to: frame, mix: into, moving: moving || into !== g.to };
+      form = { from: form.mix < 0.5 ? form.from : form.to, to: frame, mix: into, moving: moving || into !== g.to };
     }
     // into the workbench: from that shape into its frame, which reaches twice the screen's height below the top bar so
     // that the lower arcs, laid along its bottom half, pour off the screen
@@ -422,6 +457,12 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     />
 
     <WorksWheel id="loop" className="mp-wheel" label="教与学" items={wheel} onFront={setFront}>
+      {/* the ring's middle: the sand gathers into an ∞ here over a faint 教学; without WebGL the picture stands in */}
+      <div ref={ringArt} className="mp-ring-art" aria-hidden="true">
+        <span>教学</span>
+        {/* eslint-disable-next-line @next/next/no-img-element -- a stand-in the canvas draws over at the same place */}
+        <img src={picture(shade)} alt="" />
+      </div>
       <header className="mp-wheel-head">
         <p className="mp-kicker">01 闭环</p>
         <p className="mp-lead">七步连成一圈：学生做过的每一道题，<br />都会带着批改结果回到下一轮备课。</p>

@@ -27,7 +27,7 @@
 //   fit the stage (a few items make big cards).
 // - An item may bring its own card face (`face`) and a line under its title
 //   (`text`). `children` are pinned with the stage, which carries `--wheel-open`
-//   (0 the ring, 1 the drum) for them.
+//   (0 the ring, 1 the drum) and `--wheel-turn` (the turn itself) for them.
 import * as React from "react";
 
 const cn = (...names: (string | false | null | undefined)[]) => names.filter(Boolean).join(" ");
@@ -262,6 +262,7 @@ export function WorksWheel({
       if (labelRef.current) labelRef.current.style.opacity = String(1 - m);
       if (titleRef.current) titleRef.current.style.opacity = String(m);
       stageRef.current?.parentElement?.style.setProperty("--wheel-open", m.toFixed(3));
+      stageRef.current?.parentElement?.style.setProperty("--wheel-turn", t.toFixed(4));
       const near = clamp(Math.round(pos), 0, last);
       setActive((prev) => (prev === near ? prev : near));
       // at rest, and only while the section is pinned on screen
