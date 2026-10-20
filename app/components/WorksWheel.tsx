@@ -51,7 +51,7 @@ export interface WorksWheelProps extends React.ComponentPropsWithoutRef<"section
   label?: string;
   /** Label on the card's hover affordance. Omit to drop it. @default undefined */
   action?: string;
-  /** Told which item has come to the front, whenever that changes. */
+  /** Told which item rests at the front, once the wheel has come to a stop there; -1 while it turns or is a ring. */
   onFront?: (index: number) => void;
 }
 
@@ -149,6 +149,10 @@ export function WorksWheel({
   const kick = React.useRef(() => {});
   const [active, setActive] = React.useState(0);
   const [stage, setStage] = React.useState<Stage>({ w: 0, h: 0 });
+
+  const onFrontRef = React.useRef(onFront);
+  React.useEffect(() => { onFrontRef.current = onFront; }, [onFront]);
+  const resting = React.useRef(-1);
 
   const count = items.length;
   const last = Math.max(count - 1, 0);
@@ -260,6 +264,11 @@ export function WorksWheel({
       stageRef.current?.parentElement?.style.setProperty("--wheel-open", m.toFixed(3));
       const near = clamp(Math.round(pos), 0, last);
       setActive((prev) => (prev === near ? prev : near));
+      // at rest, and only while the section is pinned on screen
+      const box = sectionRef.current?.getBoundingClientRect();
+      const pinned = !!box && box.top <= 1 && box.bottom >= window.innerHeight - 1;
+      const still = pinned && m > 0.99 && Math.abs(pos - near) < 0.04 ? near : -1;
+      if (still !== resting.current) onFrontRef.current?.((resting.current = still));
       if (turn.current !== target.current) frame = requestAnimationFrame(draw);
     };
 
@@ -303,8 +312,6 @@ export function WorksWheel({
     const run = Math.max(1, box.height - window.innerHeight);
     window.scrollTo({ top: window.scrollY + box.top + (i / (last + 1)) * run, behavior: reduced ? "instant" : "smooth" });
   };
-
-  React.useEffect(() => onFront?.(active), [active, onFront]);
 
   const current = items[active];
 

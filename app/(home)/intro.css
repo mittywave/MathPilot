@@ -56,15 +56,10 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 .mp-wheel .works-wheel-title { font-weight:500; letter-spacing:.02em; }
 .mp-wheel .works-wheel-text { margin:.9em 0 0; line-height:1.8; color:var(--soft); text-wrap:balance; }
 .mp-wheel .works-wheel-index { letter-spacing:.06em; }
-/* a step's card: its name set large in the ∞'s metal (the stops FormulaSand gives the formulas) */
-.mp-step-face { position:absolute; inset:0; display:grid; place-items:center; container-type:size; border:1px solid var(--line); border-radius:inherit; background:color-mix(in srgb, var(--fg) 3%, var(--bg)); }
-.mp-step-demo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:inherit; }
+/* a step's card: its recorded demo, the first frame as the cover */
+.mp-step-demo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border:1px solid var(--line); border-radius:inherit; background:color-mix(in srgb, var(--fg) 3%, var(--bg)); }
 .mp-step-demo-toggle { position:absolute; left:10px; bottom:10px; display:grid; place-items:center; width:28px; height:28px; border:1px solid var(--line); border-radius:50%; background:color-mix(in srgb, var(--bg) 82%, transparent); color:var(--fg); cursor:pointer; opacity:.55; transition:opacity .2s; }
 .mp-step-demo-toggle:hover, .mp-step-demo-toggle:focus-visible { opacity:1; }
-.mp-step-face-no { position:absolute; top:9cqh; left:7cqw; font-family:var(--serif); font-size:8cqh; color:var(--acc); }
-.mp-step-face-name { padding-left:.06em; font-family:var(--serif); font-size:36cqh; line-height:1; letter-spacing:.06em; color:transparent;
-  background:linear-gradient(180deg, #6A655C 0%, #989183 30%, #BDB7A9 46%, #8C8579 62%, #5E5950 100%); -webkit-background-clip:text; background-clip:text; }
-.mp-intro[data-mode="dark"] .mp-step-face-name { background-image:linear-gradient(180deg, #A39E94 0%, #D6D3CA 30%, #F4F2ED 46%, #BAB6AA 62%, #8C877D 100%); }
 
 .mp-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:clamp(40px,4vw,64px) clamp(24px,3vw,56px); margin:0; padding:0; list-style:none; }
 .mp-cell { padding-top:22px; border-top:1px solid var(--line); }
