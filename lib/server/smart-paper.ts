@@ -10,7 +10,6 @@ import {
   planQuestionIds, questionComplexity, questionFeatures, smartPaperBriefSchema, smartPaperSelectSchema, SMART_PAPER_LIMITS,
   type SmartPaperCandidate, type SmartPaperOutline,
 } from "../smart-paper-contract";
-import { abilityNoteLabel, normalizeAbilityNotes } from "../student-profile-contract";
 import type { AuthUser, LibraryData } from "../types";
 
 // 智能组卷: the teacher's sentence, read against one student's archive, becomes days of questions from the library.
@@ -50,23 +49,14 @@ async function ownStudent(user: AuthUser, id: string) {
   return row;
 }
 
-// What the archive says about this student, newest first and kept short: the teacher's notes and lesson feedback (定档 ·
-// 主观, with the abilities read from it), the knowledge points graded work shows weakest (定档 · 客观), error types with
-// counts, the graded answers that were wrong or partly wrong (feedback and steps), and weak points the reports name.
+// The student digest follows confirmed grading and concrete error causes, without teacher lesson feedback.
 async function studentDigest(user: AuthUser, student: { id: string; notes: string }) {
-  const [observations, points, { index: graph }] = await Promise.all([
-    db().prepare("SELECT observed_at, text, abilities_json FROM student_observations WHERE student_id = ? AND owner_user_id = ? ORDER BY observed_at DESC, created_at DESC LIMIT 6")
-      .bind(student.id, user.id).all<{ observed_at: number; text: string; abilities_json: string }>(),
+  const [points, { index: graph }] = await Promise.all([
     db().prepare(`SELECT capability_key AS key, MAX(capability_label) AS label, SUM(verdict = 'correct') AS correct, COUNT(*) AS total FROM student_capability_evidence
       WHERE student_id = ? AND owner_user_id = ? AND dimension = 'knowledge' GROUP BY capability_key HAVING COUNT(*) >= 2`).bind(student.id, user.id).all<{ key: string; label: string; correct: number; total: number }>(),
     loadPublishedKnowledgeGraph(),
   ]);
   const lead: string[] = [];
-  if (observations.results.length) lead.push("老师课后反馈（原话，新的在前）：");
-  for (const row of observations.results as Array<{ observed_at: number; text: string; abilities_json: string }>) {
-    const abilities = normalizeAbilityNotes(jsonList(row.abilities_json)).map(abilityNoteLabel);
-    lead.push(`- ${new Date(row.observed_at).toLocaleDateString("zh-CN")}：${text(row.text.replace(/\s+/g, " "), 160)}${abilities.length ? `｜能力：${abilities.join("、")}` : ""}`);
-  }
   const weakest = (points.results as Array<{ key: string; label: string; correct: number; total: number }>).filter((row) => graph.node(row.key)?.level === "point")
     .sort((a, b) => a.correct / a.total - b.correct / b.total).slice(0, 8);
   if (weakest.length) lead.push(`批改出来的知识点正确率（从低到高）：${weakest.map((row) => `${row.label} 对 ${row.correct}/${row.total}`).join("；")}`);

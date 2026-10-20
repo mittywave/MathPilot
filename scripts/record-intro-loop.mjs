@@ -320,26 +320,23 @@ const STEPS = {
     await s.stop();
   },
 
-  // 定档: the archive's knowledge points and five abilities, and a line of after-class feedback saved into it.
+  // 定档: automatic ability analysis with traceable graded answers.
   async profile(s) {
-    await s.replay(/\/api\/students\/[^/]+\/observations(\?|$)/, `students_${MIA}_observations-`, 1200);
+    await s.replay(/\/api\/students\/[^/]+\/profile(\?|$)/, `students_${MIA}_profile-`, 1200);
     await s.goto(`/library?view=wrong-book&studentId=${MIA}&tab=profile`, 1500);
     await s.park(700, 300);
     await s.start();
     await sleep(500);
     await s.hover(s.page.locator('.profile-card').first(), 700, 600, { dy: 0.4 });
-    await s.click(s.page.getByLabel('课后反馈'), { after: 200 });
-    await s.type('符号常出错，转化不错；下次多练去括号。', 16);
     await s.cut(async () => {
-      await s.click(s.page.getByRole('button', { name: /^保存/ }).first(), { after: 0 });
-      await s.page.locator('.observation-list li, .observation').first().waitFor({ timeout: 20000 }).catch(() => {});
-      await sleep(400);
+      await s.page.locator('.ability-insights li').first().waitFor({ timeout: 20000 });
     }, { head: 0.5 });
-    await s.hover(s.page.getByText(/^能力/).first(), 700, 1400);
+    await s.click(s.page.locator('.ability-evidence summary').first(), { after: 800 });
+    await s.scroll(null, { by: 260, ms: 1200 });
     await s.stop();
   },
 
-  // 学情: a month's report written from the homework and feedback.
+  // 学情: a month's report written from homework and ability evidence.
   async report(s) {
     await s.replay(/\/api\/students\/[^/]+\/reports(\?|$)/, `students_${MIA}_reports-`, 1500);
     await s.goto(`/library?view=wrong-book&studentId=${MIA}&tab=report`, 1500);

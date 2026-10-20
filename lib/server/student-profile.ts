@@ -3,14 +3,12 @@ import { callStructuredAi } from "./ai-gateway";
 import { loadPublishedKnowledgeGraph } from "./knowledge-graph";
 import { parseRecognitionModelText } from "./recognition-model";
 import {
-  buildObservationPrompt, buildStudentReportPrompt, fallbackStudentReportText, normalizeAbilityNotes, normalizeObservationResult, normalizeStudentReportText,
-  observationSchema, OBSERVATION_LIMITS, reportTimeZone, studentReportSchema,
+  buildStudentAbilityPrompt, buildStudentReportPrompt, fallbackStudentReportText, normalizeStudentAbilityAnalysis, normalizeStudentReportText,
+  reportTimeZone, studentAbilitySchema, studentReportSchema,
 } from "../student-profile-contract";
-import type { AbilityNote, AuthUser, KnowledgeTally, QuestionType, StudentHomework, StudentObservation, StudentProfileSummary, StudentReport, StudentReportData } from "../types";
+import type { AuthUser, KnowledgeTally, QuestionType, StudentAbilityAnalysis, StudentAbilityEvidence, StudentHomework, StudentProfileSummary, StudentReport, StudentReportData } from "../types";
 
-// 定档: the archive's reading of one student. 客观 is the graded homework the teacher let into the profile (assigned
-// homework always is): every knowledge point it touched and every question type, right, partly right or wrong.
-// 主观 is the teacher's own words after each lesson, with the abilities a model read from them, quoting the words.
+// 定档 uses published grading evidence for both knowledge tallies and open-ended ability analysis.
 type AppEnv = { DB: D1Database };
 const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const DAY = 86_400_000;
@@ -33,19 +31,76 @@ async function ownedStudent(studentId: string, user: AuthUser) {
   return row;
 }
 
-type ObservationRow = { id: string; student_id: string; observed_at: number; text: string; abilities_json: string; keywords_json: string; extracted_at: number | null; created_at: number; updated_at: number };
-function toObservation(row: ObservationRow): StudentObservation {
+/** All evidence is scoped on the server; analysis never accepts client-supplied student work. */
+async function readAbilityEvidence(studentId: string, user: AuthUser, since: number | null, until: number | null) {
+  const rows = await db().prepare(`WITH eligible AS (
+    SELECT g.id, g.submission_id AS submissionId, g.assignment_question_id AS assignmentQuestionId,
+      q.question_number AS questionNumber, q.stem, q.options_json, q.answer AS standardAnswer, q.analysis AS standardAnalysis,
+      g.student_answer AS studentAnswer, g.verdict, g.feedback, g.step_analysis_json, g.evidence_summary AS evidenceSummary,
+      g.bbox_json, a.title, s.version, COALESCE(s.submitted_at, s.created_at) AS submittedAt,
+      COUNT(*) OVER () AS total,
+      ROW_NUMBER() OVER (PARTITION BY (g.verdict = 'correct') ORDER BY COALESCE(s.submitted_at, s.created_at) DESC, q.sort_order, g.id) AS position
+    FROM grading_items g JOIN homework_submissions s ON s.id = g.submission_id
+    JOIN homework_assignments a ON a.id = s.assignment_id JOIN assignment_questions q ON q.id = g.assignment_question_id
+    WHERE a.owner_user_id = ?1 AND s.student_id = ?2 AND s.status = 'published'
+      AND json_extract(a.outputs_json, '$.profile') = 1 AND g.requires_review = 0 AND q.reference_verified = 1
+      AND g.verdict IN ('correct', 'partial', 'incorrect')
+      AND (?3 IS NULL OR COALESCE(s.submitted_at, s.created_at) >= ?3)
+      AND (?4 IS NULL OR COALESCE(s.submitted_at, s.created_at) <= ?4)
+  ) SELECT * FROM eligible WHERE position <= CASE WHEN verdict = 'correct' THEN 20 ELSE 60 END
+    ORDER BY submittedAt DESC, questionNumber, id`).bind(user.id, studentId, since, until)
+    .all<StudentAbilityEvidence & { options_json: string; step_analysis_json: string; bbox_json: string; total: number; position: number }>();
   return {
-    id: row.id, studentId: row.student_id, observedAt: Number(row.observed_at), text: row.text,
-    abilities: normalizeAbilityNotes(parseJson(row.abilities_json, [])), keywords: parseJson<string[]>(row.keywords_json, []),
-    extractedAt: row.extracted_at == null ? null : Number(row.extracted_at), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+    abilityEvidenceTotal: Number(rows.results[0]?.total ?? 0),
+    abilityEvidence: rows.results.map((row: StudentAbilityEvidence & { options_json: string; step_analysis_json: string; bbox_json: string }) => ({
+      id: row.id, submissionId: row.submissionId, assignmentQuestionId: row.assignmentQuestionId,
+      questionNumber: row.questionNumber, stem: row.stem, standardAnswer: row.standardAnswer, standardAnalysis: row.standardAnalysis,
+      studentAnswer: row.studentAnswer, verdict: row.verdict, feedback: row.feedback, evidenceSummary: row.evidenceSummary,
+      title: row.title, version: row.version, submittedAt: row.submittedAt,
+      options: parseJson<unknown[]>(row.options_json, []).filter((value): value is string => typeof value === "string"),
+      stepAnalysis: parseJson<unknown[]>(row.step_analysis_json, []).filter((value): value is string => typeof value === "string"),
+      errorReasons: (parseJson<{ errors?: Array<{ reason?: string }> }>(row.bbox_json, {})?.errors ?? []).map((error) => error.reason).filter((value): value is string => typeof value === "string" && !!value.trim()),
+    })),
   };
 }
 
-/** 客观 and 主观 for one student, from `since` on (null: from the start) up to `until` (null: now). */
+// Short-lived, bounded reuse avoids another model call when switching periods with identical evidence or writing a report.
+// The owner/student scope and all source content participate in the key; corrections cannot reuse the old analysis.
+const abilityReadings = new Map<string, { at: number; analysis: StudentAbilityAnalysis }>();
+
+/** AI is a separate request so knowledge statistics remain available during analysis or an upstream failure. */
+async function analyzeStudentAbilities(evidence: StudentAbilityEvidence[], total: number, scope: string, signal?: AbortSignal, refresh = false): Promise<{ analysis: StudentAbilityAnalysis | null; notice: string }> {
+  if (!evidence.length) return { analysis: null, notice: "这段时间还没有可用于能力分析的已确认作答。" };
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([scope, total, evidence])));
+  const key = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const cached = abilityReadings.get(key);
+  if (!refresh && cached && Date.now() - cached.at < 10 * 60_000) return { analysis: cached.analysis, notice: "" };
+  abilityReadings.delete(key);
+  try {
+    const result = await callStructuredAi({ role: "text", prompt: buildStudentAbilityPrompt(evidence, total), schema: studentAbilitySchema,
+      schemaName: "student_ability_analysis", missingMessage: "尚未配置能力分析所用的 AI", signal });
+    if (!result.text) return { analysis: null, notice: result.error || "AI 没有返回可用的能力分析" };
+    signal?.throwIfAborted();
+    const analysis = normalizeStudentAbilityAnalysis(parseRecognitionModelText(result.text), evidence);
+    if (abilityReadings.size >= 24) abilityReadings.delete(abilityReadings.keys().next().value!);
+    abilityReadings.set(key, { at: Date.now(), analysis });
+    return { analysis, notice: "" };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { analysis: null, notice: error instanceof Error ? error.message : "能力分析暂时失败" };
+  }
+}
+
+export async function readStudentAbilityAnalysis(studentId: string, user: AuthUser, since: number | null, signal?: AbortSignal, refresh = false) {
+  await ownedStudent(studentId, user);
+  const evidence = await readAbilityEvidence(studentId, user, since, null);
+  return { ...evidence, ...await analyzeStudentAbilities(evidence.abilityEvidence, evidence.abilityEvidenceTotal, `${user.id}|${studentId}`, signal, refresh) };
+}
+
+/** The selected period's graded knowledge, question types and traceable work. */
 export async function readStudentProfile(studentId: string, user: AuthUser, since: number | null, until: number | null = null): Promise<StudentProfileSummary> {
   await ownedStudent(studentId, user);
-  const [evidence, types, observations, graph] = await Promise.all([
+  const [evidence, types, abilities, graph] = await Promise.all([
     db().prepare(`SELECT capability_key AS key, MAX(capability_label) AS label, verdict, COUNT(*) AS count, MAX(created_at) AS last
       FROM student_capability_evidence WHERE owner_user_id = ? AND student_id = ? AND dimension = 'knowledge' AND (?3 IS NULL OR created_at >= ?3) AND (?4 IS NULL OR created_at <= ?4)
       GROUP BY capability_key, verdict`).bind(user.id, studentId, since, until).all<{ key: string; label: string; verdict: string; count: number; last: number }>(),
@@ -55,8 +110,7 @@ export async function readStudentProfile(studentId: string, user: AuthUser, sinc
         AND g.requires_review = 0 AND g.verdict IN ('correct', 'partial', 'incorrect') AND (?3 IS NULL OR COALESCE(s.submitted_at, s.created_at) >= ?3)
         AND (?4 IS NULL OR COALESCE(s.submitted_at, s.created_at) <= ?4)
       GROUP BY q.type, g.verdict`).bind(user.id, studentId, since, until).all<{ type: QuestionType; verdict: string; count: number }>(),
-    db().prepare(`SELECT * FROM student_observations WHERE owner_user_id = ? AND student_id = ? AND (?3 IS NULL OR observed_at >= ?3) AND (?4 IS NULL OR observed_at <= ?4)
-      ORDER BY observed_at DESC, created_at DESC LIMIT 200`).bind(user.id, studentId, since, until).all<ObservationRow>(),
+    readAbilityEvidence(studentId, user, since, until),
     loadPublishedKnowledgeGraph(),
   ]);
   const tallies = new Map<string, KnowledgeTally>();
@@ -76,76 +130,8 @@ export async function readStudentProfile(studentId: string, user: AuthUser, sinc
   }
   return {
     since, knowledge: [...tallies.values()], types: QUESTION_TYPES.flatMap((type) => byType.get(type) ?? []),
-    observations: (observations.results as ObservationRow[]).map(toObservation),
+    ...abilities,
   };
-}
-
-async function readObservation(id: string, user: AuthUser) {
-  const row = await db().prepare("SELECT * FROM student_observations WHERE id = ? AND owner_user_id = ?").bind(id, user.id).first<ObservationRow>();
-  if (!row) throw responseError("这条反馈不存在", 404);
-  return row;
-}
-
-// The teacher's words are kept whatever the model does; a failed reading leaves extracted_at empty to try again later.
-async function extractObservation(id: string, words: string, user: AuthUser) {
-  const result = await callStructuredAi({ role: "text", prompt: buildObservationPrompt(words), schema: observationSchema, schemaName: "student_observation", missingMessage: "尚未配置读取课后反馈所用的 AI" });
-  if (!result.text) return result.error || "AI 没有返回可用结果";
-  let reading;
-  try { reading = normalizeObservationResult(parseRecognitionModelText(result.text), words); }
-  catch { return "AI 返回的内容不是有效的结构化数据"; }
-  await db().prepare("UPDATE student_observations SET abilities_json = ?, keywords_json = ?, extracted_at = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(JSON.stringify(reading.abilities), JSON.stringify(reading.keywords), Date.now(), Date.now(), id, user.id).run();
-  return "";
-}
-
-function observationText(value: unknown) {
-  const words = typeof value === "string" ? value.trim().slice(0, OBSERVATION_LIMITS.text) : "";
-  if (!words) throw responseError("请写下或说出这节课的情况", 400);
-  return words;
-}
-// A lesson date: a day in the last two years, not in the future.
-function observationDay(value: unknown) {
-  const time = Number(value);
-  if (!Number.isFinite(time)) return Date.now();
-  return Math.min(Date.now() + DAY, Math.max(Date.now() - 730 * DAY, Math.round(time)));
-}
-
-/** Saves the teacher's words for a lesson and reads the abilities from them; `notice` explains a reading that failed. */
-export async function createObservation(studentId: string, user: AuthUser, raw: unknown) {
-  await ownedStudent(studentId, user);
-  const body = raw && typeof raw === "object" ? raw as { text?: unknown; observedAt?: unknown } : {};
-  const words = observationText(body.text); const id = crypto.randomUUID(); const now = Date.now();
-  await db().prepare(`INSERT INTO student_observations (id, owner_user_id, student_id, observed_at, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(id, user.id, studentId, observationDay(body.observedAt), words, now, now).run();
-  const notice = await extractObservation(id, words, user).catch((error) => error instanceof Error ? error.message : "读取失败");
-  return { observation: toObservation(await readObservation(id, user)), notice };
-}
-
-/**
- * Changes one lesson's feedback: new words (read again), a different day, the teacher's own removal of a judgement or
- * keyword, or simply another reading of the same words (extract).
- */
-export async function updateObservation(studentId: string, id: string, user: AuthUser, raw: unknown) {
-  await ownedStudent(studentId, user);
-  const row = await readObservation(id, user);
-  if (row.student_id !== studentId) throw responseError("这条反馈不存在", 404);
-  const body = raw && typeof raw === "object" ? raw as { text?: unknown; observedAt?: unknown; abilities?: unknown; keywords?: unknown; extract?: unknown } : {};
-  const words = body.text === undefined ? row.text : observationText(body.text);
-  // New words make the old reading meaningless: it is cleared before the words are read again.
-  const reworded = words !== row.text;
-  const abilities: AbilityNote[] = reworded ? [] : body.abilities === undefined ? normalizeAbilityNotes(parseJson(row.abilities_json, [])) : normalizeAbilityNotes(body.abilities);
-  const keywords = reworded ? [] : body.keywords === undefined ? parseJson<string[]>(row.keywords_json, [])
-    : (Array.isArray(body.keywords) ? body.keywords : []).map((item) => String(item ?? "").trim().slice(0, OBSERVATION_LIMITS.keyword)).filter(Boolean).slice(0, OBSERVATION_LIMITS.keywords);
-  await db().prepare("UPDATE student_observations SET text = ?, observed_at = ?, abilities_json = ?, keywords_json = ?, extracted_at = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?")
-    .bind(words, body.observedAt === undefined ? row.observed_at : observationDay(body.observedAt), JSON.stringify(abilities), JSON.stringify(keywords), reworded ? null : row.extracted_at, Date.now(), id, user.id).run();
-  const notice = body.extract === true || reworded ? await extractObservation(id, words, user).catch((error) => error instanceof Error ? error.message : "读取失败") : "";
-  return { observation: toObservation(await readObservation(id, user)), notice };
-}
-
-export async function deleteObservation(studentId: string, id: string, user: AuthUser) {
-  await ownedStudent(studentId, user);
-  const result = await db().prepare("DELETE FROM student_observations WHERE id = ? AND student_id = ? AND owner_user_id = ?").bind(id, studentId, user.id).run();
-  if (!result.meta.changes) throw responseError("这条反馈不存在", 404);
 }
 
 // ---- 学情报告 ----
@@ -154,7 +140,7 @@ type ReportRow = { id: string; student_id: string; period_start: number; period_
 function toReport(row: ReportRow): StudentReport {
   return {
     id: row.id, studentId: row.student_id, periodStart: Number(row.period_start), periodEnd: Number(row.period_end),
-    data: parseJson<StudentReportData>(row.data_json, { studentName: "", className: "", homework: [], knowledge: [], types: [], observations: [], wrongAdded: 0 }),
+    data: parseJson<StudentReportData>(row.data_json, { studentName: "", className: "", homework: [], knowledge: [], types: [], abilityEvidence: [], abilityEvidenceTotal: 0, abilityAnalysis: null, wrongAdded: 0 }),
     text: normalizeStudentReportText(parseJson(row.text_json, {})), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
 }
@@ -176,7 +162,7 @@ function reportPeriod(raw: { periodStart?: unknown; periodEnd?: unknown }) {
 
 /**
  * Makes a 学情报告: the archive over the period is copied into the report (homework given or handed in, knowledge and
- * question types graded, lesson feedback, new wrong-book entries), and the model writes the text from that copy alone.
+ * question types graded, ability evidence and analysis, new wrong-book entries), and the model writes the text from that copy alone.
  * Without a model the report still holds the facts in plain sentences, with `notice` saying why.
  */
 export async function createStudentReport(studentId: string, user: AuthUser, raw: unknown) {
@@ -191,12 +177,13 @@ export async function createStudentReport(studentId: string, user: AuthUser, raw
       .bind(user.id, studentId, start, end).first<{ count: number }>(),
   ]);
   const inPeriod = (time: number) => time >= start && time <= end;
+  const ability = await analyzeStudentAbilities(profile.abilityEvidence, profile.abilityEvidenceTotal, `${user.id}|${studentId}`);
   const data: StudentReportData = {
     studentName: student.name, className: student.class_name ?? "",
     homework: homework.filter((item) => inPeriod(item.createdAt) || inPeriod(item.latest.updatedAt))
       .map(({ title, assigned, createdAt, total, done, correct, incorrect, pending }) => ({ title, assigned, createdAt, total, done, correct, incorrect, pending })),
     knowledge: profile.knowledge, types: profile.types,
-    observations: profile.observations.map(({ observedAt, text, abilities }) => ({ observedAt, text, abilities })).reverse(),
+    abilityEvidence: profile.abilityEvidence, abilityEvidenceTotal: profile.abilityEvidenceTotal, abilityAnalysis: ability.analysis,
     wrongAdded: Number(wrong?.count ?? 0),
   };
   let text = fallbackStudentReportText(data), notice = "";
@@ -209,7 +196,7 @@ export async function createStudentReport(studentId: string, user: AuthUser, raw
   await db().prepare(`INSERT INTO student_reports (id, owner_user_id, student_id, period_start, period_end, data_json, text_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(id, user.id, studentId, start, end, JSON.stringify(data), JSON.stringify(text), now, now).run();
   const row = await db().prepare("SELECT * FROM student_reports WHERE id = ?").bind(id).first<ReportRow>();
-  return { report: toReport(row!), notice: notice ? `AI 没写成，报告里先放了数据摘要：${notice}` : "" };
+  return { report: toReport(row!), notice: [notice ? `AI 没写成，报告里先放了数据摘要：${notice}` : "", profile.abilityEvidence.length && ability.notice ? `能力分析未完成：${ability.notice}` : ""].filter(Boolean).join("；") };
 }
 
 /** The teacher's edits of the report's text; the data it was written from stays as it was. */

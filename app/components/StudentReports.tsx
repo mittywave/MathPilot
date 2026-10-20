@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useConfirm } from "./ConfirmDialog";
 import { PaperMoreMenu } from "./PaperMoreMenu";
+import { AbilityAnalysis } from "./StudentProfile";
 import { createStudentReport, deleteStudentReport, fetchStudentReports, updateStudentReport } from "../../lib/api-client";
-import { ABILITY_DIMENSIONS, abilityStateLabel, reportKnowledgePoints, reportTotals } from "../../lib/student-profile-contract";
+import { reportKnowledgePoints, reportTotals } from "../../lib/student-profile-contract";
 import type { StudentReport, StudentReportText, StudentSummary } from "../../lib/types";
 
 const DAY = 86_400_000;
@@ -78,7 +79,7 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
     </header>
     <dl className="report-banner">
       <div><dt>作业</dt><dd>{totals.homework} 份</dd></div><div><dt>批改题数</dt><dd>{totals.total} 题</dd></div>
-      <div><dt>正确率</dt><dd>{totals.total ? totals.rate : "—"}</dd></div><div><dt>课后反馈</dt><dd>{totals.lessons} 次</dd></div>
+      <div><dt>正确率</dt><dd>{totals.total ? totals.rate : "—"}</dd></div><div><dt>新增错题</dt><dd>{totals.wrongAdded} 题</dd></div>
     </dl>
     <TextField label="总体情况" value={report.text.overview} onSave={(overview) => save({ overview })} />
     <section className="report-data"><h4>作业情况</h4>
@@ -92,13 +93,8 @@ function ReportView({ report, studentName, onChange, onRemove }: { report: Stude
       {points.map((item) => { const total = item.correct + item.partial + item.incorrect; return <tr key={item.key}><td>{item.label}</td><td>{total}</td><td>{item.correct}</td><td>{Math.round(item.correct / total * 100)}%</td></tr>; })}
     </tbody></table></section>}
     <TextField label="能力表现" value={report.text.abilities} onSave={(abilities) => save({ abilities })} />
-    <section className="report-data"><table><thead><tr><th>能力</th><th>老师的判断</th><th>最近一次反馈</th></tr></thead><tbody>
-      {ABILITY_DIMENSIONS.map((dimension) => {
-        const notes = report.data.observations.flatMap((item) => item.abilities.filter((note) => note.key === dimension.key).map((note) => ({ ...note, at: item.observedAt })));
-        const weak = notes.filter((note) => note.polarity === "weakness").length, strong = notes.length - weak; const latest = notes.at(-1);
-        return <tr key={dimension.key}><td>{dimension.label}</td><td>{!notes.length ? "没提到" : weak && strong ? `短板 ${weak} 次 · ${abilityStateLabel(dimension.key, "strength")} ${strong} 次` : abilityStateLabel(dimension.key, weak ? "weakness" : "strength")}</td><td>{latest ? `“${latest.evidence}”（${day(latest.at)}）` : ""}</td></tr>;
-      })}
-    </tbody></table></section>
+    {report.data.abilityAnalysis ? <AbilityAnalysis analysis={{ ...report.data.abilityAnalysis, summary: "" }} evidence={report.data.abilityEvidence ?? []} />
+      : !!report.data.observations?.length && <details className="report-data"><summary>历史报告原有的课后反馈</summary>{report.data.observations.map((item, index) => <p key={index}>{day(item.observedAt)}：{item.text}</p>)}</details>}
     <div className="report-field"><span>下一步安排</span>
       <ol className="report-plan">{[...report.text.plan, ""].map((item, index) => <li key={`${index}-${report.text.plan.length}`}>
         <TextField label={`第 ${index + 1} 条`} value={item} rows={1} onSave={(value) => save({ plan: Object.assign([...report.text.plan], { [index]: value }).map((line) => line.trim()).filter(Boolean) })} />
@@ -147,11 +143,11 @@ export function StudentReports({ student }: { student: StudentSummary }) {
       <label>从<input type="date" value={from} max={to} onChange={(event) => setRange({ from: event.target.value, to })} /></label>
       <label>到<input type="date" value={to} min={from} max={dateValue(today)} onChange={(event) => setRange({ from, to: event.target.value })} /></label>
       <button type="button" className="primary-button" disabled={busy || !from || !to} onClick={() => void generate()}>{busy ? "AI 正在写报告…" : "生成学情报告"}</button>
-      <small>汇总这段时间的作业、知识点和课后反馈，AI 写成给家长看的报告，可以修改后下载 PDF。</small>
+      <small>汇总这段时间的作业、知识点和基于作答的能力诊断，AI 写成给家长看的报告，可以修改后下载 PDF。</small>
     </header>
-    {notice && <p className="observation-notice" role="status">{notice}</p>}
+    {notice && <p className="ability-notice" role="status">{notice}</p>}
     {error ? <p className="student-panel-empty" role="alert">{error}</p> : !reports ? <div className="wrong-book-loading"><i></i><span>正在读取学情报告…</span></div>
-      : !reports.length ? <div className="student-panel-empty"><b>还没有学情报告</b><p>选好时间段点“生成学情报告”。报告里的数字都来自这段时间批改过的作业，能力表现只依据老师的课后反馈。</p></div>
+      : !reports.length ? <div className="student-panel-empty"><b>还没有学情报告</b><p>选好时间段点“生成学情报告”。报告里的数字都来自这段时间批改过的作业，能力分析依据题目要求、错题和作答过程，保留具体依据与待验证的推断。</p></div>
       : <div className="report-layout">
         <nav className="report-list" aria-label="历次学情报告">{reports.map((item) => <button key={item.id} type="button" className={item.id === shown?.id ? "active" : ""} aria-current={item.id === shown?.id} onClick={() => setSelected(item.id)}>
           <b>{period(item)}</b><small>{new Date(item.createdAt).toLocaleDateString("zh-CN")} 生成</small>

@@ -329,7 +329,7 @@ function testJpeg(quality = 82) {
 }
 
 function startMockModel(port) {
-  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,errorLocationNumbers:[],failErrorLocations:false,invalidErrorLocation:"",unlocatedErrors:false,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},observationPrompts:[],failObservation:false,reportPrompts:[],failReport:false };
+  const state = { requests: 0, failAll: false, failureCalls: 0, gradingCalls: 0, supplementalReadable:false,multiPage:false,pageQuestionCount:1,concurrency:null,verificationGate:null,invalidPage:0,pageExtractionCalls:{},pageImageCounts:[],contextProbe:false,renumberPage:0,locatorCalls:0,errorLocationNumbers:[],failErrorLocations:false,invalidErrorLocation:"",unlocatedErrors:false,teacherMarked:"",referenceNumbers:[],referenceImageCounts:[],originalContextCalls:0,gradedNumbers:[],verdictOnlyPrompts:0,assignedPage:[],assignedPrompts:[],assignedAnswers:{},assignedVerdicts:{},abilityPrompts:[],failAbility:false,reportPrompts:[],failReport:false };
   const server = createHttpServer(async (request, response) => {
     state.requests += 1;
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -381,17 +381,20 @@ function startMockModel(port) {
     if (state.failAll && prompt.includes("只识别学生已完成的数学作业")) {
       state.failureCalls += 1; response.writeHead(503, { "Content-Type": "application/json" }); response.end(JSON.stringify({ error: { message: "mock grading unavailable" } })); return;
     }
-    // 定档 · 主观: the teacher's words read against the five abilities; one judgement and one keyword quote nothing the teacher said.
-    if (prompt.includes("老师课后口述了一段对学生的观察")) {
-      if (state.failObservation) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock observation refused"}}));return; }
-      state.observationPrompts.push(prompt);
-      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({abilities:[{key:"careless",polarity:"weakness",evidence:"还是粗心"},{key:"thinking-reverse",polarity:"strength",evidence:"逆向思维 不错"},{key:"calculation",polarity:"weakness",evidence:"老师没说过的话"}],keywords:["丢负号","老师没说的词"]})}));return;
+    // Automatic ability analysis: a new dimension is accepted, an invented source is not.
+    if (prompt.includes("你是一位善于从学生数学作答中发现思维机制的诊断者")) {
+      if (state.failAbility) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock ability refused"}}));return; }
+      state.abilityPrompts.push(prompt);
+      const evidence = JSON.parse(prompt.split("分析材料（JSON，id 是引用依据的唯一标识）：\n")[1].split("\n\n请独立思考")[0]);
+      const source = evidence.find(item => item.verdict !== "correct" && (item.feedback || item.studentAnswer)) ?? evidence[0];
+      const insight = {title:"等价变形中的条件保持",demand:"保持等式两边的运算一致。",diagnosis:"当前作答显示需要检查变形依据，具体原因待后续验证。",status:"hypothesis",evidence:[{id:source.id,quote:source.feedback || source.studentAnswer}],nextStep:"只写第一步变形，并解释两边执行了什么相同操作。"};
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({summary:"从这批作答检查变形依据。",insights:[insight,{...insight,title:"虚构推断",evidence:[{id:"other-student-item",quote:"不存在的证据"}]}],limitations:["单次作答不能代表稳定能力。"]})}));return;
     }
     // 学情报告: the text is written from the data in the prompt only.
     if (prompt.includes("替老师写一份给家长看的学情报告")) {
       if (state.failReport) { response.writeHead(401,{"Content-Type":"application/json"});response.end(JSON.stringify({error:{message:"mock report refused"}}));return; }
       state.reportPrompts.push(prompt);
-      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({overview:"这段时间完成了布置的计算打卡。",knowledge:"加法掌握较好。",abilities:"老师反馈逆向思维不错。",plan:["每天练 5 道去括号","订正错题本里的题"],message:"请家长每天检查打卡。"})}));return;
+      response.writeHead(200,{"Content-Type":"application/json"});response.end(JSON.stringify({output_text:JSON.stringify({overview:"这段时间完成了布置的计算打卡。",knowledge:"加法掌握较好。",abilities:"当前作答提示应检查等价变形的依据，仍需验证。",plan:["每天练 5 道去括号","订正错题本里的题"],message:"请家长每天检查打卡。"})}));return;
     }
     // An assigned sheet is read against its list: the page names the sheet's own numbers (in any of their written forms).
     if (prompt.includes("只识别学生已完成的数学作业") && prompt.includes("这是老师布置的练习")) {
@@ -1222,39 +1225,36 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal(JSON.parse(d1Rows(stateDir,"SELECT sheet_json FROM homework_assignments WHERE id=?",[oneDayAssignment])[0].sheet_json).start,undefined);
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
-    // 定档: graded knowledge from the assigned homework, and the teacher's lesson feedback with the abilities read from it.
+    // Knowledge loads independently; ability analysis reads only this student's confirmed work.
     let profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
-    assert.ok(profile.knowledge.some(item=>item.level==="domain"),"knowledge tallies carry their place in the graph");
-    assert.ok(profile.types.some(item=>item.type==="填空题"&&item.correct>=2),"question types count only the work let into the profile");
+    assert.ok(profile.knowledge.some(item=>item.level==="domain"));
+    assert.ok(profile.types.some(item=>item.type==="填空题"&&item.correct>=2));
+    assert.ok(profile.abilityEvidence.length);
+    assert.equal(profile.observations,undefined);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherTwo})).response.status,404);
-    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherTwo,method:"POST",body:{text:"越权"}})).response.status,404);
-    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"  "}})).response.status,400);
-    const lesson=await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"今天讲去括号，他计算还是粗心，丢负号。不过逆向思维不错。",observedAt:Date.now()-86_400_000}});
-    assert.equal(lesson.response.status,201,JSON.stringify(lesson.payload));
-    assert.equal(lesson.payload.notice,"");
-    assert.deepEqual(lesson.payload.observation.abilities.map(note=>[note.key,note.polarity]),[["careless","weakness"],["thinking-reverse","strength"]],"a judgement that quotes nothing the teacher said is dropped");
-    assert.deepEqual(lesson.payload.observation.keywords,["丢负号"]);
-    assert.ok(lesson.payload.observation.extractedAt);
-    assert.match(mock.state.observationPrompts.at(-1),/thinking-transform（思维能力 · 转化）/);
-    const lessonId=lesson.payload.observation.id;
-    // The teacher removes a judgement; a failed reading of new words keeps the words and clears the old reading.
-    const trimmed=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{abilities:[lesson.payload.observation.abilities[1]]}});
-    assert.deepEqual(trimmed.payload.observation.abilities.map(note=>note.key),["thinking-reverse"]);
-    mock.state.failObservation=true;
-    const reworded=await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"PUT",body:{text:"今天状态很好。"}});
-    assert.equal(reworded.response.status,200);assert.ok(reworded.payload.notice);
-    assert.deepEqual([reworded.payload.observation.text,reworded.payload.observation.abilities,reworded.payload.observation.extractedAt],["今天状态很好。",[],null]);
-    mock.state.failObservation=false;
-    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${Date.now()-3_600_000}`,{cookie:teacherOne})).payload.profile;
-    assert.equal(profile.observations.length,0,"a lesson before the period is left out");
-    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile;
-    assert.deepEqual(profile.observations.map(item=>item.id),[lessonId]);
-    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherTwo,method:"DELETE",body:{}})).response.status,404);
-    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/observations/${lessonId}`,{cookie:teacherOne,method:"DELETE",body:{}})).response.status,200);
-    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne})).payload.profile.observations.length,0);
+    assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherTwo,method:"POST"})).response.status,404);
+    const analyzed=await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne,method:"POST"});
+    assert.equal(analyzed.response.status,200,JSON.stringify(analyzed.payload));
+    assert.equal(analyzed.payload.notice,"");
+    assert.deepEqual(analyzed.payload.analysis.insights.map(item=>item.title),["等价变形中的条件保持"]);
+    assert.ok(profile.abilityEvidence.some(item=>item.id===analyzed.payload.analysis.insights[0].evidence[0].id));
+    assert.match(mock.state.abilityPrompts.at(-1),/不局限于粗心、计算或任何五项能力/);
+    const beforeReuse=mock.state.abilityPrompts.length;
+    const reused=await jsonRequest(base,`/api/students/${studentOneId}/profile`,{cookie:teacherOne,method:"POST"});
+    assert.deepEqual(reused.payload.analysis,analyzed.payload.analysis);
+    assert.equal(mock.state.abilityPrompts.length,beforeReuse,"identical evidence reuses the successful reading");
+    mock.state.failAbility=true;
+    const abilityFailed=await jsonRequest(base,`/api/students/${studentOneId}/profile?refresh=1`,{cookie:teacherOne,method:"POST"});
+    assert.equal(abilityFailed.payload.analysis,null);assert.ok(abilityFailed.payload.notice);
+    assert.ok(abilityFailed.payload.abilityEvidence.length,"upstream failure preserves evidence");
+    mock.state.failAbility=false;
+    profile=(await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${Date.now()+86_400_000}`,{cookie:teacherOne})).payload.profile;
+    assert.equal(profile.abilityEvidence.length,0);
+    const calls=mock.state.abilityPrompts.length;
+    const empty=await jsonRequest(base,`/api/students/${studentOneId}/profile?since=${Date.now()+86_400_000}`,{cookie:teacherOne,method:"POST"});
+    assert.equal(empty.payload.analysis,null);assert.equal(mock.state.abilityPrompts.length,calls,"no AI call without evidence");
 
-    // 学情报告: a snapshot of the period, written up by the model from that snapshot alone; without a model, plain facts.
-    await jsonRequest(base,`/api/students/${studentOneId}/observations`,{cookie:teacherOne,method:"POST",body:{text:"逆向思维不错，计算还是粗心。",observedAt:Date.now()}});
+    // Reports freeze the same evidence and automatic analysis; later text edits cannot rewrite that snapshot.
     const period={periodStart:Date.now()-7*86_400_000,periodEnd:Date.now(),timeZone:"Asia/Shanghai"};
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherTwo,method:"POST",body:period})).response.status,404);
     assert.equal((await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:{periodStart:period.periodEnd,periodEnd:period.periodStart}})).response.status,400);
@@ -1265,11 +1265,13 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.deepEqual(report.text.plan,["每天练 5 道去括号","订正错题本里的题"]);
     assert.ok(report.data.homework.some(item=>item.title==="两天计算打卡"&&item.assigned&&item.done===4&&item.total===4),"the assigned homework of the period is in the snapshot");
     assert.ok(report.data.knowledge.length&&report.data.types.length);
-    assert.deepEqual(report.data.observations.map(item=>item.text),["逆向思维不错，计算还是粗心。"]);
+    assert.ok(report.data.abilityEvidence.length);
+    assert.equal(report.data.abilityAnalysis.insights[0].title,"等价变形中的条件保持");
+    assert.equal(report.data.observations,undefined);
     const reportPrompt=mock.state.reportPrompts.at(-1);
     assert.match(reportPrompt,/两天计算打卡（.+布置）：共 4 题，交了 4 题，对 3，错 1/);
-    assert.match(reportPrompt,/逆向思维不错，计算还是粗心。/);
-    assert.match(reportPrompt,/不能自己从作业结果推断粗心/);
+    assert.match(reportPrompt,/等价变形中的条件保持/);
+    assert.match(reportPrompt,/不能把假设写成确定缺陷/);
     mock.state.failReport=true;
     const plain=await jsonRequest(base,`/api/students/${studentOneId}/reports`,{cookie:teacherOne,method:"POST",body:period});
     mock.state.failReport=false;

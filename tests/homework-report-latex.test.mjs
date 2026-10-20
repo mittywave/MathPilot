@@ -2,8 +2,26 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { loadSource } from "./load-source.mjs";
 
-const { buildHomeworkReportLatex } = await loadSource("lib/homework-report-latex.ts");
+const { buildHomeworkReportLatex, buildStudentReportLatex } = await loadSource("lib/homework-report-latex.ts");
 const { completeInternationalReport, mainQuestionNumber, normalizeInternationalReport } = await import("../lib/homework-report.mjs");
+
+test("student reports export open ability diagnoses and their source quotes while preserving legacy report text", () => {
+  const report = { periodStart: 1792281600000, periodEnd: 1792368000000, data: {
+    studentName: "验收学生", className: "", homework: [], knowledge: [], types: [], wrongAdded: 1,
+    abilityEvidence: [{ id: "g", title: "四边形证明", questionNumber: "3", version: 1 }],
+    abilityAnalysis: { summary: "检查条件", insights: [{ title: "判定条件的完整性", demand: "说明垂直与平分",
+      diagnosis: "本次未写垂直条件，原因待验证", status: "hypothesis", evidence: [{ id: "g", quote: "缺少 $MN\\perp BD$" }], nextStep: "补全判定条件" }], limitations: ["没有完整手写过程"] },
+  }, text: { overview: "本期样本", knowledge: "", abilities: "原有能力文字", plan: [], message: "" } };
+  const tex = buildStudentReportLatex(report);
+  assert.match(tex, /判定条件的完整性.*待验证推断/);
+  assert.match(tex, /四边形证明.*第 3 题.*第 1 次上传/);
+  assert.match(tex, /MN\\perp BD/);
+  assert.doesNotMatch(tex, /老师的判断|五项能力|课后反馈/);
+  const legacy = buildStudentReportLatex({ ...report, data: { ...report.data, abilityAnalysis: undefined, observations: [{ observedAt: 1792300000000, text: "历史反馈原话" }] } });
+  assert.match(legacy, /历史反馈原话/);
+  assert.match(legacy, /原有能力文字/);
+  assert.doesNotMatch(legacy, /判定条件的完整性/);
+});
 
 const item = (questionNumber, score, maxScore, extra = {}) => ({ id: questionNumber, questionNumber, score, maxScore, verdict: score == null ? "review_required" : score === maxScore ? "correct" : score === 0 ? "incorrect" : "partial",
   stem: "", studentAnswer: "", feedback: "", errorType: "", stepAnalysis: [], standardAnswer: "", standardAnalysis: "", ...extra });

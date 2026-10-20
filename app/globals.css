@@ -662,7 +662,7 @@ button.student-panel-action { font-family:inherit; cursor:pointer; }
 .assign-plans small { grid-column:1; color:var(--muted); font-size:12px; }
 .assign-plans span { grid-column:2; grid-row:1 / span 2; color:var(--green); font-size:13px; font-weight:600; white-space:nowrap; }
 .assign-empty { margin:0 0 14px; padding:18px; border:1px dashed var(--line); border-radius:calc(10px*var(--radius-scale)); color:var(--muted); font-size:13px; text-align:center; }
-/* 学生档案 · 定档：左边知识点（客观），右边能力（主观）和课后反馈。 */
+/* 学生档案 · 定档：知识点统计与依据作答的能力分析。 */
 .student-profile { margin-top:16px; }
 .profile-periods { display:inline-flex; padding:3px; border:1px solid var(--line); border-radius:calc(9px*var(--radius-scale)); background:var(--surface); }
 .profile-periods button { min-height:28px; padding:0 11px; border:0; border-radius:calc(7px*var(--radius-scale)); background:none; color:var(--muted); font-size:12px; }
@@ -694,47 +694,28 @@ button.student-panel-action { font-family:inherit; cursor:pointer; }
 .profile-points { margin:0 0 6px 18px!important; }
 .profile-points li { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,46%); align-items:center; gap:12px; padding:4px 4px; color:color-mix(in srgb,var(--ink) 80%,var(--muted)); font-size:12px; }
 .profile-points li>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ability-summary { display:grid; gap:2px; margin:0 0 14px; padding:0; list-style:none; }
-.ability-summary li { display:grid; grid-template-columns:118px 56px minmax(0,1fr); align-items:baseline; gap:4px 10px; padding:6px 4px; border-bottom:1px dashed var(--line); font-size:12.5px; }
-.ability-summary b { font-size:13px; }
-.ability-state { justify-self:start; padding:1px 8px; border-radius:999px; background:var(--surface-soft); color:var(--muted); font-size:12px; font-weight:600; }
-.ability-summary li.weakness .ability-state { background:var(--danger-soft); color:var(--danger); }
-.ability-summary li.strength .ability-state { background:var(--success-soft); color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
-.ability-summary li.mixed .ability-state { background:var(--warn-soft); color:var(--warn-strong); }
-.ability-summary small { color:var(--muted); font-size:12px; }
-.ability-quote { grid-column:2 / -1; display:flex; gap:8px; min-width:0; margin:0; color:color-mix(in srgb,var(--ink) 75%,var(--muted)); font-size:12px; }
-.ability-quote q { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; quotes:"“" "”"; }
-.ability-quote em { flex:none; color:var(--muted); font-size:12px; font-style:normal; }
-.observation-compose { display:grid; gap:8px; padding:12px; border-radius:calc(10px*var(--radius-scale)); background:color-mix(in srgb,var(--green-soft) 45%,var(--surface)); }
-.observation-date { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
-.observation-date input,.observation-compose textarea,.observation-edit textarea { border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface); color:var(--ink); font:inherit; font-size:13px; outline:none; }
-.observation-date input { height:32px; padding:0 8px; }
-.observation-compose textarea,.observation-edit textarea { width:100%; padding:9px 11px; line-height:1.6; resize:vertical; }
-.observation-compose textarea:focus,.observation-edit textarea:focus,.observation-date input:focus { border-color:var(--green); box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 10%,transparent); }
-.observation-compose>div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.observation-compose small { color:var(--muted); font-size:12px; line-height:1.5; }
-.observation-compose .primary-button { flex:none; }
-
-.observation-list { display:grid; gap:0; margin:12px 0 0; padding:0; list-style:none; }
-.observation { padding:10px 2px; border-top:1px solid var(--line); }
-.observation header { display:flex; align-items:center; gap:8px; }
-.observation header b { font-size:12.5px; }
-.observation header small { color:var(--muted); font-size:12px; }
-.observation header .basket-more { margin-left:auto; }
-.observation>p { margin:6px 0 8px; color:var(--ink); font-size:13px; line-height:1.7; white-space:pre-wrap; }
-.observation-edit { display:grid; gap:8px; margin:6px 0 8px; }
-.observation-edit>div { display:flex; justify-content:flex-end; gap:8px; }
-.observation-tags { display:flex; flex-wrap:wrap; gap:6px; }
-.observation-tags small { color:var(--muted); font-size:12px; }
-.ability-chip,.keyword-chip { display:inline-flex; align-items:center; gap:2px; padding:2px 4px 2px 9px; border-radius:999px; font-size:12px; }
-.ability-chip.weakness { background:var(--danger-soft); color:var(--danger); }
-.ability-chip.strength { background:var(--success-soft); color:color-mix(in srgb,var(--success) 70%,var(--ink)); }
-.keyword-chip { background:var(--surface-soft); color:color-mix(in srgb,var(--ink) 75%,var(--muted)); }
-.ability-chip button,.keyword-chip button { width:18px; height:18px; padding:0; border:0; border-radius:50%; background:none; color:inherit; font-size:13px; line-height:1; opacity:.45; }
-.ability-chip button:hover,.keyword-chip button:hover { opacity:1; background:color-mix(in srgb,currentColor 12%,transparent); }
-.observation-pending { margin:0; color:var(--warn-strong); font-size:12px; }
-.observation-pending button { margin-left:6px; border:0; background:none; color:var(--green); font-size:12px; font-weight:600; }
-.observation-empty { margin:12px 0 0; color:var(--muted); font-size:12px; }
+.ability-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.ability-heading h3 { flex-wrap:wrap; }
+.ability-heading button { flex:none; padding:5px 9px; font-size:12px; }
+.ability-coverage,.ability-notice { margin:0 0 12px; color:var(--muted); font-size:12px; line-height:1.7; }
+.ability-analysis { font-size:13px; line-height:1.75; overflow-wrap:anywhere; }
+.ability-overview { margin:0 0 14px; }
+.ability-insights { display:grid; gap:16px; margin:0; padding:0; list-style:none; }
+.ability-insights>li { border-top:1px solid var(--line); padding-top:12px; }
+.ability-insights h4 { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 8px; font-size:14px; }
+.ability-state { flex:none; padding:1px 7px; border-radius:999px; background:var(--green-soft); color:var(--green); font-size:11px; font-weight:500; }
+.ability-state.hypothesis { background:var(--warn-soft); color:var(--warn-strong); }
+.ability-insights p { margin:7px 0; white-space:pre-wrap; }
+.ability-insights p>b { display:block; color:var(--muted); font-size:11px; font-weight:600; }
+.ability-evidence { margin:10px 0; padding:8px 10px; background:var(--surface-soft); border-radius:8px; }
+.ability-evidence summary { cursor:pointer; color:var(--green); font-size:12px; font-weight:600; }
+.ability-evidence>div { margin-top:10px; padding-top:8px; border-top:1px dashed var(--line); }
+.ability-evidence a { display:block; color:var(--green); font-weight:600; }
+.ability-evidence small { display:block; color:var(--muted); font-size:11px; }
+.ability-evidence blockquote { margin:8px 0; padding-left:10px; border-left:2px solid var(--green); white-space:pre-wrap; }
+.ability-next { padding-left:10px; border-left:2px solid var(--green); }
+.ability-limits { margin-top:16px; padding-top:10px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+.ability-limits ul { margin:5px 0 0; padding-left:18px; }
 @media (max-width:1100px) { .profile-columns { grid-template-columns:1fr; } }
 /* 学生档案 · 学情报告：左边历次报告，右边可修改的报告正文和数据表。 */
 .student-reports { margin-top:16px; }

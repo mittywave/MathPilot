@@ -1,6 +1,6 @@
 import { latexInline, latexPlain } from "./handout-latex";
 import { mainQuestionNumber } from "./homework-report.mjs";
-import { ABILITY_DIMENSIONS, abilityStateLabel, reportKnowledgePoints, reportTotals } from "./student-profile-contract";
+import { reportKnowledgePoints, reportTotals } from "./student-profile-contract";
 import type { GradingItem, HomeworkSubmission, InternationalReport, StudentReport } from "./types";
 
 // Reports parents read, each one self-contained TeX file: the IGCSE / A Level 批改报告 of one homework, and the 学情报告
@@ -171,24 +171,20 @@ ${rows.join("\n")}
 \end{tabularx}`;
 }
 
-function abilityTable(report: StudentReport) {
-  const rows = ABILITY_DIMENSIONS.flatMap((dimension) => {
-    const notes = report.data.observations.flatMap((item) => item.abilities.filter((note) => note.key === dimension.key).map((note) => ({ ...note, at: item.observedAt })));
-    if (!notes.length) return [];
-    const weak = notes.filter((note) => note.polarity === "weakness").length, strong = notes.length - weak;
-    const state = weak && strong ? `短板 ${weak} 次 · ${abilityStateLabel(dimension.key, "strength")} ${strong} 次` : abilityStateLabel(dimension.key, weak ? "weakness" : "strength");
-    const latest = notes[notes.length - 1];
-    return [`${latexPlain(dimension.label)} & ${state} & ${cell(`“${latest.evidence}”（${shortDate(latest.at)}）`)}\\\\`];
-  });
-  if (!rows.length) return "";
-  return String.raw`\renewcommand{\arraystretch}{1.3}
-\begin{tabularx}{\linewidth}{@{}p{30mm} p{30mm} X@{}}
-\toprule
-\textbf{能力} & \textbf{老师的判断} & \textbf{最近一次反馈}\\
-\midrule
-${rows.join("\n")}
-\bottomrule
-\end{tabularx}`;
+function abilityDetails(report: StudentReport) {
+  const analysis = report.data.abilityAnalysis;
+  if (!analysis) return (report.data.observations ?? []).map((item) => paragraph(`历史课后反馈（${shortDate(item.observedAt)}）：${item.text}`)).join("\n\n");
+  const sources = new Map((report.data.abilityEvidence ?? []).map((item) => [item.id, item]));
+  return [
+    ...analysis.insights.flatMap((insight) => [
+      String.raw`\subsection*{${latexPlain(insight.title)} · ${insight.status === "observed" ? "作答中可见" : "待验证推断"}}`,
+      paragraph(`题目要求：${insight.demand}`), paragraph(`能力分析：${insight.diagnosis}`),
+      ...insight.evidence.flatMap((ref) => { const source = sources.get(ref.id); return source
+        ? [String.raw`\begin{samepage}` + "\n" + paragraph(`作答依据：《${source.title}》第 ${source.questionNumber} 题（第 ${source.version} 次上传）：“${ref.quote}”`) + "\n" + String.raw`\par\end{samepage}`] : []; }),
+      paragraph(`怎样验证与练习：${insight.nextStep}`),
+    ]),
+    ...analysis.limitations.map((line) => paragraph(`判断边界：${line}`)),
+  ].join("\n\n");
 }
 
 /** 学情报告 → TeX: the teacher's (or the model's) text around tables built from the report's own data snapshot. */
@@ -197,8 +193,8 @@ export function buildStudentReportLatex(report: StudentReport) {
   const name = latexPlain(data.studentName);
   const period = `${date(report.periodStart)}—${date(report.periodEnd)}`;
   const banner = String.raw`\banner{\begin{tabularx}{\linewidth}{@{}XXXX@{}}
-\small 作业 & \small 批改题数 & \small 正确率 & \small 课后反馈\\[3pt]
-{\LARGE\bfseries ${totals.homework} 份} & {\LARGE\bfseries ${totals.total} 题} & {\LARGE\bfseries ${totals.total ? totals.rate.replace("%", "\\%") : "—"}} & {\LARGE\bfseries ${totals.lessons} 次}
+\small 作业 & \small 批改题数 & \small 正确率 & \small 新增错题\\[3pt]
+{\LARGE\bfseries ${totals.homework} 份} & {\LARGE\bfseries ${totals.total} 题} & {\LARGE\bfseries ${totals.total ? totals.rate.replace("%", "\\%") : "—"}} & {\LARGE\bfseries ${totals.wrongAdded} 题}
 \end{tabularx}}`;
   const body = [
     PREAMBLE,
@@ -224,10 +220,10 @@ export function buildStudentReportLatex(report: StudentReport) {
     knowledgeTable(report),
     String.raw`\section{能力表现}`,
     paragraph(text.abilities || "—"),
-    abilityTable(report),
+    abilityDetails(report),
     ...(text.plan.length ? [String.raw`\section{下一步安排}`, String.raw`\begin{enumerate}\setlength{\itemsep}{2pt}`, ...text.plan.map((item) => String.raw`\item ${latexInline(item)}`), String.raw`\end{enumerate}`] : []),
     ...(text.message ? [String.raw`\banner{\textbf{给家长的话}\quad ${latexInline(text.message)}}`] : []),
-    String.raw`\note{知识掌握来自这段时间批改过的作业；能力表现来自老师的课后反馈。正确率只统计已确认对错的题，待核实的题不计入。}`,
+    String.raw`\note{知识掌握来自这段时间批改过的作业；${data.abilityAnalysis ? "能力分析依据错题与作答过程，推断仍需后续作答验证。" : data.observations?.length ? "此历史报告保留生成时的课后反馈。" : "本期尚无可用的能力诊断。"}正确率只统计已确认对错的题，待核实的题不计入。}`,
     String.raw`\end{document}`,
   ];
   return `${body.join("\n\n")}\n`;
