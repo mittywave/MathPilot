@@ -935,7 +935,6 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     {confirmNode}
     <header className="handout-bar">
       <a className="handout-brand" href={backHref} aria-label="返回讲义书架" title="返回讲义书架"><BrandWordmark /></a>
-      <a className="handout-back icon-button" aria-label={`返回讲义书架：${backLabel}`} title="返回讲义书架" href={backHref}><BackIcon /></a>
       <span className="handout-location"><span>讲义编撰</span><span aria-hidden="true">/</span><span title={backLabel}>{backLabel}</span></span>
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
       <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>

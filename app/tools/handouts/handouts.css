@@ -8,10 +8,6 @@
 
 .handout-bar{display:flex;flex:none;align-items:center;gap:12px;height:52px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--surface)}
 .handout-bar .primary-button{flex:none;width:auto;margin:0;height:36px;padding:0 16px;font-size:13px;box-shadow:none}
-.handout-back{display:inline-flex;flex:none;align-items:center;justify-content:center;padding:0;color:var(--muted);text-decoration:none;transition:background-color .15s,border-color .15s,color .15s}
-.handout-back .tool-icon{width:18px;height:18px}
-.handout-back:hover{border-color:var(--green);background:var(--green-soft,#edf5f0);color:var(--green)}
-.handout-back:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .handout-location{display:flex;align-items:center;gap:10px;min-width:0;color:var(--muted);font-size:13px}
 .handout-save{display:inline-flex;flex:none;align-items:center;gap:6px;margin-left:auto;color:var(--muted);font-size:13px}
 .handout-save.failed{color:var(--danger,#b4442f)}
@@ -245,7 +241,7 @@
 @container(max-width:210px){.picker-source .handout-sheets button{font-size:12px;padding:0 6px;gap:4px}}
 
 @media(prefers-reduced-motion:reduce){
-  .handout-workspace,.handout-bank-content,.handout-outline-content,.handout-panel-chevron,.handout-panel-label,.handout-splitter,.handout-bank,.picker-tree,.picker-source>.picker-tree-toggle,.handout-back{transition:none!important}
+  .handout-workspace,.handout-bank-content,.handout-outline-content,.handout-panel-chevron,.handout-panel-label,.handout-splitter,.handout-bank,.picker-tree,.picker-source>.picker-tree-toggle{transition:none!important}
   .bank-closed .handout-bank-content,.outline-closed .handout-outline-content{filter:none}
   .picker-tree{filter:none}
   .handout-bank[data-paper-flipping] .picker-results{animation:none}

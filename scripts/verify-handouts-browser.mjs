@@ -344,7 +344,7 @@ async function verifyCourses() {
   await page.locator('.handout-module').nth(1).waitFor();
   assert.equal(await page.locator('.handout-module-head input').first().inputValue(), '整式与多项式');
   for (const name of ['小测', '作业', '讲义']) await page.locator('.handout-draft-head').getByRole('tab', { name: new RegExp(name) }).click();
-  await page.locator('.handout-back').first().click();
+  await page.getByRole('link', { name: '返回讲义书架', exact: true }).click();
   await page.getByRole('heading', { name: 'DIY 数学', exact: true }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('course'), systemId);
   assert.equal(new URL(page.url()).searchParams.get('stage'), stageId);
@@ -377,7 +377,7 @@ async function verifyCourses() {
   await page.locator('.handout-module').nth(1).waitFor();
   const copyId = new URL(page.url()).searchParams.get('id');
   assert.notEqual(copyId, lessonId);
-  await page.locator('.handout-back').first().click();
+  await page.getByRole('link', { name: '返回讲义书架', exact: true }).click();
   await page.locator('.handout-entry').filter({ hasText: '代数基础（副本）' }).waitFor();
   await (await lessonMenu('代数基础（副本）')).getByRole('button', { name: '移到…', exact: true }).click();
   await page.getByLabel('目标课程单元').selectOption({ label: '另一套课程 / 进阶阶段 / 第一单元' });
