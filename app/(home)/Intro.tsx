@@ -1,8 +1,8 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import SculptureHero, { type Rect, type SculptureMorph, type SculptureShape } from "../components/LiquidSculptureHero";
+import SculptureHero, { type Rect, type SculptureMorph, type SculptureShape, type SculptureStrands } from "../components/LiquidSculptureHero";
 import TiltedGridHero from "../components/TiltedGridHero";
-import WorksWheel from "../components/WorksWheel";
+import WorksWheel, { type Vec3, type WheelGeometry } from "../components/WorksWheel";
 import { BrandWordmark } from "../components/SiteHeader";
 import { LoginForm } from "../components/LoginForm";
 import { fetchMe, loginPath } from "../../lib/api-client";
@@ -30,6 +30,12 @@ const RIBBON = {
     return [1200 + 860 * Math.cos(t) / d, 486 + 1.12 * 860 * s * Math.cos(t) / d];
   },
   halfWidth: (t: number) => 0.72 * (34 + 74 * Math.cos(t) ** 2),
+};
+
+// where the ∞'s line crosses itself, in a picture of it drawn in `rect`
+const crossingOf = (r: Rect): [number, number] => {
+  const [x, y] = RIBBON.at(Math.PI / 2);
+  return [r.x + (x / 2400) * r.w, r.y + (y / 960) * r.h];
 };
 
 // The feature row: screens of the app (taken on an anonymised copy), each card labelled. The row is decoration, so the
@@ -106,8 +112,78 @@ const GATHER_MS = 1800;
 const SCATTER_MS = 1300;
 // the window's frame of sand, round the outside of its glass (.mp-login-card has the same corner radius)
 const FRAME = { radius: 26, halfWidth: 3.5, outset: 7, fill: 0.3 };
-// the sand's frame round the card resting at the front of the 闭环 wheel (its cards have rounded-lg corners)
-const CARD_FRAME = { radius: 8, halfWidth: 2.5, outset: 5, fill: 0 };
+// The 闭环 wheel's sand is the ∞'s two lobes, 学 (the right one) and 教: round a card each runs from the middle of its top
+// down its own side to the middle of its bottom, CARD_FRAME outside the card's rounded-lg edge; between two shapes they
+// twist round each other into a cord, CORD.radius apart, a half turn every CORD.twist card heights, both ends crossings
+// where the strands change sides as they do in the middle of the ∞.
+const CARD_FRAME = { radius: 8, halfWidth: 2.5, outset: 5 };
+const CORD = { radius: 7, halfWidth: 2, twist: 0.2 };
+const EYE_POINTS = 240;
+const plus = (a: Vec3, b: Vec3, k = 1): Vec3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+const mixed = (a: Vec3, b: Vec3, t: number): Vec3 => plus(a, plus(b, a, -1), t);
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const unit = (a: Vec3): Vec3 => plus([0, 0, 0], a, 1 / (Math.hypot(...a) || 1));
+const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// which way a card's own right (x) or down (y) points in the wheel's space
+const axis = (g: WheelGeometry, i: number, x: number, y: number, dx: number, dy: number) => unit(plus(g.at(i, x + dx, y + dy), g.at(i, x, y), -1));
+// The frame of sand round card i as the wheel has it now, in px on the screen; `length` is a lobe's on the card itself.
+function eyeOf(g: WheelGeometry, i: number) {
+  const { w, h, face } = g.card;
+  const { radius, outset, halfWidth } = CARD_FRAME;
+  const R = radius + outset, a = w / 2 - radius, b = h / 2 - radius, arc = (Math.PI / 2) * R;
+  const length = 2 * a + 2 * arc + 2 * b;
+  const line = (side: number) => {
+    const out = new Float32Array(EYE_POINTS * 4);
+    for (let k = 0; k < EYE_POINTS; k++) {
+      let d = (k / (EYE_POINTS - 1)) * length, x: number, y: number;
+      if (d < a) [x, y] = [d, -h / 2 - outset];
+      else if ((d -= a) < arc) [x, y] = [a + Math.sin(d / R) * R, -b - Math.cos(d / R) * R];
+      else if ((d -= arc) < 2 * b) [x, y] = [w / 2 + outset, d - b];
+      else if ((d -= 2 * b) < arc) [x, y] = [a + Math.cos(d / R) * R, b + Math.sin(d / R) * R];
+      else [x, y] = [a - (d - arc), h / 2 + outset];
+      const [sx, sy, near] = g.view(g.at(i, side * x, y));
+      out.set([sx, sy, halfWidth * face * near, 0], k * 4);
+    }
+    return out;
+  };
+  const shape: SculptureShape = { kind: "path", strands: [line(1), line(-1)], span: (w + h) * face * g.view(g.at(i, 0, 0))[2] * 0.9 };
+  return { shape, length: length * face };
+}
+// The cord from one shape into the next, in the wheel's space: from `start`, leaving along `out`, to `end`, arriving
+// along `into`, `across` the way to the right at either end. The right lobe starts on the near side, so it comes out of
+// the crossing to the left; `turns` half turns later (an odd number) it crosses back into the right of what is next.
+function cordOf(g: WheelGeometry, start: Vec3, out: Vec3, across0: Vec3, end: Vec3, into: Vec3, across1: Vec3, turns?: number) {
+  const reach = Math.hypot(...plus(end, start, -1));
+  const c1 = plus(start, out, reach * 0.4), c2 = plus(end, into, -reach * 0.4);
+  const point = (t: number) => mixed(mixed(mixed(start, c1, t), mixed(c1, c2, t), t), mixed(mixed(c1, c2, t), mixed(c2, end, t), t), t);
+  const along = (t: number) => unit(mixed(mixed(plus(c1, start, -1), plus(c2, c1, -1), t), mixed(plus(c2, c1, -1), plus(end, c2, -1), t), t));
+  // the curve measured, so that the points come evenly along it
+  const N = 64, run = [0];
+  for (let j = 1; j <= N; j++) run.push(run[j - 1] + Math.hypot(...plus(point(j / N), point((j - 1) / N), -1)));
+  const length = run[N], pitch = CORD.twist * g.card.h;
+  const half = turns ?? 2 * Math.max(0, Math.round((length / pitch - 1) / 2)) + 1;
+  const count = Math.min(480, Math.max(32, Math.round(length / 2)));
+  const radius = CORD.radius * g.card.face, taper = Math.min(0.3, (0.5 * pitch) / Math.max(length, 1));
+  const strands: SculptureStrands = [new Float32Array(count * 4), new Float32Array(count * 4)];
+  for (let k = 0, j = 0; k < count; k++) {
+    const s = k / (count - 1), want = s * length;
+    while (j < N - 1 && run[j + 1] < want) j++;
+    const t = (j + (want - run[j]) / (run[j + 1] - run[j] || 1)) / N;
+    const p = point(t), tangent = along(t);
+    // the way to the right turns from one end's to the other's, square to the curve; the near side square to both
+    const lean = mixed(across0, across1, s);
+    const side = unit(plus(lean, tangent, -dot(lean, tangent)));
+    const near = cross(side, tangent);
+    const phase = Math.PI / 2 + half * Math.PI * s;
+    const open = smooth(0, taper, s) * smooth(0, taper, 1 - s);
+    [1, -1].forEach((sign, lobe) => {
+      const [x, y, scale] = g.view(plus(plus(p, side, sign * radius * open * Math.cos(phase)), near, sign * radius * open * Math.sin(phase)));
+      strands[lobe].set([x, y, CORD.halfWidth * g.card.face * scale, sign * Math.sin(phase) * open], k * 4);
+    });
+  }
+  return { strands, length };
+}
 type Gather = { from: number; to: number; start: number };
 // how far the ∞ has gathered (0 … 1), taking `ms` there and SCATTER_MS back; a move starts on the first frame drawn
 // after it was asked for
@@ -170,7 +246,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
   const loopRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(-1);
   const turned = useRef(-1);
-  const rested = useRef<DOMRect | null>(null);
+  const wheelGeometry = useRef<(() => WheelGeometry) | null>(null);
   // 进入工作台 opens the 题库; whoever is not signed in gets the login window first
   const [workbench, setWorkbench] = useState(loginPath(WORKBENCH));
   const initial = opened === undefined ? null : { next: nextOf(opened), leaving: false };
@@ -353,32 +429,45 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     return () => observer.disconnect();
   }, []);
 
-  // While the 闭环 section is on the screen the sand belongs to it. Coming in, the hero's ∞ pours down into a frame round
-  // the card at the front; as the wheel turns the frame flows from each card into the next; when the cards close into
-  // the ring it gathers into an ∞ in the middle, over 教学 (ringArt), which then scrolls away with the section.
+  // While the 闭环 section is on the screen the sand belongs to it, one line running on from shape to shape. Coming in,
+  // the hero's ∞ lets its lobes out through its crossing, down a twisted cord into the frame round the card at the
+  // front. As the wheel turns, that frame runs out of the bottom of its card, down the cord between the two and into
+  // the next card's frame from the top, the two half frames and the cord an hourglass on the way. When the cards close
+  // into the ring it pours from the last card into an ∞ in the middle, over 教学 (ringArt), which then scrolls away with
+  // the section.
   const loopForms = (hero: Rect, view: { w: number; h: number }) => {
     const section = loopRef.current ??= document.getElementById("loop");
     const ring = ringArt.current?.getBoundingClientRect();
-    if (!section || !ring) return null;
+    const g = wheelGeometry.current?.();
+    if (!section || !ring || !g) return null;
     const box = section.getBoundingClientRect();
     if (box.top >= view.h || box.bottom <= 0) return null;
-    const turn = parseFloat((section.firstElementChild as HTMLElement | null)?.style.getPropertyValue("--wheel-turn") ?? "") || 0;
-    const cards = [...section.querySelectorAll(".mp-step-demo")].map((video) => video.parentElement!.getBoundingClientRect());
-    const last = cards.length - 1;
-    const frame = (r: DOMRect): SculptureShape => ({ kind: "window", rect: { x: r.left, y: r.top, w: r.width, h: r.height }, ...CARD_FRAME });
-    // where a card rests at the front, read while one does; the frame waits there between turns
-    const at = Math.round(turn);
-    if (Math.abs(turn - at) < 0.01 && at <= last) rested.current = cards[at];
-    const rest = rested.current ?? cards[0];
-    const centre: SculptureShape = { kind: "image", rect: { x: ring.left, y: ring.top, w: ring.width, h: ring.height } };
-    // each move is one thread of sand, out of the bottom of the shape it leaves and into the top of the next
-    const bottom = (r: Rect | DOMRect): [number, number] => ["w" in r ? r.x + r.w / 2 : r.left + r.width / 2, "h" in r ? r.y + r.h * 0.8 : r.bottom];
-    const top = (r: DOMRect): [number, number] => [r.left + r.width / 2, r.top];
+    const { turn } = g, last = STEPS.length - 1, edge = g.card.h / 2 + CARD_FRAME.outset;
+    // the middle of a card's bottom or top, and which ways its own down and right point there
+    const end = (i: number, y: number) => [g.at(i, 0, y), axis(g, i, 0, y, 0, 1), axis(g, i, 0, y, 1, 0)] as const;
+    // an ∞ on the screen meets its cord at its crossing, the cord upright there
+    const crossing = (r: Rect) => {
+      const [x, y] = crossingOf(r);
+      return [[x - g.origin[0], y - g.origin[1], 0], [0, 1, 0], [1, 0, 0]] as [Vec3, Vec3, Vec3];
+    };
+    const pour = (from: SculptureShape, to: SculptureShape, length: number, mix: number, cord: ReturnType<typeof cordOf>): SculptureMorph =>
+      ({ from, to, mix, cord: { strands: cord.strands, share: cord.length / length } });
     let form: SculptureMorph;
-    if (box.top > 0) form = { from: { kind: "image", rect: hero }, to: frame(cards[0]), mix: Math.min(1, 1 - box.top / view.h), stream: { out: bottom(hero), in: top(cards[0]) } };
-    else if (turn >= last) form = { from: frame(cards[last]), to: centre, mix: Math.min(1, turn - last), stream: { out: bottom(cards[last]), in: [ring.left + ring.width / 2, ring.top + ring.height / 2] } };
-    // turning, the frame pours out past the cards' side and down into the next card coming up from below
-    else form = { from: frame(rest), to: frame(cards[Math.floor(turn) + 1]), mix: turn - Math.floor(turn), stream: { out: bottom(rest), in: top(cards[Math.floor(turn) + 1]), swing: rest.width * 0.62 } };
+    if (box.top > 0) {
+      const eye = eyeOf(g, 0);
+      form = pour({ kind: "image", rect: hero }, eye.shape, eye.length, Math.min(1, 1 - box.top / view.h), cordOf(g, ...crossing(hero), ...end(0, -edge)));
+    } else if (turn >= last) {
+      // Poured once the cards have nearly closed into the ring, and so timed by the page's own scroll, from the last
+      // stretch's second half until the section is a quarter of the screen on its way out: the ring itself closes in
+      // too short a stretch to show it. It waits for the cards, should the wheel lag behind a quick scroll.
+      const eye = eyeOf(g, last), centre: Rect = { x: ring.left, y: ring.top, w: ring.width, h: ring.height };
+      const run = Math.max(1, box.height - view.h);
+      const mix = Math.min(smooth((run * (last + 0.6)) / (last + 1), run + view.h / 4, -box.top), Math.min(1, Math.max(0, (turn - last - 0.7) / 0.3)));
+      form = pour(eye.shape, { kind: "image", rect: centre }, eye.length, mix, cordOf(g, ...end(last, edge), ...crossing(centre), 1));
+    } else {
+      const i = Math.floor(turn), eye = eyeOf(g, i);
+      form = pour(eye.shape, eyeOf(g, i + 1).shape, eye.length, turn - i, cordOf(g, ...end(i, edge), ...end(i + 1, -edge)));
+    }
     return { form, turn };
   };
 
@@ -408,9 +497,11 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     const away = !wheel && !g.to && !e.to && !into && !out && (y + h * 1.1 < 0 || y - h * 0.1 > view.h || x + w < 0 || x > view.w);
     const box = glass.current?.getBoundingClientRect();
     let form: SculptureMorph = wheel ? { ...wheel.form, moving } : { from: place, to: place, mix: 0, moving, away };
+    // where the sand is now, to move on from: part way through a pour it stays where the pour has it
+    const held = (m: SculptureMorph): SculptureShape => m.cord && m.mix > 0 && m.mix < 1 ? { kind: "pour", pour: m } : m.mix < 0.5 ? m.from : m.to;
     if (into > 0 && box) {
       const frame: SculptureShape = { kind: "window", rect: { x: box.left, y: box.top, w: box.width, h: box.height }, ...FRAME };
-      form = { from: form.mix < 0.5 ? form.from : form.to, to: frame, mix: into, moving: moving || into !== g.to };
+      form = { from: held(form), to: frame, mix: into, moving: moving || into !== g.to };
     }
     // into the workbench: from that shape into its frame, which reaches twice the screen's height below the top bar so
     // that the lower arcs, laid along its bottom half, pour off the screen
@@ -418,7 +509,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     const gate: SculptureShape = {
       kind: "window", rect: { x: e.left, y: e.top, w: view.w - e.left - e.right, h: 2 * (view.h - e.top) }, ...GATE,
     };
-    return { from: form.mix < 0.5 ? form.from : form.to, to: gate, mix: out, moving: form.moving || out !== e.to };
+    return { from: held(form), to: gate, mix: out, moving: form.moving || out !== e.to };
   };
 
   return <div ref={root} className="mp-intro" data-mode={mode ?? undefined} data-login={login ? (login.leaving ? "out" : "in") : undefined}
@@ -458,7 +549,7 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       loadFonts={false}
     />
 
-    <WorksWheel id="loop" className="mp-wheel" label="教与学" items={wheel} onFront={setFront}>
+    <WorksWheel id="loop" className="mp-wheel" label="教与学" items={wheel} onFront={setFront} geometryRef={wheelGeometry}>
       {/* the ring's middle: the sand gathers into an ∞ here over a faint 教学; without WebGL the picture stands in */}
       <div ref={ringArt} className="mp-ring-art" aria-hidden="true">
         <span>教学</span>

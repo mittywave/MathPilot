@@ -27,7 +27,10 @@
 //   fit the stage (a few items make big cards).
 // - An item may bring its own card face (`face`) and a line under its title
 //   (`text`). `children` are pinned with the stage, which carries `--wheel-open`
-//   (0 the ring, 1 the drum) and `--wheel-turn` (the turn itself) for them.
+//   (0 the ring, 1 the drum) for them.
+// - Whatever is drawn round the cards from outside asks where they are, and how
+//   far the wheel has turned, through `geometryRef`: the same transforms worked
+//   out by hand.
 import * as React from "react";
 
 const cn = (...names: (string | false | null | undefined)[]) => names.filter(Boolean).join(" ");
@@ -53,6 +56,23 @@ export interface WorksWheelProps extends React.ComponentPropsWithoutRef<"section
   action?: string;
   /** Told which item rests at the front, once the wheel has come to a stop there; -1 while it turns or is a ring. */
   onFront?: (index: number) => void;
+  /** Filled in by the wheel: where its cards are now, for drawing round them. */
+  geometryRef?: React.RefObject<(() => WheelGeometry) | null>;
+}
+
+export type Vec3 = [number, number, number];
+
+/** Where the cards are at this moment. A point on card `i`, in px from the
+    middle of its face (x right, y down, z toward the viewer), goes into the
+    stage's 3D space with `at`; `view` puts a point of that space on the screen,
+    in viewport px, with how much perspective scales it there (z = 0 is the
+    screen's own plane, `origin` its middle). */
+export interface WheelGeometry {
+  turn: number;
+  card: { w: number; h: number; face: number };
+  origin: [number, number];
+  at: (i: number, x: number, y: number, z?: number) => Vec3;
+  view: (p: Vec3) => Vec3;
 }
 
 /* Geometry. The card is measured against the stage; everything else is measured
@@ -130,6 +150,7 @@ export function WorksWheel({
   label = "Works '26",
   action = "View",
   onFront,
+  geometryRef,
   className,
   style,
   children,
@@ -214,10 +235,12 @@ export function WorksWheel({
   React.useEffect(() => {
     if (!stage.h) return;
     let frame = 0;
-    const { ringR, ringScale, drumR, bow } = metrics;
+    let drawn = -1;
+    const { cardW, cardH, ringR, ringScale, drumR, bow, depth } = metrics;
 
     const draw = () => {
       frame = 0;
+      drawn = document.timeline.currentTime as number;
       const gap = target.current - turn.current;
       if (Math.abs(gap) < 0.0005) turn.current = target.current;
       else turn.current += gap * (reduced ? 1 : EASE);
@@ -262,7 +285,6 @@ export function WorksWheel({
       if (labelRef.current) labelRef.current.style.opacity = String(1 - m);
       if (titleRef.current) titleRef.current.style.opacity = String(m);
       stageRef.current?.parentElement?.style.setProperty("--wheel-open", m.toFixed(3));
-      stageRef.current?.parentElement?.style.setProperty("--wheel-turn", t.toFixed(4));
       const near = clamp(Math.round(pos), 0, last);
       setActive((prev) => (prev === near ? prev : near));
       // at rest, and only while the section is pinned on screen
@@ -276,12 +298,51 @@ export function WorksWheel({
     kick.current = () => {
       if (!frame) frame = requestAnimationFrame(draw);
     };
+    if (geometryRef)
+      geometryRef.current = () => {
+        // this frame's step first, if the wheel has yet to take it: the cards and what is drawn round them land on the
+        // same frame, never one apart
+        if (frame && drawn !== document.timeline.currentTime) {
+          cancelAnimationFrame(frame);
+          draw();
+        }
+        const t = turn.current;
+        const pos = Math.min(t, last);
+        const m = 1 - clamp(t - last, 0, 1);
+        const face = lerp(ringScale, 1, m);
+        const box = stageRef.current!.getBoundingClientRect();
+        const ox = box.left + box.width / 2;
+        const oy = box.top + box.height / 2;
+        return {
+          turn: t,
+          card: { w: cardW, h: cardH, face },
+          origin: [ox, oy],
+          // place() applied to a point, its transforms last to first, then the wheel's set-back
+          at: (i, x, y, z = 0) => {
+            const drumDeg = -(i - pos) * STEP;
+            const ringDeg = (((i * 360) / count + 180) % 360) - 180;
+            let px = x * face, py = y * face, pz = z + m * drumR;
+            const a = rad(m * drumDeg);
+            [py, pz] = [py * Math.cos(a) - pz * Math.sin(a), py * Math.sin(a) + pz * Math.cos(a)];
+            py -= (1 - m) * ringR;
+            const b = rad((1 - m) * ringDeg);
+            [px, py] = [px * Math.cos(b) - py * Math.sin(b), px * Math.sin(b) + py * Math.cos(b)];
+            px += m * bowAt(drumDeg, bow);
+            return [px, py, pz - m * drumR];
+          },
+          view: ([x, y, z]) => {
+            const k = depth / (depth - z);
+            return [ox + x * k, oy + y * k, k];
+          },
+        };
+      };
     draw();
     return () => {
       cancelAnimationFrame(frame);
       kick.current = () => {};
+      if (geometryRef) geometryRef.current = null;
     };
-  }, [metrics, stage.h, count, last, reduced]);
+  }, [metrics, stage.h, count, last, reduced, geometryRef]);
 
   // How far down its section the page is, as a turn: a stretch per item, each
   // resting at the front before the next turns round, then the ring.

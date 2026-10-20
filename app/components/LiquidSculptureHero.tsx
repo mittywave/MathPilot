@@ -32,11 +32,20 @@ export type SculpturePiece = { box: Rect; x: number; y: number }
 const MAX_PIECES = 32
 // points in the table that lays the window's frame out (reachTable)
 const REACH = 256
+// places along each lobe of the ∞ in the table of where the material lies along its lines (layStrands)
+const STRAND = 1024
+
+/** Two lines the material can lie along, one for each lobe of the ∞ (0 the right, 1 the left): x, y, the band's half
+ *  width there (px) and how near the viewer it lies (-1 … 1, the back of a twisted cord is drawn smaller and fainter),
+ *  point after point, evenly spaced from where the material comes in to where it goes out. */
+export type SculptureStrands = [Float32Array, Float32Array]
 
 /** A shape the sculpture can take, in viewport px. "image" is the picture itself, its pieces moved if given. "window"
  *  bends the material along the sculpture's centre line (`ribbon`) into the frame of a window: the ∞ opens at its
  *  crossing, its upper arcs run along the top, its lower arcs along the bottom and the tips meet at the sides, with
- *  `fill` of the grains settled inside it as dust. */
+ *  `fill` of the grains settled inside it as dust. "path" lays each lobe along its own line, from its lower arc's
+ *  crossing end at the line's start round the tip to its upper arc's at the end; `span` sizes the grains, as a
+ *  window's width and height do. "pour" is the material held where a pour (a morph with a cord) has it. */
 export type SculptureShape =
   | { kind: "image"; rect: Rect; pieces?: SculpturePiece[] }
   | {
@@ -49,6 +58,8 @@ export type SculptureShape =
       /** share of the grains (0 … 1) spread over the inside */
       fill: number
     }
+  | { kind: "path"; strands: SculptureStrands; span: number }
+  | { kind: "pour"; pour: SculptureMorph }
 
 /** The sculpture between two shapes: `mix` 0 is `from`, 1 is `to`. `moving` keeps the animation running; `away` says
  *  the shape is out of sight, and the engine rests until the page moves or the pointer stirs again. */
@@ -56,9 +67,11 @@ export interface SculptureMorph {
   from: SculptureShape
   to: SculptureShape
   mix: number
-  /** Pour the grains one after another through a single twisting thread that leaves `from` at `out` and enters `to`
-   *  at `in` (viewport px), instead of moving them all at once; `swing` is how far it swings out to the side (px). */
-  stream?: { out: [number, number]; in: [number, number]; swing?: number }
+  /** Pour the material from `from` into `to` through a cord of its own, `share` being how much of a lobe it holds on
+   *  the way: along each lobe the grains keep their order and the stream runs at an even rate, out at the end of
+   *  `from` (a picture lets its upper arcs out through the crossing) and in at the start of `to` (into a picture
+   *  through the crossing, the lower arcs first). Only between pictures and paths. */
+  cord?: { strands: SculptureStrands; share: number }
   alpha?: number
   moving?: boolean
   away?: boolean
@@ -150,9 +163,11 @@ float energyAt(vec2 rectPx, vec2 mouse, float radius, float presence, float wake
 /* Shapes: where a grain sits in shape A and in shape B, and how far it has travelled between them. Every grain knows
    its place along the centre line (uRib: t, its offset in half ribbon widths, how much material it stands for), so each
    shape keeps the strands in order. Kinds: 0 the picture (its pieces moved by uPieceAt), 1 the frame of a window (laid
-   out by the reach table in uRib's last row). */
+   out by the reach table in uRib's last row), 2 the lobes laid along lines (uStrands, worked out by layStrands). With
+   uCord the material is on its way from A to B through a cord, and uStrands holds the whole way. */
 const SHAPES = `
 uniform sampler2D uRib;
+uniform sampler2D uStrands;
 uniform int uPieces;
 uniform vec4 uPieceBox[${MAX_PIECES}];
 uniform vec2 uPieceAt[${MAX_PIECES}];
@@ -163,10 +178,7 @@ uniform vec4 uA1;
 uniform vec4 uB0;
 uniform vec4 uB1;
 uniform float uMix;
-uniform float uStream;
-uniform vec4 uStreamEnds;
-uniform float uStreamWidth;
-uniform float uStreamSwing;
+uniform float uCord;
 uniform float uStagger;
 uniform float uSwirl;
 uniform float uCirculate;
@@ -182,10 +194,10 @@ vec2 pieceAt(vec2 uv){
   }
   return vec2(0.0);
 }
-// The rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
-// of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
-// grains that lie before this one, from the reach table. Quarters 0 and 1 are the right side, 0 and 2 the top.
-void frameLine(vec2 uv, vec4 rib, out float l, out float quarter, inout float n){
+// Which quarter of the line a grain is on, an arc of the ∞ from the crossing to a tip (0 and 1 the right lobe, 0 and
+// 2 the upper arcs), and how far along it: l is the share of the quarter's grains that lie before this one, from
+// the reach table.
+void lineAt(vec4 rib, out float l, out float quarter){
   float u = mod(rib.x + PI*0.5, 2.0*PI) - PI*0.5;
   quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
   float reach = quarter < 0.5 ? u/(PI*0.5) + 1.0 : quarter < 1.5 ? 1.0 - u/(PI*0.5) : quarter < 2.5 ? u/(PI*0.5) - 1.0 : 3.0 - u/(PI*0.5);
@@ -193,9 +205,26 @@ void frameLine(vec2 uv, vec4 rib, out float l, out float quarter, inout float n)
   int row = textureSize(uRib, 0).y - 1, k = int(x);
   vec4 pick = vec4(equal(vec4(quarter), vec4(0.0, 1.0, 2.0, 3.0)));
   l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
-  // where two quarters meet their strands lie differently across the band, so there it is spread evenly instead
+}
+// A grain laid along its lobe's line, by its place along the lobe: from the upper arc's crossing end (0) round the
+// tip to the lower arc's (1). uStrands has two rows a lobe, the right one first: where the line runs there (x, y, the
+// normal across it), and the band's half width, how near the viewer it lies (-1 … 1), whether that place is on a
+// drawn line (1) or in a picture (0) and how far from the first shape it has come (moved). In a picture the grain
+// keeps its own offset across the ribbon, loose fibres and all; along a line they are drawn in, and spread evenly
+// where two arcs meet. xy in viewport px, z how much of it shows, w its size.
+vec4 strandAt(vec2 uv, vec4 rib, out float moved, out float line){
+  float l, quarter;
+  lineAt(rib, l, quarter);
+  float x = (mod(quarter, 2.0) < 0.5 ? l*0.5 : 1.0 - l*0.5)*${STRAND - 1}.0;
+  int k = int(x), k1 = min(k + 1, ${STRAND - 1}), row = quarter < 1.5 ? 0 : 2;
+  vec4 at = mix(texelFetch(uStrands, ivec2(k, row), 0), texelFetch(uStrands, ivec2(k1, row), 0), fract(x));
+  vec4 band = mix(texelFetch(uStrands, ivec2(k, row + 1), 0), texelFetch(uStrands, ivec2(k1, row + 1), 0), fract(x));
   float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
-  n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
+  line = band.z;
+  moved = band.w;
+  float n = mix(rib.y, mix(tighten(rib.y), hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet), line);
+  // the far strand of a twisted cord is drawn smaller and fainter than the near one
+  return vec4(at.xy + at.zw/max(length(at.zw), 1e-4)*n*band.x, 1.0 + min(band.y, 0.0)*0.45, 1.0 + band.y*0.18);
 }
 vec2 frameAt(vec4 p0, vec4 p1, float l, float quarter, float n){
   vec2 hs = p0.zw*0.5;
@@ -209,22 +238,23 @@ vec2 frameAt(vec4 p0, vec4 p1, float l, float quarter, float n){
   vec2 side = vec2(quarter < 1.5 ? 1.0 : -1.0, mod(quarter, 2.0) < 0.5 ? 1.0 : -1.0);
   return p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side;
 }
-// a place on a frame by its distance round the outline from the middle of the top (0) to the middle of the bottom
-// (1), on the right or the left
-vec2 frameFromTop(vec4 p0, vec4 p1, float d, bool right, float n){
-  return d < 0.5 ? frameAt(p0, p1, 2.0*d, right ? 0.0 : 2.0, n) : frameAt(p0, p1, 2.0 - 2.0*d, right ? 1.0 : 3.0, n);
-}
 // xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
 vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec2 uv, vec4 rib){
   if(kind == 0) return vec4(p0.xy + uv*p0.zw + pieceAt(uv), 1.0, 1.0);
+  if(kind == 2){ float moved, line; return strandAt(uv, rib, moved, line); }
   float n = tighten(rib.y);
   // a share of the grains, picked at random, settles inside as dust
   if(hash(uv*vec2(613.7, 287.3)) < p1.w){
     vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
     return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
   }
+  // the rest lays each quarter out evenly along a quarter of the frame, from the crossing (the middle of the top or the
+  // bottom) round the corner to the tip (the middle of a side); where two quarters meet their strands lie differently
+  // across the band, so there it is spread evenly instead
   float l, quarter;
-  frameLine(uv, rib, l, quarter, n);
+  lineAt(rib, l, quarter);
+  float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
+  n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
   return vec4(frameAt(p0, p1, l, quarter, n), 1.0, 1.0);
 }
 // the lobe tips lead and the crossing follows; grains next to each other keep together, so the ribbon stays a ribbon
@@ -234,65 +264,23 @@ float travel(float t, float sd){
   return e*e*e*(e*(e*6.0 - 15.0) + 10.0);
 }
 vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
-  vec4 a = shapeAt(uKindA, uA0, uA1, hm.xy, rib);
-  vec4 b = shapeAt(uKindB, uB0, uB1, hm.xy, rib);
   // Short, overlapping journeys along the ribbon: each grain fades before wrapping back to its start.
   // Keeping the journeys local preserves the photographed strands and the crossing's two directions.
   float phase = fract(hm.z + uTime*0.28);
   vec2 drift = vec2(cos(rib.w), sin(rib.w))*(phase - 0.5)*0.06*uCirculate;
+  if(uCord > 0.5){
+    // poured through a cord: every grain is at its place along the way, the places moving on at an even rate, and in a
+    // picture it keeps circulating
+    float line;
+    vec4 s = strandAt(hm.xy, rib, e, line);
+    alpha = s.z;
+    size = s.w;
+    return s.xy + (1.0 - line)*drift*(e < 0.5 ? uA0.z : uB0.z);
+  }
+  vec4 a = shapeAt(uKindA, uA0, uA1, hm.xy, rib);
+  vec4 b = shapeAt(uKindB, uB0, uB1, hm.xy, rib);
   if(uKindA == 0) a.xy += drift*uA0.z;
   if(uKindB == 0) b.xy += drift*uB0.z;
-  if(uStream > 0.5){
-    // One after another the grains pour through a single twisting thread. A frame unwinds into it: its grains slide
-    // round the outline to the middle of its bottom, so the frame shortens from the top until the last grain leaves,
-    // and a frame being filled is wound on from the middle of its top, down both sides, each grain stopping at its
-    // place. A picture gathers to the way out, or spreads from the way in, directly.
-    const float SPAN = 0.22;
-    float nA = tighten(rib.y), nB = nA, lA = 0.0, qA = 0.0, lB = 0.0, qB = 0.0;
-    bool fA = uKindA == 1 && hash(hm.xy*vec2(613.7, 287.3)) >= uA1.w;
-    bool fB = uKindB == 1 && hash(hm.xy*vec2(613.7, 287.3)) >= uB1.w;
-    if(fA) frameLine(hm.xy, rib, lA, qA, nA);
-    if(fB) frameLine(hm.xy, rib, lB, qB, nB);
-    // how far round from the way out (0) this grain sits, and so when it leaves
-    float order = fA ? (mod(qA, 2.0) > 0.5 ? lA*0.5 : 1.0 - lA*0.5) : clamp(fract(rib.x/(2.0*PI) + 0.25)*0.97 + hm.z*0.03, 0.0, 1.0);
-    float t0 = order*(1.0 - SPAN), t1 = t0 + SPAN;
-    vec2 g1 = fA ? frameAt(uA0, uA1, 0.0, 1.0, 0.0) : uStreamEnds.xy;
-    vec2 g2 = fB ? frameAt(uB0, uB1, 0.0, 0.0, 0.0) : uStreamEnds.zw;
-    float ks = fA ? 0.0 : 0.18, ke = fB ? 1.0 : 0.82;
-    float k = clamp((uMix - t0)/SPAN, 0.0, 1.0);
-    e = k;
-    vec2 p;
-    if(uMix <= t0 && fA){ float d = 1.0 - order*(1.0 - uMix/max(t0, 0.0001)); p = frameFromTop(uA0, uA1, d, qA < 1.5, nA*(1.0 - uMix/max(t0, 0.0001))); }
-    else if(uMix >= t1 && fB){
-      float there = mod(qB, 2.0) < 0.5 ? lB*0.5 : 1.0 - lB*0.5;
-      float f = clamp((uMix - t1)/max(1.0 - t1, 0.0001), 0.0, 1.0);
-      p = frameFromTop(uB0, uB1, there*f, qB < 1.5, nB*f);
-    }
-    else if(k < ks){ p = mix(a.xy, g1, smoothstep(0.0, ks, k)); }
-    else if(k > ke){ p = mix(g2, b.xy, smoothstep(ke, 1.0, k)); }
-    else {
-      float u = (k - ks)/(ke - ks);
-      vec2 d = g2 - g1;
-      float len = max(length(d), 1.0);
-      vec2 dir = d/len, nrm = vec2(-dir.y, dir.x);
-      // the thread's spine: an S that swings out and back, more for a long fall, with a smaller wobble on top, and on
-      // the way one loop over, so even a short drop tumbles
-      float swing = uStreamSwing > 0.0 ? uStreamSwing : min(len*0.18, 140.0);
-      float loop = clamp(len*0.22, 50.0, 110.0)*sin(u*PI);
-      float a2 = u*2.0*PI;
-      vec2 spine = g1 + d*u + nrm*(sin(a2)*swing + sin(u*5.0*PI + 1.3)*swing*0.18 + sin(a2)*loop) + dir*(cos(a2) - 1.0)*loop*0.6;
-      // across it the grains lie as a ribbon that keeps turning over as it falls: edge-on it narrows to a line, then
-      // opens again, the near edge drawn a little larger than the far one
-      float across = hm.z*2.0 - 1.0;
-      float roll = u*7.0*PI + 0.6;
-      float width = uStreamWidth*sin(u*PI);
-      p = spine + nrm*across*width*cos(roll) + dir*across*width*0.25*sin(roll);
-      size = 0.9 + 0.3*across*sin(roll);
-    }
-    alpha = mix(a.z, b.z, k);
-    if(uMix <= t0 || uMix >= t1 || k < ks || k > ke) size = mix(a.w, b.w, k);
-    return p;
-  }
   e = travel(rib.x, hm.z);
   vec2 p = mix(a.xy, b.xy, e);
   // on the way the material billows, like liquid poured from one mould into the next
@@ -611,6 +599,10 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string): Prog {
 const TEX_W = 1024
 const SETTLE_FRAMES = 270
 
+/** The sculpture's centre line sampled round from t = 0 (where it runs and its normal, in image px) and the ribbon's
+ *  half width as measured from the grains, in bins round the line. */
+type CentreLine = { x: Float32Array; y: Float32Array; nx: Float32Array; ny: Float32Array; width: number[] }
+
 /** Where every grain sits along the sculpture's centre line, 4 floats each: t, its offset in half widths of the ribbon,
  *  its size in bent shapes, and the image-space tangent angle. Bigger grains fill sparse stretches of bent shapes. */
 function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, ih: number, ribbon: SculptureRibbon) {
@@ -700,7 +692,8 @@ function ribbonCoords(home: Float32Array, n: number, size: number, iw: number, i
     out[i * 4 + 1] /= width[bin[i]]
     out[i * 4 + 2] = grain[bin[i]]
   }
-  return out
+  const line: CentreLine = { x: cx, y: cy, nx, ny, width }
+  return { rib: out, line }
 }
 
 /** The window's frame lays each quarter of the centre line (an arc of the ∞, crossing to tip) out evenly by
@@ -724,6 +717,37 @@ function reachTable(rib: Float32Array, n: number) {
     }
   })
   return table
+}
+
+/** Where each lobe of the ∞ lies in the picture by its grains' order along it (0 the upper arc's crossing end, 1 the
+ *  lower arc's), at STRAND places a lobe, the right one first: the centre line there and its normal, in 0 … 1 of the
+ *  picture, and the ribbon's measured half width, in the picture's width. The reach table run backwards, so a grain
+ *  laid at its own place lands where it is in the picture. */
+function lobeLines(line: CentreLine, reach: Float32Array, iw: number, ih: number) {
+  const out = new Float32Array(2 * STRAND * 5)
+  const M = line.x.length, B = line.width.length, quarterTurn = Math.PI / 2
+  for (let lobe = 0; lobe < 2; lobe++)
+    for (let k = 0; k < STRAND; k++) {
+      const u = k / (STRAND - 1)
+      const q = lobe * 2 + (u < 0.5 ? 0 : 1)
+      const l = u < 0.5 ? 2 * u : 2 * (1 - u)
+      let j = 0
+      while (j < REACH - 2 && reach[(j + 1) * 4 + q] <= l) j++
+      const a = reach[j * 4 + q], b = reach[(j + 1) * 4 + q]
+      const r = (j + (b > a ? clamp((l - a) / (b - a), 0, 1) : 0)) / (REACH - 1)
+      const v = q === 0 ? r - 1 : q === 1 ? 1 - r : q === 2 ? r + 1 : 3 - r
+      const t = (((v * quarterTurn) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+      const f = (t / (2 * Math.PI)) * M, i0 = Math.floor(f) % M, i1 = (i0 + 1) % M, w = f - Math.floor(f)
+      const nx = line.nx[i0] + (line.nx[i1] - line.nx[i0]) * w, ny = line.ny[i0] + (line.ny[i1] - line.ny[i0]) * w
+      const o = (lobe * STRAND + k) * 5
+      out[o] = (line.x[i0] + (line.x[i1] - line.x[i0]) * w) / iw
+      out[o + 1] = (line.y[i0] + (line.y[i1] - line.y[i0]) * w) / ih
+      out[o + 2] = nx / (Math.hypot(nx, ny) || 1)
+      out[o + 3] = ny / (Math.hypot(nx, ny) || 1)
+      // the width the grains' offsets were measured in: one per bin, as they were
+      out[o + 4] = line.width[Math.min(B - 1, Math.floor((t / (2 * Math.PI)) * B))] / iw
+    }
+  return out
 }
 
 const smooth = (a: number, b: number, x: number) => {
@@ -766,6 +790,10 @@ export class LiquidEngine {
   private homeTex: WebGLTexture | null = null
   private colTex: WebGLTexture | null = null
   private ribTex: WebGLTexture | null = null
+  // where the lobes lie along their lines this frame (layStrands), and in the picture (lobeLines)
+  private strandTex: WebGLTexture | null = null
+  private strands = new Float32Array(STRAND * 4 * 4)
+  private lobes: Float32Array | null = null
   private shape: SculptureMorph | null = null
   private pieceBox = new Float32Array(MAX_PIECES * 4)
   private pieceAt = new Float32Array(MAX_PIECES * 2)
@@ -870,6 +898,7 @@ export class LiquidEngine {
       this.flowFb.push(fb)
     }
     this.clearFlow()
+    this.strandTex = this.makeTex(gl.RGBA32F, STRAND, 4, gl.RGBA, gl.FLOAT, null, gl.NEAREST)
   }
 
   private makeTex(
@@ -1010,8 +1039,11 @@ export class LiquidEngine {
     // one row more than the grains take: the reach table for the window's frame
     const ribArr = new Float32Array((total + TEX_W) * 4)
     if (this.ribbon) {
-      ribArr.set(ribbonCoords(homeArr, n, total, pictureWidth(img), pictureHeight(img), this.ribbon))
-      ribArr.set(reachTable(ribArr, n), total * 4)
+      const { rib, line } = ribbonCoords(homeArr, n, total, pictureWidth(img), pictureHeight(img), this.ribbon)
+      ribArr.set(rib)
+      const reach = reachTable(ribArr, n)
+      ribArr.set(reach, total * 4)
+      this.lobes = lobeLines(line, reach, pictureWidth(img), pictureHeight(img))
     }
 
     for (const t of [this.homeTex, this.colTex, this.ribTex, ...this.stateTex]) if (t) gl.deleteTexture(t)
@@ -1140,12 +1172,66 @@ export class LiquidEngine {
   private readMorph(dt: number): SculptureMorph {
     const still: SculptureShape = { kind: "image", rect: this.rect }
     this.shape = this.morph?.(dt) ?? { from: still, to: still, mix: 0 }
+    this.layStrands(this.shape)
     return this.shape
   }
 
+  /* Where along its line each place of a lobe is this frame, for kind 2 (SHAPES): a path as it is, or, poured through a
+     cord, the whole way from the first shape through the cord into the second, each place moved on by how far the stream
+     has run. Along the way, 0 … 1 is the first shape from where the material comes in to where it goes out, then the
+     cord (its share long), then the second shape, and the grain at order u starts 1 - u along: the grains keep their
+     order, the first out at the far end of the second shape, the last at its start. */
+  private layStrands(m: SculptureMorph): void {
+    if (m.from.kind === "pour") return this.layStrands(m.from.pour)
+    if (m.to.kind === "pour") return this.layStrands(m.to.pour)
+    const path = m.from.kind === "path" ? m.from : m.to.kind === "path" ? m.to : null
+    if (!this.strandTex || (!m.cord && !path)) return
+    const out = this.strands
+    const share = m.cord ? Math.max(m.cord.share, 0.001) : 0
+    const run = m.cord ? clamp(m.mix, 0, 1) * (1 + share) : 0
+    for (let lobe = 0; lobe < 2; lobe++)
+      for (let k = 0; k < STRAND; k++) {
+        let c = 1 - k / (STRAND - 1) + run, moved = 0
+        let on: SculptureShape | SculptureStrands = m.cord ? m.from : path!
+        if (m.cord && c >= 1 && c < 1 + share) {
+          moved = (c - 1) / share
+          c = moved
+          on = m.cord.strands
+        } else if (m.cord && c >= 1) {
+          c = Math.min(1, c - 1 - share)
+          moved = 1
+          on = m.to
+        }
+        const at = (lobe * 2 * STRAND + k) * 4, band = at + STRAND * 4
+        if (Array.isArray(on) || on.kind === "path") {
+          // along a line, its normal from the points either side
+          const line = (Array.isArray(on) ? on : on.strands)[lobe]
+          const count = line.length / 4
+          const f = c * (count - 1), i = Math.min(count - 2, Math.floor(f)), w = f - i
+          const pick = (j: number, e: number) => line[clamp(j, 0, count - 1) * 4 + e]
+          const lerp = (e: number) => pick(i, e) + (pick(i + 1, e) - pick(i, e)) * w
+          const dx = pick(i + 2, 0) - pick(i - 1, 0), dy = pick(i + 2, 1) - pick(i - 1, 1)
+          out.set([lerp(0), lerp(1), -dy, dx], at)
+          out.set([lerp(2), lerp(3), 1, moved], band)
+        } else if (this.lobes && on.kind === "image") {
+          // in the picture: the place of order 1 - c
+          const { x, y, w, h } = on.rect
+          const f = (1 - c) * (STRAND - 1), i = Math.min(STRAND - 2, Math.floor(f)), t = f - i
+          const o = (lobe * STRAND + i) * 5
+          const lerp = (e: number) => this.lobes![o + e] + (this.lobes![o + 5 + e] - this.lobes![o + e]) * t
+          out.set([x + lerp(0) * w, y + lerp(1) * h, lerp(2), lerp(3)], at)
+          out.set([lerp(4) * w, 0, 0, moved], band)
+        }
+      }
+    const gl = this.gl
+    gl.bindTexture(gl.TEXTURE_2D, this.strandTex)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, STRAND, 4, gl.RGBA, gl.FLOAT, out)
+  }
+
   // grains are as big as the shape's own grid: the picture's, finer along a frame's line
-  private dotFor(s: SculptureShape) {
-    const span = s.kind === "image" ? s.rect.w : (s.rect.w + s.rect.h) * 0.9
+  private dotFor(s: SculptureShape): number {
+    if (s.kind === "pour") return this.dotFor(s.pour.from) + (this.dotFor(s.pour.to) - this.dotFor(s.pour.from)) * clamp(s.pour.mix, 0, 1)
+    const span = s.kind === "image" ? s.rect.w : s.kind === "path" ? s.span : (s.rect.w + s.rect.h) * 0.9
     return (span / this.gridW) * 1.45 * clamp(this.opts.dotSize, 0.2, 3)
   }
 
@@ -1153,9 +1239,9 @@ export class LiquidEngine {
     const gl = this.gl
     const rm = this.opts.reducedMotion
     for (const [slot, s] of [["A", m.from], ["B", m.to]] as const) {
-      const p0 = [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
+      const p0 = s.kind === "path" || s.kind === "pour" ? [0, 0, 0, 0] : [s.rect.x, s.rect.y, s.rect.w, s.rect.h]
       const p1 = s.kind === "window" ? [s.radius, s.halfWidth, s.outset, clamp(s.fill, 0, 1)] : [0, 0, 0, 0]
-      gl.uniform1i(P.u["uKind" + slot], s.kind === "window" ? 1 : 0)
+      gl.uniform1i(P.u["uKind" + slot], s.kind === "window" ? 1 : s.kind === "path" || s.kind === "pour" ? 2 : 0)
       gl.uniform4fv(P.u[`u${slot}0`], p0)
       gl.uniform4fv(P.u[`u${slot}1`], p1)
     }
@@ -1173,10 +1259,7 @@ export class LiquidEngine {
       gl.uniform2fv(P.u["uPieceAt[0]"], this.pieceAt)
     }
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
-    gl.uniform1f(P.u.uStream, m.stream ? 1 : 0)
-    if (m.stream) gl.uniform4f(P.u.uStreamEnds, m.stream.out[0], m.stream.out[1], m.stream.in[0], m.stream.in[1])
-    gl.uniform1f(P.u.uStreamWidth, 7 * clamp(this.cssW / 1440, 0.6, 1.4))
-    gl.uniform1f(P.u.uStreamSwing, m.stream?.swing ?? 0)
+    gl.uniform1f(P.u.uCord, m.cord ? 1 : 0)
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
     gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
     // Fade circulation away while the image bends into a frame; the morph itself stays intact.
@@ -1335,6 +1418,9 @@ export class LiquidEngine {
     gl.activeTexture(gl.TEXTURE3)
     gl.bindTexture(gl.TEXTURE_2D, this.ribTex)
     gl.uniform1i(P.u.uRib, 3)
+    gl.activeTexture(gl.TEXTURE4)
+    gl.bindTexture(gl.TEXTURE_2D, this.strandTex)
+    gl.uniform1i(P.u.uStrands, 4)
     this.shapeUniforms(P, this.shape ?? this.readMorph(0))
     gl.uniform2f(P.u.uRes, this.cssW, this.cssH)
     gl.uniform2f(P.u.uMouse, this.mouse.x, this.mouse.y)
@@ -1435,6 +1521,9 @@ export class LiquidEngine {
     gl.activeTexture(gl.TEXTURE4)
     gl.bindTexture(gl.TEXTURE_2D, this.ribTex)
     gl.uniform1i(P.u.uRib, 4)
+    gl.activeTexture(gl.TEXTURE5)
+    gl.bindTexture(gl.TEXTURE_2D, this.strandTex)
+    gl.uniform1i(P.u.uStrands, 5)
     this.shapeUniforms(P, m)
     gl.uniform1i(P.u.uTexW, TEX_W)
     gl.uniform2f(P.u.uRes, this.cssW, this.cssH)
@@ -1465,7 +1554,7 @@ export class LiquidEngine {
     if (!this.lost) {
       gl.deleteBuffer(this.quad)
       gl.deleteVertexArray(this.vao)
-      for (const t of [...this.flowTex, ...this.stateTex, this.imgTex, this.homeTex, this.colTex, this.ribTex]) if (t) gl.deleteTexture(t)
+      for (const t of [...this.flowTex, ...this.stateTex, this.imgTex, this.homeTex, this.colTex, this.ribTex, this.strandTex]) if (t) gl.deleteTexture(t)
       for (const f of [...this.flowFb, ...this.stateFb]) gl.deleteFramebuffer(f)
       for (const p of [this.pFlow, this.pSim, this.pPart, this.pImg]) if (p) gl.deleteProgram(p.p)
     }
