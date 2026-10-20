@@ -88,7 +88,7 @@ export default function HandoutsPage() {
   if (!loaded) return <><SiteHeader active="handouts" user={null} loading /><main className="toolbox handouts"><p>正在读取…</p></main></>;
   if (!user) return <><SiteHeader active="handouts" user={null} /><main className="toolbox handouts"><p>请先登录 MathPilot。</p><a href={loginPath("/tools/handouts")}>去登录</a></main></>;
   return <>
-    {openId ? <HandoutEditor id={openId} onNotice={onNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={onNotice} /></>}
+    {openId ? <HandoutEditor id={openId} user={user} onNotice={onNotice} /> : <><SiteHeader active="handouts" user={user} /><HandoutList isAdmin={user.role === "admin"} onNotice={onNotice} /></>}
     {toastNode}
   </>;
 }
@@ -450,12 +450,13 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   </main>;
 }
 
-function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: string, tone?: "success" | "error") => void }) {
+function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onNotice: (message: string, tone?: "success" | "error") => void }) {
   const [confirmNode, confirm] = useConfirm();
   const [doc, setDoc] = useState<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
   const [home, setHome] = useState<HandoutGroup & { studentName: string | null; domainName: string | null; coursePath: HandoutCourseNode[] }>({ ...NOWHERE, studentName: null, domainName: null, coursePath: [] });
   const [missing, setMissing] = useState(false);
   const [library, setLibrary] = useState<LibraryData | null>(null);
+  const refreshLibrary = useCallback(() => fetchLibrary().then(setLibrary), []);
   const [bankSource, setBankSource] = useState<"library" | "temporary">("library");
   const [saveState, setSaveState] = useState<SaveState>("saved");
   // A link from the course knowledge graph (?module=) opens the handout at that module, ready to add questions to it.
@@ -488,13 +489,20 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
 
   useEffect(() => {
     void fetchHandout(id).then(({ handout }) => { setHome({ courseUnitId: handout.courseUnitId, coursePath: handout.coursePath, domain: handout.domain, domainName: handout.domainName, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()), temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current); }).catch(() => setMissing(true));
-    void fetchLibrary().then(setLibrary).catch(() => setLibrary({ scope: "public", modules: [], categories: [], questions: [] }));
-  }, [id]);
+    void refreshLibrary().catch(() => setLibrary({ scope: "public", modules: [], categories: [], questions: [] }));
+  }, [id, refreshLibrary]);
 
   useEffect(() => {
-    const params = new URLSearchParams({ id });
-    if (sheet !== "handout") params.set("sheet", sheet);
-    window.history.replaceState(null, "", `/tools/handouts?${params}`);
+    const params = new URLSearchParams(window.location.search);
+    params.set("id", id);
+    if (sheet !== "handout") params.set("sheet", sheet); else params.delete("sheet");
+    window.history.replaceState(window.history.state, "", `/tools/handouts?${params}`);
+    const pop = () => {
+      const next = HANDOUT_SHEETS.find(item => item.value === new URLSearchParams(window.location.search).get("sheet"))?.value ?? "handout";
+      if (next !== sheet) { setSheet(next); setPicker(null); setOutlineTarget(""); }
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
   }, [id, sheet]);
 
   useEffect(() => { document.title = `${doc?.title || "讲义"} · 讲义编撰 · MathPilot`; }, [doc?.title]);
@@ -849,7 +857,7 @@ function HandoutEditor({ id, onNotice }: { id: string; onNotice: (message: strin
           <span className="handout-panel-label" aria-hidden="true">题库</span>
         </button>
         <div id="handout-bank-content" className="handout-bank-content" inert={!panels.bank} aria-hidden={!panels.bank}>
-        <QuestionPicker library={library} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
+        <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
           source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
           onEdit={openEditEntry} onRemove={async (questionId) => {
             if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }

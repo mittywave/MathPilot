@@ -77,12 +77,13 @@ async function inspectDocx(file) {
   };
 }
 
-// The 题库选题 pane picks its module from the 切换模块 menu inside the 知识目录, which is folded below 1680px.
+// The handout picker shares the library's module tree; the directory is folded below 1680px.
 async function choosePickerModule(picker, name) {
   const unfold = picker.getByRole('button', { name: '展开知识目录', exact: true });
   if (await unfold.count()) await unfold.click();
-  await picker.locator('summary[aria-label="切换模块"]').click();
-  await picker.getByRole('group', { name: '选择题库模块', exact: true }).getByRole('button', { name, exact: true }).click();
+  const returnToModules = picker.getByRole('button', { name: '切换到模块题库', exact: true });
+  if (await returnToModules.isVisible()) await returnToModules.click();
+  await picker.locator('.picker-module-directory .module-root').filter({ hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\d+$`) }).click();
 }
 
 // --temporary exercises the current two-pane editor against a real isolated Worker.
