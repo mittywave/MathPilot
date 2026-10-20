@@ -182,30 +182,23 @@ vec2 pieceAt(vec2 uv){
   }
   return vec2(0.0);
 }
-// xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
-vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec2 uv, vec4 rib){
-  if(kind == 0) return vec4(p0.xy + uv*p0.zw + pieceAt(uv), 1.0, 1.0);
-  float t = rib.x;
-  float n = tighten(rib.y);
-  vec2 hs = p0.zw*0.5;
-  // a share of the grains, picked at random, settles inside as dust
-  if(hash(uv*vec2(613.7, 287.3)) < p1.w){
-    vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
-    return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
-  }
-  // the rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
-  // of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
-  // grains that lie before this one, from the reach table
-  float u = mod(t + PI*0.5, 2.0*PI) - PI*0.5;
-  float quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
+// The rest lays each quarter of the line out evenly along a quarter of the frame, from the crossing (the middle
+// of the top or the bottom) round the corner to the tip (the middle of a side): l is the share of the quarter's
+// grains that lie before this one, from the reach table. Quarters 0 and 1 are the right side, 0 and 2 the top.
+void frameLine(vec2 uv, vec4 rib, out float l, out float quarter, inout float n){
+  float u = mod(rib.x + PI*0.5, 2.0*PI) - PI*0.5;
+  quarter = u < 0.0 ? 0.0 : u < PI*0.5 ? 1.0 : u < PI ? 2.0 : 3.0;
   float reach = quarter < 0.5 ? u/(PI*0.5) + 1.0 : quarter < 1.5 ? 1.0 - u/(PI*0.5) : quarter < 2.5 ? u/(PI*0.5) - 1.0 : 3.0 - u/(PI*0.5);
   float x = clamp(reach, 0.0, 1.0)*${REACH - 1}.0;
   int row = textureSize(uRib, 0).y - 1, k = int(x);
   vec4 pick = vec4(equal(vec4(quarter), vec4(0.0, 1.0, 2.0, 3.0)));
-  float l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
+  l = mix(dot(texelFetch(uRib, ivec2(k, row), 0), pick), dot(texelFetch(uRib, ivec2(min(k + 1, ${REACH - 1}), row), 0), pick), fract(x));
   // where two quarters meet their strands lie differently across the band, so there it is spread evenly instead
   float meet = 1.0 - smoothstep(0.0, 0.07, l)*(1.0 - smoothstep(0.93, 1.0, l));
   n = mix(n, hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet);
+}
+vec2 frameAt(vec4 p0, vec4 p1, float l, float quarter, float n){
+  vec2 hs = p0.zw*0.5;
   float R = min(p1.x, min(hs.x, hs.y));
   float a = hs.x - R, b = PI*0.5*R, h = hs.y - R;
   float s = l*(a + b + h);
@@ -213,9 +206,26 @@ vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec2 uv, vec4 rib){
   if(s < a){ pt = vec2(s, -hs.y); nm = vec2(0.0, -1.0); }
   else if(s < a + b){ float ph = (s - a)/max(R, 0.001); nm = vec2(sin(ph), -cos(ph)); pt = vec2(a, -h) + nm*R; }
   else { pt = vec2(hs.x, -h + (s - a - b)); nm = vec2(1.0, 0.0); }
-  // quarters 0 and 1 are the right lobe, 0 and 2 its upper arcs
   vec2 side = vec2(quarter < 1.5 ? 1.0 : -1.0, mod(quarter, 2.0) < 0.5 ? 1.0 : -1.0);
-  return vec4(p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side, 1.0, 1.0);
+  return p0.xy + hs + (pt + nm*(p1.z + n*p1.y))*side;
+}
+// a place on a frame by its distance round the outline from the middle of the top (0) to the middle of the bottom
+// (1), on the right or the left
+vec2 frameFromTop(vec4 p0, vec4 p1, float d, bool right, float n){
+  return d < 0.5 ? frameAt(p0, p1, 2.0*d, right ? 0.0 : 2.0, n) : frameAt(p0, p1, 2.0 - 2.0*d, right ? 1.0 : 3.0, n);
+}
+// xy in viewport px, z = how much of the material shows there, w = how big the grain is drawn
+vec4 shapeAt(int kind, vec4 p0, vec4 p1, vec2 uv, vec4 rib){
+  if(kind == 0) return vec4(p0.xy + uv*p0.zw + pieceAt(uv), 1.0, 1.0);
+  float n = tighten(rib.y);
+  // a share of the grains, picked at random, settles inside as dust
+  if(hash(uv*vec2(613.7, 287.3)) < p1.w){
+    vec2 r = vec2(hash(uv*vec2(91.7, 41.3)), hash(uv*vec2(23.9, 157.1)));
+    return vec4(p0.xy + (0.015 + 0.97*r)*p0.zw, 1.0, 1.15);
+  }
+  float l, quarter;
+  frameLine(uv, rib, l, quarter, n);
+  return vec4(frameAt(p0, p1, l, quarter, n), 1.0, 1.0);
 }
 // the lobe tips lead and the crossing follows; grains next to each other keep together, so the ribbon stays a ribbon
 float travel(float t, float sd){
@@ -233,18 +243,35 @@ vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
   if(uKindA == 0) a.xy += drift*uA0.z;
   if(uKindB == 0) b.xy += drift*uB0.z;
   if(uStream > 0.5){
-    // one after another, in order along the line (a little shuffled), each grain gathers to the way out, pours down a
-    // single thread that twists round its own axis as it falls and swings from side to side, and spreads into place
-    float r = clamp(fract(rib.x/(2.0*PI) + 0.25)*0.97 + hm.z*0.03, 0.0, 1.0);
+    // One after another the grains pour through a single twisting thread. A frame unwinds into it: its grains slide
+    // round the outline to the middle of its bottom, so the frame shortens from the top until the last grain leaves,
+    // and a frame being filled is wound on from the middle of its top, down both sides, each grain stopping at its
+    // place. A picture gathers to the way out, or spreads from the way in, directly.
     const float SPAN = 0.22;
-    float k = clamp((uMix - r*(1.0 - SPAN))/SPAN, 0.0, 1.0);
+    float nA = tighten(rib.y), nB = nA, lA = 0.0, qA = 0.0, lB = 0.0, qB = 0.0;
+    bool fA = uKindA == 1 && hash(hm.xy*vec2(613.7, 287.3)) >= uA1.w;
+    bool fB = uKindB == 1 && hash(hm.xy*vec2(613.7, 287.3)) >= uB1.w;
+    if(fA) frameLine(hm.xy, rib, lA, qA, nA);
+    if(fB) frameLine(hm.xy, rib, lB, qB, nB);
+    // how far round from the way out (0) this grain sits, and so when it leaves
+    float order = fA ? (mod(qA, 2.0) > 0.5 ? lA*0.5 : 1.0 - lA*0.5) : clamp(fract(rib.x/(2.0*PI) + 0.25)*0.97 + hm.z*0.03, 0.0, 1.0);
+    float t0 = order*(1.0 - SPAN), t1 = t0 + SPAN;
+    vec2 g1 = fA ? frameAt(uA0, uA1, 0.0, 1.0, 0.0) : uStreamEnds.xy;
+    vec2 g2 = fB ? frameAt(uB0, uB1, 0.0, 0.0, 0.0) : uStreamEnds.zw;
+    float ks = fA ? 0.0 : 0.18, ke = fB ? 1.0 : 0.82;
+    float k = clamp((uMix - t0)/SPAN, 0.0, 1.0);
     e = k;
-    vec2 g1 = uStreamEnds.xy, g2 = uStreamEnds.zw;
     vec2 p;
-    if(k < 0.18){ float f = smoothstep(0.0, 0.18, k); p = mix(a.xy, g1, f); }
-    else if(k > 0.82){ float f = smoothstep(0.82, 1.0, k); p = mix(g2, b.xy, f); }
+    if(uMix <= t0 && fA){ float d = 1.0 - order*(1.0 - uMix/max(t0, 0.0001)); p = frameFromTop(uA0, uA1, d, qA < 1.5, nA*(1.0 - uMix/max(t0, 0.0001))); }
+    else if(uMix >= t1 && fB){
+      float there = mod(qB, 2.0) < 0.5 ? lB*0.5 : 1.0 - lB*0.5;
+      float f = clamp((uMix - t1)/max(1.0 - t1, 0.0001), 0.0, 1.0);
+      p = frameFromTop(uB0, uB1, there*f, qB < 1.5, nB*f);
+    }
+    else if(k < ks){ p = mix(a.xy, g1, smoothstep(0.0, ks, k)); }
+    else if(k > ke){ p = mix(g2, b.xy, smoothstep(ke, 1.0, k)); }
     else {
-      float u = (k - 0.18)/0.64;
+      float u = (k - ks)/(ke - ks);
       vec2 d = g2 - g1;
       float len = max(length(d), 1.0);
       vec2 dir = d/len, nrm = vec2(-dir.y, dir.x);
@@ -258,12 +285,12 @@ vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
       // opens again, the near edge drawn a little larger than the far one
       float across = hm.z*2.0 - 1.0;
       float roll = u*7.0*PI + 0.6;
-      float width = uStreamWidth*(0.5 + 0.5*sin(u*PI));
+      float width = uStreamWidth*sin(u*PI);
       p = spine + nrm*across*width*cos(roll) + dir*across*width*0.25*sin(roll);
       size = 0.9 + 0.3*across*sin(roll);
     }
     alpha = mix(a.z, b.z, k);
-    if(k <= 0.18 || k >= 0.82) size = mix(a.w, b.w, k);
+    if(uMix <= t0 || uMix >= t1 || k < ks || k > ke) size = mix(a.w, b.w, k);
     return p;
   }
   e = travel(rib.x, hm.z);
@@ -1148,7 +1175,7 @@ export class LiquidEngine {
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
     gl.uniform1f(P.u.uStream, m.stream ? 1 : 0)
     if (m.stream) gl.uniform4f(P.u.uStreamEnds, m.stream.out[0], m.stream.out[1], m.stream.in[0], m.stream.in[1])
-    gl.uniform1f(P.u.uStreamWidth, 12 * clamp(this.cssW / 1440, 0.6, 1.4))
+    gl.uniform1f(P.u.uStreamWidth, 7 * clamp(this.cssW / 1440, 0.6, 1.4))
     gl.uniform1f(P.u.uStreamSwing, m.stream?.swing ?? 0)
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
     gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
