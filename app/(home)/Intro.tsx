@@ -50,16 +50,16 @@ const CARDS = FEATURES.map((feature) => ({ src: `/intro/${feature.file}.webp`, a
 const ROW = { tile: 30, aspect: 16 / 9, axis: 60, curve: 80, fade: 12 };
 
 // The teaching loop, turned as a wheel: the page's scroll brings the seven steps to the front one by one, each with its
-// name and line beside it, and at the end they close into a ring round 教与学. A card is the step's name set large in
-// the ∞'s metal.
+// name and line beside it, and at the end they close into a ring round 教与学. A card is a recording of the step done
+// in the app.
 const STEPS = [
-  { demo: "intake", no: "01", name: "入库", short: "入库", text: "照片、PDF、Word 转成可编辑的题目，每道题一个永久编号。" },
-  { demo: "paper", no: "02", name: "组卷", short: "组卷", text: "从题库勾选，或者说一句要什么练习，按学生档案挑题、按天排好。" },
-  { demo: "handout", no: "03", name: "讲义", short: "讲义", text: "所见即所得地编讲义，排成学生版、附答案版和教师版 PDF。" },
-  { demo: "assign", no: "04", name: "布置", short: "布置", text: "在学生档案里布置作业，一份作业可以分几次交。" },
-  { demo: "grading", no: "05", name: "批改", short: "批改", text: "上传作业照片或 PDF 自动批改，按卷面上印的题号对上原题和答案。" },
-  { demo: "profile", no: "06", name: "定档", short: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
-  { demo: "report", no: "∞", name: "学情报告", short: "学情", text: "汇总每个学生的强项和薄弱处，带回下一轮组卷。" },
+  { demo: "intake", name: "入库", text: "照片、PDF、Word 转成可编辑的题目，每道题一个永久编号。" },
+  { demo: "paper", name: "组卷", text: "从题库勾选，或者说一句要什么练习，按学生档案挑题、按天排好。" },
+  { demo: "handout", name: "讲义", text: "所见即所得地编讲义，排成学生版、附答案版和教师版 PDF。" },
+  { demo: "assign", name: "布置", text: "在学生档案里布置作业，一份作业可以分几次交。" },
+  { demo: "grading", name: "批改", text: "上传作业照片或 PDF 自动批改，按卷面上印的题号对上原题和答案。" },
+  { demo: "profile", name: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
+  { demo: "report", name: "学情报告", text: "汇总每个学生的强项和薄弱处，带回下一轮组卷。" },
 ];
 const REDUCE = "(prefers-reduced-motion: reduce)";
 const followMotion = (changed: () => void) => {
@@ -68,12 +68,9 @@ const followMotion = (changed: () => void) => {
   return () => query.removeEventListener("change", changed);
 };
 const motionReduced = () => window.matchMedia(REDUCE).matches;
-const stepFace = (step: (typeof STEPS)[number]) =>
-  <span className="mp-step-face"><span className="mp-step-face-no">{step.no}</span><span className="mp-step-face-name">{step.short}</span></span>;
-
-// A step's demo: a drawn walk-through of doing it (scripts/intro-loop-demos.html, rendered by
-// scripts/render-intro-loop.mjs). It opens and closes on the card's face, so it lies over the face and only the card
-// at the front plays; its neighbours fetch the start, the rest are not loaded. Reduced motion leaves it paused.
+// A step's demo: the real app doing it, recorded by scripts/record-intro-loop.mjs. The card shows its first frame;
+// only the card resting at the centre plays it, from the start, and the cards beside it fetch it ahead. Reduced motion
+// leaves it paused.
 function StepDemo({ step, front, near, mode }: { step: (typeof STEPS)[number]; front: boolean; near: boolean; mode: "light" | "dark" }) {
   const video = useRef<HTMLVideoElement>(null);
   const reduced = useSyncExternalStore(followMotion, motionReduced, () => false);
@@ -84,13 +81,12 @@ function StepDemo({ step, front, near, mode }: { step: (typeof STEPS)[number]; f
     if (!el) return;
     if (playing) el.play().catch(() => {});
     else el.pause();
-    if (!front) el.currentTime = 0; // back on the face, the frame it opens on
+    if (!front) el.currentTime = 0; // back on the first frame, the card's cover
   }, [playing, front, mode]);
-  if (!near) return stepFace(step);
+  const src = `/intro/loop/${step.demo}-${mode}`;
   return <>
-    {stepFace(step)}
-    <video ref={video} key={mode} className="mp-step-demo" src={`/intro/loop/${step.demo}-${mode}.mp4`} muted loop playsInline
-      preload={front ? "auto" : "metadata"} aria-hidden="true" />
+    <video ref={video} key={mode} className="mp-step-demo" src={`${src}.mp4`} poster={`${src}.jpg`} muted loop playsInline
+      preload={near ? "auto" : "none"} aria-hidden="true" />
     {front ? <button type="button" className="mp-step-demo-toggle" aria-label={playing ? "暂停演示" : "播放演示"} title={playing ? "暂停演示" : "播放演示"}
       onClick={() => setChosen(!playing)}>
       {playing
@@ -160,11 +156,11 @@ function Arrow() {
 export default function IntroPage({ login: opened }: { login?: string }) {
   const mode = useSyncExternalStore(followTheme, themeNow, themeOnServer);
   const shade = mode ?? "light";
-  const [front, setFront] = useState(0);
+  const [front, setFront] = useState(-1);
   const wheel = STEPS.map((step, i) => ({
     title: step.name,
     text: step.text,
-    face: <StepDemo step={step} front={i === front} near={Math.abs(i - front) <= 1} mode={shade} />,
+    face: <StepDemo step={step} front={i === front} near={front >= 0 && Math.abs(i - front) <= 1} mode={shade} />,
   }));
   const root = useRef<HTMLDivElement>(null);
   const closingArt = useRef<HTMLImageElement>(null);
