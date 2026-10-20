@@ -52,7 +52,14 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 .mp-wheel-head { position:absolute; inset:clamp(64px,10svh,120px) auto clamp(48px,8svh,96px) clamp(20px,3.2vw,48px); display:flex; flex-direction:column; justify-content:space-between; pointer-events:none; }
 .mp-wheel-head .mp-kicker { margin:0; }
 .mp-wheel-head .mp-lead { max-width:340px; margin:0; font-size:16px; opacity:calc(1 - var(--wheel-open, 0)); }
-.mp-wheel .works-wheel-label { font-weight:500; letter-spacing:.06em; }
+.mp-wheel .works-wheel-label { visibility:hidden; }
+/* the ring's middle, the hero's ∞ and word again at the ring's size; it comes in as the cards close round it */
+.mp-ring-art { --ring:min(29vw, 47svh); position:absolute; top:50%; left:50%; width:var(--ring); aspect-ratio:2400 / 960; translate:-50% -50%;
+  display:grid; place-items:center; pointer-events:none; opacity:clamp(0, 1 - 2.5 * var(--wheel-open, 1), 1); }
+.mp-ring-art span { position:absolute; font-weight:600; font-size:calc(var(--ring) / 2.5); line-height:.8; letter-spacing:-.06em; white-space:nowrap;
+  color:color-mix(in srgb, var(--fg) 5%, transparent); }
+.mp-ring-art img { position:relative; width:100%; height:100%; }
+.mp-intro:has(.sh-root[data-gl="on"]) .mp-ring-art img { visibility:hidden; }
 .mp-wheel .works-wheel-title { font-weight:500; letter-spacing:.02em; }
 .mp-wheel .works-wheel-text { margin:.9em 0 0; line-height:1.8; color:var(--soft); text-wrap:balance; }
 .mp-wheel .works-wheel-index { letter-spacing:.06em; }
