@@ -108,7 +108,6 @@ const SCATTER_MS = 1300;
 const FRAME = { radius: 26, halfWidth: 3.5, outset: 7, fill: 0.3 };
 // the sand's frame round the card resting at the front of the 闭环 wheel (its cards have rounded-lg corners)
 const CARD_FRAME = { radius: 8, halfWidth: 2.5, outset: 5, fill: 0 };
-const ease = (t: number) => t * t * (3 - 2 * t);
 type Gather = { from: number; to: number; start: number };
 // how far the ∞ has gathered (0 … 1), taking `ms` there and SCATTER_MS back; a move starts on the first frame drawn
 // after it was asked for
@@ -372,11 +371,14 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     if (Math.abs(turn - at) < 0.01 && at <= last) rested.current = cards[at];
     const rest = rested.current ?? cards[0];
     const centre: SculptureShape = { kind: "image", rect: { x: ring.left, y: ring.top, w: ring.width, h: ring.height } };
+    // each move is one thread of sand, out of the bottom of the shape it leaves and into the top of the next
+    const bottom = (r: Rect | DOMRect): [number, number] => ["w" in r ? r.x + r.w / 2 : r.left + r.width / 2, "h" in r ? r.y + r.h * 0.8 : r.bottom];
+    const top = (r: DOMRect): [number, number] => [r.left + r.width / 2, r.top];
     let form: SculptureMorph;
-    if (box.top > 0) form = { from: { kind: "image", rect: hero }, to: frame(cards[0]), mix: ease(Math.min(1, 1 - box.top / view.h)) };
-    else if (turn >= last) form = { from: frame(cards[last]), to: centre, mix: ease(Math.min(1, turn - last)) };
-    // turning, it slides down to meet the next card coming up from below and rides back up with it
-    else form = { from: frame(rest), to: frame(cards[Math.floor(turn) + 1]), mix: turn - Math.floor(turn) };
+    if (box.top > 0) form = { from: { kind: "image", rect: hero }, to: frame(cards[0]), mix: Math.min(1, 1 - box.top / view.h), stream: { out: bottom(hero), in: top(cards[0]) } };
+    else if (turn >= last) form = { from: frame(cards[last]), to: centre, mix: Math.min(1, turn - last), stream: { out: bottom(cards[last]), in: [ring.left + ring.width / 2, ring.top + ring.height / 2] } };
+    // turning, the frame pours out past the cards' side and down into the next card coming up from below
+    else form = { from: frame(rest), to: frame(cards[Math.floor(turn) + 1]), mix: turn - Math.floor(turn), stream: { out: bottom(rest), in: top(cards[Math.floor(turn) + 1]), swing: rest.width * 0.62 } };
     return { form, turn };
   };
 
