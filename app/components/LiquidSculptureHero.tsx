@@ -56,6 +56,9 @@ export interface SculptureMorph {
   from: SculptureShape
   to: SculptureShape
   mix: number
+  /** Pour the grains one after another through a single twisting thread that leaves `from` at `out` and enters `to`
+   *  at `in` (viewport px), instead of moving them all at once; `swing` is how far it swings out to the side (px). */
+  stream?: { out: [number, number]; in: [number, number]; swing?: number }
   alpha?: number
   moving?: boolean
   away?: boolean
@@ -160,6 +163,10 @@ uniform vec4 uA1;
 uniform vec4 uB0;
 uniform vec4 uB1;
 uniform float uMix;
+uniform float uStream;
+uniform vec4 uStreamEnds;
+uniform float uStreamWidth;
+uniform float uStreamSwing;
 uniform float uStagger;
 uniform float uSwirl;
 uniform float uCirculate;
@@ -225,6 +232,40 @@ vec2 homeAt(vec4 hm, vec4 rib, out float alpha, out float e, out float size){
   vec2 drift = vec2(cos(rib.w), sin(rib.w))*(phase - 0.5)*0.06*uCirculate;
   if(uKindA == 0) a.xy += drift*uA0.z;
   if(uKindB == 0) b.xy += drift*uB0.z;
+  if(uStream > 0.5){
+    // one after another, in order along the line (a little shuffled), each grain gathers to the way out, pours down a
+    // single thread that twists round its own axis as it falls and swings from side to side, and spreads into place
+    float r = clamp(fract(rib.x/(2.0*PI) + 0.25)*0.97 + hm.z*0.03, 0.0, 1.0);
+    const float SPAN = 0.22;
+    float k = clamp((uMix - r*(1.0 - SPAN))/SPAN, 0.0, 1.0);
+    e = k;
+    vec2 g1 = uStreamEnds.xy, g2 = uStreamEnds.zw;
+    vec2 p;
+    if(k < 0.18){ float f = smoothstep(0.0, 0.18, k); p = mix(a.xy, g1, f); }
+    else if(k > 0.82){ float f = smoothstep(0.82, 1.0, k); p = mix(g2, b.xy, f); }
+    else {
+      float u = (k - 0.18)/0.64;
+      vec2 d = g2 - g1;
+      float len = max(length(d), 1.0);
+      vec2 dir = d/len, nrm = vec2(-dir.y, dir.x);
+      // the thread's spine: an S that swings out and back, more for a long fall, with a smaller wobble on top, and on
+      // the way one loop over, so even a short drop tumbles
+      float swing = uStreamSwing > 0.0 ? uStreamSwing : min(len*0.18, 140.0);
+      float loop = clamp(len*0.22, 50.0, 110.0)*sin(u*PI);
+      float a2 = u*2.0*PI;
+      vec2 spine = g1 + d*u + nrm*(sin(a2)*swing + sin(u*5.0*PI + 1.3)*swing*0.18 + sin(a2)*loop) + dir*(cos(a2) - 1.0)*loop*0.6;
+      // across it the grains lie as a ribbon that keeps turning over as it falls: edge-on it narrows to a line, then
+      // opens again, the near edge drawn a little larger than the far one
+      float across = hm.z*2.0 - 1.0;
+      float roll = u*7.0*PI + 0.6;
+      float width = uStreamWidth*(0.5 + 0.5*sin(u*PI));
+      p = spine + nrm*across*width*cos(roll) + dir*across*width*0.25*sin(roll);
+      size = 0.9 + 0.3*across*sin(roll);
+    }
+    alpha = mix(a.z, b.z, k);
+    if(k <= 0.18 || k >= 0.82) size = mix(a.w, b.w, k);
+    return p;
+  }
   e = travel(rib.x, hm.z);
   vec2 p = mix(a.xy, b.xy, e);
   // on the way the material billows, like liquid poured from one mould into the next
@@ -1105,6 +1146,10 @@ export class LiquidEngine {
       gl.uniform2fv(P.u["uPieceAt[0]"], this.pieceAt)
     }
     gl.uniform1f(P.u.uMix, clamp(m.mix, 0, 1))
+    gl.uniform1f(P.u.uStream, m.stream ? 1 : 0)
+    if (m.stream) gl.uniform4f(P.u.uStreamEnds, m.stream.out[0], m.stream.out[1], m.stream.in[0], m.stream.in[1])
+    gl.uniform1f(P.u.uStreamWidth, 12 * clamp(this.cssW / 1440, 0.6, 1.4))
+    gl.uniform1f(P.u.uStreamSwing, m.stream?.swing ?? 0)
     gl.uniform1f(P.u.uStagger, rm ? 0 : 0.35)
     gl.uniform1f(P.u.uSwirl, rm ? 0 : 70 * clamp(this.cssW / 1440, 0.6, 1.4))
     // Fade circulation away while the image bends into a frame; the morph itself stays intact.
