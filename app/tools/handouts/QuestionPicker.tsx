@@ -157,6 +157,16 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
 
   function toggle(id: string) { setSelected((current) => isSelected(id) ? current.filter((item) => item !== id) : [...current, id]); }
 
+  function toggleTree(open: boolean) {
+    setTreeOpen(open);
+    requestAnimationFrame(() => {
+      const bank = resultsPane.current?.closest(".handout-bank");
+      bank?.querySelector<HTMLButtonElement>(open
+        ? temporary ? ".picker-tree > header .icon-button" : ".picker-directory-face:not([aria-hidden='true']) > header .icon-button"
+        : ".picker-tree-toggle")?.focus({ preventScroll: true });
+    });
+  }
+
   function navigatePapers(view: "modules" | "papers" | "paper", id = "", folder = paperLocation.folder, returnId = paperLocation.returnId) {
     if ((view === "papers") !== (paperLocation.view === "papers")) setPaperFlipping(!matchMedia("(prefers-reduced-motion: reduce)").matches);
     setPaperLocation({ view, id, folder, returnId }); setPaperError(""); setLimit(PAGE_SIZE);
@@ -182,24 +192,24 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const displayed = paperOpen ? (activePaper?.items ?? []).map(item => ({ ...item, question: library?.questions.find(question => question.id === item.questionId) ?? null })) : results.map((question, index) => ({ questionId: question.id, number: String(index + 1), section: "", question }));
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题" data-paper-flipping={paperFlipping || undefined}>
-    <aside className="picker-tree" aria-label={papersOpen ? "试卷目录" : "知识目录"} hidden={!treeOpen}>
-      {temporary && <><header><h2>临时题库</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" onClick={() => setTreeOpen(false)}>←</button></header><div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div></>}
+    <aside className="picker-tree" id="picker-directory" aria-label={papersOpen ? "试卷目录" : "知识目录"} inert={!treeOpen} aria-hidden={!treeOpen}>
+      {temporary && <><header><h2>临时题库</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header><div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div></>}
       <div className={`paper-directory-flip${papersOpen ? " is-papers" : ""}`} hidden={temporary}>
         <div className="picker-directory-face paper-directory-face paper-directory-front" inert={temporary || papersOpen} aria-hidden={temporary || papersOpen}>
-          <header><h2>模块</h2><button type="button" className="paper-view-toggle" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={true} onClick={() => setTreeOpen(false)}>←</button></header>
+          <header><h2>模块</h2><button type="button" className="paper-view-toggle" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header>
           <div className="picker-module-directory">{modules.map(module => <CategoryTree key={module.id} module={module} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} collapsible onSelect={id => {
             if (paperOpen) { navigatePapers("modules", "", paperLocation.folder, paperLocation.id); setKeyword(""); }
             setScope({ moduleId: module.id, categoryId: id === module.id ? "" : id }); setLimit(PAGE_SIZE);
           }} />)}</div>
         </div>
         <div className="picker-directory-face paper-directory-face paper-directory-back" inert={!papersOpen} aria-hidden={!papersOpen}>
-          <header><h2>试卷</h2><button type="button" className="paper-view-toggle" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={() => navigatePapers("modules")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起试卷目录" aria-expanded={true} onClick={() => setTreeOpen(false)}>←</button></header>
+          <header><h2>试卷</h2><button type="button" className="paper-view-toggle" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={() => navigatePapers("modules")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起试卷目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header>
           <PaperDirectory folders={paperFolders} selected={paperLocation.folder} user={user} onSelect={id => navigatePapers("papers", "", id)} onChanged={() => setPaperRefresh(value => value + 1)} onNotice={onNotice} />
         </div>
       </div>
     </aside>
     <div className="picker-main">
-      <div className="picker-source">{!treeOpen && <button className="icon-button" type="button" title="展开目录" aria-label={papersOpen ? "展开试卷目录" : "展开知识目录"} aria-expanded={false} onClick={() => setTreeOpen(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button>}<div className="handout-sheets" role="tablist" aria-label="选题来源">
+      <div className="picker-source"><button className="icon-button picker-tree-toggle" type="button" title="展开目录" aria-label={papersOpen ? "展开试卷目录" : "展开知识目录"} aria-expanded={treeOpen} aria-controls="picker-directory" aria-hidden={treeOpen} inert={treeOpen} tabIndex={treeOpen ? -1 : 0} onClick={() => toggleTree(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button><div className="handout-sheets" role="tablist" aria-label="选题来源">
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
       </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}{papersOpen && <button className="secondary" onClick={() => setImportPaperOpen(true)}>录入试卷</button>}</div>
