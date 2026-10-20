@@ -1,9 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { CategoryTree } from "../../components/CategoryTree";
-import { PaperCenter, PaperDirectory, PaperImportDialog } from "../../components/PaperCenter";
+import { PaperCenter, PaperDirectory } from "../../components/PaperCenter";
 import { QuestionBody } from "../../components/QuestionBody";
 import { jobsApi } from "../../components/RecognitionJobs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, sheetLabel } from "../../../lib/handout-rules.mjs";
@@ -57,7 +56,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const [activePaper, setActivePaper] = useState<PaperDetail | null>(null);
   const [paperError, setPaperError] = useState("");
   const [paperFlipping, setPaperFlipping] = useState(false);
-  const [importPaperOpen, setImportPaperOpen] = useState(false);
   const target = useRef<HTMLDivElement>(null);
   const resultsPane = useRef<HTMLDivElement>(null);
   const sourceRef = useRef(source);
@@ -199,7 +197,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       <div className="picker-source"><button className="icon-button picker-tree-toggle" type="button" title="展开目录" aria-label={papersOpen ? "展开试卷目录" : "展开知识目录"} aria-expanded={treeOpen} aria-controls="picker-directory" aria-hidden={treeOpen} inert={treeOpen} tabIndex={treeOpen ? -1 : 0} onClick={() => toggleTree(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button><div className="handout-sheets" role="tablist" aria-label="选题来源">
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
-      </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}{papersOpen && <button className="secondary" onClick={() => setImportPaperOpen(true)}>录入试卷</button>}</div>
+      </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div ref={target} className={`picker-target${list ? " list" : ""}`}>
         <header><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span></header>
         <div className="picker-target-fields">
@@ -248,6 +246,5 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       {temporary && !!pendingArchive.length && <div className="picker-archive"><select aria-label="入库分类" value={archiveCategory} disabled={archiving} onChange={(event) => setArchiveCategory(event.target.value)}><option value="">选择正式题库分类</option>{modules.map((module) => <optgroup key={module.id} label={module.name}><option value={module.id}>{module.name}（根目录）</option>{categories.filter((category) => category.moduleId === module.id).map((category) => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</optgroup>)}</select><button className="secondary" disabled={!archiveCategory || archiving} onClick={async () => { setArchiving(true); try { const saved = await onArchive(pendingArchive, archiveCategory); setArchiveIds((ids) => ids.filter((id) => !saved.includes(id))); } catch (error) { onNotice(error instanceof Error ? error.message : "入库失败，请重试", "error"); } finally { setArchiving(false); } }}>{archiving ? "正在入库…" : `保存勾选 ${pendingArchive.length} 题`}</button></div>}
       {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
     </div>
-    {importPaperOpen && createPortal(<PaperImportDialog folders={paperFolders} modules={modules} onClose={() => setImportPaperOpen(false)} onUploaded={folder => { navigatePapers("papers", "", folder); setPaperRefresh(value => value + 1); }} onNotice={onNotice} />, document.body)}
   </section>;
 }
