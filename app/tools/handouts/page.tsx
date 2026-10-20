@@ -486,7 +486,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const [noteImport, setNoteImport] = useState<string | null>(null);
   const [dropNote, setDropNote] = useState<string | null>(null);
   // A question dragged by its handle lands beside another question or at the end of a 讲义 lane.
-  const dragging = useRef<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
   const [dropAt, setDropAt] = useState<Parameters<typeof dropHandoutItem>[2] | null>(null);
   const noteFile = useRef<HTMLInputElement>(null);
   const noteTarget = useRef<string | null>(null);
@@ -851,18 +851,32 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const backLabel = groupLabel(home);
   const backHref = homeShelf === "student" ? `/tools/handouts?shelf=student&student=${encodeURIComponent(home.studentId ?? "")}` : homeShelf === "course" ? `/tools/handouts?shelf=course&course=${encodeURIComponent(home.coursePath[0]?.id ?? "")}&stage=${encodeURIComponent(home.coursePath[1]?.id ?? "")}` : `/tools/handouts?shelf=topic&topic=${encodeURIComponent(home.coursePath[2]?.id ?? home.coursePath[1]?.id ?? home.domain ?? "unsorted")}`;
 
-  // The six-dot handle drags its question; focused, ↑ ↓ move it one place. A mouse never leaves focus on it, so no ring stays behind.
-  const dragHandle = (item: HandoutItem, name: string) => <button className="handout-drag" draggable aria-label={`拖动${name}调整顺序`} title="拖动调整顺序，也可按 ↑ ↓ 键"
-    onDragStart={(event) => { dragging.current = item.id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", name); const card = event.currentTarget.closest("article"); if (card) event.dataTransfer.setDragImage(card, 16, 16); }}
-    onClick={(event) => { if (event.detail) event.currentTarget.blur(); }}
-    onDragEnd={(event) => { event.currentTarget.blur(); dragging.current = null; setDropAt(null); }}
-    onKeyDown={(event) => { const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0; if (direction) { event.preventDefault(); setItems(moveHandoutItem(doc.items, item.id, direction)); } }}><GripIcon /></button>;
-  const drop = (event: DragEvent) => { if (!dragging.current || !dropAt) return; event.preventDefault(); event.stopPropagation(); setItems(dropHandoutItem(doc.items, dragging.current, dropAt)); dragging.current = null; setDropAt(null); };
-  const dropMark = (item: HandoutItem) => dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dragging.current !== item.id ? dropAt.after ? " drop-after" : " drop-before" : "";
-  const cardDrop = (item: HandoutItem) => ({
-    onDragOver: (event: DragEvent<HTMLElement>) => { if (!dragging.current) return; event.preventDefault(); event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); const after = event.clientY > box.top + box.height / 2; if (!(dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dropAt.after === after)) setDropAt({ itemId: item.id, after }); },
-    onDrop: drop,
+  const draggedItem = doc.items.find(item => item.id === dragging);
+  const drop = (event: DragEvent, target = dropAt) => {
+    if (!dragging || !target) return;
+    event.preventDefault(); event.stopPropagation();
+    const next = dropHandoutItem(doc.items, dragging, target);
+    if (next !== doc.items) { setItems(next); setOutlineTarget(`question-${dragging}`); }
+    setDragging(null); setDropAt(null);
+  };
+  const dropMark = (item: HandoutItem) => dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dragging !== item.id ? dropAt.after ? " drop-after" : " drop-before" : "";
+  const cardDrop = (item: HandoutItem, horizontal = false) => ({
+    onDragOver: (event: DragEvent<HTMLElement>) => { if (!draggedItem || draggedItem.kind !== item.kind) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; const box = event.currentTarget.getBoundingClientRect(); const after = horizontal ? event.clientX > box.left + box.width / 2 : event.clientY > box.top + box.height / 2; if (!(dropAt && "itemId" in dropAt && dropAt.itemId === item.id && dropAt.after === after)) setDropAt({ itemId: item.id, after }); },
+    onDrop: (event: DragEvent<HTMLElement>) => { const box = event.currentTarget.getBoundingClientRect(); drop(event, { itemId: item.id, after: horizontal ? event.clientX > box.left + box.width / 2 : event.clientY > box.top + box.height / 2 }); },
   });
+  const laneDrop = (sectionId: string, band: HandoutBand) => ({
+    onDragOver: (event: DragEvent<HTMLElement>) => { if (draggedItem?.kind !== "question") return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "move"; if (!(dropAt && !("itemId" in dropAt) && dropAt.sectionId === sectionId && dropAt.band === band)) setDropAt({ sectionId, band }); },
+    onDrop: (event: DragEvent<HTMLElement>) => drop(event, { sectionId, band }),
+  });
+  // The body grip and outline number share one drag path; ↑ ↓ reorder within their current lane.
+  const dragHandle = (item: HandoutItem, name: string, outlineNumber?: string) => <button key={item.id} type="button" className={outlineNumber === undefined ? "handout-drag" : `handout-outline-number${dropMark(item)}${dragging === item.id ? " is-dragging" : ""}`} draggable
+    aria-label={outlineNumber === undefined ? `拖动${name}调整顺序` : `定位${name}`} aria-current={outlineNumber !== undefined && outlineTarget === `question-${item.id}` ? "location" : undefined}
+    title={outlineNumber === undefined ? "拖动调整顺序，也可按 ↑ ↓ 键" : "点击定位；拖动到其他模块或题号前后；↑ ↓ 调整本栏顺序"}
+    onDragStart={(event) => { setDragging(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", name); const card = event.currentTarget.closest("article"); if (card) event.dataTransfer.setDragImage(card, 16, 16); }}
+    onClick={(event) => { if (outlineNumber !== undefined) locateOutline(`question-${item.id}`); else if (event.detail) event.currentTarget.blur(); }}
+    onDragEnd={(event) => { event.currentTarget.blur(); setDragging(null); setDropAt(null); }}
+    onKeyDown={(event) => { const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0; if (direction) { event.preventDefault(); setItems(moveHandoutItem(doc.items, item.id, direction)); } }}
+    {...(outlineNumber === undefined ? {} : cardDrop(item, true))}>{outlineNumber ?? <GripIcon />}</button>;
   // One question as the handout prints it, with one quiet line underneath: where it comes from, its 考点 and the actions.
   // 移出讲义 stays a visible red button; the rest of the actions are plain text buttons.
   const questionCard = (item: QuestionItem, band: HandoutBand) => {
@@ -1000,8 +1014,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
           // The lane the bank is adding to is marked, so it is always clear where picked questions go.
           const target = activePicker.kind === "add" && activePicker.sectionId === section.id && activePicker.band === band;
           const landing = dropAt && !("itemId" in dropAt) && dropAt.sectionId === section.id && dropAt.band === band;
-          return <div className={`handout-lane ${band}${target ? " target" : ""}${landing ? " dropping" : ""}`} key={band}
-            onDragOver={(event) => { if (!dragging.current) return; event.preventDefault(); if (!landing) setDropAt({ sectionId: section.id, band }); }} onDrop={drop}>
+          return <div className={`handout-lane ${band}${target ? " target" : ""}${landing ? " dropping" : ""}`} key={band} {...laneDrop(section.id, band)}>
             <div className="handout-lane-head"><b>{HANDOUT_PARTS[band].label}</b><span className={`handout-count${lane.length ? "" : " zero"}`} aria-label={`${lane.length} 道题`}>{lane.length}</span>
               <div className="handout-lane-add">
                 <button className="text-button" aria-pressed={target} disabled={!libraryReady} onClick={() => choosePicker({ kind: "add", sectionId: section.id, band })}>从题库选题</button>
@@ -1028,19 +1041,20 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
         </button>
         <nav id="handout-outline-content" className="handout-outline-content" aria-label={`${sheetLabel(sheet)}结构`} inert={!panels.outline} aria-hidden={!panels.outline}>
           <header><h2>{sheetLabel(sheet)}结构</h2><span>{questionCount} 题</span></header>
-          <div className="handout-outline-scroll">
+          <div className="handout-outline-scroll" onDragOver={() => { if (dragging) setDropAt(null); }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropAt(null); }}>
             <button type="button" className="handout-outline-title" aria-current={outlineTarget === "handout-heading" ? "location" : undefined} onClick={() => locateOutline("handout-heading")}>{doc.title || "未命名讲义"}</button>
             {sheet === "handout" ? modules.map(({ section, bands }, index) => {
               const heading = moduleHeading(section.title, index);
-              return <section className="handout-outline-module" key={section.id}>
+              const landing = dropAt && !("itemId" in dropAt) && dropAt.sectionId === section.id;
+              return <section className={`handout-outline-module${landing ? " dropping" : ""}`} key={section.id} {...laneDrop(section.id, draggedItem?.kind === "question" ? draggedItem.band ?? "example" : "example")}>
                 <button type="button" className="handout-outline-heading" aria-label={`定位模块${heading.numeral}：${heading.title || "未命名模块"}`} aria-current={outlineTarget === `module-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`module-${section.id}`)}><span>{heading.numeral}</span><b>{heading.title || "未命名模块"}</b></button>
                 <button type="button" className="handout-outline-note" aria-label={`定位模块${heading.numeral}知识点`} aria-current={outlineTarget === `knowledge-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`knowledge-${section.id}`)}>知识点</button>
-                {HANDOUT_BANDS.filter(band => bands[band].length).map(band => <div className="handout-outline-band" key={band}>
+                {HANDOUT_BANDS.filter(band => bands[band].length).map(band => <div className={`handout-outline-band${landing && dropAt.band === band ? " dropping" : ""}`} key={band} {...laneDrop(section.id, band)}>
                   <span>{HANDOUT_PARTS[band].label}</span>
-                  <div className="basket-outline-questions">{bands[band].map(item => <button type="button" className="handout-outline-number" key={item.id} aria-label={`定位模块${heading.numeral}${HANDOUT_PARTS[band].label} ${numbers.get(item.id)}`} aria-current={outlineTarget === `question-${item.id}` ? "location" : undefined} onClick={() => locateOutline(`question-${item.id}`)}>{numbers.get(item.id)}</button>)}</div>
+                  <div className="basket-outline-questions">{bands[band].map(item => dragHandle(item, `模块${heading.numeral}${HANDOUT_PARTS[band].label} ${numbers.get(item.id)}`, numbers.get(item.id)))}</div>
                 </div>)}
               </section>;
-            }) : <div className="basket-outline-questions">{listed.map((item, index) => <button type="button" className="handout-outline-number" key={item.id} aria-label={`定位${sheetLabel(sheet)}第 ${index + 1} 题`} aria-current={outlineTarget === `question-${item.id}` ? "location" : undefined} onClick={() => locateOutline(`question-${item.id}`)}>{index + 1}</button>)}</div>}
+            }) : <div className="basket-outline-questions">{listed.map((item, index) => dragHandle(item, `${sheetLabel(sheet)}第 ${index + 1} 题`, String(index + 1)))}</div>}
             {!questionCount && <p className="handout-muted">尚未加入题目</p>}
           </div>
         </nav>

@@ -140,14 +140,22 @@
 .handout-outline-title,.handout-outline-heading{display:flex;align-items:flex-start;gap:8px;width:100%;border:0;border-radius:6px;background:transparent;text-align:left;line-height:1.6}
 .handout-outline-title{padding:6px;margin-bottom:10px;font-family:"Songti SC",serif;font-size:16px;font-weight:700}
 .handouts .handout-outline-title,.handouts .handout-outline-heading{white-space:normal;overflow-wrap:anywhere}
-.handout-outline-module{padding:8px 0;border-top:1px solid var(--line)}
+.handout-outline-module{padding:8px 0;border-top:1px solid var(--line);border-radius:6px;transition:background-color .15s,box-shadow .15s}
+.handout-outline-module.dropping{background:var(--green-soft);box-shadow:inset 0 0 0 2px var(--green)}
+.handout-outline-band.dropping{border-radius:5px;background:color-mix(in srgb,var(--green) 10%,transparent)}
 .handout-outline-heading{padding:5px 6px;font-size:13px}
 .handout-outline-heading>span{flex:none;color:var(--muted);font-size:12px}
 .handout-outline-heading>b{font-weight:600}
 .handout-outline-note{margin:2px 0 4px 24px;padding:3px 6px;border:0;border-radius:5px;background:transparent;font-size:12px}
 .handout-outline-band{padding:4px 0 2px 24px}
 .handout-outline-band>span{display:block;margin:0 0 4px 6px;color:var(--muted);font-size:12px}
-.handout-outline-number{min-width:32px;min-height:32px;padding:0 6px;border:1px solid var(--line);border-radius:5px;background:var(--surface);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;transition:background-color .15s,border-color .15s}
+.handout-outline-number{position:relative;min-width:32px;min-height:32px;padding:0 6px;border:1px solid var(--line);border-radius:5px;background:var(--surface);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;transition:background-color .15s,border-color .15s}
+.handout-outline-content .handout-outline-number{cursor:grab}
+.handout-outline-content .handout-outline-number:active{cursor:grabbing}
+.handout-outline-number.is-dragging{opacity:.4}
+.handout-outline-number.drop-before::before,.handout-outline-number.drop-after::after{content:"";position:absolute;top:-3px;bottom:-3px;width:3px;border-radius:2px;background:var(--green);pointer-events:none}
+.handout-outline-number.drop-before::before{left:-4px}
+.handout-outline-number.drop-after::after{right:-4px}
 .handout-outline-content button:hover{background:var(--green-soft);color:var(--green)}
 .handout-outline-content button[aria-current]{background:var(--green-soft);color:var(--green)}
 .handout-outline-content .handout-outline-number[aria-current]{border-color:var(--green);background:var(--green);color:var(--on-accent);box-shadow:0 0 0 3px var(--green-soft)}
