@@ -58,7 +58,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const [paperError, setPaperError] = useState("");
   const [paperFlipping, setPaperFlipping] = useState(false);
   const [importPaperOpen, setImportPaperOpen] = useState(false);
-  const target = useRef<HTMLDetailsElement>(null);
+  const target = useRef<HTMLDivElement>(null);
   const resultsPane = useRef<HTMLDivElement>(null);
   const sourceRef = useRef(source);
   useEffect(() => { sourceRef.current = source; }, [source]);
@@ -119,23 +119,10 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     try { localStorage.setItem("mathpilot-picker-scope", JSON.stringify({ moduleId: activeModuleId, categoryId: activeCategoryId })); } catch { /* Storage may be unavailable; keep this session's selection. */ }
   }, [library, activeModuleId, activeCategoryId]);
   const targetLabel = mode.kind === "add" ? sections.find(section => section.id === mode.sectionId)?.label || "请先添加知识模块" : "";
-  useEffect(() => {
-    const close = (event: PointerEvent) => {
-      if (target.current?.open && !target.current.contains(event.target as Node)) target.current.open = false;
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      if (target.current?.open) {
-        event.preventDefault(); target.current.open = false; target.current.querySelector("summary")?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape, true);
-    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape, true); };
-  }, []);
   const targetKey = mode.kind === "replace" ? mode.itemId : `${sheet}|${mode.sectionId}|${mode.band}`;
   useEffect(() => {
     if (matchMedia("(prefers-reduced-motion:reduce)").matches) return;
-    target.current?.querySelector("summary")?.animate([{ backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px var(--green)" }, { backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px transparent" }], { duration: 900 });
+    target.current?.querySelector("header")?.animate([{ backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px var(--green)" }, { backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px transparent" }], { duration: 900 });
   }, [targetKey]);
   const pathOf = (id: string) => categoryPath(modules, categories, id);
   const moduleQuestions = (library?.questions ?? []).filter((question) => question.moduleId === activeModuleId);
@@ -213,8 +200,8 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
       </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}{papersOpen && <button className="secondary" onClick={() => setImportPaperOpen(true)}>录入试卷</button>}</div>
-      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <details ref={target} className={`picker-target${list ? " list" : ""}`}>
-        <summary title="展开或收起选题目标"><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></summary>
+      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div ref={target} className={`picker-target${list ? " list" : ""}`}>
+        <header><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span></header>
         <div className="picker-target-fields">
         <select aria-label={list ? "考查模块" : "加入模块"} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
           {!sections.length && <option value="">{list ? "讲义还没有知识模块" : "请先添加知识模块"}</option>}
@@ -224,7 +211,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
           {HANDOUT_BANDS.map((band) => <option key={band} value={band}>作为{HANDOUT_PARTS[band].label}</option>)}
         </select>}
         </div>
-      </details>}
+      </div>}
       <div className="picker-filters" hidden={papersOpen || paperOpen}>
         <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />
         {temporary && <>

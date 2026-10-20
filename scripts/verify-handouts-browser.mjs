@@ -586,7 +586,7 @@ try {
   // Questions are picked in the left 题库选题 pane: a lane's 从题库选题 makes it the target, the pane's module
   // switcher chooses the module, and 加入例题/练习/变式 adds the selection.
   const picker = page.locator('.handout-bank');
-  const pickerTarget = () => picker.locator('.picker-target summary b').innerText();
+  const pickerTarget = () => picker.locator('.picker-target header b').innerText();
   await lane(0, 'example').getByRole('button', { name: '从题库选题', exact: true }).click();
   assert.equal(await pickerTarget(), '模块一 · 例题');
   await choosePickerModule(picker, '初一数学');
