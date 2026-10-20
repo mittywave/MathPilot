@@ -668,7 +668,7 @@ export default function Home() {
     deleting.current = true;
     try {
       if (!await confirm({ title: `删除学生档案「${student.name}」`,
-        items: ["学生讲义", "作业与批改记录，包括上传的照片", `错题本（${student.wrongCount} 道）`, "课后反馈和学情报告"],
+        items: ["学生讲义", "作业与批改记录，包括上传的照片", `错题本（${student.wrongCount} 道）`, "学情报告及历史反馈"],
         body: "这些内容会一起永久删除，无法恢复。", typeToConfirm: student.name, confirmLabel: "永久删除", danger: true })) return;
       const index = students.findIndex((item) => item.id === student.id);
       const nextId = activeStudentId === student.id ? students[index + 1]?.id ?? students[index - 1]?.id ?? "" : activeStudentId;

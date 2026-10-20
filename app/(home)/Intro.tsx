@@ -42,8 +42,8 @@ const FEATURES = [
   { file: "handout", name: "讲义编撰", text: "所见即所得地写讲义，讲义、小测和作业放在一起。" },
   { file: "graph", name: "知识图谱", text: "知识点按年级排列，连线标出学习先后。" },
   { file: "grading", name: "作业批改", text: "上传作业照片或 PDF，按题号对上原题和答案。" },
-  { file: "profile", name: "学生档案", text: "按知识点和五项能力定档，错题进入错题本。" },
-  { file: "report", name: "学情报告", text: "汇总一段时间的作业和课后反馈，写成报告。" },
+  { file: "profile", name: "学生档案", text: "依据作答分析知识掌握与能力，错题进入错题本。" },
+  { file: "report", name: "学情报告", text: "汇总一段时间的作业和能力诊断，写成报告。" },
   { file: "smart", name: "智能组卷", text: "说一句要什么练习，按学生档案挑题、按天排好。" },
 ];
 const CARDS = FEATURES.map((feature) => ({ src: `/intro/${feature.file}.webp`, alt: feature.name }));
@@ -58,7 +58,7 @@ const STEPS = [
   { demo: "handout", name: "讲义", text: "所见即所得地编讲义，排成学生版、附答案版和教师版 PDF。" },
   { demo: "assign", name: "布置", text: "在学生档案里布置作业，一份作业可以分几次交。" },
   { demo: "grading", name: "批改", text: "上传作业照片或 PDF 自动批改，按卷面上印的题号对上原题和答案。" },
-  { demo: "profile", name: "定档", text: "按知识点和五项能力定档，做错的题进入错题本。" },
+  { demo: "profile", name: "定档", text: "依据作答分析知识掌握与能力，做错的题进入错题本。" },
   { demo: "report", name: "学情报告", text: "汇总每个学生的强项和薄弱处，带回下一轮组卷。" },
 ];
 const REDUCE = "(prefers-reduced-motion: reduce)";
