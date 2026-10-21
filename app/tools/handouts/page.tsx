@@ -4,14 +4,13 @@ import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout,
 import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, dropHandoutItem, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
-import type { WordAnswerPlacement } from "../../../lib/export-word";
-import type { LatexStatus } from "../../../lib/handout-latex-files";
 import { noteFromBlocks, type RecognizedNoteFigure } from "../../../lib/handout-note.mjs";
 import { clipboardImage } from "../../../lib/image-tools";
 import { randomClientId } from "../../../lib/client-random-id.mjs";
 import { droppedImage, readScreenshot, recognizeScreenshot } from "../../../lib/screenshot-recognition";
 import type { NoteRecognitionResult } from "../../../lib/recognition-contract";
-import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutCourseNode, HandoutGroup, HandoutItem, HandoutSheet, HandoutShelf, HandoutSummary, LibraryData, Question, StudentSummary } from "../../../lib/types";
+import type { AuthUser, Handout, HandoutBand, HandoutDomain, HandoutCourseNode, HandoutGroup, HandoutItem, HandoutSheet, HandoutShelf, HandoutSummary, LibraryData, Question, StudentSummary, TypesetSettings } from "../../../lib/types";
+import type { BasketTypeset } from "../typeset/Typesetter";
 import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { QuestionBody } from "../../components/QuestionBody";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../../components/QuestionEntry";
@@ -30,17 +29,11 @@ type SectionItem = Extract<HandoutItem, { kind: "section" }>;
 type QuestionItem = Extract<HandoutItem, { kind: "question" }>;
 type ListSheet = Exclude<HandoutSheet, "handout">;
 type ListItem = Extract<HandoutItem, { kind: ListSheet }>;
-type ExportFormat = "pdf" | "word";
 
 const ENTRY_CATEGORY_KEY = "mitty-handout-entry-category";
-// listHint is shown for 小测 and 作业, which have no 例题/练习/变式.
-const ANSWER_CHOICES: { value: WordAnswerPlacement; label: string; hint: string; listHint: string }[] = [
-  { value: "none", label: "不附", hint: "学生版：例题留课堂笔记区，练习和变式留作答空间。", listHint: "学生版：解答题留作答空间。" },
-  { value: "end", label: "文末", hint: "学生版正文，答案与解析按例题、练习、变式分组附在文末。", listHint: "学生版正文，答案与解析附在文末。" },
-  { value: "each", label: "每题后", hint: "教师版：每道题后紧跟答案与解析。", listHint: "教师版：每道题后紧跟答案与解析。" },
-];
 // The editor engine loads with the first module; until then the note shows as it reads.
 const NoteEditor = lazy(() => import("../../components/NoteEditor"));
+const Typesetter = lazy(() => import("../typeset/Typesetter"));
 // crypto.randomUUID only exists on secure origins; colleagues use the plain-http LAN address.
 const newId = () => randomClientId();
 
@@ -52,25 +45,8 @@ function GripIcon() {
   return <svg viewBox="0 0 10 16" aria-hidden="true" focusable="false">{[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" />))}</svg>;
 }
 
-function saveBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a"); link.href = url; link.download = fileName; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
 function readStored(key: string) { try { return window.localStorage.getItem(key) ?? ""; } catch { return ""; } }
 function writeStored(key: string, value: string) { try { window.localStorage.setItem(key, value); } catch { /* 浏览器禁用本地存储时只是不记住上次的分类 */ } }
-
-// A small menu closes when the pointer goes down anywhere outside it.
-function closeOutside(menu: HTMLDetailsElement) {
-  if (!menu.open) return;
-  const close = (event: PointerEvent) => {
-    if (menu.contains(event.target as Node)) return;
-    menu.open = false; document.removeEventListener("pointerdown", close);
-  };
-  document.addEventListener("pointerdown", close);
-}
-const closeMenu = (item: HTMLElement) => { const menu = item.closest("details"); if (menu) menu.open = false; };
 
 export default function HandoutsPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -476,10 +452,9 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const [outlineTarget, setOutlineTarget] = useState("");
   const bankPane = useRef<HTMLDivElement>(null);
   const [entry, setEntry] = useState<EntryState | null>(null);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [answers, setAnswers] = useState<WordAnswerPlacement>("end");
-  const [exporting, setExporting] = useState<ExportFormat | "source" | null>(null);
-  const [latexStatus, setLatexStatus] = useState<LatexStatus | null>(null);
+  const [typeset, setTypeset] = useState<BasketTypeset | null>(null);
+  const [openingTypeset, setOpeningTypeset] = useState(false);
+  const typesetSettings = useRef<Partial<Record<HandoutSheet, { order: string; settings: TypesetSettings }>>>({});
   const latest = useRef<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
   const saving = useRef<Promise<void> | null>(null);
   const pending = useRef(false);
@@ -785,53 +760,39 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
 
   function chooseNoteScreenshot(sectionId: string) { noteTarget.current = sectionId; noteFile.current?.click(); }
 
-  // Where 精排 PDF cannot be typeset (the hosted site), the main action falls back to Word.
-  const pdfReady = latexStatus?.available === true;
-  const mainFormat: ExportFormat = latexStatus && !latexStatus.available ? "word" : "pdf";
-
-  async function openExport() {
-    setExportOpen(true);
-    const { latexCompilerStatus } = await import("../../../lib/handout-latex-files");
-    const status = await latexCompilerStatus();
-    setLatexStatus(status);
-  }
-
-  // PDF and LaTeX source share one generator; Word keeps the editable source format. The open 讲义, 小测 or 作业 is exported.
-  async function exportHandout(kind: ExportFormat | "source") {
-    if (!doc || exporting) return;
-    setExporting(kind);
+  async function openTypeset() {
+    if (!doc || openingTypeset) return;
+    setOpeningTypeset(true);
     try {
+      if (saveState !== "saved") await flush();
+      const current = latest.current!;
       const find = (_scope: unknown, questionId: string) => resolve(questionId);
-      const handout = sheet === "handout" ? handoutSections(doc.items, find) : null;
-      const list = sheet === "handout" ? null : sheetQuestions(doc.items, sheet, find);
-      const missingCount = (handout ?? list)!.missingCount;
-      const temporaryIds = new Set(doc.temporaryQuestions.map((question) => question.id));
-      const ids = [...new Set(doc.items.flatMap((item) => item.kind === (sheet === "handout" ? "question" : sheet) && resolve(item.questionId) && !temporaryIds.has(item.questionId) ? [item.questionId] : []))];
+      const handout = sheet === "handout" ? handoutSections(current.items, find) : null;
+      const list = sheet === "handout" ? null : sheetQuestions(current.items, sheet, find);
+      const questions = handout ? handout.modules.flatMap((module) => HANDOUT_BANDS.flatMap((band) => module.bands[band])) : list!.questions;
+      if (!questions.length) throw new Error("当前资料没有可读取的题目，请先加入题目。");
+      const temporaryIds = new Set(current.temporaryQuestions.map((question) => question.id));
+      const ids = [...new Set(questions.filter((question) => !temporaryIds.has(question.id)).map((question) => question.id))];
       if (ids.length) await authorizeDownload(ids);
-      const notes = missingCount ? [`跳过 ${missingCount} 道无法读取的题`] : [];
-      const fileName = list ? `${doc.title}-${sheetLabel(sheet)}` : doc.title;
-      if (kind === "word") {
-        const { buildWordBlob, handoutWordSections } = await import("../../../lib/export-word");
-        const word = list ? { title: `${doc.title} · ${sheetLabel(sheet)}`, sections: [{ questions: list.questions }] } : { title: doc.title, sections: handoutWordSections(handout!.modules, answers) };
-        saveBlob(await buildWordBlob({ ...word, answers }), `${fileName}.docx`);
-        onNotice(["Word 已生成", ...notes].join("，"));
-      } else {
-        const { buildHandoutLatexProject, compileLatexPdf, latexSourceZip } = await import("../../../lib/handout-latex-files");
-        const project = await buildHandoutLatexProject(list ? { title: doc.title, answers, sheet: sheetLabel(sheet), questions: list.questions } : { title: doc.title, answers, modules: handout!.modules });
-        if (project.missingFigures) notes.push(`${project.missingFigures} 张配图未能读取`);
-        if (kind === "source") {
-          saveBlob(await latexSourceZip(project), `${fileName}-LaTeX.zip`);
-          onNotice(["LaTeX 源码已下载", ...notes].join("，"));
-        } else {
-          const { pdf, issues } = await compileLatexPdf(project);
-          saveBlob(pdf, `${fileName}.pdf`);
-          setLatexStatus((status) => status && { ...status, installed: true });
-          onNotice(["PDF 已生成", ...(issues ? [`${issues} 处公式需要检查`] : []), ...notes].join("，"));
-        }
-      }
-      setExportOpen(false);
-    } catch (error) { onNotice(error instanceof Error ? error.message : "导出失败", "error"); }
-    finally { setExporting(null); }
+      const order = JSON.stringify(handout
+        ? handout.modules.flatMap((module) => HANDOUT_BANDS.flatMap((band) => module.bands[band].map((question) => [question.id, band])))
+        : questions.map((question) => question.id));
+      const previous = typesetSettings.current[sheet];
+      setTypeset({
+        title: current.title, questions,
+        handout: handout ?? { sheet: sheetLabel(sheet), missingCount: list!.missingCount },
+        settings: previous ? { ...previous.settings, ownRoom: previous.order === order ? previous.settings.ownRoom : {} } : { answers: "end", showSource: true },
+        studentId: home.studentId ?? undefined,
+        origin: { back: "← 讲义编辑", name: sheetLabel(sheet), hint: "点击返回继续编辑" },
+        onClose: (title, settings) => {
+          typesetSettings.current[sheet] = { order, settings };
+          if (title && title !== latest.current!.title) edit({ title });
+          setTypeset(null);
+          requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".handout-bar .primary-button")?.focus());
+        },
+      });
+    } catch (error) { onNotice(error instanceof Error ? error.message : "打开快速排版失败", "error"); }
+    finally { setOpeningTypeset(false); }
   }
 
   if (missing) return <main className="toolbox handouts"><a className="secondary" href="/tools/handouts"><BackIcon /><span>全部讲义</span></a><div className="handout-empty"><b>讲义不存在</b><p>它可能已被删除。</p></div></main>;
@@ -852,8 +813,6 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   for (const entry of placed) if (entry.sheet !== sheet) usedIn.set(entry.questionId, (usedIn.get(entry.questionId) ?? new Set<string>()).add(sheetLabel(entry.sheet)));
   const sizes = Object.fromEntries(HANDOUT_SHEETS.map((item) => [item.value, placed.filter((entry) => entry.sheet === item.value).length])) as Record<HandoutSheet, number>;
   const questionCount = sizes[sheet];
-  const missingCount = libraryReady ? placed.filter((entry) => entry.sheet === sheet && !resolve(entry.questionId)).length : 0;
-  const answerChoice = ANSWER_CHOICES.find((choice) => choice.value === answers);
   const saveLabel = { saved: "已保存", editing: "编辑中", saving: "保存中…", failed: "保存失败" }[saveState];
   // The back link names where this handout lives and returns to that shelf.
   const homeShelf = shelfOf(home);
@@ -940,13 +899,13 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   // The bank keeps adding to the module it last pointed at.
   const addTarget = activePicker.kind === "add" ? activePicker.sectionId : modules[0]?.section.id ?? null;
 
-  return <main className="toolbox handouts handout-editor">
+  return <><main className="toolbox handouts handout-editor" inert={Boolean(typeset)}>
     {confirmNode}
     <header className="handout-bar">
       <a className="handout-brand" href={backHref} aria-label="返回讲义书架" title="返回讲义书架"><BrandWordmark /></a>
       <span className="handout-location"><span>讲义编撰</span><span aria-hidden="true">/</span><span title={backLabel}>{backLabel}</span></span>
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
-      <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+      <button className="primary-button" disabled={!questionCount || !libraryReady || openingTypeset} onClick={() => void openTypeset()}>{openingTypeset ? "正在打开…" : "快速排版"}</button>
     </header>
     <div className={`handout-workspace${panels.bank ? "" : " bank-closed"}${panels.outline ? "" : " outline-closed"}`} style={{ "--handout-bank-full": `${bankFull}px`, "--handout-outline-full": `${outlineFull}px`, "--handout-tree-full": `${treeFull}px` } as CSSProperties}>
       <div className="handout-bank-pane" ref={bankPane}>
@@ -1078,26 +1037,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
       moduleIds={entry.draft.id && !entry.temporary ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
       saveTemporaryQuestions={entry.temporary ? saveTemporaryQuestions : undefined} startWithFile={entry.temporary && !entry.draft.id}
       onSaved={(saved) => entrySaved(entry, saved)} onClose={() => setEntry(null)} onNotice={onNotice} />}
-    {exportOpen && <div className="modal-backdrop"><section className="modal export-modal" role="dialog" aria-modal="true" aria-label="导出讲义">
-      <div className="modal-head"><div><span className="eyebrow">导出{sheet === "handout" ? "" : sheetLabel(sheet)} · {questionCount} 题</span><h2>{doc.title}</h2></div><button className="close" aria-label="关闭" disabled={Boolean(exporting)} onClick={() => setExportOpen(false)}>×</button></div>
-      <fieldset className="handout-answer-choice" disabled={Boolean(exporting)}><legend>答案</legend>
-        <div>{ANSWER_CHOICES.map((choice) => <label key={choice.value} className={answers === choice.value ? "active" : ""}><input type="radio" name="handout-answers" value={choice.value} checked={answers === choice.value} onChange={() => setAnswers(choice.value)} />{choice.label}</label>)}</div>
-        <p>{sheet === "handout" ? answerChoice?.hint : answerChoice?.listHint}</p>
-      </fieldset>
-      {!!missingCount && <p className="handout-warning">有 {missingCount} 道题已无法读取，导出时会跳过。</p>}
-      {latexStatus && !latexStatus.available ? <p className="handout-export-status">精排 PDF 需要在运行 MathPilot 的这台电脑上生成；这里可以导出 Word，或下载 LaTeX 源码自行编译。</p>
-        : latexStatus && !latexStatus.installed && <p className="handout-export-status">首次生成会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
-      {/* PDF is the handout; Word and the LaTeX source are kept for the rare file someone else needs. */}
-      <div className="modal-actions handout-export-actions">
-        <details className="handout-more-formats" onToggle={(event) => closeOutside(event.currentTarget)}>
-          <summary>其他格式</summary>
-          <div role="menu">
-            {pdfReady && <button role="menuitem" disabled={Boolean(exporting)} onClick={(event) => { closeMenu(event.currentTarget); void exportHandout("word"); }}>{exporting === "word" ? "正在生成…" : "导出 Word"}</button>}
-            <button role="menuitem" disabled={Boolean(exporting)} onClick={(event) => { closeMenu(event.currentTarget); void exportHandout("source"); }}>{exporting === "source" ? "正在打包…" : "下载 LaTeX 源码"}</button>
-          </div>
-        </details>
-        <button className="primary-button" disabled={Boolean(exporting) || !latexStatus} onClick={() => void exportHandout(mainFormat)}>{exporting === mainFormat ? mainFormat === "pdf" ? latexStatus?.installed ? "正在排版…" : "首次排版中…" : "正在生成…" : mainFormat === "pdf" ? "生成 PDF" : "生成 Word"}</button>
-      </div>
-    </section></div>}
-  </main>;
+  </main>{typeset && <div className="handout-typeset" role="dialog" aria-modal="true" aria-label="快速排版">
+    <Suspense fallback={<p role="status">正在打开快速排版…</p>}><Typesetter basket={typeset} /></Suspense>
+  </div>}</>;
 }

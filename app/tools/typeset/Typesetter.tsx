@@ -5,11 +5,13 @@ import { contentFingerprint } from "../../../lib/content-fingerprint.mjs";
 import { questionCreationContent } from "../../../lib/question-create-rules.mjs";
 import { createQuestionMatcher } from "../../../lib/question-identity";
 import type { WordAnswerPlacement } from "../../../lib/export-word";
-import type { SheetGroup } from "../../../lib/handout-latex";
+import type { HandoutLatexInput, SheetGroup } from "../../../lib/handout-latex";
+import { HANDOUT_BANDS, bandLabel, moduleHeading, type HandoutExportModule } from "../../../lib/handout-rules.mjs";
 import type { LatexStatus } from "../../../lib/handout-latex-files";
 import { planDays, planQuestionIds } from "../../../lib/smart-paper-contract";
 import type { AuthUser, Question, TypesetRecord, TypesetSettings } from "../../../lib/types";
 import { SiteHeader } from "../../components/SiteHeader";
+import { PaperMoreMenu } from "../../components/PaperMoreMenu";
 import { AssignHomework } from "../../components/AssignHomework";
 import { PdfPreview } from "./PdfPreview";
 import { TypesetHistory } from "./TypesetHistory";
@@ -89,6 +91,7 @@ export type BasketTypeset = {
   questions: Question[]; title: string; settings: Partial<TypesetSettings>; onClose: (title: string, settings: TypesetSettings) => void;
   onChange?: (title: string, settings: TypesetSettings) => void;
   groups?: SheetGroup[]; groupMode?: "sections" | "days"; recordId?: string; studentId?: string; origin?: { back: string; name: string; hint: string };
+  handout?: ({ modules: HandoutExportModule[] } | { sheet: string }) & { missingCount: number };
 };
 const BASKET_ORIGIN = { back: "← 组卷篮", name: "组卷篮", hint: "点击回组卷篮调整题目" };
 
@@ -103,6 +106,9 @@ function questionLabel(groups: SheetGroup[] | undefined, index: number, groupMod
 }
 
 export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
+  const handout = basket?.handout;
+  const modules = handout && "modules" in handout ? handout.modules : undefined;
+  const sheet = handout && "sheet" in handout ? handout.sheet : "练习";
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
   const [status, setStatus] = useState<LatexStatus | null>(null);
   const statusRef = useRef<LatexStatus | null>(null);
@@ -144,7 +150,11 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       .then((value) => { statusRef.current = value; setStatus(value); return value; });
     // The basket's questions open at once. They stay in the basket and are not kept in the history; a 智能组卷 plan
     // brings its own record, and settings changed here are written to it.
-    if (basket) { void show((basket.origin ?? BASKET_ORIGIN).name, basket.questions, basket.title, restoredSettings(basket.settings), basket.groups, basket.groupMode); return; }
+    if (basket) {
+      void show((basket.origin ?? BASKET_ORIGIN).name, basket.questions, basket.title, restoredSettings(basket.settings), basket.groups, basket.groupMode);
+      if (basket.handout) document.querySelector<HTMLButtonElement>(".handout-typeset .typeset-top button")?.focus();
+      return;
+    }
     void fetchMe().then(({ user }) => setUser(user)).catch(() => { setUser(null); setHistoryNote("历史记录读取失败，请刷新重试。"); });
   // The basket is read once, when the tool opens; it is out of sight until the tool closes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,6 +187,14 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   }, [source, ownRoom, groupRoom]);
   const spacing = useMemo(() => source?.questions.map((_, index) => roomOf(index)) ?? [], [source, roomOf]);
   const spacingKey = spacing.join(",");
+  const projectInput = useMemo<HandoutLatexInput | null>(() => source ? {
+    title: appliedTitle || "练习", answers, showSource, spacing: spacingKey.split(",").map(Number), linePitch,
+    ...(modules ? { modules } : { sheet, questions: source.questions, groups: source.groups, groupMode: source.groupMode }),
+  } : null, [source, appliedTitle, answers, showSource, spacingKey, linePitch, modules, sheet]);
+  const handoutLabels = useMemo(() => {
+    const numbers = { example: 0, practice: 0, variant: 0 };
+    return modules?.flatMap((module, index) => HANDOUT_BANDS.flatMap((band) => module.bands[band].map(() => `模块${moduleHeading(module.heading, index).numeral} ${bandLabel(band, ++numbers[band])}`)));
+  }, [modules]);
 
   const registerQuestions = useCallback(async (questions: Question[]) => {
     setError(""); setBusy("正在加入题库并分配 ID…");
@@ -190,7 +208,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
   // Any change of file, title, edition or spacing typesets again; quick successive changes make one run.
   useEffect(() => {
-    if (!source) return;
+    if (!source || !projectInput) return;
     const id = ++run.current;
     const timer = setTimeout(() => void (async () => {
       setError(""); setBusy(statusRef.current?.installed === false ? "首次排版：正在下载排版组件，约 1–2 分钟…" : "正在排版…");
@@ -200,7 +218,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         const { buildHandoutLatexProject, compileLatexPdf } = await import("../../../lib/handout-latex-files");
         // The hosted site has no typesetter; the panel says so instead.
         if (!statusRef.current?.available) return;
-        const project = await buildHandoutLatexProject({ title: appliedTitle || "练习", answers, showSource, sheet: "练习", questions: source.questions, spacing: spacingKey.split(",").map(Number), linePitch, groups: source.groups, groupMode: source.groupMode });
+        const project = await buildHandoutLatexProject(projectInput);
         const notes = project.missingFigures ? [`${project.missingFigures} 张配图未能读取`] : [];
         const { pdf, issues } = await compileLatexPdf(project);
         if (id !== run.current) return;
@@ -211,7 +229,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
       finally { if (id === run.current) setBusy(""); }
     })(), 350);
     return () => clearTimeout(timer);
-  }, [source, appliedTitle, answers, showSource, saveToLibrary, spacingKey, linePitch, registerQuestions]);
+  }, [source, projectInput, saveToLibrary, registerQuestions]);
 
   // Puts a material on the page: its questions, with the title and the settings it opens with.
   async function show(fileName: string, questions: Question[], name: string, settings: TypesetSettings, groups?: SheetGroup[], groupMode?: "sections" | "days") {
@@ -220,7 +238,30 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     setShowSource(settings.showSource === true);
     setSaveToLibrary(settings.saveToLibrary === true);
     setGroupRoom(settings.groupRoom); setOwnRoom(Object.fromEntries(Object.entries(settings.ownRoom).map(([index, value]) => [Number(index), value])));
-    setSource({ fileName, questions, units: questions.map((question) => leavesAnswerLines(question) ? "行" : "mm"), groups, groupMode });
+    const units: Unit[] = modules
+      ? modules.flatMap((module) => HANDOUT_BANDS.flatMap((band) => module.bands[band].map((question) => band === "example" || leavesAnswerLines(question) ? "行" as const : "mm" as const)))
+      : questions.map((question) => leavesAnswerLines(question) ? "行" : "mm");
+    setSource({ fileName, questions, units, groups, groupMode });
+  }
+
+  // Keep the handout's editable Word and LaTeX downloads beside its PDF preview.
+  async function exportHandout(format: "word" | "source") {
+    if (!handout || !projectInput || busy) return;
+    setBusy(format === "word" ? "正在生成 Word…" : "正在打包…"); setError("");
+    try {
+      if (format === "word") {
+        const { buildWordBlob, handoutWordSections } = await import("../../../lib/export-word");
+        const sections = "modules" in projectInput ? handoutWordSections(projectInput.modules, answers) : [{ questions: projectInput.questions }];
+        const title = "modules" in projectInput ? projectInput.title : `${projectInput.title} · ${sheet}`;
+        saveBlob(await buildWordBlob({ title, sections, answers }), `${fileName}.docx`);
+      } else {
+        const { buildHandoutLatexProject, latexSourceZip } = await import("../../../lib/handout-latex-files");
+        const project = await buildHandoutLatexProject(projectInput);
+        saveBlob(await latexSourceZip(project), `${fileName}-LaTeX.zip`);
+        if (project.missingFigures) setError(`${project.missingFigures} 张配图未能读取，请核对下载内容。`);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "导出失败"); }
+    finally { setBusy(""); }
   }
 
   // A new file starts a record; a record from the history opens with the settings it was left with.
@@ -330,7 +371,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
   const origin = basket?.origin ?? BASKET_ORIGIN;
   const days = source?.groups ? source.groupMode === "sections" ? ` · ${source.groups.length} 个大题` : ` · 分 ${source.groups.length} 天` : "";
   const teacher = answers === "each";
-  const fileName = `${appliedTitle || "练习"}-${EDITIONS.find((item) => item.value === answers)!.label}`;
+  const fileName = `${appliedTitle || "练习"}${handout && !modules ? `-${sheet}` : ""}-${EDITIONS.find((item) => item.value === answers)!.label}`;
   const withAnswers = source?.questions.filter((question) => question.answer.trim() && question.answer !== "见解析" || question.analysis.trim()).length ?? 0;
   const own = Object.keys(ownRoom).map(Number).sort((a, b) => a - b);
   const setOwn = (index: number, value: number | null) => setOwnRoom((current) => {
@@ -339,7 +380,7 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
     return next;
   });
 
-  const labelOf = (index: number) => questionLabel(source?.groups, index, source?.groupMode);
+  const labelOf = (index: number) => handoutLabels?.[index] ?? questionLabel(source?.groups, index, source?.groupMode);
   const pickedPopover = source && picked !== null && (() => {
     const unit = source.units[picked]; const group = groupRoom[groupKey(source.questions[picked], unit)] ?? ROOM[unit].fallback;
     return <div className="typeset-popover" role="dialog" aria-label={`${labelOf(picked)}的留白`}>
@@ -403,9 +444,9 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
         </label>)}</div>
         <div className="typeset-options">
           <label><input type="checkbox" checked={showSource} disabled={!source} onChange={(event) => setShowSource(event.target.checked)} /><span>显示题目来源</span></label>
-          <label title="勾选后加入题库并在 PDF 印上永久 ID；取消勾选不会删除已入库题目。"><input type="checkbox" checked={saveToLibrary} disabled={!source || Boolean(busy)} onChange={(event) => { setSaveToLibrary(event.target.checked); if (event.target.checked) { setResult(null); setBusy("正在加入题库并分配 ID…"); } }} /><span>加入题库并分配 ID</span></label>
+          {!modules && <label title="勾选后加入题库并在 PDF 印上永久 ID；取消勾选不会删除已入库题目。"><input type="checkbox" checked={saveToLibrary} disabled={!source || Boolean(busy)} onChange={(event) => { setSaveToLibrary(event.target.checked); if (event.target.checked) { setResult(null); setBusy("正在加入题库并分配 ID…"); } }} /><span>加入题库并分配 ID</span></label>}
         </div>
-        <small>布置给学生时自动加入题库，已有题目保留原 ID。</small>
+        <small>{modules ? "保留模块和知识点；学生版与附答案版的例题留课堂笔记区。" : "布置给学生时自动加入题库，已有题目保留原 ID。"}</small>
       </div>
 
       {source && <section className="typeset-field" aria-label="间距"><span>间距</span>
@@ -430,11 +471,16 @@ export default function Typesetter({ basket }: { basket?: BasketTypeset }) {
 
       <div className="typeset-actions">
       <button className="primary-button typeset-download" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!result || Boolean(busy)} onClick={() => result && saveBlob(result.pdf, `${fileName}.pdf`)}>下载 PDF</button>
-      {(basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || Boolean(busy)} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {!modules && (basket || records !== null) && <button type="button" className="secondary typeset-assign" aria-describedby={!source&&!basket&&!busy?"typeset-missing":undefined} disabled={!source || Boolean(busy)} onClick={() => setAssigning(true)}>布置给学生</button>}
+      {handout && <PaperMoreMenu label="其他格式">
+        <button type="button" disabled={!source || Boolean(busy)} onClick={() => void exportHandout("word")}>导出 Word</button>
+        <button type="button" disabled={!source || Boolean(busy)} onClick={() => void exportHandout("source")}>下载 LaTeX 源码</button>
+      </PaperMoreMenu>}
       {!source&&!basket&&!busy&&<p className="missing-reason" id="typeset-missing">还差：<button type="button" className="text-button" onClick={()=>{const control=document.querySelector<HTMLButtonElement>(".typeset-panel button.typeset-drop");control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});}}>一份 Word 练习或网页题目</button></p>}
       {status && !status.available && <p className="typeset-note">PDF 需要在运行 MathPilot 的这台电脑上生成。</p>}
       {status?.available && !status.installed && !result && <p className="typeset-note">首次排版会下载排版组件（约 25MB）和所需宏包，约 1–2 分钟，之后几秒完成。</p>}
       {result?.notes.map((note) => <p key={note} className="typeset-note warn">{note}</p>)}
+      {!!handout?.missingCount && <p className="typeset-note warn">已跳过 {handout.missingCount} 道无法读取的题。</p>}
       {historyNote && <p className="typeset-note warn">{historyNote}</p>}
       {error && <p className="typeset-note error" role="alert">{error}</p>}
       </div>

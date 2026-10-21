@@ -240,14 +240,16 @@ async function verifyTemporaryLibrary() {
   step('PDF and PNG rendering/recognition-review/save wiring verified with stubbed AI; file filter and unused-question deletion work');
 
   // Export before archiving the second question proves temporary-only content needs no formal question row.
-  for (const [label, key] of [['文末', 'end'], ['每题后', 'each'], ['不附', 'none']]) {
-    await page.getByRole('button', { name: '导出', exact: true }).click();
-    const modal = page.locator('.export-modal');
+  for (const [label, key] of [['附答案', 'end'], ['教师版', 'each'], ['学生版', 'none']]) {
+    await page.getByRole('button', { name: '快速排版', exact: true }).click();
+    const modal = page.locator('.handout-typeset');
     await modal.locator('label', { hasText: label }).click();
     const downloading = page.waitForEvent('download');
-    await modal.getByRole('button', { name: '生成 Word', exact: true }).click();
+    await modal.getByRole('button', { name: '其他格式', exact: true }).click();
+    await modal.getByRole('button', { name: '导出 Word', exact: true }).click();
     const file = join(out, `temporary-${key}.docx`);
     await (await downloading).saveAs(file);
+    await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
     await modal.waitFor({ state: 'hidden' });
     const docx = await inspectDocx(file);
     assert.ok(docx.songti && docx.timesNewRoman);
@@ -459,7 +461,8 @@ try {
   await modal.getByLabel('答案', { exact: true }).fill('$x=4$');
   await modal.getByRole('textbox', { name: '解析', exact: true }).fill('两边减 1，再乘 2。');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.waitFor({ state: 'hidden' });
+  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
+    await modal.waitFor({ state: 'hidden' });
   const bankCard = page.locator('.question-card', { hasText: '题库回归' });
   await bankCard.waitFor();
   assert.ok(await bankCard.locator('.katex').count() > 0, 'formula renders as web math');
@@ -472,7 +475,8 @@ try {
   await modal.locator('input[type=file][multiple]').setInputFiles(join(out, 'diagram.png'));
   await modal.locator('.manual-image-grid img').waitFor();
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.waitFor({ state: 'hidden' });
+  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
+    await modal.waitFor({ state: 'hidden' });
   const editedCard = page.locator('.question-card', { hasText: '题库回归（已编辑）' });
   await editedCard.waitFor();
   assert.equal(await editedCard.locator('img.question-diagram').count(), 1, 'a figure added while editing is kept');
@@ -492,7 +496,8 @@ try {
   await modal.locator('.diagram-review img').waitFor();
   assert.match(await modal.locator('.source-status b').innerText(), /识别可信度 92%/);
   await modal.getByRole('button', { name: '取消', exact: true }).click();
-  await modal.waitFor({ state: 'hidden' });
+  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
+    await modal.waitFor({ state: 'hidden' });
   await page.unroute('**/api/recognize');
   step('题库 AI 截图录入: a dropped screenshot goes through the shared path and its diagram is cropped');
   await page.getByRole('button', { name: /新建试题/ }).first().click();
@@ -622,7 +627,8 @@ try {
   await modal.getByLabel('答案', { exact: true }).fill('9');
   await modal.locator('label.field', { hasText: '知识点标签' }).locator('input').fill('列方程，等量关系');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.waitFor({ state: 'hidden' });
+  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
+    await modal.waitFor({ state: 'hidden' });
   await saved();
   assert.deepEqual(await labels(lane(1, 'example')), ['例3.'], '例题 number on across modules');
   assert.deepEqual(await lane(1, 'example').locator('.handout-points b').allInnerTexts(), ['列方程', '等量关系']);
@@ -698,7 +704,8 @@ try {
   await modal.waitFor();
   await modal.locator('label.field', { hasText: '知识点标签' }).locator('input').fill('一元一次方程，移项');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.waitFor({ state: 'hidden' });
+  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
+    await modal.waitFor({ state: 'hidden' });
   await lane(0, 'practice').locator('.handout-question').first().locator('.handout-points b', { hasText: '一元一次方程' }).waitFor();
   assert.ok((await api('/api/library')).questions.find(q => q.id === 'seed-1').tags.includes('移项'), 'tags are saved on the library question');
   step('讲义 考点: an untagged question opens the shared editor from 「未标知识点 · 补充」; its tags become 考点 chips');
@@ -796,20 +803,22 @@ try {
     assert.ok(index >= 0, `${label}: missing ${marker} after position ${from}`);
     return index + marker.length;
   }, 0);
-  for (const [label, key] of [['不附', 'none'], ['文末', 'end'], ['每题后', 'each']]) {
-    await page.getByRole('button', { name: '导出', exact: true }).click();
-    const exportModal = page.locator('.export-modal');
-    await page.locator('.export-modal .primary-button:not(:disabled)').waitFor();
+  for (const [label, key] of [['学生版', 'none'], ['附答案', 'end'], ['教师版', 'each']]) {
+    await page.getByRole('button', { name: '快速排版', exact: true }).click();
+    const exportModal = page.locator('.handout-typeset');
+    await exportModal.locator('.typeset-note').filter({ hasText: 'PDF 需要在运行 MathPilot 的这台电脑上生成' }).waitFor();
     // The compiled Worker has no local typesetter, exactly like the deployed site.
-    assert.equal(await exportModal.getByRole('button', { name: '生成 PDF', exact: true }).count(), 0, 'without a typesetter the main action is Word');
-    assert.match(await exportModal.innerText(), /精排 PDF 需要在运行 MathPilot 的这台电脑上生成/);
+    assert.equal(await exportModal.getByRole('button', { name: '下载 PDF', exact: true }).isDisabled(), true, 'without a local typesetter PDF stays disabled and Word remains available');
+    assert.match(await exportModal.innerText(), /PDF 需要在运行 MathPilot 的这台电脑上生成/);
     await exportModal.locator('label', { hasText: label }).click();
     if (key === 'none') assert.match(await exportModal.innerText(), /例题留课堂笔记区/);
     if (key === 'each') await page.screenshot({ path: join(out, 'export-dialog.png') });
     const download = page.waitForEvent('download', { timeout: 60000 });
-    await exportModal.getByRole('button', { name: '生成 Word', exact: true }).click();
+    await exportModal.getByRole('button', { name: '其他格式', exact: true }).click();
+    await exportModal.getByRole('button', { name: '导出 Word', exact: true }).click();
     const file = join(out, `handout-${key}.docx`);
     await (await download).saveAs(file);
+    await exportModal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
     await exportModal.waitFor({ state: 'hidden' });
     const docx = await inspectDocx(file);
     assert.ok(docx.songti && docx.timesNewRoman, `${key}: Songti SC / Times New Roman fonts`);

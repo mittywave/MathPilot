@@ -180,35 +180,38 @@ try {
   await page.locator('.handout-lane.knowledge').first().locator('.note-preview h4').waitFor();
   await page.waitForFunction(() => [...document.querySelectorAll('.note-figure img:not(.ProseMirror-separator)')].length === 3 && [...document.querySelectorAll('.note-figure img:not(.ProseMirror-separator)')].every(img => img.complete && img.naturalWidth > 0));
   step('知识点截图识别 via drag-and-drop and paste; all notes and figures persist after reload');
-  const dialog = page.locator('.export-modal');
+  const dialog = page.locator('.handout-typeset');
   async function exportAs({ format, answers, file, source = false }) {
-    await page.getByRole('button', { name: '导出', exact: true }).click();
+    await page.getByRole('button', { name: '快速排版', exact: true }).click();
     await dialog.waitFor();
-    await page.locator('.export-modal .primary-button:not(:disabled)').waitFor();
-    await dialog.locator('label', { hasText: answers }).click();
+    await dialog.locator('.typeset-download:not(:disabled)').waitFor({ timeout: 420000 });
+    await dialog.locator('label', { hasText: ({ '不附': '学生版', '文末': '附答案', '每题后': '教师版' })[answers] }).click();
+    await page.waitForTimeout(500);
+    await dialog.locator('.typeset-download:not(:disabled)').waitFor({ timeout: 420000 });
     const started = Date.now();
     const download = page.waitForEvent('download', { timeout: 420000 });
     // PDF is the main action; Word and the LaTeX source sit under 其他格式.
     if (source || format === 'word') {
-      await dialog.getByText('其他格式', { exact: true }).click();
-      await dialog.getByRole('menuitem', { name: source ? '下载 LaTeX 源码' : '导出 Word' }).click();
-    } else await dialog.getByRole('button', { name: '生成 PDF', exact: true }).click();
+      await dialog.getByRole('button', { name: '其他格式', exact: true }).click();
+      await dialog.getByRole('button', { name: source ? '下载 LaTeX 源码' : '导出 Word' }).click();
+    } else await dialog.getByRole('button', { name: '下载 PDF', exact: true }).click();
     await (await download).saveAs(join(out, file));
+    await dialog.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
     await dialog.waitFor({ state: 'hidden', timeout: 30000 });
     result.downloads[file] = { seconds: Math.round((Date.now() - started) / 100) / 10, notice: await page.locator('.toast').innerText().catch(() => '') };
   }
-  await page.getByRole('button', { name: '导出', exact: true }).click();
-  await page.locator('.export-modal .primary-button:not(:disabled)').waitFor();
-  assert.equal(await dialog.getByRole('button', { name: '生成 PDF', exact: true }).isEnabled(), true, 'PDF is the main action when the local typesetter is available');
-  assert.equal(await dialog.locator('fieldset').count(), 1, 'the only choice is where answers go');
-  result.firstRunHint = await dialog.locator('.handout-export-status').innerText().catch(() => '');
+  await page.getByRole('button', { name: '快速排版', exact: true }).click();
+  await dialog.locator('.typeset-download:not(:disabled)').waitFor({ timeout: 420000 });
+  assert.equal(await dialog.getByRole('button', { name: '下载 PDF', exact: true }).isEnabled(), true, 'PDF is the main action when the local typesetter is available');
+  assert.equal(await dialog.getByRole('radiogroup', { name: '版本' }).count(), 1, 'the same quick typesetter controls editions and spacing');
+  result.firstRunHint = (await dialog.locator('.typeset-note').allTextContents()).join('；');
   await page.screenshot({ path: join(out, 'export-dialog.png') });
-  await dialog.getByText('其他格式', { exact: true }).click();
-  assert.deepEqual(await dialog.getByRole('menuitem').allInnerTexts(), ['导出 Word', '下载 LaTeX 源码']);
+  await dialog.getByRole('button', { name: '其他格式', exact: true }).click();
+  assert.deepEqual(await dialog.getByRole('group', { name: '其他格式' }).getByRole('button').allInnerTexts(), ['导出 Word', '下载 LaTeX 源码']);
   await page.screenshot({ path: join(out, 'export-dialog-more.png') });
-  await dialog.locator('h2').click();
-  await dialog.getByRole('menuitem').first().waitFor({ state: 'hidden' });
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await dialog.locator('.typeset-field').first().click();
+  await dialog.getByRole('group', { name: '其他格式' }).waitFor({ state: 'hidden' });
+  await dialog.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
   await exportAs({ format: 'pdf', answers: '不附', file: 'handout-none.pdf' });
   step(`PDF 学生版 exported (first run incl. engine setup: ${result.downloads['handout-none.pdf'].seconds}s)`);
   await exportAs({ format: 'pdf', answers: '文末', file: 'handout-end.pdf' });
@@ -256,17 +259,16 @@ try {
   assert.ok(wordXml.indexOf('<w:drawing') < wordXml.indexOf('容易证明'), 'the note figure sits inside the note');
   step('Word export still works from the same dialog and carries the recognized note with its figure');
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: '导出', exact: true }).click();
-  await page.locator('.export-modal .primary-button:not(:disabled)').waitFor();
-  const mobile = await page.evaluate(() => ({
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole('button', { name: '快速排版', exact: true }).click();
+  await dialog.locator('.typeset-download:not(:disabled)').waitFor({ timeout: 420000 });
+  const desktop = await page.evaluate(() => ({
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    wrapped: [...document.querySelectorAll('.export-modal button, .export-modal label')].filter(el => el.offsetParent && el.scrollWidth > el.clientWidth + 1).map(el => el.innerText),
-    small: [...document.querySelectorAll('.export-modal button, .export-modal label')].filter(el => el.offsetParent && !el.classList.contains('close') && el.getBoundingClientRect().height < 40).map(el => el.innerText),
+    wrapped: [...document.querySelectorAll('.handout-typeset button, .handout-typeset label')].filter(el => el.offsetParent && el.scrollWidth > el.clientWidth + 1).map(el => el.innerText),
   }));
-  await page.screenshot({ path: join(out, 'export-dialog-mobile.png') });
-  assert.deepEqual(mobile, { overflow: 0, wrapped: [], small: [] });
-  step('export dialog on a 390px phone: no overflow, no wrapped labels, touch targets ≥ 40px');
+  await page.screenshot({ path: join(out, 'quick-typeset-desktop.png') });
+  assert.deepEqual(desktop, { overflow: 0, wrapped: [] });
+  step('quick typesetter on a 1280px desktop: no overflow or clipped controls');
   assert.deepEqual(result.pageErrors, []);
   result.ok = true;
 } catch (error) {

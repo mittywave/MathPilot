@@ -97,7 +97,6 @@
 .handout-answer-choice>div.wrap label{padding:0 16px}
 .handout-move-hint{margin:14px 0 0;color:var(--muted);font-size:12.5px}
 .handout-answer-choice label.unavailable{opacity:.45;cursor:not-allowed}
-.handout-export-actions{align-items:center}
 
 .toolbox.handout-editor{display:flex;flex-direction:column;width:100%;max-width:none;height:100dvh;padding:0}
 .handout-workspace{--handout-outline-full:248px;--handout-outline-width:var(--handout-outline-full);--handout-bank-full:calc((100% - var(--handout-outline-width)) * .4);--handout-bank-width:var(--handout-bank-full);--handout-panel-ease:cubic-bezier(.22,.8,.22,1);position:relative;display:grid;grid-template-columns:minmax(0,var(--handout-bank-width)) minmax(0,1fr) var(--handout-outline-width);gap:0;flex:1;min-height:0;container-type:inline-size;transition:grid-template-columns .48s var(--handout-panel-ease)}
@@ -261,17 +260,6 @@
   .picker-item-foot button{margin-left:auto}
 }
 
-.handout-export-status{margin:12px 0 0;color:var(--muted);font-size:12.5px}
-.handout-more-formats{position:relative;margin-right:auto}
-.handout-more-formats>summary{display:flex;align-items:center;min-height:40px;padding:0 4px;list-style:none;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}
-.handout-more-formats>summary::-webkit-details-marker{display:none}
-.handout-more-formats>summary::after{content:"";width:6px;height:6px;margin-left:7px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg)}
-.handout-more-formats[open]>summary::after{transform:translateY(1px) rotate(225deg)}
-.handout-more-formats>summary:hover{color:var(--ink,#24352f)}
-.handout-more-formats>div{position:absolute;left:0;bottom:calc(100% + 6px);z-index:2;display:grid;min-width:168px;padding:6px;border:1px solid var(--line,#e4e9e6);border-radius:calc(10px*var(--radius-scale));background:var(--surface,#fff);box-shadow:0 10px 28px color-mix(in srgb,var(--ink,#24352f) 16%,transparent)}
-.handout-more-formats>div>button{min-height:40px;padding:0 12px;border:0;border-radius:calc(7px*var(--radius-scale));background:none;color:var(--ink,#24352f);font-size:14px;text-align:left;white-space:nowrap;cursor:pointer}
-.handout-more-formats>div>button:hover:not(:disabled){background:var(--green-soft,#edf5f0);color:var(--green,#2f6b53)}
-.handout-more-formats>div>button:disabled{opacity:.55;cursor:not-allowed}
 
 /* 讲义书架：左侧书架导航，右侧用满整个宽度，像讲义的目录页一样并排列出四个学期或四个年级。 */
 .handout-home{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:calc(100vh - var(--topbar-h));color:var(--ink)}
@@ -392,3 +380,5 @@
 .handout-drag:active{cursor:grabbing}
 .handout-question.drop-before{box-shadow:inset 0 3px 0 var(--green,#2f6b53)}
 .handout-question.drop-after{box-shadow:inset 0 -3px 0 var(--green,#2f6b53)}
+
+.handout-typeset{position:fixed;inset:0;z-index:50;background:var(--page)}

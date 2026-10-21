@@ -14,7 +14,7 @@ import type { HandoutBand, Question } from "./types";
 export const DEFAULT_ANSWER_LINES = 6;
 // A sheet may come in groups (智能组卷 by day): the questions are listed in group order and each group takes the next `size`.
 export type SheetGroup = { title: string; size: number };
-export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; spacing?: number[]; linePitch?: number; groups?: SheetGroup[]; groupMode?: "sections" | "days"; showSource?: boolean });
+export type HandoutLatexInput = { title: string; answers: WordAnswerPlacement; spacing?: number[]; linePitch?: number; showSource?: boolean } & ({ modules: HandoutExportModule[] } | { sheet: string; questions: Question[]; groups?: SheetGroup[]; groupMode?: "sections" | "days" });
 
 const TEXT_ESCAPES: Record<string, string> = {
   "\\": "\\textbackslash{}", "{": "\\{", "}": "\\}", "#": "\\#", "$": "\\$", "%": "\\%", "&": "\\&", "_": "\\_", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}",
@@ -419,7 +419,7 @@ function questionLatex(question: Question, label: string, band: HandoutBand, ans
   // 学生版：例题留课堂笔记区，练习和变式的解答题留作答横线，其他题按给定的毫米留白；教师版不留白。
   const lines = leavesAnswerLines(question);
   const answerLines = Math.round(space ?? DEFAULT_ANSWER_LINES);
-  if (answers !== "each" && band === "example") out.push(`\\handoutnotesarea{${DEFAULT_ANSWER_LINES}}`);
+  if (answers !== "each" && band === "example" && answerLines > 0) out.push(`\\handoutnotesarea{${answerLines}}`);
   else if (answers !== "each" && lines && answerLines > 0) out.push(`\\handoutworkspace{${answerLines}}`);
   else if (answers !== "each" && !lines && space && space > 0) out.push(`\\handoutgap{${Number(space.toFixed(1))}}`);
   out.push("\\end{handoutquestion}");
@@ -472,14 +472,14 @@ export function buildHandoutLatex(input: HandoutLatexInput, figureName: (source:
   // A sheet in days scores each day under its own heading, so the title keeps only name and class.
   const fields = groups && list?.groupMode !== "sections" ? "姓名,班级" : list || /(小测|测验|测试|作业|练习|周练|月考|考试|检测|试卷)/.test(title) ? "姓名,班级,得分" : "姓名,班级,日期";
   const series = [heading.series, list?.sheet ?? ""].filter(Boolean).map(latexPlain).join("\\enspace ");
-  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups, input.groupMode, input.showSource) : moduleBody(input.modules, answers, figureName);
+  const body = "questions" in input ? sheetBody(input.questions, answers, figureName, input.spacing, groups, input.groupMode, input.showSource) : moduleBody(input.modules, answers, figureName, input.spacing, input.showSource);
   return [
     "\\documentclass{mitty-handout}",
     series ? `\\handoutseries{${series}}` : "",
     `\\handouttitle{${latexPlain(heading.title)}}`,
     `\\handoutedition{${EDITIONS[answers]}}`,
     `\\handoutfields{${fields}}`,
-    list?.linePitch ? `\\handoutlinepitch{${Number(list.linePitch.toFixed(1))}mm}` : "",
+    input.linePitch ? `\\handoutlinepitch{${Number(input.linePitch.toFixed(1))}mm}` : "",
     "\\begin{document}",
     "\\makehandouttitle",
     ...body,
@@ -515,8 +515,9 @@ function sheetBody(questions: Question[], answers: WordAnswerPlacement, figureNa
   return keys.length ? [...body, "\\handoutanswerkey", ...keys] : body;
 }
 
-function moduleBody(modules: HandoutExportModule[], answers: WordAnswerPlacement, figureName: (source: string) => string | null) {
+function moduleBody(modules: HandoutExportModule[], answers: WordAnswerPlacement, figureName: (source: string) => string | null, spacing?: number[], showSource = true) {
   const body: string[] = [];
+  let questionIndex = 0;
   const counters: Record<HandoutBand, number> = { example: 0, practice: 0, variant: 0 };
   const keys: Record<HandoutBand, string[]> = { example: [], practice: [], variant: [] };
   modules.forEach((module, index) => {
@@ -530,7 +531,7 @@ function moduleBody(modules: HandoutExportModule[], answers: WordAnswerPlacement
       const labels = questions.map(() => bandLabel(band, ++counters[band]));
       body.push(`\\handoutpart{${HANDOUT_PARTS[band].label}}{${HANDOUT_PARTS[band].tagline}}`, `\\handoutnumberwidth{${labels.at(-1)}}`);
       questions.forEach((question, position) => {
-        body.push(questionLatex(question, labels[position], band, answers, figureName));
+        body.push(questionLatex(question, labels[position], band, answers, figureName, true, spacing?.[questionIndex++], undefined, showSource));
         if (answers === "end") keys[band].push(`\\begin{handoutkey}{${labels[position]}}`, answerBody(question, figureName), "\\end{handoutkey}");
       });
     }

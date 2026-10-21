@@ -111,6 +111,22 @@ test("every module runs 知识点 → 例题 → 练习 → 变式 with per-band
   assert.doesNotMatch(teacher, /handoutworkspace|handoutnotesarea|handoutanswerkey/);
 });
 
+test("quick typesetting preserves handout modules and band numbering while adjusting question space", () => {
+  const input = { title: "讲义", modules, answers: "end", spacing: [2, 4, 12, 3, 8], linePitch: 10, showSource: false };
+  const source = buildHandoutLatex(input);
+  assert.match(source, /\\handoutsection\{一\}\{平行四边形的性质\}/);
+  assert.match(source, /对边相等/);
+  assert.match(source, /\\handoutlinepitch\{10mm\}/);
+  assert.deepEqual([...source.matchAll(/\\begin\{handoutquestion\}\{([^}]+)\}/g)].map(match => match[1]), ["例1", "例2", "1", "变式1", "2"]);
+  assert.deepEqual([...source.matchAll(/\\handoutnotesarea\{(\d+)\}/g)].map(match => Number(match[1])), [2, 4]);
+  assert.deepEqual([...source.matchAll(/\\handoutgap\{(\d+)\}/g)].map(match => Number(match[1])), [12, 8]);
+  assert.match(source, /\\handoutworkspace\{3\}/);
+  assert.match(source, /\\handoutkeygroup\{例题解析\}\{例2\}/);
+  assert.doesNotMatch(source, /2024 期中|ID /);
+  assert.doesNotMatch(buildHandoutLatex({ ...input, answers: "each" }), /handoutnotesarea|handoutworkspace|handoutgap/);
+  assert.doesNotMatch(buildHandoutLatex({ ...input, spacing: [0, 0, 0, 0, 0] }), /handoutnotesarea|handoutworkspace|handoutgap/);
+});
+
 test("a 小测 or 作业 prints one numbered list under its name, without 考点", () => {
   const student = buildList("none");
   assert.match(student, /\\handoutseries\{第一讲\\enspace 小测\}\n\\handouttitle\{平行四边形的性质\}\n\\handoutedition\{学生版\}\n\\handoutfields\{姓名,班级,得分\}/);
