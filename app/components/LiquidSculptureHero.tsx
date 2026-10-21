@@ -36,8 +36,10 @@ const REACH = 256
 const STRAND = 1024
 
 /** Two lines the material can lie along, one for each lobe of the ∞ (0 the right, 1 the left): x, y, the band's half
- *  width there (px) and how near the viewer it lies (-1 … 1, the back of a twisted cord is drawn smaller and fainter),
- *  point after point, evenly spaced from where the material comes in to where it goes out. */
+ *  width there (px) and how near the viewer it lies (-1 … 1, the back of a twisted cord is drawn smaller and fainter;
+ *  further back, down to -2, it thins out too, fewer and fewer of its grains drawn), point after point from where the
+ *  material comes in to where it goes out. The material is spread evenly over the points, so it lies thinner where
+ *  they lie further apart. */
 export type SculptureStrands = [Float32Array, Float32Array]
 
 /** A shape the sculpture can take, in viewport px. "image" is the picture itself, its pieces moved if given. "window"
@@ -73,6 +75,9 @@ export interface SculptureMorph {
    *  through the crossing, the lower arcs first). Only between pictures and paths. */
   cord?: { strands: SculptureStrands; share: number }
   alpha?: number
+  /** 0 … 1, 1 if left out: how much of the flow under the cursor (`liquid`) the shape takes on. It sways every grain
+   *  by a few px, so a small shape that has to keep its outline takes less of it. */
+  liquid?: number
   moving?: boolean
   away?: boolean
 }
@@ -223,8 +228,10 @@ vec4 strandAt(vec2 uv, vec4 rib, out float moved, out float line){
   line = band.z;
   moved = band.w;
   float n = mix(rib.y, mix(tighten(rib.y), hash(uv*vec2(37.1, 71.9))*2.0 - 1.0, meet), line);
-  // the far strand of a twisted cord is drawn smaller and fainter than the near one
-  return vec4(at.xy + at.zw/max(length(at.zw), 1e-4)*n*band.x, 1.0 + min(band.y, 0.0)*0.45, 1.0 + band.y*0.18);
+  // the far strand of a twisted cord is drawn smaller and fainter than the near one; further back still the material
+  // thins out, each grain drawn only while its own share (0 … 1) is under 2 + depth: all of them at -1, none at -2
+  float depth = max(band.y, -1.0), shown = step(hash(uv*vec2(19.3, 77.1)), 2.0 + band.y);
+  return vec4(at.xy + at.zw/max(length(at.zw), 1e-4)*n*band.x, (1.0 + min(depth, 0.0)*0.45)*shown, 1.0 + depth*0.18);
 }
 vec2 frameAt(vec4 p0, vec4 p1, float l, float quarter, float n){
   vec2 hs = p0.zw*0.5;
@@ -1453,7 +1460,7 @@ export class LiquidEngine {
     const rm = o.reducedMotion
     const introVis = rm || !o.intro ? 1 : Math.pow(this.introT, 2.2)
     const base = o.ambient && !rm && !this.ribbon ? clamp(o.ambientIntensity, 0, 2) : 0
-    const amb = base + this.flowing * 0.85 * clamp(o.liquid, 0, 2) * (rm ? 0.3 : 1)
+    const amb = base + this.flowing * 0.85 * clamp(o.liquid, 0, 2) * clamp(m.liquid ?? 1, 0, 1) * (rm ? 0.3 : 1)
     const rest = o.restStyle === "particles" ? 1 : this.ribbon && o.ambient && !rm ? 0.32 * clamp(o.ambientIntensity, 0, 1) : 0
     const [br, bg, bb] = o.bg
     const [ir, ig, ib] = this.imgBg

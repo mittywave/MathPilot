@@ -77,9 +77,8 @@ html[data-theme="dark"] .mp-intro:not([data-mode]) :is(.sh-root, .sh-fixed) { --
 .mp-closing { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:clamp(20px,3.5svh,40px); height:100svh; min-height:680px;
   padding:clamp(48px,8svh,96px) clamp(20px,3.2vw,48px); border-top:1px solid var(--line); text-align:center; }
 .mp-closing h2 { font-size:clamp(44px,6vw,96px); }
-/* where the ∞ comes to rest; the picture itself only shows when there is no WebGL to draw it */
-.mp-closing-art { display:block; width:min(80vw, 1100px, calc((100svh - 400px) * 2.5)); height:auto; aspect-ratio:2400 / 960; }
-.mp-intro:has(.sh-root[data-gl="on"]) .mp-closing-art { visibility:hidden; }
+/* the sand draws the last words' full stop over the font's, which only shows when there is no WebGL */
+.mp-intro:has(.sh-root[data-gl="on"]) .mp-stop { color:transparent; }
 .mp-btn { display:inline-flex; align-items:center; gap:10px; height:48px; padding:0 24px; border-radius:999px; background:var(--fg); color:var(--bg);
   font-size:15px; font-weight:500; text-decoration:none; transition:transform .3s cubic-bezier(.2,.7,.2,1); }
 .mp-btn:hover { transform:translateY(-1px); }
