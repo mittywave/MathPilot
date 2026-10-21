@@ -123,7 +123,7 @@ function escapeRegExp(value: string) {
 }
 
 function inferFilledAnswer(questionText: string, answeredText: string) {
-  const parts = questionText.split(/[\s\u3000]{2,}/).filter((part) => part.length > 0);
+  const parts = questionText.split(/[\s\u3000]{2,}|_{3,}|＿{2,}/).filter((part) => part.length > 0);
   if (parts.length < 2) return "";
   const pattern = parts.map((part) => escapeRegExp(part).replace(/(?:\\ |\s)+/g, "\\s*")).join("([\\s\\S]+?)");
   const match = answeredText.match(new RegExp(`^\\s*${pattern}\\s*$`));
@@ -153,23 +153,23 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   });
   const answerBlockStart = blocks.findIndex((block) => /(?:参考答案与试题解析|答案与解析|试题解析)/.test(block.text));
   const questionEnd = answerBlockStart < 0 ? blocks.length : answerBlockStart;
-  type ParsedQuestion = StructuredDocxQuestion & { firstParagraph: string; blocks: typeof blocks; heading: boolean };
+  type ParsedQuestion = Omit<StructuredDocxQuestion, "type"> & { type: QuestionType | null; firstParagraph: string; blocks: typeof blocks; heading: boolean };
   const questions: ParsedQuestion[] = [];
   let currentSection = "";
-  const parsedQuestion = (questionNumber: string, type: QuestionType, firstParagraph: string, heading: boolean, first: typeof blocks): ParsedQuestion => ({ questionNumber, section: currentSection, type, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, contentImages: [], warnings: [], firstParagraph, blocks: first, heading });
+  const parsedQuestion = (questionNumber: string, type: QuestionType | null, firstParagraph: string, heading: boolean, first: typeof blocks): ParsedQuestion => ({ questionNumber, section: currentSection, type, stem: firstParagraph, stemParagraphs: [], stemDocxXml: [], stemDocxAssets: {}, options: [], optionsDocxXml: [], optionsDocxAssets: {}, sourcePage: 0, contentImages: [], warnings: [], firstParagraph, blocks: first, heading });
   let currentType: QuestionType | null = null; let currentQuestion: ParsedQuestion | null = null;
   for (let index = 0; index < questionEnd; index += 1) {
     const block = blocks[index];
     if (/^声明[：:].*著作权/.test(block.text)) continue;
     // A 讲义 heading (“例题精练 1”) opens a question whose stem is in the paragraphs below it.
     const heading = block.kind === "p" ? docxQuestionHeading(block.text, block.xml) : null;
-    if (heading) { currentQuestion = parsedQuestion(`${heading.label} ${heading.number}`, "解答题", "", true, []); questions.push(currentQuestion); continue; }
+    if (heading) { currentQuestion = parsedQuestion(`${heading.label} ${heading.number}`, null, "", true, []); questions.push(currentQuestion); continue; }
     const detectedType = sectionQuestionType(block.text);
     if (detectedType && /^[一二三四五六七八九十]+[.．、]/.test(block.text)) { currentType = detectedType; currentSection = block.text; currentQuestion = null; continue; }
     if (index > 0 && block.text === blocks[0]?.text) continue;
     if (currentQuestion?.heading && block.kind === "p" && docxTitleLine(block.text, block.xml)) { currentQuestion = null; continue; }
     const numberMatch = block.kind === "p" && !currentQuestion?.heading ? docxNumberedQuestion(block.text) : null;
-    if (numberMatch && (currentType || numberMatch.type)) {
+    if (numberMatch) {
       // Put the number before its type label so all existing renderers can renumber it.
       // Keep the label in the printed stem; equations, formatting and pictures stay intact.
       if (numberMatch.type) {
@@ -186,7 +186,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
         numberMatch.stem = label + numberMatch.stem;
         block.text = `${numberMatch.number}．${numberMatch.stem}`;
       }
-      currentQuestion = parsedQuestion(numberMatch.number, numberMatch.type ?? currentType!, numberMatch.stem, false, [block]);
+      currentQuestion = parsedQuestion(numberMatch.number, numberMatch.type ?? currentType, numberMatch.stem, false, [block]);
       if (block.printedId) currentQuestion.code = block.printedId;
       questions.push(currentQuestion); continue;
     }
@@ -202,15 +202,19 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
       const analysisBlocks = solutionStart < 0 ? [] : question.blocks.filter((_, index) => index >= solutionStart && roles[index] !== "warning");
       questionBlocks = question.blocks.filter((block, index) => roles[index] !== "warning" && !analysisBlocks.includes(block));
       question.warnings.push(...question.blocks.filter((_, index) => roles[index] === "warning").map((block) => block.text.replace(/^(?:转录提示|格式问题)[：:]\s*/, "")));
-      const optionCount = questionBlocks.filter((block) => isDocxOptionBlock(block.text)).length;
-      question.type = docxInferredQuestionType(questionBlocks, optionCount);
-      question.warnings.unshift("题型按内容推断，请核对");
       if (analysisBlocks.length) {
         question.analysis = analysisBlocks.map((block) => block.text).filter(Boolean).join("\n");
         question.analysisDocxXml = analysisBlocks.map((block) => block.xml);
-        question.answer = question.type === "解答题" ? "见解析" : question.analysis.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase() ?? "";
       }
     }
+    // A printed number opens a question even without a type heading. Infer only after
+    // collecting the complete stem and options; several options may share one paragraph.
+    if (!question.type) {
+      const optionCount = splitDocxOptionBlocks(questionBlocks.map((block) => block.text)).length;
+      question.type = docxInferredQuestionType(questionBlocks, optionCount);
+      question.warnings.unshift("题型按内容推断，请核对");
+    }
+    if (question.heading && question.analysis) question.answer = question.type === "解答题" ? "见解析" : question.analysis.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase() ?? "";
     if (question.blocks.some((block) => block.overlays)) question.warnings.push("配图上用 Word 绘制的线条或标注未能读取，只保留了底图，请对照原件核对");
     const optionBlocks = question.type === "单选题" || question.type === "多选题" ? questionBlocks.filter((block) => isDocxOptionBlock(block.text)) : [];
     const stemBlocks = questionBlocks.filter((block) => !optionBlocks.includes(block));
@@ -273,7 +277,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     }
     if (!answers[question.questionNumber] && question.type === "解答题" && analyses[question.questionNumber]) answers[question.questionNumber] = "见解析";
   }
-  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, section: question.section, type: question.type, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets, ...(question.code ? { code: question.code } : {}) })) };
+  return { paragraphs, answerSectionStart, pageCount, answers, analyses, analysisXml, analysisAssets, questionImages, options, questions: questions.map((question): StructuredDocxQuestion => ({ questionNumber: question.questionNumber, section: question.section, type: question.type!, stem: question.stem, stemParagraphs: question.stemParagraphs, stemDocxXml: question.stemDocxXml, stemDocxAssets: question.stemDocxAssets, options: question.options, optionsDocxXml: question.optionsDocxXml, optionsDocxAssets: question.optionsDocxAssets, sourcePage: question.sourcePage, contentImages: question.contentImages, warnings: question.warnings, answer: question.answer, analysis: question.analysis, analysisDocxXml: question.analysisDocxXml, analysisDocxAssets: question.analysisDocxAssets, ...(question.code ? { code: question.code } : {}) })) };
 }
 
 function waitForImages(root: HTMLElement) {

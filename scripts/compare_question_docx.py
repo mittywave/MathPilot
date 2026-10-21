@@ -86,14 +86,12 @@ def split_at_answers(blocks: list[Block]) -> tuple[list[Block], list[Block]]:
 def question_groups(blocks: list[Block]) -> dict[str, list[Block]]:
     groups: dict[str, list[Block]] = {}
     current: str | None = None
-    section_seen = False
     for block in blocks:
         if SECTION_TITLE.search(block.text):
-            section_seen = True
             current = None
             continue
         match = QUESTION_START.match(block.text) if block.kind == "p" else None
-        if match and section_seen:
+        if match:
             current = match.group(1)
             groups[current] = [block]
         elif current and (block.text or block.kind == "tbl" or block.image_ids):

@@ -1,15 +1,18 @@
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
+import { build } from 'esbuild';
+import JSZip from 'jszip';
 // Run after npm run build. The application, D1, media storage, UI import and
 // download are real; only two network failures are injected into this fixture.
 // No user database or external AI connection is used.
 // Usage: node scripts/verify-word-import-browser.mjs fixed /path/to/20-question.docx
+// Parser-only regression: ... structure /path/to/source.docx expected-question-count
 // PLAYWRIGHT_PACKAGE may point to a bundled playwright/package.json.
 const require = createRequire(process.env.PLAYWRIGHT_PACKAGE || import.meta.url);
 const { chromium } = require('playwright');
@@ -25,7 +28,52 @@ const root = process.cwd();
 const mode = process.argv[2] || 'fixed';
 const out = resolve(process.env.WORD_IMPORT_EVIDENCE_DIR || join('artifacts/word-import-regression', mode));
 await mkdir(out, {recursive:true});
-if (!process.argv[3]) throw Error('Supply the source 20-question DOCX as the second argument.');
+if (!process.argv[3]) throw Error('Supply the source DOCX as the second argument.');
+if (mode === 'structure') {
+  const bundle = await build({entryPoints:['lib/file-import.ts'],bundle:true,write:false,format:'iife',globalName:'WordImportRegression',platform:'browser',logLevel:'silent'});
+  const browser = await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {})});
+  try {
+    const page = await browser.newPage();
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    const parse = async bytes => page.evaluate(async base64 => {
+      const file = new File([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))], 'fixture.docx');
+      const pages = await globalThis.WordImportRegression.renderImportFile(file,()=>{});
+      return {direct:pages.length===1 && pages[0].image.startsWith('data:image/gif'),questions:globalThis.WordImportRegression.structuredDocxQuestions(pages)};
+    },bytes.toString('base64'));
+    const p = text => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const heading = text => `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+    const fixtures = [
+      {name:'numbered without type headings',body:p('1．求值：___。')+p('（1）保留小问。')+'<w:p><m:oMath><m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r></m:den></m:f></m:oMath></w:p>'+p('2．选出正确答案。')+p('A．甲 B．乙 C．丙 D．丁')+p('3．证明下列结论。')+p('0.71x 是下一行的条件。')+p('参考答案与试题解析')+p('1．求值：　2　。')+p('【解答】保留原解析。'),numbers:['1','2','3'],types:['填空题','单选题','解答题']},
+      {name:'explicit type headings and repeated local numbers',body:p('一、多项选择题')+p('1．选择所有正确项。')+p('A．甲 B．乙')+p('二、填空题')+p('1．结果为___。'),numbers:['1','1'],types:['多选题','填空题']},
+      {name:'per-question type labels',body:p('（多选）1．选择所有正确项。')+p('A．甲 B．乙')+p('（单选）2．选择一项。')+p('A．甲 B．乙'),numbers:['1','2'],types:['多选题','单选题']},
+      {name:'bold handout headings and one-line options',body:heading('例题精练 1')+p('1．以下哪项正确？')+p('A．甲 B．乙')+heading('例题精练 2')+p('结果为___。'),numbers:['例题精练 1','例题精练 2'],types:['单选题','填空题']},
+    ];
+    for (const fixture of fixtures) {
+      const zip = new JSZip();
+      zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body>${fixture.body}</w:body></w:document>`);
+      const parsed = await parse(await zip.generateAsync({type:'nodebuffer'}));
+      assert.ok(parsed.direct,fixture.name+' must not render pages for AI');
+      assert.deepEqual(parsed.questions.map(q=>q.questionNumber),fixture.numbers,fixture.name);
+      assert.deepEqual(parsed.questions.map(q=>q.type),fixture.types,fixture.name);
+      if (fixture === fixtures[0]) {
+        assert.ok(parsed.questions[0].stem.includes('（1）保留小问'));
+        assert.ok(parsed.questions[0].stemDocxXml.some(xml=>xml.includes('<m:f>')));
+        assert.equal(parsed.questions[0].analysis,'【解答】保留原解析。');
+        assert.equal(parsed.questions[0].answer,'2');
+        assert.equal(parsed.questions[1].options.length,4);
+        assert.ok(parsed.questions[2].stem.includes('0.71x'));
+      }
+    }
+    const parsed = await parse(await readFile(resolve(process.argv[3])));
+    assert.ok(parsed.direct,'the real DOCX must use direct extraction');
+    assert.equal(parsed.questions.length,Number(process.argv[4]||15));
+    await writeFile(join(out,'parsed-questions.json'),JSON.stringify(parsed.questions,null,2));
+    const result={fixtures:fixtures.map(f=>f.name),file:resolve(process.argv[3]),direct:parsed.direct,questions:parsed.questions.length,types:parsed.questions.map(q=>q.type)};
+    await writeFile(join(out,'results.json'),JSON.stringify(result,null,2));
+    console.log(JSON.stringify(result,null,2));
+  } finally {await browser.close();}
+  process.exit(0);
+}
 const state = await mkdtemp(join(tmpdir(), 'zhiti-word-import-'));
 const port = await new Promise((accept, reject) => {
   const socket = createServer(); socket.once('error', reject);
@@ -59,11 +107,12 @@ try {
   }});
   await page.goto(base+'/library');
   await expect(page.locator('.user-chip')).toContainText('本机管理员');
-  // 新建模块 sits in the sidebar heading's 管理模块 menu.
-  await page.getByRole('button',{name:'管理模块',exact:true}).first().click();
-  await page.locator('.more-panel').getByRole('button',{name:'新建模块',exact:true}).click();
+  await page.getByRole('button',{name:'模块与分类管理',exact:true}).click();
+  await page.getByRole('dialog').getByRole('button',{name:'＋ 新建模块',exact:true}).click();
   await page.getByLabel('模块名称',{exact:true}).fill('Word 导入回归');
   await page.getByRole('button',{name:'创建模块',exact:true}).click();
+  await page.getByRole('dialog').getByRole('button',{name:'＋ 新建模块',exact:true}).waitFor();
+  await page.getByRole('button',{name:'关闭管理窗口',exact:true}).click();
   await page.getByRole('button',{name:'新建试题',exact:true}).first().click();
   await page.getByRole('button',{name:'文件批量录入'}).click();
   await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
@@ -128,7 +177,7 @@ try {
     result.imageLoads=await cards.locator('img').evaluateAll(imgs=>imgs.map(img=>({loaded:img.complete&&img.naturalWidth>0,width:img.naturalWidth})));
     assert.ok(result.imageLoads.every(x=>x.loaded));
     await page.getByRole('button',{name:'全选结果',exact:true}).click();
-    await page.locator('button.export-button').click();
+    await page.getByRole('button',{name:/^组卷篮/}).first().click();
     await page.getByLabel('练习标题',{exact:true}).fill('Word 导入修复回归');
     await page.locator('#basket-include-answers').check();
     const download=page.waitForEvent('download',{timeout:60000});

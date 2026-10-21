@@ -96,6 +96,7 @@ function escapeMathText(value: string) {
 }
 
 function delimiterLatex(value: string, fallback: string) {
+  if (value === "") return ".";
   const delimiter = value || fallback;
   if (delimiter === "{") return "\\{";
   if (delimiter === "}") return "\\}";

@@ -8,6 +8,15 @@ const paragraph = (body) => `<w:p xmlns:w="word" xmlns:m="math"><w:pPr><w:jc w:v
 const textRun = (value, properties = "") => `<w:r><w:rPr>${properties}</w:rPr><w:t xml:space="preserve">${value}</w:t></w:r>`;
 const mathRun = (body) => `<w:r><m:oMath>${body}</m:oMath></w:r>`;
 
+test("keeps an explicitly hidden Word equation delimiter hidden while preserving defaults", () => {
+  const expression = '<m:e><m:r><m:t>x=1</m:t></m:r></m:e>';
+  for (const [properties, expected] of [
+    ['<m:begChr m:val="{"/><m:endChr m:val=""/>', '\\left\\{x=1\\right.'],
+    ['<m:begChr m:val=""/><m:endChr m:val="|"/>', '\\left.x=1\\right|'],
+    ['', '\\left(x=1\\right)'],
+  ]) assert.deepEqual(docxMathLatex(mathRun(`<m:d><m:dPr>${properties}</m:dPr>${expression}</m:d>`)), [expected]);
+});
+
 test("turns Word fractions, ordered scripts and percentages into semantic web math", () => {
   const xml = paragraph(`${textRun("7．由题可列方程为")}${mathRun([
     "<m:f><m:num><m:r><m:t>3000</m:t></m:r></m:num><m:den><m:r><m:t>x</m:t></m:r></m:den></m:f>",
