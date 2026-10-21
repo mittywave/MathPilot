@@ -54,6 +54,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const [expandedModuleId, setExpandedModuleId] = useState<string | null>(null);
   const [paperLocation, setPaperLocation] = useState(() => pickerPaperLocation(practice));
   const [paperQuery, setPaperQuery] = useState("");
+  const [paperKeyword, setPaperKeyword] = useState("");
   const [paperVisited, setPaperVisited] = useState(paperLocation.view !== "modules");
   const [paperFolders, setPaperFolders] = useState<PaperFolder[]>([]);
   const [paperRefresh, setPaperRefresh] = useState(0);
@@ -65,7 +66,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const sourceRef = useRef(source);
   useEffect(() => { sourceRef.current = source; }, [source]);
   useEffect(() => {
-    const pop = () => { const next = pickerPaperLocation(practice); setPaperLocation(next); setActivePaper(null); setPaperError(""); if (next.view !== "modules") setPaperVisited(true); onSourceChange?.("library"); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); };
+    const pop = () => { const next = pickerPaperLocation(practice); setPaperLocation(next); setPaperKeyword(""); setActivePaper(null); setPaperError(""); if (next.view !== "modules") setPaperVisited(true); onSourceChange?.("library"); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, [onSourceChange, practice]);
@@ -160,7 +161,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     if ((view === "papers") !== (paperLocation.view === "papers")) setPaperFlipping(!matchMedia("(prefers-reduced-motion: reduce)").matches);
     setPaperLocation({ view, id, folder, returnId }); setPaperError(""); setLimit(PAGE_SIZE);
     resultsPane.current?.scrollTo({ top: 0, behavior: "instant" });
-    if (id !== paperLocation.id) setActivePaper(null);
+    if (id !== paperLocation.id) { setActivePaper(null); setPaperKeyword(""); }
     if (view !== "modules") setPaperVisited(true);
     const url = new URL(window.location.href);
     for (const [name, value] of Object.entries({ view: view === "modules" ? "" : view, paperId: id, folder, returnPaper: returnId })) {
@@ -179,7 +180,11 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       onNotice(`已选中本卷 ${ids.length} 道可用题${paper.items.some(item => !item.question) ? "，不可用题目已跳过" : ""}`);
     } catch (error) { onNotice(error instanceof Error ? error.message : "选题失败，请重试", "error"); }
   }
-  const displayed = paperOpen ? (activePaper?.items ?? []).map(item => ({ ...item, question: library?.questions.find(question => question.id === item.questionId) ?? null })) : results.map((question, index) => ({ questionId: question.id, number: String(index + 1), section: "", question }));
+  const paperSearch = paperKeyword.trim().toLowerCase();
+  const displayed = paperOpen ? (activePaper?.items ?? [])
+    .map(item => ({ ...item, question: library?.questions.find(question => question.id === item.questionId) ?? null }))
+    .filter(item => !paperSearch || (item.question && questionMatchesKeyword(item.question, paperSearch, pathOf(item.question.categoryId))))
+    : results.map((question, index) => ({ questionId: question.id, number: String(index + 1), section: "", question }));
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题" data-paper-flipping={paperFlipping || undefined}>
     <aside className="picker-tree" id="picker-directory" aria-label={papersOpen ? "试卷目录" : "知识目录"} inert={!treeOpen} aria-hidden={!treeOpen}>
@@ -220,6 +225,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       </div>
       <div className="picker-filters">
         {papersOpen && <input type="search" aria-label="搜索试卷" placeholder="搜索试卷标题…" value={paperQuery} onChange={(event) => setPaperQuery(event.target.value)} />}
+        {paperOpen && <input type="search" aria-label="搜索本卷题目" placeholder="本卷搜索：题目 ID、知识点、题干" value={paperKeyword} onChange={(event) => { setPaperKeyword(event.target.value); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); }} />}
         {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
         {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={disabled || !availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
         {temporary && <>
@@ -232,8 +238,8 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       {paperOpen && <header className="paper-detail-header"><button className="text-button" onClick={() => navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper && <div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{!replacing && <button onClick={() => void selectPaper(activePaper)}>整卷选择</button>}<a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></div>}</header>}
       {!temporary && paperError && <p className="paper-error" role="alert">{paperError}<button onClick={() => setPaperRefresh(value => value + 1)}>重试</button></p>}
       {!temporary && !papersOpen && !paperOpen && paperLocation.returnId && <div className="paper-return"><button className="text-button" onClick={() => navigatePapers("paper", paperLocation.returnId)}>← 返回刚才的试卷</button></div>}
-      {papersOpen ? null : temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>先校对再选题，不自动加入正式题库。</p><button className="secondary" onClick={onImport}>导入文件</button></div> : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">没有符合条件的题目。</p> : <>
-        <p className="picker-count">共 {displayed.length} 道</p>
+      {papersOpen ? null : temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>先校对再选题，不自动加入正式题库。</p><button className="secondary" onClick={onImport}>导入文件</button></div> : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">{paperOpen ? "本卷没有符合条件的题目。" : "没有符合条件的题目。"}</p> : <>
+        <p className="picker-count">{paperOpen && paperSearch ? `本卷找到 ${displayed.length} 道（共 ${activePaper?.items.length ?? 0} 道）` : `共 ${displayed.length} 道`}</p>
         <ol className="picker-list">{displayed.slice(0, paperOpen ? displayed.length : limit).map((item, index) => {
           const question = item.question;
           const section = item.section && item.section !== displayed[index - 1]?.section ? <li className="picker-paper-section"><h3>{item.section}</h3></li> : null;
