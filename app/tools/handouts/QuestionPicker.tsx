@@ -120,7 +120,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const targetKey = mode.kind === "replace" ? mode.itemId : `${sheet}|${mode.sectionId}|${mode.band}`;
   useEffect(() => {
     if (matchMedia("(prefers-reduced-motion:reduce)").matches) return;
-    target.current?.querySelector("header")?.animate([{ backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px var(--green)" }, { backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px transparent" }], { duration: 900 });
+    target.current?.animate([{ backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px var(--green)" }, { backgroundColor: "var(--green-soft)", boxShadow: "inset 0 0 0 2px transparent" }], { duration: 900 });
   }, [targetKey]);
   const pathOf = (id: string) => categoryPath(modules, categories, id);
   const moduleQuestions = (library?.questions ?? []).filter((question) => question.moduleId === activeModuleId);
@@ -197,11 +197,11 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       <div className="picker-source"><button className="icon-button picker-tree-toggle" type="button" title="展开目录" aria-label={papersOpen ? "展开试卷目录" : "展开知识目录"} aria-expanded={treeOpen} aria-controls="picker-directory" aria-hidden={treeOpen} inert={treeOpen} tabIndex={treeOpen ? -1 : 0} onClick={() => toggleTree(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button><div className="handout-sheets" role="tablist" aria-label="选题来源">
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
         <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
-      </div>{temporary && <button className="secondary" onClick={onImport}>导入文件</button>}</div>
+      </div>
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div ref={target} className={`picker-target${list ? " list" : ""}`}>
-        <header><span>{list ? `加入${list}，考查` : "加入到"} <b title={targetLabel}>{targetLabel.split(" · ")[0]}{!list && ` · ${HANDOUT_PARTS[mode.band].label}`}</b></span></header>
+        <header><span>{list ? `加入${list}，考查` : "加入到"}</span></header>
         <div className="picker-target-fields">
-        <select aria-label={list ? "考查模块" : "加入模块"} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
+        <select aria-label={list ? "考查模块" : "加入模块"} title={targetLabel} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
           {!sections.length && <option value="">{list ? "讲义还没有知识模块" : "请先添加知识模块"}</option>}
           {sections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
         </select>
@@ -210,8 +210,11 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </select>}
         </div>
       </div>}
-      <div className="picker-filters" hidden={papersOpen || paperOpen}>
-        <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />
+      {temporary && <button className="secondary" onClick={onImport}>导入文件</button>}
+      </div>
+      <div className="picker-filters">
+        {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
+        {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
         {temporary && <>
           <select aria-label="来源文件" value={fileName} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源文件</option>{[...new Set(temporaryQuestions.map((question) => question.importFileName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}</select>
           <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
@@ -244,7 +247,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       </>}
       </div>
       {temporary && !!pendingArchive.length && <div className="picker-archive"><select aria-label="入库分类" value={archiveCategory} disabled={archiving} onChange={(event) => setArchiveCategory(event.target.value)}><option value="">选择正式题库分类</option>{modules.map((module) => <optgroup key={module.id} label={module.name}><option value={module.id}>{module.name}（根目录）</option>{categories.filter((category) => category.moduleId === module.id).map((category) => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</optgroup>)}</select><button className="secondary" disabled={!archiveCategory || archiving} onClick={async () => { setArchiving(true); try { const saved = await onArchive(pendingArchive, archiveCategory); setArchiveIds((ids) => ids.filter((id) => !saved.includes(id))); } catch (error) { onNotice(error instanceof Error ? error.message : "入库失败，请重试", "error"); } finally { setArchiving(false); } }}>{archiving ? "正在入库…" : `保存勾选 ${pendingArchive.length} 题`}</button></div>}
-      {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
     </div>
   </section>;
 }
