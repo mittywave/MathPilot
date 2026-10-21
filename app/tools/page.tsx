@@ -9,7 +9,6 @@ import "./tools.css";
 function ToolIcon({ name }: { name: ToolboxTool["icon"] }) {
   const paths = {
     pen: <><path d="m4 16.5 9.8-9.8 3.5 3.5-9.8 9.8L4 21l.5-4.5Z" /><path d="m12.5 8 3.5 3.5M4 21l4.5-.5" /></>,
-    check: <><path d="M9 4h6v3H9z" /><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15" /><path d="m8.5 14 2.5 2.5 4.5-5" /></>,
     page: <><path d="M6.5 3h8l4 4v12.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5.5 19.5v-15A1.5 1.5 0 0 1 7 3Z" /><path d="M14.5 3v4h4M8.5 11h7M8.5 14.5h7M8.5 18h4" /></>,
     share: <><circle cx="18" cy="5.5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="18.5" r="2.5" /><path d="m8.3 10.8 7.4-4.1M8.3 13.2l7.4 4.1" /></>,
     spark: <><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.2l-1.8-5.6-5.7-1.8L10.2 9Z" /><path d="M18.5 3.5v3M17 5h3M5.5 17v3M4 18.5h3" /></>,

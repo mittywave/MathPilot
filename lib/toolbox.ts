@@ -1,11 +1,7 @@
 // Tools collected under the single “工具箱” entry. Adding a tool is one entry here plus its own page; cards open the tool in the current tab.
-export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "check" | "page" | "spark"; adminOnly?: boolean };
+export type ToolboxTool = { key: string; href: string; name: string; summary: string; icon: "pen" | "share" | "page" | "spark"; adminOnly?: boolean };
 
 export const TOOLBOX_TOOLS: ToolboxTool[] = [
-  {
-    key: "homework", href: "/tools/homework", name: "作业批改", icon: "check",
-    summary: "上传学生拍好的作业照片或 PDF，自动批改，可写入错题本和定档。",
-  },
   {
     key: "answer-studio", href: "/tools/answer-studio", name: "文件转录", icon: "pen",
     summary: "把题目或答案的照片、PDF 转成可编辑的 Word：只放原题得到题目，加上答案得到解析。",
