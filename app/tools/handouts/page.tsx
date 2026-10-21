@@ -1060,7 +1060,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
               const heading = moduleHeading(section.title, index);
               const landing = dropAt && !("itemId" in dropAt) && dropAt.sectionId === section.id;
               return <section className={`handout-outline-module${landing ? " dropping" : ""}`} key={section.id} {...laneDrop(section.id, draggedItem?.kind === "question" ? draggedItem.band ?? "example" : "example")}>
-                <button type="button" className="handout-outline-heading" aria-label={`定位模块${heading.numeral}：${heading.title || "未命名模块"}`} aria-current={outlineTarget === `module-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`module-${section.id}`)}><span>{heading.numeral}</span><b>{heading.title || "未命名模块"}</b></button>
+                <button type="button" className="handout-outline-heading" aria-label={`定位模块${heading.numeral}`} aria-current={outlineTarget === `module-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`module-${section.id}`)}>模块{heading.numeral}</button>
                 <button type="button" className="handout-outline-note" aria-label={`定位模块${heading.numeral}知识点`} aria-current={outlineTarget === `knowledge-${section.id}` ? "location" : undefined} onClick={() => locateOutline(`knowledge-${section.id}`)}>知识点</button>
                 {HANDOUT_BANDS.filter(band => bands[band].length).map(band => <div className={`handout-outline-band${landing && dropAt.band === band ? " dropping" : ""}`} key={band} {...laneDrop(section.id, band)}>
                   <span>{HANDOUT_PARTS[band].label}</span>
