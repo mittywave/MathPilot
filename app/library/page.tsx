@@ -20,10 +20,9 @@ import { StudentReports } from "../components/StudentReports";
 import { WrongQuestionEvidence } from "../components/WrongQuestionEvidence";
 import WrongQuestionUpload from "../components/WrongQuestionUpload";
 import { QuestionBody } from "../components/QuestionBody";
-import { BasketOutline } from "../components/BasketOutline";
 import LibraryKnowledgeMap, { KnowledgeMapRail, type KnowledgeMapFocus } from "../components/knowledge-graph/LibraryKnowledgeMap";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../components/QuestionEntry";
-import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, moveBasketQuestion, orderedBasketQuestions, placeBasketQuestion, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
+import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, orderedBasketQuestions, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
 import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../lib/library-tree";
 import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, moveCloudCategory, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
@@ -45,6 +44,7 @@ const LIBRARY_PAGE = 40;
 // A new list paints its first few cards on their own, so the page shows sooner; the rest of the first 40 follow below.
 const LIBRARY_FIRST = 8;
 // 组卷篮 opens 快速排版 in place; the typesetter loads only then.
+const BasketEditor = lazy(() => import("../components/BasketEditor"));
 const Typesetter = lazy(() => import("../tools/typeset/Typesetter"));
 
 function uid(prefix: string) { return `${prefix}-${randomClientId()}`; }
@@ -64,7 +64,7 @@ async function inlineHomeworkImages(value: unknown): Promise<unknown> {
 }
 function currentTimestamp() { return Date.now(); }
 
-type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; move: (id: string, direction: -1 | 1) => void; drop: (id: string) => void; activate: (id: string) => void; focus: (id: string) => void; place: (id: string, sectionId: string | null) => void };
+type CardActions = { toggleSelected: (id: string) => void; toggleAnswer: (id: string) => void; edit: (question: Question) => void; remove: (question: Question) => void; focus: (id: string) => void };
 
 // A click anywhere on a selectable card ticks it, as its check box does. Buttons, links and the grading record keep
 // their own clicks, and dragging across the text to copy it ticks nothing.
@@ -76,22 +76,21 @@ function selectOnCardClick(event: MouseEvent<HTMLElement>, toggle: () => void) {
 
 // One card of the library list. It re-renders only when its own question or state changes, so ticking one question
 // in a long category does not rebuild every other card on the page.
-const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, number, hideSource = false, isLast, isFirst = index === 0, sectionId, sections, path, checked, active = false, answerOpen, selectable, basket, canDelete, isExporting, isAlevelPage, pageLocale, actions }: {
-  question: Question; index: number; number?: string; hideSource?: boolean; isLast: boolean; path: string; checked: boolean; active?: boolean; answerOpen: boolean; selectable: boolean; basket: boolean;
-  canDelete: boolean; isExporting: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
-  isFirst?: boolean; sectionId?: string | null; sections?: Array<{ id: string | null; title: string }>;
+const LibraryQuestionCard = memo(function LibraryQuestionCard({ question, index, number, hideSource = false, path, checked, active = false, answerOpen, selectable, canDelete, isAlevelPage, pageLocale, actions }: {
+  question: Question; index: number; number?: string; hideSource?: boolean; path: string; checked: boolean; active?: boolean; answerOpen: boolean; selectable: boolean;
+  canDelete: boolean; isAlevelPage: boolean; pageLocale: AlevelPageLocale; actions: CardActions;
 }) {
   const pageCopy = ALEVEL_PAGE_COPY[pageLocale];
   const visibleTags = isAlevelPage ? localizeAlevelTags(question, pageLocale) : question.tags ?? [];
   // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- The check box is the keyboard control; a click on the card is a pointer shortcut for it.
-  return <article id={basket ? `basket-question-${question.id}` : undefined} tabIndex={basket ? -1 : undefined} className={`question-card ${checked ? "checked" : ""} ${active ? "active" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => { actions.focus(question.id); actions.toggleSelected(question.id); }) : basket ? (event) => selectOnCardClick(event, () => actions.activate(question.id)) : undefined}>
+  return <article className={`question-card ${checked ? "checked" : ""} ${active ? "active" : ""}`} onClick={selectable ? (event) => selectOnCardClick(event, () => { actions.focus(question.id); actions.toggleSelected(question.id); }) : undefined}>
     {selectable && <button className={`check ${checked ? "on" : ""}`} aria-label={pageLocale === "en" ? `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion} question ${index + 1}` : `${checked ? pageCopy.deselectQuestion : pageCopy.selectQuestion}第 ${index + 1} 题`} onClick={() => { actions.focus(question.id); actions.toggleSelected(question.id); }}>{checked ? "✓" : ""}</button>}
     <div className="question-main">
       <div className="meta">{question.code && <span>ID {question.code}</span>}<span>{alevelPageLabel(question.type, pageLocale)}</span><span className={question.difficulty === "提高" ? "hard" : question.difficulty === "中等" ? "medium" : "easy"}>{alevelPageLabel(question.difficulty, pageLocale)}</span>{path && <em>{path}</em>}</div>
       <QuestionBody question={hideSource ? {...question,source:""} : question} number={number ?? index + 1} figureAlt={pageCopy.figureAlt} />
       {!!visibleTags.length && <div className="tag-row">{visibleTags.map((tag) => <span key={`${pageLocale}-${tag}`}>{tag}</span>)}</div>}
       {answerOpen && <div className="answer-box"><b>{pageCopy.answer}</b><p><MathText text={question.answer || pageCopy.none} /></p>{question.analysis && <><b>{pageCopy.solution}</b><div className="analysis-content">{question.studioSource ? <StudioSolution source={{...question.studioSource,analysis:question.analysis}}/> : <DocxContent xml={question.analysisDocxXml} fallback={question.analysis} assets={question.analysisDocxAssets} />}</div></>}</div>}
-      <div className="question-actions"><button onClick={() => { if (selectable) actions.focus(question.id); actions.toggleAnswer(question.id); }}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{!basket && question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}{basket && <div className="basket-card-actions">{!!sections?.some((section) => section.id !== sectionId) && <label className="basket-move-to">移动到<select aria-label={`第 ${index + 1} 题移动到`} disabled={isExporting} value={sectionId ?? ""} onChange={(event) => actions.place(question.id, event.target.value || null)}>{sections.map((section) => <option key={section.id ?? "unassigned"} value={section.id ?? ""}>{section.title}</option>)}</select></label>}<button disabled={isFirst || isExporting} aria-label={`上移第 ${index + 1} 题`} onClick={() => actions.move(question.id, -1)}>↑ 上移</button><button disabled={isLast || isExporting} aria-label={`下移第 ${index + 1} 题`} onClick={() => actions.move(question.id, 1)}>↓ 下移</button><button disabled={isExporting} aria-label={`移除第 ${index + 1} 题`} onClick={() => actions.drop(question.id)}>移除</button></div>}</div>
+      <div className="question-actions"><button onClick={() => { if (selectable) actions.focus(question.id); actions.toggleAnswer(question.id); }}>{answerOpen ? pageCopy.hideSolution : pageCopy.showSolution}</button>{(question.createdBy === "local-admin" || question.createdByEmail) && <small>{question.createdBy === "local-admin" ? pageLocale === "en" ? "Entered by local admin" : "本机管理员 录入" : <>{pageCopy.enteredBy} {question.createdByEmail}{pageCopy.enteredSuffix ? ` ${pageCopy.enteredSuffix}` : ""}</>}</small>}<span></span>{question.canEdit && <><button onClick={() => actions.edit(question)}>{pageCopy.edit}</button>{canDelete && <PaperMoreMenu label={pageLocale === "en" ? `Question ${index + 1} actions` : `第 ${index + 1} 题操作`}><button className="danger-text" onClick={() => actions.remove(question)}>{pageCopy.delete}</button></PaperMoreMenu>}</>}</div>
     </div>
   </article>;
 });
@@ -388,7 +387,6 @@ export default function Home() {
   const basketPool = useMemo(() => [...basketWrongQuestions, ...questions], [questions, basketWrongQuestions]);
   const selectedQuestions = orderedBasketQuestions(basketPool, selectedIds);
   const paperSections = useMemo(() => basketSections(basketStructure, basketPool), [basketStructure, basketPool]);
-  const sectionChoices = useMemo(() => paperSections.map((section) => ({ id: section.id, title: section.id ? section.title : "未分组" })), [paperSections]);
   const byCode = query.trim() ? questions.find((item) => item.code === query.trim()) : undefined;
   const filteredQuestions = useMemo(() => {
     if (showSelected) return orderedBasketQuestions(basketPool, selectedIds);
@@ -418,7 +416,6 @@ export default function Home() {
   // A new filter starts again from the top (8 cards, then 40); the end marker loads the next 40 while it is still well below the screen.
   const listKey = `${activeModuleId}|${activeCategory}|${typeFilter}|${query}|${showSelected}`;
   const [listPaging, setListPaging] = useState({ key: "", count: LIBRARY_PAGE });
-  const [locatingQuestion, setLocatingQuestion] = useState<string | null>(null);
   const visibleCount = listPaging.key === listKey ? listPaging.count : LIBRARY_FIRST;
   useEffect(() => {
     if (listPaging.key === listKey) return;
@@ -431,9 +428,6 @@ export default function Home() {
     });
     return () => { cancelAnimationFrame(frame); window.clearTimeout(timer); window.removeEventListener("mp-entered", extend); };
   }, [listKey, listPaging.key]);
-  // The basket question shown on the knowledge map: the one last clicked in the outline or the list, else the first.
-  const [activeBasketId, setActiveBasketId] = useState("");
-  const activeBasketQuestion = selectedQuestions.find((question) => question.id === activeBasketId) ?? selectedQuestions[0] ?? null;
   // 题库 · 右栏知识图谱 shows the question clicked, else the category picked in the tree, and lights
   // the tree's categories that hold what it shows.
   const showKnowledgeMap = Boolean(authUser && activeModule) && !showSelected && !showWrongBook && !isAlevelPage;
@@ -531,21 +525,6 @@ export default function Home() {
     const id = mapQuestionId === null ? activeModule.id : activeCategory ?? activeModule.id;
     return { kind: "category", id, name: categories.find((item) => item.id === id)?.name ?? activeModule.name };
   }, [activeCategory, activeModule, categories, filteredQuestions, mapMounted, mapQuestion, mapQuestionId, showKnowledgeMap]);
-  const locateBasketQuestion = (id: string) => {
-    const index = selectedIds.indexOf(id);
-    if (index < 0) return;
-    setActiveBasketId(id);
-    setListPaging((current) => ({ key: listKey, count: Math.max(current.key === listKey ? current.count : LIBRARY_PAGE, index + 1) }));
-    setLocatingQuestion(id);
-  };
-  useEffect(() => {
-    if (!locatingQuestion || !showSelected || typesetting) return;
-    const frame = requestAnimationFrame(() => {
-      const card = document.getElementById(`basket-question-${locatingQuestion}`);
-      if (card) { card.scrollIntoView({ block: "start" }); card.focus({ preventScroll: true }); setLocatingQuestion(null); }
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [locatingQuestion, showSelected, typesetting, visibleCount]);
   const listEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const end = listEndRef.current;
@@ -722,16 +701,8 @@ export default function Home() {
     toggleAnswer: (id) => setExpandedAnswers((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]),
     edit: (question) => cardHandlers.current.openEditQuestion(question),
     remove: (question) => { void cardHandlers.current.deleteQuestion(question); },
-    move: (id, direction) => setBasketStructure((current) => {
-      const section = current.sections.find((item) => item.questionIds.includes(id));
-      return section ? { ...current, sections: current.sections.map((item) => item.id === section.id ? { ...item, questionIds: moveBasketQuestion(item.questionIds, id, direction) } : item) }
-        : { ...current, unassignedIds: moveBasketQuestion(current.unassignedIds, id, direction) };
-    }),
-    drop: (id) => setSelectedIds((ids) => ids.filter((item) => item !== id)),
-    activate: setActiveBasketId,
     focus: setMapQuestionId,
-    place: (id, sectionId) => setBasketStructure((current) => placeBasketQuestion(current, id, sectionId)),
-  }), [setSelectedIds]);
+  }), []);
 
   async function deleteWrongEntries(entries: WrongQuestionEntry[]) {
     if (!entries.length) return;
@@ -947,14 +918,19 @@ export default function Home() {
     setPaperTitle(title); setIncludeAnswers(settings.answers !== "none"); setTypesetKept({ ids: typesetIds, settings });
   }, [typesetIds]);
   const directoryLabel = paperView === "papers" ? `${directoryOpen ? "收起" : "展开"}试卷目录` : pageLocale === "en" ? `${directoryOpen ? "Collapse" : "Expand"} knowledge directory` : `${directoryOpen ? "收起" : "展开"}知识点目录`;
-  if (typesetting) return <>{toastNode}<Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
+  const typesetOverlay = typesetting ? <Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
     questions: selectedQuestions, title: paperTitle,
     groups: basketStructure.sections.length ? paperSections.filter((section) => section.questions.length).map((section) => ({ title: section.heading, size: section.questions.length })) : undefined,
     groupMode: "sections",
     settings: typesetKept ? { ...typesetKept.settings, ownRoom: typesetKept.ids === typesetIds ? typesetKept.settings.ownRoom : {} } : { answers: includeAnswers ? "end" : "none" },
     onChange: keepTypeset,
     onClose: (title, settings) => { keepTypeset(title, settings); setTypesetting(false); },
-  }} /></Suspense></>;
+  }} /></Suspense> : null;
+
+  if (showSelected && !showWrongBook && authUser) return <>{toastNode}{confirmDialog}<div hidden={typesetting} inert={typesetting}><Suspense fallback={<div className="wrong-book-loading">正在打开组卷篮…</div>}><BasketEditor user={authUser} library={{ scope: "public", modules, categories, questions }} pool={basketPool} structure={basketStructure} title={paperTitle} includeAnswers={includeAnswers} disabled={basketBusy} exporting={isExporting} status={draftStatus}
+    onChange={setBasketStructure} onTitle={setPaperTitle} onAnswers={include => { setIncludeAnswers(include); setTypesetKept(current => current ? { ...current, settings: { ...current.settings, answers: include ? "end" : "none" } } : null); }}
+    onLibrary={data => { setModules(data.modules); setCategories(data.categories); setQuestions(data.questions); }} onBack={openLibrary}
+    onTypeset={() => void openTypeset()} onWord={() => void generateWord()} onGroupByType={() => void classifyBasket()} onNotice={onNotice} /></Suspense></div>{typesetOverlay}</>;
 
   return (
     <main className={`app-shell ${isAlevelPage ? `alevel-page locale-${pageLocale}` : ""}`.trim()} aria-busy={libraryLoading}>
@@ -1045,19 +1021,11 @@ export default function Home() {
             <div className="question-list">{activePaper?.items.map((item,index)=>{
               const question=questions.find(q=>q.id===item.questionId);
               return <Fragment key={`${index}-${item.questionId}`}>{item.section&&item.section!==activePaper.items[index-1]?.section&&<h2 className="basket-section-heading">{item.section}</h2>}
-                {question?<LibraryQuestionCard question={question} index={index} number={item.number} hideSource isLast={index===activePaper.items.length-1} path={pathOf(question.categoryId)} checked={selectedIds.includes(question.id)} active={mapOpen&&question.id===mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser)} basket={false} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={false} pageLocale="zh" actions={cardActions}/>:<div className="paper-missing">第 {item.number} 题已移入回收站或不再可用。原题位仍保留。</div>}
+                {question?<LibraryQuestionCard question={question} index={index} number={item.number} hideSource path={pathOf(question.categoryId)} checked={selectedIds.includes(question.id)} active={mapOpen&&question.id===mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser)} canDelete={canDelete} isAlevelPage={false} pageLocale="zh" actions={cardActions}/>:<div className="paper-missing">第 {item.number} 题已移入回收站或不再可用。原题位仍保留。</div>}
               </Fragment>;
             })}</div>
           </div> : <>
           {returnPaperId&&!showSelected&&<div className="paper-return"><button className="text-button" onClick={()=>navigatePapers("paper",returnPaperId)}>← 返回刚才的试卷</button></div>}
-          {showSelected ? <>
-            <aside className="basket-settings">
-              <label className="basket-title">练习标题<input value={paperTitle} disabled={basketBusy} onChange={(event) => setPaperTitle(event.target.value)} placeholder="输入练习标题" /></label>
-              <label className="basket-answer" htmlFor="basket-include-answers" aria-label="附带答案与解析"><input id="basket-include-answers" type="checkbox" checked={includeAnswers} disabled={basketBusy} onChange={(event) => { setIncludeAnswers(event.target.checked); setTypesetKept((current) => current ? { ...current, settings: { ...current.settings, answers: event.target.checked ? "end" : "none" } } : null); }} /><span><b>附带答案与解析</b><small>文末另起一页</small></span></label>
-              <BasketOutline structure={basketStructure} pool={basketPool} disabled={basketBusy} activeId={activeBasketQuestion?.id ?? ""} onChange={setBasketStructure} onLocate={locateBasketQuestion} onGroupByType={() => void classifyBasket()} onNotice={onNotice} />
-              <div className="basket-toolbar"><span>已选 {selectedQuestions.length} 题<small role="status">{draftStatus}</small></span><button className="primary-button" disabled={basketBusy || !selectedQuestions.length} onClick={() => void openTypeset()}>快速排版</button><button className="secondary" disabled={basketBusy || !selectedQuestions.length} onClick={generateWord}>{isExporting ? "正在生成…" : "生成 Word"}</button><PaperMoreMenu><button disabled={basketBusy || !selectedQuestions.length && !basketStructure.sections.length} onClick={() => setBasketStructure({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu></div>
-            </aside>
-          </> : <>
           <div className="filters">
             <label className="search"><span>⌕</span><input value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (!value.trim()) setWrongCatalog(null); if (value.trim() && questions.some(question => question.code === value.trim())) setTypeFilter("全部"); window.scrollTo(0,0); }} aria-label={pageCopy.searchLabel} placeholder={pageCopy.searchPlaceholder} /></label>
             <div className="page-language-switch filter-segments" role="group" aria-label={pageCopy.allTypes}>
@@ -1068,7 +1036,6 @@ export default function Home() {
             {isAlevelPage && <div className="page-language-switch" role="group" aria-label={pageCopy.language}><button lang="zh-CN" className={alevelPageLocale === "zh" ? "active" : ""} aria-pressed={alevelPageLocale === "zh"} onClick={() => chooseAlevelPageLocale("zh")}>中文</button><button lang="en" className={alevelPageLocale === "en" ? "active" : ""} aria-pressed={alevelPageLocale === "en"} onClick={() => chooseAlevelPageLocale("en")}>English</button></div>}
           </div>
           {!libraryLoading && <div className="library-position">{byCode ? (pageLocale === "en" ? "ID lookup across all modules" : "全题库 ID 查找") : activeName.split(" / ").join(" › ")} · {alevelQuestionCount(filteredQuestions.length, pageLocale)}</div>}
-          </>}
           {!!wrongMatches.length && <section className="question-list wrong-catalog" aria-label="错题本中还没进题库的题">
             <h2 className="basket-section-heading">错题本中未入题库<small>{wrongMatches.length} 题 · 可加入题库，ID 不变</small></h2>
             {wrongMatches.map((item, index) => {
@@ -1087,14 +1054,9 @@ export default function Home() {
             {!filteredQuestions.length && !wrongMatches.length && (libraryLoading ? <div className="wrong-book-loading"><i></i><span>{showSelected ? "正在读取组卷篮…" : "正在读取题库…"}</span></div> : <div className={`empty-state ${showSelected ? "basket-empty" : ""}`}><div>{pageCopy.empty}</div><h3>{showSelected ? "组卷篮还是空的" : !activeModule ? "创建第一个模块" : pageCopy.noQuestions}</h3><p>{showSelected ? "到题库勾选题目或从学生错题本加入，再回来调整顺序并生成练习。" : !activeModule ? canManageLibrary ? "模块可以是考试、学科或你习惯的任意分组" : "登录后即可创建模块和录题" : canManageLibrary ? pageCopy.addFirstQuestion : pageCopy.noResources}</p>{showSelected ? <button onClick={() => setShowSelected(false)}>去题库选题</button> : canManageLibrary ? <button onClick={activeModule ? openNewQuestion : openNewModule}>{activeModule ? pageCopy.newQuestion : pageCopy.newModule}</button> : null}</div>)}
             {filteredQuestions.slice(0, visibleCount).map((question, index) => {
               const path = pathOf(question.categoryId);
-              const section = showSelected ? paperSections.find((item) => index >= item.start && index < item.start + item.questions.length) : undefined;
-              return <Fragment key={question.id}>
-                {section?.heading && index === section.start && <h2 className="basket-section-heading">{section.heading}<small>{section.questions.length} 题</small></h2>}
-                <LibraryQuestionCard question={question} index={index} isFirst={section ? index === section.start : index === 0} isLast={section ? index === section.start + section.questions.length - 1 : index === filteredQuestions.length - 1}
-                  sectionId={section?.id} sections={showSelected ? sectionChoices : undefined}
-                  path={showSelected || query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={showSelected ? question.id === activeBasketQuestion?.id : mapOpen && question.id === mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser) && !showSelected}
-                  basket={showSelected} canDelete={canDelete} isExporting={basketBusy} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />
-              </Fragment>;
+              return <LibraryQuestionCard key={question.id} question={question} index={index}
+                path={query.trim() || activeName !== path ? path : ""} checked={selectedIds.includes(question.id)} active={mapOpen && question.id === mapQuestion?.id} answerOpen={expandedAnswers.includes(question.id)} selectable={Boolean(authUser)}
+                canDelete={canDelete} isAlevelPage={isAlevelPage} pageLocale={pageLocale} actions={cardActions} />;
             })}
           </div>
           {filteredQuestions.length > visibleCount && <div ref={listEndRef} className="question-list-end" aria-hidden="true" />}

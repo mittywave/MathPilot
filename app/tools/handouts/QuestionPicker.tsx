@@ -14,42 +14,44 @@ export type PickerMode = { kind: "add"; sectionId: string | null; band: HandoutB
 const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const PAGE_SIZE = 30;
 
-function pickerPaperLocation() {
-  const params = new URLSearchParams(window.location.search), view = params.get("view");
-  return { view: view === "papers" || view === "paper" ? view : "modules" as "modules" | "papers" | "paper", id: params.get("paperId") ?? "", folder: params.get("folder") ?? "", returnId: params.get("returnPaper") ?? "" };
+function pickerPaperLocation(practice = false) {
+  const params = new URLSearchParams(window.location.search), view = params.get(practice ? "pickerView" : "view");
+  return { view: view === "papers" || view === "paper" ? view : "modules" as "modules" | "papers" | "paper", id: params.get(practice ? "pickerPaperId" : "paperId") ?? "", folder: params.get(practice ? "pickerFolder" : "folder") ?? "", returnId: params.get(practice ? "pickerReturnPaper" : "returnPaper") ?? "" };
 }
 
 // The same bank stays open while adding to different lanes or replacing a question.
 // For a 小测 or 作业 the chosen module is the one the new questions test, and there is no band to choose.
 // taken: already in the open sheet, so not offered again; usedIn: where else in this 讲 a question is used.
-export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTreeOpenChange: setTreeOpen, mode, sheet, taken, usedIn, onPick, sections, onModeChange, source, onSourceChange, temporaryQuestions, onImport, onArchive, onEdit, onRemove, onNotice }: {
+export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTreeOpenChange: setTreeOpen, mode, sheet, disabled = false, taken, usedIn, onPick, sections, onModeChange, source = "library", onSourceChange, temporaryQuestions = [], onImport, onArchive, onEdit, onRemove, onNotice }: {
   library: LibraryData | null;
   user: AuthUser;
   onLibraryChanged: () => Promise<void>;
   treeOpen: boolean;
   onTreeOpenChange: (open: boolean) => void;
   mode: PickerMode;
-  sheet: HandoutSheet;
+  sheet: HandoutSheet | "practice";
+  disabled?: boolean;
   taken: Set<string>;
   usedIn: Map<string, Set<string>>;
   onPick: (questionIds: string[]) => void;
   sections: { id: string; label: string }[];
   onModeChange: (mode: PickerMode | null) => void;
-  source: "library" | "temporary";
-  onSourceChange: (source: "library" | "temporary") => void;
-  temporaryQuestions: Question[];
-  onImport: () => void;
-  onArchive: (ids: string[], categoryId: string) => Promise<string[]>;
-  onEdit: (question: Question) => void;
-  onRemove: (id: string) => void;
+  source?: "library" | "temporary";
+  onSourceChange?: (source: "library" | "temporary") => void;
+  temporaryQuestions?: Question[];
+  onImport?: () => void;
+  onArchive?: (ids: string[], categoryId: string) => Promise<string[]>;
+  onEdit?: (question: Question) => void;
+  onRemove?: (id: string) => void;
   onNotice: (message: string, tone?: "success" | "error") => void;
 }) {
   const replacing = mode.kind === "replace";
-  const list = sheet === "handout" ? null : sheetLabel(sheet);
+  const practice = sheet === "practice";
+  const list = practice ? "练习卷" : sheet === "handout" ? null : sheetLabel(sheet);
   const [scope, setScope] = useState<{ moduleId: string; categoryId: string }>(() => {
     try { const value = JSON.parse(localStorage.getItem("mathpilot-picker-scope") || "{}"); return { moduleId: typeof value.moduleId === "string" ? value.moduleId : "", categoryId: typeof value.categoryId === "string" ? value.categoryId : "" }; } catch { return { moduleId: "", categoryId: "" }; }
   });
-  const [paperLocation, setPaperLocation] = useState(pickerPaperLocation);
+  const [paperLocation, setPaperLocation] = useState(() => pickerPaperLocation(practice));
   const [paperQuery, setPaperQuery] = useState("");
   const [paperVisited, setPaperVisited] = useState(paperLocation.view !== "modules");
   const [paperFolders, setPaperFolders] = useState<PaperFolder[]>([]);
@@ -62,10 +64,10 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const sourceRef = useRef(source);
   useEffect(() => { sourceRef.current = source; }, [source]);
   useEffect(() => {
-    const pop = () => { const next = pickerPaperLocation(); setPaperLocation(next); setActivePaper(null); setPaperError(""); if (next.view !== "modules") setPaperVisited(true); onSourceChange("library"); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); };
+    const pop = () => { const next = pickerPaperLocation(practice); setPaperLocation(next); setActivePaper(null); setPaperError(""); if (next.view !== "modules") setPaperVisited(true); onSourceChange?.("library"); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
-  }, [onSourceChange]);
+  }, [onSourceChange, practice]);
   useEffect(() => {
     if (!paperVisited) return;
     const controller = new AbortController();
@@ -117,7 +119,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     if (!library || !activeModuleId) return;
     try { localStorage.setItem("mathpilot-picker-scope", JSON.stringify({ moduleId: activeModuleId, categoryId: activeCategoryId })); } catch { /* Storage may be unavailable; keep this session's selection. */ }
   }, [library, activeModuleId, activeCategoryId]);
-  const targetLabel = mode.kind === "add" ? sections.find(section => section.id === mode.sectionId)?.label || "请先添加知识模块" : "";
+  const targetLabel = mode.kind === "add" ? sections.find(section => section.id === (mode.sectionId ?? ""))?.label || (practice ? "未分组" : "请先添加知识模块") : "";
   const targetKey = mode.kind === "replace" ? mode.itemId : `${sheet}|${mode.sectionId}|${mode.band}`;
   useEffect(() => {
     if (matchMedia("(prefers-reduced-motion:reduce)").matches) return;
@@ -160,7 +162,8 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     if (id !== paperLocation.id) setActivePaper(null);
     if (view !== "modules") setPaperVisited(true);
     const url = new URL(window.location.href);
-    for (const [key, value] of Object.entries({ view: view === "modules" ? "" : view, paperId: id, folder, returnPaper: returnId })) {
+    for (const [name, value] of Object.entries({ view: view === "modules" ? "" : view, paperId: id, folder, returnPaper: returnId })) {
+      const key = practice ? `picker${name[0].toUpperCase()}${name.slice(1)}` : name;
       if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
     }
     window.history.pushState(window.history.state, "", `${url.pathname}${url.search}`);
@@ -196,13 +199,13 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     </aside>
     <div className="picker-main">
       <div className="picker-source"><button className="icon-button picker-tree-toggle" type="button" title="展开目录" aria-label={papersOpen ? "展开试卷目录" : "展开知识目录"} aria-expanded={treeOpen} aria-controls="picker-directory" aria-hidden={treeOpen} inert={treeOpen} tabIndex={treeOpen ? -1 : 0} onClick={() => toggleTree(true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14m-7-7 7 7-7 7" /></svg></button><div className="handout-sheets" role="tablist" aria-label="选题来源">
-        <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange("library"); setSelected([]); }}>正式题库</button>
-        <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>
+        <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange?.("library"); setSelected([]); }}>正式题库</button>
+        {onImport && <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange?.("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>}
       </div>
       {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div ref={target} className={`picker-target${list ? " list" : ""}`}>
-        <header><span>{list ? `加入${list}，考查` : "加入到"}</span></header>
+        <header><span>{practice ? "加入到" : list ? `加入${list}，考查` : "加入到"}</span></header>
         <div className="picker-target-fields">
-        <select aria-label={list ? "考查模块" : "加入模块"} title={targetLabel} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
+        <select aria-label={practice ? "加入分组" : list ? "考查模块" : "加入模块"} title={targetLabel} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
           {!sections.length && <option value="">{list ? "讲义还没有知识模块" : "请先添加知识模块"}</option>}
           {sections.map((section) => <option key={section.id} value={section.id}>{section.label}</option>)}
         </select>
@@ -216,7 +219,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       <div className="picker-filters">
         {papersOpen && <input type="search" aria-label="搜索试卷" placeholder="搜索试卷标题…" value={paperQuery} onChange={(event) => setPaperQuery(event.target.value)} />}
         {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
-        {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
+        {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={disabled || !availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
         {temporary && <>
           <select aria-label="来源文件" value={fileName} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源文件</option>{[...new Set(temporaryQuestions.map((question) => question.importFileName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}</select>
           <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
@@ -244,16 +247,16 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
             <div className="picker-item-foot"><small>{question.code && `ID ${question.code} · `}{question.type} · {question.difficulty} · {temporary ? question.importFileName || "临时录入" : pathOf(question.categoryId)}</small>
               {elsewhere && !inHandout && <span className="picker-taken">{[...elsewhere].join("、")}已用</span>}
               {inHandout ? <span className="picker-taken">已在{list ?? "讲义"}中</span> : replacing
-                ? <button className="secondary" onClick={() => onPick([question.id])}>换成这道</button>
+                ? <button className="secondary" disabled={disabled} onClick={() => onPick([question.id])}>换成这道</button>
                 : <button className={chosen ? "picker-toggle on" : "picker-toggle"} aria-pressed={chosen} onClick={() => toggle(question.id)}>{chosen ? "✓ 已选" : "＋ 选择"}</button>}
             </div>
-            {temporary && <div className="picker-archive-item"><label><input type="checkbox" aria-label={`第 ${index + 1} 题存入正式题库`} checked={archived.has(question.id) || archiveIds.includes(question.id)} disabled={archived.has(question.id) || archiving} onChange={(event) => setArchiveIds((ids) => event.target.checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} />{archived.has(question.id) ? "已存入正式题库" : "存入正式题库"}</label><button className="text-button" onClick={() => onEdit(question)}>校对</button><button className="text-button" onClick={() => onRemove(question.id)}>删除</button></div>}
+            {temporary && <div className="picker-archive-item"><label><input type="checkbox" aria-label={`第 ${index + 1} 题存入正式题库`} checked={archived.has(question.id) || archiveIds.includes(question.id)} disabled={archived.has(question.id) || archiving} onChange={(event) => setArchiveIds((ids) => event.target.checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} />{archived.has(question.id) ? "已存入正式题库" : "存入正式题库"}</label><button className="text-button" onClick={() => onEdit?.(question)}>校对</button><button className="text-button" onClick={() => onRemove?.(question.id)}>删除</button></div>}
           </li></Fragment>;
         })}</ol>
         {!paperOpen && results.length > limit && <button className="secondary picker-more" onClick={() => setLimit((current) => current + PAGE_SIZE)}>再显示 {Math.min(PAGE_SIZE, results.length - limit)} 道</button>}
       </>}
       </div>
-      {temporary && !!pendingArchive.length && <div className="picker-archive"><select aria-label="入库分类" value={archiveCategory} disabled={archiving} onChange={(event) => setArchiveCategory(event.target.value)}><option value="">选择正式题库分类</option>{modules.map((module) => <optgroup key={module.id} label={module.name}><option value={module.id}>{module.name}（根目录）</option>{categories.filter((category) => category.moduleId === module.id).map((category) => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</optgroup>)}</select><button className="secondary" disabled={!archiveCategory || archiving} onClick={async () => { setArchiving(true); try { const saved = await onArchive(pendingArchive, archiveCategory); setArchiveIds((ids) => ids.filter((id) => !saved.includes(id))); } catch (error) { onNotice(error instanceof Error ? error.message : "入库失败，请重试", "error"); } finally { setArchiving(false); } }}>{archiving ? "正在入库…" : `保存勾选 ${pendingArchive.length} 题`}</button></div>}
+      {temporary && !!pendingArchive.length && <div className="picker-archive"><select aria-label="入库分类" value={archiveCategory} disabled={archiving} onChange={(event) => setArchiveCategory(event.target.value)}><option value="">选择正式题库分类</option>{modules.map((module) => <optgroup key={module.id} label={module.name}><option value={module.id}>{module.name}（根目录）</option>{categories.filter((category) => category.moduleId === module.id).map((category) => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</optgroup>)}</select><button className="secondary" disabled={!archiveCategory || archiving} onClick={async () => { setArchiving(true); try { const saved = await onArchive!(pendingArchive, archiveCategory); setArchiveIds((ids) => ids.filter((id) => !saved.includes(id))); } catch (error) { onNotice(error instanceof Error ? error.message : "入库失败，请重试", "error"); } finally { setArchiving(false); } }}>{archiving ? "正在入库…" : `保存勾选 ${pendingArchive.length} 题`}</button></div>}
     </div>
   </section>;
 }

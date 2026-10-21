@@ -26,8 +26,8 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, ac
 page.setDefaultTimeout(30000);
 page.on('pageerror', (error) => result.pageErrors.push(String(error)));
 const outline = page.getByLabel('试卷结构', { exact: true });
-const headings = () => page.locator('.basket-section-heading');
-const titleInput = () => page.locator('.basket-title input');
+const headings = () => page.locator('.handout-draft .basket-section-heading');
+const titleInput = () => page.getByRole('textbox', { name: '练习标题', exact: true });
 const ready = () => page.getByRole('status').filter({ hasText: '已保存在本机' }).waitFor();
 const choose = async (code) => {
   await page.locator('.search input').fill(code);
@@ -35,7 +35,7 @@ const choose = async (code) => {
   await card.locator('.check').click();
 };
 const basket = async () => { await page.locator('.topbar').getByRole('button', { name: /组卷篮/ }).click(); await outline.waitFor(); };
-const library = () => page.locator('.topbar').getByRole('button', { name: '题库', exact: true }).click();
+const library = () => page.getByRole('button', { name: '返回题库', exact: true }).click();
 const exportFile = async (button, name) => {
   const pending = page.waitForEvent('download', { timeout: 240000 });
   await button.click();
@@ -80,6 +80,42 @@ try {
   await titleInput().fill('结构化组卷验收');
   assert.deepEqual(await outline.locator('.basket-outline-locate').allTextContents(), ['1', '2', '3', '4', '5', '6'], 'the compact outline shows only global question numbers');
   assert.equal(await outline.locator('.katex').count(), 0, 'question stems and equations stay in the right-hand cards');
+
+  const search = page.getByRole('searchbox', { name: '搜索', exact: true });
+  await search.fill(questions[6].code);
+  await page.locator('.picker-item').click();
+  await page.getByRole('button', { name: '加入练习卷', exact: true }).click();
+  assert.equal(await outline.locator('.basket-outline-locate').count(), 7);
+  await page.locator(`[id="basket-question-${questions[6].id}"]`).getByRole('button', { name: '移除第 7 题', exact: true }).click();
+  await page.locator(`[id="basket-question-${questions[0].id}"]`).getByRole('button', { name: '替换', exact: true }).click();
+  await page.getByRole('button', { name: '换成这道', exact: true }).click();
+  await ready();
+  assert.equal((await stored('local-admin')).structure.unassignedIds[0], questions[6].id);
+  await page.locator(`[id="basket-question-${questions[6].id}"]`).getByRole('button', { name: '替换', exact: true }).click();
+  await search.fill(questions[0].code);
+  await page.getByRole('button', { name: '换成这道', exact: true }).click();
+  await search.fill('');
+  step('shared picker adds on card click, removes, replaces and preserves the original slot');
+  for (const name of ['题库', '试卷结构']) {
+    const toggle = page.getByRole('button', { name: `收起${name}`, exact: true });
+    await toggle.click();
+    await page.getByRole('button', { name: `展开${name}`, exact: true }).click();
+    await page.getByRole('button', { name: `收起${name}`, exact: true }).click();
+    await page.getByRole('button', { name: `展开${name}`, exact: true }).click();
+  }
+  const splitter = page.getByRole('separator', { name: '调整题库与正文宽度', exact: true });
+  await splitter.focus();
+  const beforeWidth = Number(await splitter.getAttribute('aria-valuenow'));
+  await splitter.press('ArrowRight');
+  assert.equal(Number(await splitter.getAttribute('aria-valuenow')), beforeWidth + 16);
+  await splitter.press('ArrowLeft');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await page.locator('.handout-workspace').evaluate(node => getComputedStyle(node).transitionDuration), '0s');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.getByRole('button', { name: '查看解析', exact: true }).first().click();
+  assert.equal(await page.locator('.basket-solution.open').count(), 1);
+  await page.getByRole('button', { name: '收起解析', exact: true }).click();
+  step('both panels reverse their collapse animation, keyboard resizing works and reduced motion disables transitions');
   // A true gap drop must insert between its neighbours, not append to the section.
   const fourth = outline.locator(`[data-question-id="${questions[3].id}"]`);
   const secondBox = await outline.getByRole('button', { name: '定位第 2 题', exact: true }).boundingBox();
@@ -103,10 +139,12 @@ try {
   step('native gap insertion previews the exact slot, confirms/highlights the moved question, and right-half drops insert after a tile');
   await outline.getByRole('button', { name: '按题型分类', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.basket-section-heading').length === 5);
-  assert.deepEqual(await headings().allTextContents(), ['一、单选题1 题', '二、多选题1 题', '三、填空题1 题', '四、判断题1 题', '五、解答题2 题']);
+  assert.deepEqual(await headings().allTextContents(), ['一、单选题1从题库选题', '二、多选题1从题库选题', '三、填空题1从题库选题', '四、判断题1从题库选题', '五、解答题2从题库选题']);
   await page.getByRole('textbox', { name: '大标题 1', exact: true }).fill('选择与基础');
   await page.getByRole('combobox', { name: '第 3 题移动到', exact: true }).selectOption({ label: '选择与基础' });
-  assert.equal(await page.getByRole('button', { name: '上移第 3 题', exact: true }).isDisabled(), true, 'the next section starts with its own disabled up button');
+  await page.getByRole('button', { name: '第 3 题更多操作', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '上移', exact: true }).isDisabled(), true, 'the next section starts with its own disabled up button');
+  await page.getByRole('button', { name: '第 3 题更多操作', exact: true }).click();
   await outline.getByRole('button', { name: '＋ 大标题', exact: true }).click();
   await page.getByRole('textbox', { name: '大标题 6', exact: true }).fill('综合应用');
   await page.getByRole('combobox', { name: '第 6 题移动到', exact: true }).selectOption({ label: '综合应用' });
@@ -146,11 +184,12 @@ try {
   await basket();
   const finalRow = outline.locator('.basket-outline-question').last();
   await finalRow.locator('.basket-outline-locate').click();
-  await page.waitForFunction(() => document.activeElement?.id === document.querySelector('.question-list .question-card:last-child')?.id);
-  assert.equal(await page.locator('.question-list .question-card').count(), 52);
-  assert.equal(await page.locator('.question-list .question-number').last().innerText(), '52.');
+  await page.waitForFunction(() => document.activeElement?.id === [...document.querySelectorAll('.handout-draft .handout-question')].at(-1)?.id);
+  assert.equal(await page.locator('.handout-draft .handout-question').count(), 52);
+  assert.equal(await page.locator('.handout-draft .question-number').last().innerText(), '52.');
   step('52-question directory locates and focuses the final card beyond lazy pagination');
 
+  await page.emulateMedia({ reducedMotion: "reduce" });
   // Keep six representative questions through the real remove controls for readable export evidence.
   const keep = new Set(questions.slice(0, 6).map((question) => question.id));
   for (const question of questions.filter((question) => !keep.has(question.id))) {
@@ -158,10 +197,11 @@ try {
     await row.locator('.basket-outline-locate').click();
     await page.locator(`[id="basket-question-${question.id}"]`).getByRole('button', { name: /^移除第/ }).click();
   }
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.getByRole('textbox', { name: '大标题 1', exact: true }).fill('选择与基础');
   for (const width of [1280, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.locator('.handout-draft').evaluate(node => node.scrollTo(0, 0));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal overflow');
     const box = await page.getByRole('button', { name: '生成 Word', exact: true }).boundingBox();
     assert.ok(box && box.y >= 0 && box.y + box.height <= 1000, 'export action stays visible');
@@ -195,7 +235,7 @@ try {
   assert.match(inspected.pages.join(' '), /其他题目/);
   await writeFile(join(out, 'pdf-text.json'), JSON.stringify(inspected, null, 2));
   await page.getByRole('button', { name: '布置给学生', exact: true }).click();
-  assert.equal(await page.getByText('交作业日期', { exact: true }).count(), 1);
+  assert.match(await page.locator('.assign-summary').innerText(), /6 道题/);
   assert.doesNotMatch(await page.locator('.assign-summary').innerText(), /分.*天/);
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.screenshot({ path: join(out, 'typeset-sections.png'), fullPage: false });
@@ -204,7 +244,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.typeset-own')?.textContent.includes('8 mm'));
   await page.getByRole('button', { name: '← 组卷篮', exact: true }).click();
   await ready();
-  step('real PDF typesetting; sectioned paper remains one homework with one due date');
+  step('real PDF typesetting; sectioned paper remains one homework');
 
   // Renaming and regrouping the last item keep the exact same ordered IDs.
   // A later change of order must clear per-question spacing, which is index based.
@@ -219,7 +259,8 @@ try {
   await outline.waitFor(); await ready();
   assert.equal((await stored('local-admin')).typeset.settings.ownRoom['0'], 8, 'settings saved while overlay is open survive refresh');
   await page.getByRole('combobox', { name: '第 2 题移动到', exact: true }).selectOption({ label: '选择与基础' });
-  await page.getByRole('button', { name: '上移第 2 题', exact: true }).click();
+  await page.getByRole('button', { name: '第 2 题更多操作', exact: true }).click();
+  await page.getByRole('button', { name: '上移', exact: true }).click();
   await page.getByRole('button', { name: '快速排版', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.typeset-rooms li').length > 0);
   assert.equal(await page.locator('.typeset-own').count(), 0, 'changed question order clears the indexed spacing');
@@ -243,6 +284,7 @@ try {
   await page.reload(); await outline.waitFor(); await ready();
   assert.equal(await page.locator('.basket-outline-question').count(), 0);
   await titleInput().fill('另一个账号的草稿'); await ready();
+  await library();
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await page.getByRole('button', { name: /登录.*注册/ }).waitFor();
   assert.equal((await stored('local-admin')).title, '结构化组卷验收', 'sign out does not erase the first account draft');
@@ -270,7 +312,7 @@ try {
   assert.equal((await stored('local-admin')).snapshots.length, 0);
   step('wrong-book snapshot fixture retains its picture across reload; missing references are reported and removed snapshots are released');
 
-  await page.locator('.basket-toolbar').getByRole('button', { name: '组卷更多操作', exact: true }).click();
+  await page.getByRole('button', { name: '练习卷更多操作', exact: true }).click();
   await page.getByRole('button', { name: '清空组卷篮', exact: true }).click();
   await ready(); await page.reload(); await outline.waitFor(); await ready();
   assert.equal(await page.locator('.basket-outline-question').count(), 0);
@@ -304,10 +346,72 @@ try {
   }, daysEncoded);
   assert.deepEqual(anchorPages, [0, 0, 1, 1], 'day two still starts on its own page');
   await page.getByRole('button', { name: '布置给学生', exact: true }).click();
-  assert.equal(await page.getByText('第 1 天', { exact: true }).count(), 1);
-  assert.match(await page.locator('.assign-summary').innerText(), /分 2 天.*每天一份/);
+  assert.match(await page.locator('.assign-summary').innerText(), /2 天任务/);
   await page.getByRole('button', { name: '取消', exact: true }).click();
-  step('existing smart-paper history still typesets separate days and assigns two consecutive due dates');
+  step('existing smart-paper history still typesets separate days and preserves two-day tasks');
+  {
+    await page.setViewportSize({ width: 1680, height: 1050 });
+    const lib=await api('/api/library');
+    let questions=lib.questions.filter(q=>q.id.startsWith('basket-fixture-')).slice(0,3);
+    const payload=await fetch(base+'/api/papers?fileName=basket-paper-fixture.docx',{method:'POST',headers:{Origin:base,'Content-Type':'application/vnd.openxmlformats-officedocument.wordprocessingml.document'},body:await readFile('artifacts/basket-verification/structured-basket.docx')});
+    const {paper}=await payload.json();assert.ok(paper);
+    if(paper.status!=='done'){
+    await api(`/api/papers/${paper.id}`,{action:'prepare',draft:{title:'练习卷整卷选题验收',metadata:{kind:'custom',moduleId:questions[0].moduleId},issues:[],classified:true,questions:questions.slice(0,2).map((q,i)=>({number:String(i+1),section:'一、基础',page:1,question:q,categoryPath:["验收练习"],warnings:[]}))}},'PATCH');
+    await api(`/api/papers/${paper.id}`,{action:'start'},'PATCH');
+    }
+    let detail;
+    for(let i=0;i<60;i++){detail=(await api(`/api/papers/${paper.id}`)).paper;if(detail.status==='done')break;if(detail.status==='failed')throw new Error(JSON.stringify(detail));await new Promise(r=>setTimeout(r,300));}
+    assert.equal(detail.status,'done');
+    questions=[...detail.items.map(item=>item.question),lib.questions.find(q=>q.id.startsWith('basket-fixture-')&&!detail.items.some(item=>item.questionId===q.id))];
+    await page.goto(base+'/library?view=selected');
+    await page.getByRole('textbox',{name:'练习标题',exact:true}).fill('练习卷编排验收');
+    await page.getByRole('button',{name:'＋ 大标题',exact:true}).click();
+    await page.getByRole('textbox',{name:'大标题 1',exact:true}).fill('基础巩固');
+    await page.locator('.handout-draft').getByRole('button',{name:'从题库选题',exact:true}).click();
+    const search=page.getByRole('searchbox',{name:'搜索',exact:true});
+    await search.fill(questions[0].code);
+    await page.locator('.picker-item').click();
+    await page.getByRole('button',{name:'加入练习卷',exact:true}).click();
+    assert.equal(await page.locator('.basket-outline-section').first().locator('.basket-outline-question').count(),1);
+    await search.fill(questions[1].code);await page.locator('.picker-item').click();
+    await page.getByRole('button',{name:'快速排版',exact:true}).click();
+    await page.getByRole('button',{name:'← 组卷篮',exact:true}).click();
+    assert.equal(await search.inputValue(),questions[1].code);
+    assert.equal(await page.getByRole('button',{name:'✓ 已选',exact:true}).count(),1);
+    await page.getByRole('button',{name:'加入练习卷',exact:true}).click();
+    assert.equal(await page.locator('.basket-outline-section').first().locator('.basket-outline-question').count(),2);
+    await search.fill('');
+    step('target group placement and pending picker selection survive typeset return');
+    await page.getByRole('button',{name:'切换到试卷中心',exact:true}).click();
+    await page.getByRole('searchbox',{name:'搜索试卷',exact:true}).fill('练习卷整卷选题验收');
+    const paperRow = page.locator('.paper-row').filter({ has: page.locator(`a[href="/api/papers/${paper.id}?source=1"]`) });
+    await paperRow.getByRole('button',{name:'整卷选择',exact:true}).click();
+    await page.locator('.app-toast').filter({hasText:'已选中本卷'}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'加入练习卷',exact:true}).isDisabled(),true,'existing questions are not selected twice');
+    await paperRow.getByRole('button',{name:'练习卷整卷选题验收',exact:true}).click();
+    assert.equal(new URL(page.url()).searchParams.get('view'),'selected');
+    assert.equal(new URL(page.url()).searchParams.get('pickerView'),'paper');
+    await page.reload();await page.locator('.basket-editor').waitFor();
+    await page.getByRole('button',{name:'整卷选择',exact:true}).waitFor();
+    assert.equal(await page.locator('.handout-draft .handout-question').count(),2);
+    assert.equal(await page.locator('.picker-item .picker-taken').count(),2);
+    step('real paper browsing, whole-paper deduplication and picker URL survive reload inside the basket');
+    await page.locator('.picker-module-directory').getByText(lib.modules.find(m=>m.id===questions[2].moduleId).name,{exact:true}).click();
+    await page.getByRole('searchbox',{name:'搜索',exact:true}).fill(questions[2].code);
+    await page.locator('.picker-item').click();
+    await page.getByRole('button',{name:'加入练习卷',exact:true}).click();
+    const rows=page.locator('.handout-draft .handout-question');
+    const firstId=await rows.first().getAttribute('id'), secondId=await rows.nth(1).getAttribute('id');
+    await rows.first().getByRole('button',{name:/拖动第/}).dragTo(rows.nth(1),{targetPosition:{x:150,y:(await rows.nth(1).boundingBox()).height-5}});
+    assert.equal(await rows.first().getAttribute('id'),secondId);
+    assert.equal(await rows.nth(1).getAttribute('id'),firstId);
+    await rows.nth(1).getByRole('button',{name:/拖动第/}).dragTo(page.locator('.basket-outline-section').last().locator('header'));
+    assert.equal(await page.locator('.basket-outline-section').last().locator('.basket-outline-question').count(),2);
+    step('body handles reorder and move into the outline without duplicate IDs');
+    await page.locator('.handout-draft').evaluate(n=>n.scrollTo(0,0));
+    await search.fill('');
+    await page.screenshot({path:'artifacts/basket-verification/workspace-1680.png'});
+  }
   assert.deepEqual(result.pageErrors, []);
 } catch (error) {
   result.error = String(error);
