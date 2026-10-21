@@ -128,9 +128,9 @@ function BasketOutline({ structure, pool, disabled, activeId, onChange, onLocate
 
 // The basket owns placements and local persistence; the workspace, picker and
 // assessment rows are the same components used by handout quizzes and homework.
-export default function BasketEditor({ user, library, pool, structure, title, includeAnswers, disabled, exporting, status, onChange, onTitle, onAnswers, onLibrary, onBack, onTypeset, onWord, onGroupByType, onNotice }: {
-  user: AuthUser; library: LibraryData; pool: Question[]; structure: BasketStructure; title: string; includeAnswers: boolean; disabled: boolean; exporting: boolean; status: string;
-  onChange: Dispatch<SetStateAction<BasketStructure>>; onTitle: (title: string) => void; onAnswers: (include: boolean) => void; onLibrary: (library: LibraryData) => void; onBack: () => void; onTypeset: () => void; onWord: () => void; onGroupByType: () => void; onNotice: (message: string, tone?: "success" | "error") => void;
+export default function BasketEditor({ user, library, pool, structure, title, disabled, exporting, status, onChange, onTitle, onLibrary, onBack, onTypeset, onWord, onGroupByType, onNotice }: {
+  user: AuthUser; library: LibraryData; pool: Question[]; structure: BasketStructure; title: string; disabled: boolean; exporting: boolean; status: string;
+  onChange: Dispatch<SetStateAction<BasketStructure>>; onTitle: (title: string) => void; onLibrary: (library: LibraryData) => void; onBack: () => void; onTypeset: () => void; onWord: () => void; onGroupByType: () => void; onNotice: (message: string, tone?: "success" | "error") => void;
 }) {
   const [treeOpen, setTreeOpen] = useState(false);
   const workspace = useQuestionWorkspace("mathpilot-basket-panels", treeOpen);
@@ -196,7 +196,6 @@ export default function BasketEditor({ user, library, pool, structure, title, in
       <button className="handout-brand" onClick={onBack} aria-label="返回题库" title="返回题库"><BrandWordmark /></button>
       <span className="handout-location">组卷篮<span aria-hidden="true">/</span>练习卷</span>
       <span className="handout-save" role="status">{status}</span>
-      <label className="basket-answer"><input type="checkbox" checked={includeAnswers} disabled={disabled} onChange={event => onAnswers(event.target.checked)} />附带答案与解析</label>
       <button className="secondary" disabled={disabled || !count} onClick={onWord}>{exporting ? "正在生成…" : "生成 Word"}</button>
       <button className="primary-button" disabled={disabled || !count} onClick={onTypeset}>快速排版</button>
       <PaperMoreMenu label="练习卷更多操作"><button disabled={disabled || !ids.length && !structure.sections.length} onClick={() => onChange({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu>

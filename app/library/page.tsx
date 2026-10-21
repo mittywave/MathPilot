@@ -23,7 +23,7 @@ import { QuestionBody } from "../components/QuestionBody";
 import LibraryKnowledgeMap, { KnowledgeMapRail, type KnowledgeMapFocus } from "../components/knowledge-graph/LibraryKnowledgeMap";
 import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "../components/QuestionEntry";
 import { basketIds, basketQuestionTypes as questionTypes, basketSections, basketStorage, groupBasketByType, orderedBasketQuestions, restoreBasketDraft, selectBasketQuestions, type BasketDraft, type BasketStructure } from "../../lib/paper-basket";
-import { buildQuestionsWordBlob, buildWordBlob, downloadWordBlob } from "../../lib/export-word";
+import { buildWordBlob, downloadWordBlob } from "../../lib/export-word";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../lib/library-tree";
 import { authorizeDownload, createCloudCategory, createCloudModule, createStudent as createStudentProfile, deleteCloudCategory, deleteCloudModule, deleteCloudQuestion, deleteStudent as deleteStudentProfile, deleteWrongQuestion, fetchDeletedQuestions, fetchLibrary, fetchWrongQuestionCatalog, fetchMe, fetchStudents, fetchWrongQuestions, importCloudLibrary, loginPath, logout, reorderCloudModules, moveCloudCategory, restoreCloudQuestion, restoreWrongQuestion, saveStudentClass, deleteStudentClass, updateCloudModule, updateStudent as updateStudentProfile } from "../../lib/api-client";
 import { ALEVEL_PAGE_COPY, ALEVEL_PAGE_LOCALE_KEY, alevelPageLabel, alevelQuestionCount, isAlevel9709ModuleName, localizeAlevelTags, type AlevelPageLocale } from "../../lib/alevel-page-locale.mjs";
@@ -148,7 +148,6 @@ export default function Home() {
   const [categoryParent, setCategoryParent] = useState<string>("");
   const [isExporting, setIsExporting] = useState(false);
   const [paperTitle, setPaperTitle] = useState("专项练习");
-  const [includeAnswers, setIncludeAnswers] = useState(true);
   // 快速排版 from the basket takes the whole window. Closing it hands back the title and settings, so the next opening
   // starts where this one stopped; a question's own spacing is kept only while the same questions stay in the same order.
   const [typesetting, setTypesetting] = useState(false);
@@ -295,7 +294,7 @@ export default function Home() {
       // the draft's own snapshots join them rather than replace them.
       if (raw) {
         const { draft, missing } = restoreBasketDraft(raw, library);
-        setBasketStructure(draft.structure); setPaperTitle(draft.title); setIncludeAnswers(draft.includeAnswers);
+        setBasketStructure(draft.structure); setPaperTitle(draft.title);
         setBasketWrongQuestions((current) => [...draft.snapshots, ...current.filter((question) => !draft.snapshots.some((item) => item.id === question.id))]); setTypesetKept(draft.typeset);
         if (missing) show({ text: `草稿中 ${missing} 道已失效的题目已移除`, tone: "success" });
       } else {
@@ -312,7 +311,7 @@ export default function Home() {
   useEffect(() => {
     if (!authUser || draftOwner !== authUser.id || !draftCanSave) return;
     const owner = authUser.id;
-    const draft: BasketDraft = { version: 1, structure: basketStructure, title: paperTitle, includeAnswers, typeset: typesetKept,
+    const draft: BasketDraft = { version: 1, structure: basketStructure, title: paperTitle, includeAnswers: true, typeset: typesetKept,
       snapshots: basketWrongQuestions.filter((question) => selectedIds.includes(question.id) && !questions.some((item) => item.id === question.id)) };
     // Serialize atomic writes; a slow earlier save cannot overwrite a later edit.
     saveQueue.current = saveQueue.current.then(async () => {
@@ -327,7 +326,7 @@ export default function Home() {
         }
       }
     });
-  }, [authUser, draftOwner, draftCanSave, basketStructure, paperTitle, includeAnswers, typesetKept, basketWrongQuestions, selectedIds, questions, show]);
+  }, [authUser, draftOwner, draftCanSave, basketStructure, paperTitle, typesetKept, basketWrongQuestions, selectedIds, questions, show]);
 
   useEffect(() => {
     void (async () => {
@@ -680,7 +679,7 @@ export default function Home() {
 
 
   async function signOut() {
-    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setIncludeAnswers(true); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
+    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
     catch (error) { show({ text: error instanceof Error ? error.message : "退出失败", tone: "error" }); }
   }
 
@@ -806,7 +805,7 @@ export default function Home() {
       await authorizeDownload(selectedQuestions.map((question) => question.id));
       const title = paperTitle.trim() || "练习题";
       const sections = paperSections.filter((section) => section.questions.length).map((section) => ({ heading: section.heading || `试题（共${selectedQuestions.length}题）`, questions: section.questions }));
-      downloadWordBlob(basketStructure.sections.length ? await buildWordBlob({ title, sections, answers: includeAnswers ? "end" : "none", answerHeadings: true }) : await buildQuestionsWordBlob(selectedQuestions, title, includeAnswers, "basket"), `${title}.docx`);
+      downloadWordBlob(await buildWordBlob({ title, sections, answers: "end", answerHeadings: basketStructure.sections.length > 0, includeQuestionIds: false }), `${title}.docx`);
       show({ text: "Word 练习已生成", tone: "success" });
     }
     catch (error) { show({ text: error instanceof Error ? error.message : "下载失败", tone: "error" }); }
@@ -915,20 +914,20 @@ export default function Home() {
 
   const typesetIds = useMemo(() => orderedBasketQuestions(basketPool, selectedIds).map((question) => question.id).join(","), [basketPool, selectedIds]);
   const keepTypeset = useCallback((title: string, settings: TypesetSettings) => {
-    setPaperTitle(title); setIncludeAnswers(settings.answers !== "none"); setTypesetKept({ ids: typesetIds, settings });
+    setPaperTitle(title); setTypesetKept({ ids: typesetIds, settings });
   }, [typesetIds]);
   const directoryLabel = paperView === "papers" ? `${directoryOpen ? "收起" : "展开"}试卷目录` : pageLocale === "en" ? `${directoryOpen ? "Collapse" : "Expand"} knowledge directory` : `${directoryOpen ? "收起" : "展开"}知识点目录`;
   const typesetOverlay = typesetting ? <Suspense fallback={<div className="wrong-book-loading"><i></i><span>正在打开快速排版…</span></div>}><Typesetter basket={{
     questions: selectedQuestions, title: paperTitle,
     groups: basketStructure.sections.length ? paperSections.filter((section) => section.questions.length).map((section) => ({ title: section.heading, size: section.questions.length })) : undefined,
     groupMode: "sections",
-    settings: typesetKept ? { ...typesetKept.settings, ownRoom: typesetKept.ids === typesetIds ? typesetKept.settings.ownRoom : {} } : { answers: includeAnswers ? "end" : "none" },
+    settings: typesetKept ? { ...typesetKept.settings, ownRoom: typesetKept.ids === typesetIds ? typesetKept.settings.ownRoom : {} } : { answers: "end" },
     onChange: keepTypeset,
     onClose: (title, settings) => { keepTypeset(title, settings); setTypesetting(false); },
   }} /></Suspense> : null;
 
-  if (showSelected && !showWrongBook && authUser) return <>{toastNode}{confirmDialog}<div hidden={typesetting} inert={typesetting}><Suspense fallback={<div className="wrong-book-loading">正在打开组卷篮…</div>}><BasketEditor user={authUser} library={{ scope: "public", modules, categories, questions }} pool={basketPool} structure={basketStructure} title={paperTitle} includeAnswers={includeAnswers} disabled={basketBusy} exporting={isExporting} status={draftStatus}
-    onChange={setBasketStructure} onTitle={setPaperTitle} onAnswers={include => { setIncludeAnswers(include); setTypesetKept(current => current ? { ...current, settings: { ...current.settings, answers: include ? "end" : "none" } } : null); }}
+  if (showSelected && !showWrongBook && authUser) return <>{toastNode}{confirmDialog}<div hidden={typesetting} inert={typesetting}><Suspense fallback={<div className="wrong-book-loading">正在打开组卷篮…</div>}><BasketEditor user={authUser} library={{ scope: "public", modules, categories, questions }} pool={basketPool} structure={basketStructure} title={paperTitle} disabled={basketBusy} exporting={isExporting} status={draftStatus}
+    onChange={setBasketStructure} onTitle={setPaperTitle}
     onLibrary={data => { setModules(data.modules); setCategories(data.categories); setQuestions(data.questions); }} onBack={openLibrary}
     onTypeset={() => void openTypeset()} onWord={() => void generateWord()} onGroupByType={() => void classifyBasket()} onNotice={onNotice} /></Suspense></div>{typesetOverlay}</>;
 

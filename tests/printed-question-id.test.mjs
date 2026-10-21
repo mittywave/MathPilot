@@ -72,6 +72,22 @@ test("Word question lists print each question's ID after its number, a handout's
   const kept = { ...printed, id: "k", stemDocxXml: [starting("2．ID 0063").xml] };
   const again = await (await JSZip.loadAsync(await (await buildWordBlob({ title: "再导出", answers: "none", sections: [{ questions: [kept] }] })).arrayBuffer())).file("word/document.xml").async("string");
   assert.equal((again.match(/ID 0063/g) ?? []).length, 1);
+  // The basket's ID-free Word keeps both editable stems and re-imported paragraphs,
+  // including an old printed ID split across runs, without changing the source question.
+  const splitId = { ...printed, stemDocxXml: ['<w:p><w:r><w:t>7．I</w:t></w:r><w:r><w:t>D 00</w:t></w:r><w:r><w:t>63 求值</w:t></w:r></w:p>'] };
+  const textId = { ...plain, stem: "7．ID 1322 已知点 $A(2,4)$，求 $OA$" };
+  const withoutIds = await buildWordBlob({ title: "组卷篮", answers: "end", includeQuestionIds: false, sections: [
+    { questions: [plain, printed, headed, kept, splitId, textId].map((question) => ({ ...question, answer: "答案内容", analysis: "解析内容" })) },
+  ] });
+  const cleanXml = await (await JSZip.loadAsync(await withoutIds.arrayBuffer())).file("word/document.xml").async("string");
+  assert.equal(XMLValidator.validate(cleanXml), true);
+  const cleanText = Array.from(cleanXml.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g), (match) => match[1]).join("");
+  assert.doesNotMatch(cleanText, /ID\s*\d{4,7}/);
+  for (const start of ["1．已知点", "2．求值", "3．已知 2.5", "4．求值", "5．求值", "6．已知点"]) assert.ok(cleanText.includes(start), start);
+  assert.equal((cleanText.match(/答案内容/g) ?? []).length, 6);
+  assert.equal((cleanText.match(/解析内容/g) ?? []).length, 6);
+  assert.equal(plain.code, "1322");
+  assert.match(kept.stemDocxXml[0], /ID 0063/);
 });
 
 const user = { id: "u", email: "u@test", role: "admin" };

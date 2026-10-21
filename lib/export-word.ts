@@ -10,6 +10,7 @@ import { resolveWordImageSource } from "./word-image-source.mjs";
 import { standaloneWordQuestionImages } from "./word-question-images.mjs";
 import { questionImageForPrint } from "./vector-diagram-renderer";
 import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
+import { docxPrintedQuestionId } from "./docx-import-rules.mjs";
 import { parseHandoutNote, type NoteLine, type NoteSpan } from "./handout-note.mjs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, moduleHeading, questionPoints, type HandoutExportModule } from "./handout-rules.mjs";
 import type { Question } from "./types";
@@ -415,7 +416,7 @@ export function handoutWordSections(modules: HandoutExportModule[], answers: Wor
   return sections;
 }
 
-export async function buildWordBlob({ title, sections, answers, answerHeadings = false }: { title: string; sections: WordSection[]; answers: WordAnswerPlacement; answerHeadings?: boolean }) {
+export async function buildWordBlob({ title, sections, answers, answerHeadings = false, includeQuestionIds = true }: { title: string; sections: WordSection[]; answers: WordAnswerPlacement; answerHeadings?: boolean; includeQuestionIds?: boolean }) {
   const imageCache = new Map<string, Promise<ResolvedWordImage>>();
   const resolveImage = (source: string) => {
     let pending = imageCache.get(source);
@@ -500,10 +501,11 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       let label = String(number);
       if (part) { const count = (partCounters.get(part.key) ?? 0) + 1; partCounters.set(part.key, count); label = `${part.prefix ?? ""}${count}`; }
       rendered.push({ question, label, part, section });
-      // Question lists print each question's ID, as their PDF does; a 讲义's bands do not.
-      const code = !part && question.code?.trim() ? question.code.trim() : "";
+      // Basket Word exports omit IDs; other question lists and handout bands keep their own print rules.
+      const code = includeQuestionIds && !part && question.code?.trim() ? question.code.trim() : "";
       const source = question.source ? `（${question.source}）` : "";
       const stemParagraphs = (question.stemParagraphs?.length ? question.stemParagraphs : question.stem.split(/\r?\n/)).filter((line) => line.length > 0);
+      if (!includeQuestionIds && stemParagraphs.length) stemParagraphs[0] = docxPrintedQuestionId(stemParagraphs[0], "")?.text ?? stemParagraphs[0];
       const compactConclusion = isCompactConclusionQuestion(question);
       const images = await Promise.all(standaloneWordQuestionImages(question).map((source) => questionImageForPrint(question, source)));
       if (question.stemDocxXml?.length) {
@@ -614,6 +616,7 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       });
       // A paragraph that still shows an ID after its number (from a Word read back without removing it) keeps that one.
       const shownText = Array.from(safeParagraphXml.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g), (match) => match[1]).join("");
+      if (!includeQuestionIds && replacement.questionNumber != null) safeParagraphXml = docxPrintedQuestionId(shownText, safeParagraphXml)?.xml ?? safeParagraphXml;
       const questionCode = replacement.questionCode && !/^\s*(?:\d{1,3}(?:[．、]|\.(?!\d))\s*)?ID\s?\d{4,7}/.test(shownText) ? replacement.questionCode : "";
       if (replacement.questionNumber != null && questionCode) {
         // The number and the ID go in front in runs of their own; a number the stem was printed with is dropped, and the
