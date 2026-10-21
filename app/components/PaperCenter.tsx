@@ -64,6 +64,8 @@ export function PaperDirectory({folders,selected,onSelect,onChanged,user,onNotic
 export function PaperCenter({folderId,folders,refresh,user,modules,onOpen,onAdd,addLabel="加入组卷篮",onNotice,onFolders,onLibraryChanged,readOnly=false,searchQuery}:{folderId:string;folders:PaperFolder[];refresh:number;user:AuthUser|null;modules:LibraryModule[];onOpen:(id:string)=>void;onAdd?:(paper:PaperDetail)=>void|Promise<void>;addLabel?:string;onNotice:Notice;onFolders:(folders:PaperFolder[])=>void;onLibraryChanged:()=>void;readOnly?:boolean;searchQuery?:string}) {
   const [query,setQuery]=useState(""),[filters,setFilters]=useState({year:"",grade:"",examType:""}),[pagination,setPagination]=useState({key:"",offset:0}),[total,setTotal]=useState(0),[papers,setPapers]=useState<ExamPaper[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState("");
   const [facets,setFacets]=useState<Record<string,string[]>>({}),[editing,setEditing]=useState<ExamPaper|null>(null),[version,setVersion]=useState(0),[confirmNode,confirm]=useConfirm();
+  const [preparing,setPreparing]=useState<Record<string,string>>({});
+  const pending=useRef(new Set<string>());
   const prior=useRef(new Map<string,string>()),latestReady=useRef(onLibraryChanged);latestReady.current=onLibraryChanged;
   const moving=papers.some(p=>["queued","running"].includes(p.status)&&!p.stalled);
   const search=searchQuery??query;
@@ -78,7 +80,25 @@ export function PaperCenter({folderId,folders,refresh,user,modules,onOpen,onAdd,
     const timeout=setTimeout(()=>void fetchList(),180),timer=moving?setInterval(()=>void fetchList(),3000):undefined;
     return()=>{controller.abort();clearTimeout(timeout);clearInterval(timer);};
   },[folderId,search,filters,offset,refresh,version,moving,onFolders]);
-  async function action(paper:ExamPaper,action:"start"|"cancel"){try{await jobsApi(`/api/papers/${paper.id}`,patch({action}));setVersion(v=>v+1);}catch(e){onNotice(errorText(e),"error");}}
+  async function action(paper:ExamPaper,action:"start"|"cancel"){
+    if(pending.current.has(paper.id))return;
+    pending.current.add(paper.id);
+    const progress=(message:string)=>setPreparing(current=>({...current,[paper.id]:message}));
+    progress(action==="start"?"正在继续录入…":"正在取消…");
+    try{
+      if(action==="start"&&paper.status==="failed"&&/\.docx$/i.test(paper.fileName)){
+        const {draft}=await jobsApi<{draft:PaperDraft|null}>(`/api/papers/${paper.id}?draft=1`);
+        if(draft&&!draft.edited&&paperDraftIssues(draft).length){
+          progress("正在重新读取原始 Word…");
+          const source=await fetch(`/api/papers/${paper.id}?source=1`);
+          if(!source.ok)throw new Error("无法读取试卷原件，请稍后重试");
+          await preparePaperFile(new File([await source.blob()],paper.fileName),paper,progress);
+        }
+      }
+      await jobsApi(`/api/papers/${paper.id}`,patch({action}));setVersion(v=>v+1);
+    }catch(e){onNotice(errorText(e),"error");}
+    finally{pending.current.delete(paper.id);setPreparing(current=>{const next={...current};delete next[paper.id];return next;});}
+  }
   async function remove(paper:ExamPaper){if(!await confirm({title:`删除试卷「${paper.title}」`,body:"删除试卷及上传原件，已经入库的题目和永久 ID 会保留。",confirmLabel:"删除试卷",danger:true}))return;try{await jobsApi(`/api/papers/${paper.id}`,{method:"DELETE"});setVersion(v=>v+1);onNotice("试卷已删除，题库题目仍保留");}catch(e){onNotice(errorText(e),"error");}}
   async function add(paper:ExamPaper){try{const result=await jobsApi<{paper:PaperDetail}>(`/api/papers/${paper.id}`);await onAdd?.(result.paper);}catch(e){onNotice(errorText(e),"error");}}
   return <div className="paper-center">{(!readOnly||searchQuery===undefined)&&<div className="filters paper-filters">{searchQuery===undefined&&<label className="search"><span>⌕</span><input aria-label="搜索试卷" placeholder="搜索试卷标题…" value={query} onChange={e=>setQuery(e.target.value)}/></label>}
@@ -87,9 +107,9 @@ export function PaperCenter({folderId,folders,refresh,user,modules,onOpen,onAdd,
   {error&&<p role="alert" className="paper-error">{error}<button onClick={()=>setVersion(v=>v+1)}>重试</button></p>}
   {loading?<div className="wrong-book-loading">正在读取试卷…</div>:!papers.length?<div className="empty-state"><div>卷</div><h3>{search||Object.values(filters).some(Boolean)?"没有符合条件的试卷":"这里还没有试卷"}</h3><p>{user?"可在题库的试卷中心录入 Word 或 PDF。":"试卷收录后会显示在这里。"}</p></div>:<div className="paper-list">{papers.map(paper=><article className="paper-row" key={paper.id}>
     <div className="paper-row-main"><h2><button disabled={paper.status!=="done"} onClick={()=>onOpen(paper.id)}>{paper.title}</button></h2><div className="paper-row-meta">{[paper.metadata.year,paper.metadata.school||paper.metadata.district,`${paper.metadata.grade}${paper.metadata.term?`（${paper.metadata.term}）`:""}`,paper.metadata.examType,paper.status==="done"?`${paper.questionCount} 题`:""].filter(Boolean).map((label,i)=><span key={`${i}-${label}`}>{label}</span>)}<span>{new Date(paper.createdAt).toLocaleDateString("zh-CN")} 录入</span></div>
-      {paper.status!=="done"&&<p className={`paper-job-state ${paper.error||paper.stalled?"error":""}`} role="status">{paper.stalled?"处理已中断，可从断点继续":paper.error||paper.progress||({uploading:"上传尚未完成，请重新选择原文件继续",queued:"等待识别…",running:"正在识别与归类…",failed:"录入未完成"} as Record<string,string>)[paper.status]}</p>}
+      {paper.status!=="done"&&<p className={`paper-job-state ${paper.error||paper.stalled?"error":""}`} role="status">{preparing[paper.id]||(paper.stalled?"处理已中断，可从断点继续":paper.error||paper.progress||({uploading:"上传尚未完成，请重新选择原文件继续",queued:"等待识别…",running:"正在识别与归类…",failed:"录入未完成"} as Record<string,string>)[paper.status])}</p>}
     </div><div className="paper-row-actions">
-      {paper.status==="done"?<><button onClick={()=>onOpen(paper.id)}>查看</button>{user&&onAdd&&<button onClick={()=>void add(paper)}>{addLabel}</button>}</>:user&&!readOnly&&<>{(paper.status==="failed"||paper.stalled)&&<><button onClick={()=>void action(paper,"start")}>继续</button><button onClick={()=>setEditing(paper)}>修正</button></>}{["queued","running"].includes(paper.status)&&!paper.stalled&&<button onClick={()=>void action(paper,"cancel")}>取消</button>}</>}
+      {paper.status==="done"?<><button onClick={()=>onOpen(paper.id)}>查看</button>{user&&onAdd&&<button onClick={()=>void add(paper)}>{addLabel}</button>}</>:user&&!readOnly&&<>{(paper.status==="failed"||paper.stalled)&&<><button disabled={Boolean(preparing[paper.id])} onClick={()=>void action(paper,"start")}>{preparing[paper.id]?"准备中…":"继续"}</button><button disabled={Boolean(preparing[paper.id])} onClick={()=>setEditing(paper)}>修正</button></>}{["queued","running"].includes(paper.status)&&!paper.stalled&&<button onClick={()=>void action(paper,"cancel")}>取消</button>}</>}
       {user&&<><a href={`/api/papers/${paper.id}?source=1`}>下载原件</a>{!readOnly&&<PaperMoreMenu portal label={`${paper.title}操作`}>{paper.status==="done"&&<button onClick={()=>setEditing(paper)}>编辑信息 / 移动</button>}{user.role==="admin"&&<button className="danger-text" onClick={()=>void remove(paper)}>删除试卷</button>}</PaperMoreMenu>}</>}
     </div></article>)}</div>}
     {total>40&&<div className="paper-pagination"><button disabled={!offset} onClick={()=>setOffset(n=>Math.max(0,n-40))}>上一页</button><span>{Math.floor(offset/40)+1} / {Math.ceil(total/40)}</span><button disabled={offset+40>=total} onClick={()=>setOffset(n=>n+40)}>下一页</button></div>}
@@ -103,6 +123,25 @@ function MetadataFields({metadata,onChange,modules}:{metadata:PaperMetadata;onCh
     {metadata.kind==="custom"&&<label>题库模块<select value={metadata.moduleId} onChange={e=>onChange({...metadata,moduleId:e.target.value})}><option value="">请选择</option>{modules.map(m=><option value={m.id} key={m.id}>{m.name}</option>)}</select></label>}
   </div>;
 }
+// Uploads and recovery of unedited Word drafts must read the same source structure.
+async function preparePaperFile(file:File,paper:ExamPaper,onProgress:(message:string)=>void) {
+    const {renderImportFile,structuredDocxQuestions}=await import("../../lib/file-import");
+    const {contentFingerprint}=await import("../../lib/content-fingerprint.mjs");
+    const pages=/\.docx$/i.test(file.name)?await renderImportFile(file,(current,total)=>onProgress(`正在读取 Word ${current}/${total} 页…`)):[];
+    const structured=structuredDocxQuestions(pages);
+    if(structured.length){
+      const sourceQuestions=pages.find(page=>page.sourceQuestions?.length)?.sourceQuestions??[];
+      const firstLine=pages[0]?.textHint?.split(/\n/).find(line=>/试卷|考试|(?:数学|期中|期末).*卷/.test(line)&&!/^\s*\d+[.、]/.test(line))?.trim();
+      const draft:PaperDraft={title:firstLine?.slice(0,200)||paper.title,metadata:{...emptyPaperMetadata(),...paper.metadata},edited:false,issues:[],questions:structured.map(({questionNumber,warnings,...q},index)=>({number:questionNumber,section:sourceQuestions[index]?.section||q.type,page:q.sourcePage,categoryPath:[],warnings,question:{...q,id:"",moduleId:"",categoryId:"",difficulty:"中等",source:paper.title,createdAt:0,updatedAt:0,answer:q.answer==="见解析"&&!q.analysis?"":q.answer}}))};
+      onProgress(`已读取 ${structured.length} 道题，正在提交后台归类…`);await jobsApi(`/api/papers/${paper.id}`,patch({action:"prepare",draft}));
+    }else{
+      let count=0;const uploadPage=async(page:{image:string;page:number;textHint?:string;documentSection?:"questions"|"answers"})=>{count++;onProgress(`正在上传第 ${count} 页，请暂时保持窗口打开…`);await uploadJobPage(paper.jobId!,{...page,id:`paper-page-${page.page}`,name:file.name,hash:await contentFingerprint(page.image)},`/api/papers/${paper.id}`);};
+      if(pages.length){for(const page of pages)await uploadPage({image:page.image,page:page.pageNumber,textHint:page.textHint,documentSection:page.documentSection});}
+      else{const {readStudioFilesInBatches}=await import("../../lib/answer-studio-images");await readStudioFilesInBatches([file],"question","",onProgress,async batch=>{for(const page of batch)await uploadPage(page);});}
+      if(!count)throw new Error("文件中没有可识别的页面");
+    }
+}
+
 export function PaperImportDialog({folders,modules,onClose,onUploaded,onNotice}:{folders:PaperFolder[];modules:LibraryModule[];onClose:()=>void;onUploaded:(folder:string)=>void;onNotice:Notice}) {
   const [file,setFile]=useState<File|null>(null),[folder,setFolder]=useState(""),[moduleId,setModule]=useState(""),[busy,setBusy]=useState(false),[progress,setProgress]=useState(""),[error,setError]=useState(""),[dragging,setDragging]=useState(false);
   const dialogRef=usePaperDialog(true,onClose,busy);
@@ -119,21 +158,7 @@ export function PaperImportDialog({folders,modules,onClose,onUploaded,onNotice}:
     setProgress("正在保存试卷原文件…");
     const result=await jobsApi<{paper:ExamPaper;existing:boolean}>(`/api/papers?${new URLSearchParams({fileName:file.name,folder,moduleId})}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});
     if(result.existing&&result.paper.status!=="uploading"){onNotice(result.paper.status==="done"?"这份文件已经收录，已保留原试卷和 ID":"这份文件已有录入任务，可在试卷列表继续");onUploaded(result.paper.folderId);onClose();return;}
-    const {renderImportFile,structuredDocxQuestions}=await import("../../lib/file-import");
-    const {contentFingerprint}=await import("../../lib/content-fingerprint.mjs");
-    const pages=/\.docx$/i.test(file.name)?await renderImportFile(file,(current,total)=>setProgress(`正在读取 Word ${current}/${total} 页…`)):[];
-    const structured=structuredDocxQuestions(pages);
-    if(structured.length){
-      const sourceQuestions=pages.find(page=>page.sourceQuestions?.length)?.sourceQuestions??[];
-      const firstLine=pages[0]?.textHint?.split(/\n/).find(line=>/试卷|考试|(?:数学|期中|期末).*卷/.test(line)&&!/^\s*\d+[.、]/.test(line))?.trim();
-      const draft:PaperDraft={title:firstLine?.slice(0,200)||result.paper.title,metadata:{...emptyPaperMetadata(),...(moduleId?{kind:"custom" as const,moduleId}:{})},issues:[],questions:structured.map(({questionNumber,warnings,...q},index)=>({number:questionNumber,section:sourceQuestions[index]?.section||q.type,page:q.sourcePage,categoryPath:[],warnings,question:{...q,id:"",moduleId:"",categoryId:"",difficulty:"中等",source:result.paper.title,createdAt:0,updatedAt:0,answer:q.answer==="见解析"&&!q.analysis?"":q.answer}}))};
-      setProgress(`已读取 ${structured.length} 道题，正在提交后台归类…`);await jobsApi(`/api/papers/${result.paper.id}`,patch({action:"prepare",draft}));
-    }else{
-      let count=0;const uploadPage=async(page:{image:string;page:number;textHint?:string;documentSection?:"questions"|"answers"})=>{count++;setProgress(`正在上传第 ${count} 页，请暂时保持窗口打开…`);await uploadJobPage(result.paper.jobId!,{...page,id:`paper-page-${page.page}`,name:file.name,hash:await contentFingerprint(page.image)},`/api/papers/${result.paper.id}`);};
-      if(pages.length){for(const page of pages)await uploadPage({image:page.image,page:page.pageNumber,textHint:page.textHint,documentSection:page.documentSection});}
-      else{const {readStudioFilesInBatches}=await import("../../lib/answer-studio-images");await readStudioFilesInBatches([file],"question","",setProgress,async batch=>{for(const page of batch)await uploadPage(page);});}
-      if(!count)throw new Error("文件中没有可识别的页面");
-    }
+    await preparePaperFile(file,result.paper,setProgress);
     await jobsApi(`/api/papers/${result.paper.id}`,patch({action:"start"}));onNotice("试卷已转入后台，识别完整后会自动入库");onUploaded(folder?result.paper.folderId:"");onClose();
   }catch(e){setError(errorText(e));}finally{setBusy(false);}}
   return <div className="modal-backdrop"><section ref={dialogRef} tabIndex={-1} className="modal paper-import-dialog" role="dialog" aria-modal="true" aria-label="录入整套试卷"
@@ -166,7 +191,7 @@ function PaperEditor({paper,folders,modules,onClose,onSaved,onNotice}:{paper:Exa
   useEffect(()=>{if(paper.status==="done")return;let live=true;void jobsApi<{draft:PaperDraft|null}>(`/api/papers/${paper.id}?draft=1`).then(result=>{if(live){setDraft(result.draft);if(result.draft){setTitle(result.draft.title);setMetadata(result.draft.metadata);}}}).catch(e=>{if(live)setError(errorText(e));}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[paper.id,paper.status]);
   const dialogRef=usePaperDialog(true,onClose,busy);
   function itemChange(index:number,changes:Partial<PaperDraft["questions"][number]>){setDraft(current=>current?{...current,classified:false,questions:current.questions.map((q,i)=>i===index?{...q,...changes}:q)}:null);}
-  async function save(){setBusy(true);setError("");try{await jobsApi(`/api/papers/${paper.id}`,patch({title,folderId:folder,metadata}));if(draft){const updated={...draft,title,metadata};const issues=paperDraftIssues(updated);if(issues.length)throw new Error(issues.slice(0,5).join("；"));await jobsApi(`/api/papers/${paper.id}`,patch({action:"prepare",draft:updated}));await jobsApi(`/api/papers/${paper.id}`,patch({action:"start"}));}onNotice(draft?"修正已保存，正在继续入库":"试卷信息已更新");onSaved();}catch(e){setError(errorText(e));}finally{setBusy(false);}}
+  async function save(){setBusy(true);setError("");try{await jobsApi(`/api/papers/${paper.id}`,patch({title,folderId:folder,metadata}));if(draft){const updated={...draft,title,metadata,edited:true};const issues=paperDraftIssues(updated);if(issues.length)throw new Error(issues.slice(0,5).join("；"));await jobsApi(`/api/papers/${paper.id}`,patch({action:"prepare",draft:updated}));await jobsApi(`/api/papers/${paper.id}`,patch({action:"start"}));}onNotice(draft?"修正已保存，正在继续入库":"试卷信息已更新");onSaved();}catch(e){setError(errorText(e));}finally{setBusy(false);}}
   return <div className="modal-backdrop"><section ref={dialogRef} tabIndex={-1} className={`modal paper-editor${draft?" with-questions":""}`} role="dialog" aria-modal="true" aria-label="编辑试卷"><div className="modal-head"><h2>{paper.status==="done"?"编辑试卷信息":"修正试卷"}</h2><button className="close" aria-label="关闭编辑" disabled={busy} onClick={onClose}>×</button></div>
     <label className="field">试卷标题<input value={title} onChange={e=>setTitle(e.target.value)}/></label><label className="field">文件夹<select value={folder} onChange={e=>setFolder(e.target.value)}><option value="">自动按试卷标题归档</option>{folders.map(f=><option key={f.id} value={f.id}>{paperFolderPath(folders,f.id)}</option>)}</select></label>
     <MetadataFields metadata={metadata} modules={modules} onChange={setMetadata}/>

@@ -120,3 +120,12 @@ test("numeric enumeration in a solution is not a question boundary", () => {
   assert.deepEqual(docxNumberedQuestion("7. 2025+2026 的结果"), {number:"7",stem:"2025+2026 的结果"});
   assert.equal(docxNumberedQuestion("0.71x=2"), null);
 });
+
+test("a parenthesized choice type opens its own numbered question without changing the following type", () => {
+  for (const prefix of ["（多选）", "(多选题)", "【多项选择题】", "（ 多项选择 ）"]) {
+    assert.deepEqual(docxNumberedQuestion(`${prefix} 8．已知三角形的三边。`), {number:"8",stem:"已知三角形的三边。",type:"多选题"});
+  }
+  assert.deepEqual(docxNumberedQuestion("（单选）10、求余式"), {number:"10",stem:"求余式",type:"单选题"});
+  assert.deepEqual(docxNumberedQuestion("11．普通题"), {number:"11",stem:"普通题"});
+  for (const value of ["（1）计算", "（多选）0.71x=2", "（备注）8．文字", "设（多选）8．文字"]) assert.equal(docxNumberedQuestion(value), null);
+});

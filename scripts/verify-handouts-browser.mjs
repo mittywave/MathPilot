@@ -40,10 +40,11 @@ async function wordFixture(png) {
   const doc = new Document({ sections: [{ children: [
     p(t('Word 回归试卷')),
     p(t('一、选择题')),
-    p(t('1．方程 '), new WordMath({ children: [new MathFraction({ numerator: [new MathRun('x')], denominator: [new MathRun('2')] }), new MathRun('=3')] }), t(' 的解是（　　）')),
-    p(t('A．x=3　　B．x=6　　C．x=5　　D．x=1')),
+    p(t('（多'), t('选）'), t('1．方程 '), new WordMath({ children: [new MathFraction({ numerator: [new MathRun('x')], denominator: [new MathRun('2')] }), new MathRun('=3')] }), t(' 的解满足（　　）')),
+    p(t('A．x=3　　B．x=6　　C．x=5　　D．2x=12')),
     p(t('二、解答题')),
     p(t('2．根据下表和图形，列方程求 a 的值，并求 '), new WordMath({ children: [new MathRadical({ children: [new MathRun('4')] })] }), t(' 的值。')),
+    p(t('声明：本资料著作权归出题人所有。')),
     p(t('0.5b=4，请继续求 b 的值。')),
     new Table({ width: { size: 4000, type: WidthType.DXA }, rows: [
       new TableRow({ children: [new TableCell({ children: [p(t('月份'))] }), new TableCell({ children: [p(t('销量'))] })] }),
@@ -51,7 +52,7 @@ async function wordFixture(png) {
     ] }),
     new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ type: 'png', data: png, transformation: { width: 160, height: 100 } })] }),
     p(t('参考答案与试题解析')),
-    p(t('1．')), p(t('【分析】去分母。')), p(t('【解答】解：x=6，故选：B．')), p(t('【点评】本题考查一元一次方程。')),
+    p(t('（多选）1．')), p(t('【分析】去分母。')), p(t('【解答】解：x=6，故选：B、D．')), p(t('【点评】本题考查一元一次方程。')),
     p(t('2．')), p(t('【分析】由表格列方程。')), p(t('【解答】解：a+12=20，a=8．')), p(t('0.5b=4，')), p(t('解得：b=8。')), p(t('【点评】本题考查列方程。')),
   ] }] });
   const zip = await JSZip.loadAsync(await Packer.toBuffer(doc));
@@ -119,7 +120,14 @@ async function verifyTemporaryLibrary() {
   assert.equal((await api('/api/library')).questions.length, 0, 'temporary import does not create formal questions');
   assert.equal((await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions.length, 2, 'retry is idempotent');
   const imported = (await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions;
+  assert.equal(imported[0].type, '多选题');
+  assert.equal(imported[0].answer, 'BD', 'all choice letters survive answer-section pairing');
+  assert.match(imported[0].stem, /^（多选）/);
+  assert.match(imported[0].stemDocxXml.join(''), />1．（多选）</);
+  assert.doesNotMatch(imported[0].stemDocxXml.join(''), />（多<|>选）</);
+  assert.equal(imported[1].type, '解答题', 'a per-question label never leaks to the following section');
   assert.match(imported[1].stem, /0\.5b=4/);
+  assert.doesNotMatch(imported[1].stem, /声明|著作权/, 'a repeated copyright footer never interrupts a continued question');
   assert.match(imported[1].analysis, /0\.5b=4，[\s\S]*解得：b=8。[\s\S]*【点评】/, 'decimal-leading lines never truncate the original analysis');
   assert.ok(await cards.first().locator('.katex').count() > 0);
   assert.ok(await cards.nth(1).locator('table').count() > 0);
@@ -162,6 +170,7 @@ async function verifyTemporaryLibrary() {
   await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).click();
   await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).waitFor();
   await page.unroute('**/api/questions');
+  await page.locator('.app-toast.error .toast-close').click();
   await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).click();
   await cards.first().getByText('已存入正式题库', { exact: true }).waitFor();
   assert.equal((await api('/api/library')).questions.length, 1);
@@ -498,6 +507,7 @@ try {
   // One shared library: 5 seeded + the one seeded as public + the typed question + 2 imported.
   assert.equal(bankAfterImport.questions.length, 9);
   assert.ok(bankAfterImport.questions.some(q => q.stemDocxXml?.some(x => x.includes('<w:tbl'))), 'Word table structure kept');
+  assert.ok(bankAfterImport.questions.some(q => q.type === '多选题' && q.answer === 'BD' && q.options.length === 4), 'prefixed choice question and complete answer saved');
   step('题库 文件批量录入: Word fixture split into 2 questions and saved with table structure');
 
   // ---- 讲义编撰：每个知识模块 = 知识点 → 例题 → 练习 → 变式 ----

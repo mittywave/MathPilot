@@ -144,6 +144,18 @@ test("paper completeness rejects repeated numbers, gaps, missing stems and incom
  const f=await fixture();try{let d=draft([question(),question()]);d.questions[1].number="1";assert.match(f.rules.paperDraftIssues(d).join(' '),/重复/);d.questions[1].number="3";assert.match(f.rules.paperDraftIssues(d).join(' '),/不连续/);d.questions[1].number="2";d.questions[1].incomplete=true;assert.match(f.rules.paperDraftIssues(d).join(' '),/跨页/);d.questions[1].incomplete=false;d.expectedCount=3;assert.match(f.rules.paperDraftIssues(d).join(' '),/原卷标注/);
  }finally{f.sqlite.close();}
 });
+
+test("reparsing a failed Word draft stays automatic while a correction stays edited",async()=>{
+ const f=await fixture();try{
+  f.paper("retry");f.sqlite.prepare("UPDATE studio_jobs SET status='failed' WHERE id='job-retry'").run();
+  await f.api.preparePaperDraft("retry",{...draft([question()]),edited:false});
+  assert.equal((await f.api.readPaperDraft("retry")).edited,false);
+  await f.api.preparePaperDraft("retry",{...draft([question()]),edited:true});
+  assert.equal((await f.api.readPaperDraft("retry")).edited,true);
+  await f.api.preparePaperDraft("retry",draft([question()]));
+  assert.equal((await f.api.readPaperDraft("retry")).edited,true,"legacy corrections are still protected");
+ }finally{f.sqlite.close();}
+});
 test("page checkpoints join a continued question and pair the original numbered answer without publishing partial rows",async()=>{
  const f=await fixture();try{f.paper("pdf");const base={...question(),question_number:"1",section:"一、填空题",continuation:false,incomplete:true,tags:[],warnings:[],confidence:1,diagram_bbox:null,options_bbox:null};const source={version:1,fileName:"试卷.pdf",categories:[],notes:[],pages:[{id:"p1",page:1,name:"p1",hash:"1"},{id:"p2",page:2,name:"p2",hash:"2"}],results:{p1:{result:{title:"七年级试卷",expected_count:1,questions:[{...base,stem:"已知一个整数",answer:""}],answers:[]}},p2:{result:{title:"",expected_count:0,questions:[{...base,stem:"比 3 大 2，求该整数。",answer:"",continuation:true,incomplete:false}],answers:[{question_number:"1",section:"参考答案",answer:"5",analysis:"",continuation:false}]}}}};
  let failure;try{await f.api.runPaperImport("pdf","job-pdf","run-1",source,{signal:new AbortController().signal,touch:async()=>{},checkpoint:async()=>{},boundary:()=>{},image:async()=>new ArrayBuffer(0),recognize:async()=>{throw Error("cached pages must not be re-read");}});}catch(e){failure=e;}

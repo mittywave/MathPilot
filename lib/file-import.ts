@@ -160,6 +160,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
   let currentType: QuestionType | null = null; let currentQuestion: ParsedQuestion | null = null;
   for (let index = 0; index < questionEnd; index += 1) {
     const block = blocks[index];
+    if (/^声明[：:].*著作权/.test(block.text)) continue;
     // A 讲义 heading (“例题精练 1”) opens a question whose stem is in the paragraphs below it.
     const heading = block.kind === "p" ? docxQuestionHeading(block.text, block.xml) : null;
     if (heading) { currentQuestion = parsedQuestion(`${heading.label} ${heading.number}`, "解答题", "", true, []); questions.push(currentQuestion); continue; }
@@ -168,8 +169,24 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     if (index > 0 && block.text === blocks[0]?.text) continue;
     if (currentQuestion?.heading && block.kind === "p" && docxTitleLine(block.text, block.xml)) { currentQuestion = null; continue; }
     const numberMatch = block.kind === "p" && !currentQuestion?.heading ? docxNumberedQuestion(block.text) : null;
-    if (numberMatch && currentType) {
-      currentQuestion = parsedQuestion(numberMatch.number, currentType, numberMatch.stem, false, [block]);
+    if (numberMatch && (currentType || numberMatch.type)) {
+      // Put the number before its type label so all existing renderers can renumber it.
+      // Keep the label in the printed stem; equations, formatting and pictures stay intact.
+      if (numberMatch.type) {
+        const runs = Array.from(block.xml.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g), match => match[1]).join("");
+        const prefix = runs.indexOf(numberMatch.number);
+        let remaining = prefix + (runs.slice(prefix).match(/^\d{1,3}[.．、]\s*/)?.[0].length ?? 0);
+        block.xml = block.xml.replace(/(<w:t\b[^>]*>)([^<]*)(<\/w:t>)/g, (whole, open, value, close) => {
+          if (remaining <= 0) return whole;
+          const removed = Math.min(remaining, value.length); remaining -= removed;
+          return `${open}${value.slice(removed)}${close}`;
+        });
+        const label = `（${numberMatch.type === "多选题" ? "多选" : "单选"}）`;
+        block.xml = block.xml.replace(/<w:r\b/, `<w:r><w:t>${numberMatch.number}．${label}</w:t></w:r><w:r`);
+        numberMatch.stem = label + numberMatch.stem;
+        block.text = `${numberMatch.number}．${numberMatch.stem}`;
+      }
+      currentQuestion = parsedQuestion(numberMatch.number, numberMatch.type ?? currentType!, numberMatch.stem, false, [block]);
       if (block.printedId) currentQuestion.code = block.printedId;
       questions.push(currentQuestion); continue;
     }
@@ -212,7 +229,7 @@ async function extractDocxParagraphs(buffer: ArrayBuffer) {
     const numberMatch = block.kind === "p" ? docxNumberedQuestion(paragraph) : null;
     const number = numberMatch?.number;
     if (number) { currentNumber = number; collectingAnalysis = false; repeatedQuestionText[number] = numberMatch?.stem ?? ""; }
-    const choice = paragraph.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F])(?=[。．，、\s]|$)/i)?.[1].toUpperCase();
+    const choice = paragraph.match(/(?:故选|答案(?:为)?)[：:]?\s*([A-F](?:[\s、，,]*[A-F])*)(?=[。．，、\s]|$)/i)?.[1].replace(/[\s、，,]/g, "").toUpperCase();
     if (currentNumber && choice) answers[currentNumber] = choice;
     if (/^【(?:分析|解答|点评)】/.test(paragraph)) collectingAnalysis = true;
     if (currentNumber && collectingAnalysis) {

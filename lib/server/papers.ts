@@ -118,7 +118,7 @@ export async function preparePaperDraft(id:string,raw:unknown) {
     item.number=clean(item.number,40);item.section=clean(item.section);item.page=Math.max(0,Number(item.page)||0);item.warnings=Array.isArray(item.warnings)?item.warnings.map(w=>clean(w,500)):[];}
   draft.title=clean(draft.title)||row.title;draft.metadata=paperMetadata({...draft.metadata,autoFolder:paperMetadata(JSON.parse(row.metadata_json)).autoFolder});draft.issues=Array.isArray(draft.issues)?draft.issues.map(i=>clean(i,500)):[];
   if(new TextEncoder().encode(JSON.stringify(draft)).byteLength>45*1024*1024)throw fail("试卷草稿过大，请缩小图片后重试",413);
-  draft.edited = row.status === "failed";
+  draft.edited = row.status === "failed" && draft.edited !== false;
   await writePaperDraft(id,draft);
 }
 export async function updatePaper(id:string,raw:{action?:string;draft?:unknown;title?:unknown;folderId?:unknown;metadata?:unknown}) {
