@@ -189,7 +189,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </div>
         <div className="picker-directory-face paper-directory-face paper-directory-back" inert={!papersOpen} aria-hidden={!papersOpen}>
           <header><h2>试卷</h2><button type="button" className="paper-view-toggle" title="翻转到模块题库" aria-label="切换到模块题库" disabled={paperFlipping} onClick={() => navigatePapers("modules")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起试卷目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header>
-          <PaperDirectory folders={paperFolders} selected={paperLocation.folder} user={user} onSelect={id => navigatePapers("papers", "", id)} onChanged={() => setPaperRefresh(value => value + 1)} onNotice={onNotice} />
+          <PaperDirectory readOnly folders={paperFolders} selected={paperLocation.folder} user={user} onSelect={id => navigatePapers("papers", "", id)} onChanged={() => setPaperRefresh(value => value + 1)} onNotice={onNotice} />
         </div>
       </div>
     </aside>
@@ -218,7 +218,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </>}
       </div>
       <div className="picker-results" ref={resultsPane}>
-      {paperVisited && <div className="picker-paper-center" hidden={!papersOpen} inert={!papersOpen}><PaperCenter folderId={paperLocation.folder} folders={paperFolders} refresh={paperRefresh} user={user} modules={modules} onOpen={id => navigatePapers("paper", id)} onAdd={replacing ? undefined : selectPaper} addLabel="整卷选择" onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={() => void onLibraryChanged().catch(error => onNotice(error instanceof Error ? error.message : "题库更新失败", "error"))} /></div>}
+      {paperVisited && <div className="picker-paper-center" hidden={!papersOpen} inert={!papersOpen}><PaperCenter readOnly folderId={paperLocation.folder} folders={paperFolders} refresh={paperRefresh} user={user} modules={modules} onOpen={id => navigatePapers("paper", id)} onAdd={replacing ? undefined : selectPaper} addLabel="整卷选择" onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={() => void onLibraryChanged().catch(error => onNotice(error instanceof Error ? error.message : "题库更新失败", "error"))} /></div>}
       {paperOpen && <header className="paper-detail-header"><button className="text-button" onClick={() => navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper && <div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{!replacing && <button onClick={() => void selectPaper(activePaper)}>整卷选择</button>}<a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></div>}</header>}
       {!temporary && paperError && <p className="paper-error" role="alert">{paperError}<button onClick={() => setPaperRefresh(value => value + 1)}>重试</button></p>}
       {!temporary && !papersOpen && !paperOpen && paperLocation.returnId && <div className="paper-return"><button className="text-button" onClick={() => navigatePapers("paper", paperLocation.returnId)}>← 返回刚才的试卷</button></div>}
