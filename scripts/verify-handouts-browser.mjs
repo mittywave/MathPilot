@@ -461,8 +461,7 @@ try {
   await modal.getByLabel('答案', { exact: true }).fill('$x=4$');
   await modal.getByRole('textbox', { name: '解析', exact: true }).fill('两边减 1，再乘 2。');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
-    await modal.waitFor({ state: 'hidden' });
+  await modal.waitFor({ state: 'hidden' });
   const bankCard = page.locator('.question-card', { hasText: '题库回归' });
   await bankCard.waitFor();
   assert.ok(await bankCard.locator('.katex').count() > 0, 'formula renders as web math');
@@ -475,8 +474,7 @@ try {
   await modal.locator('input[type=file][multiple]').setInputFiles(join(out, 'diagram.png'));
   await modal.locator('.manual-image-grid img').waitFor();
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
-    await modal.waitFor({ state: 'hidden' });
+  await modal.waitFor({ state: 'hidden' });
   const editedCard = page.locator('.question-card', { hasText: '题库回归（已编辑）' });
   await editedCard.waitFor();
   assert.equal(await editedCard.locator('img.question-diagram').count(), 1, 'a figure added while editing is kept');
@@ -496,8 +494,7 @@ try {
   await modal.locator('.diagram-review img').waitFor();
   assert.match(await modal.locator('.source-status b').innerText(), /识别可信度 92%/);
   await modal.getByRole('button', { name: '取消', exact: true }).click();
-  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
-    await modal.waitFor({ state: 'hidden' });
+  await modal.waitFor({ state: 'hidden' });
   await page.unroute('**/api/recognize');
   step('题库 AI 截图录入: a dropped screenshot goes through the shared path and its diagram is cropped');
   await page.getByRole('button', { name: /新建试题/ }).first().click();
@@ -522,7 +519,7 @@ try {
   await nav.getByRole('link', { name: '讲义编撰', exact: true }).waitFor();
   assert.deepEqual(await nav.locator('.nav-item').allInnerTexts(), ['题库', '组卷篮', '讲义编撰', '知识图谱', '学生档案', '工具箱']);
   const tools = await page.locator('.tool-card strong').allInnerTexts();
-  assert.deepEqual(tools, ['作业批改', '文件转录', '快速排版', '智能组卷', 'AI 配置', '共享办公']);
+  assert.deepEqual(tools, ['文件转录', '快速排版', '智能组卷', 'AI 配置', '共享办公']);
   assert.ok(!tools.includes('讲义编撰') && !tools.includes('知识图谱'), 'top-bar entries are not toolbox cards');
   await page.locator('.topbar').screenshot({ path: join(out, 'site-header.png') });
   await nav.getByRole('link', { name: '讲义编撰', exact: true }).click();
@@ -627,8 +624,7 @@ try {
   await modal.getByLabel('答案', { exact: true }).fill('9');
   await modal.locator('label.field', { hasText: '知识点标签' }).locator('input').fill('列方程，等量关系');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
-    await modal.waitFor({ state: 'hidden' });
+  await modal.waitFor({ state: 'hidden' });
   await saved();
   assert.deepEqual(await labels(lane(1, 'example')), ['例3.'], '例题 number on across modules');
   assert.deepEqual(await lane(1, 'example').locator('.handout-points b').allInnerTexts(), ['列方程', '等量关系']);
@@ -704,8 +700,7 @@ try {
   await modal.waitFor();
   await modal.locator('label.field', { hasText: '知识点标签' }).locator('input').fill('一元一次方程，移项');
   await modal.getByRole('button', { name: '确认并保存', exact: true }).click();
-  await modal.getByRole('button', { name: '← 讲义编辑', exact: true }).click();
-    await modal.waitFor({ state: 'hidden' });
+  await modal.waitFor({ state: 'hidden' });
   await lane(0, 'practice').locator('.handout-question').first().locator('.handout-points b', { hasText: '一元一次方程' }).waitFor();
   assert.ok((await api('/api/library')).questions.find(q => q.id === 'seed-1').tags.includes('移项'), 'tags are saved on the library question');
   step('讲义 考点: an untagged question opens the shared editor from 「未标知识点 · 补充」; its tags become 考点 chips');

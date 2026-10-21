@@ -382,3 +382,24 @@
 .handout-question.drop-after{box-shadow:inset 0 -3px 0 var(--green,#2f6b53)}
 
 .handout-typeset{position:fixed;inset:0;z-index:50;background:var(--page)}
+/* Practice papers use the same assessment canvas as quiz and homework lists. */
+.basket-editor .handout-brand{padding:0;border:0;background:transparent;cursor:pointer}
+.basket-editor .handout-bar>.secondary{height:36px;min-height:36px;padding:0 12px;font-size:13px}
+.basket-paper-count{color:var(--muted);font-size:13px;white-space:nowrap}
+.basket-student-line{display:flex;flex-wrap:wrap;gap:12px 24px;margin:14px 0 22px;color:var(--muted);font-size:13px}
+.basket-editor .basket-section-heading{margin:0;font-size:14px}
+.basket-editor .handout-question.active{background:color-mix(in srgb,var(--green-soft) 36%,transparent);box-shadow:inset 2px 0 var(--green)}
+.basket-editor .handout-question-foot>small{flex-basis:100%}
+.basket-editor .handout-outline-title{flex:none;margin:8px 0}
+.basket-editor .basket-outline{min-height:0}
+.basket-editor .basket-outline-scroll{border:0;padding:4px 0;background:transparent}
+.basket-editor .basket-outline-section{padding:6px 0;background:transparent}
+.basket-editor .basket-outline-tools{padding-bottom:8px;border:0;gap:8px}
+.basket-editor .basket-outline-tools>button{min-height:28px}
+.basket-empty-group{padding:8px 14px;color:var(--muted);font-size:12px}
+.basket-list-end{text-align:center;padding:16px}
+.basket-outline-fold,.basket-solution{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .24s ease,opacity .2s ease}
+.basket-outline-fold:not(.closed),.basket-solution.open{grid-template-rows:1fr;opacity:1}
+.basket-outline-fold>div,.basket-solution>div{min-height:0;overflow:hidden}
+.basket-solution{flex-basis:100%;min-width:0}
+@media(prefers-reduced-motion:reduce){.basket-outline-fold,.basket-solution{transition:none}}

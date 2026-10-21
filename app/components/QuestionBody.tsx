@@ -1,3 +1,4 @@
+import type { HTMLAttributes, ReactNode } from "react";
 import { DocxContent, DocxOptions } from "./DocxContent";
 import { docxWebImageSources, parseDocxWebContent } from "../../lib/docx-web-content";
 import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout, sourceFigureWidth } from "../../lib/question-layout";
@@ -21,4 +22,13 @@ export function QuestionBody({ question, number, figureAlt = "题目配图" }: {
     {optionsBelow && <DocxOptions xml={question.optionsDocxXml} fallback={question.options} assets={question.optionsDocxAssets} />}
     {question.optionsImage && <img className="question-options-figure" src={question.optionsImage} alt={`${figureAlt}（选项）`} />}
   </div>;
+}
+
+// Quizzes, homework and practice papers share the same numbered row and action line.
+export function SheetQuestion({ question, number, grip, metadata, loading = false, children, ...props }: HTMLAttributes<HTMLElement> & { question?: Question; loading?: boolean; number: string | number; grip: ReactNode; metadata: ReactNode; children: ReactNode }) {
+  return <article {...props} tabIndex={-1} className={`handout-question${props.className ? ` ${props.className}` : ""}`}>
+    {grip}
+    {question ? <QuestionBody question={question} number={number} /> : <p className="handout-missing">{loading ? "正在读取题目…" : "原题已删除或无权访问，可替换或移出。"}</p>}
+    <div className="handout-question-foot">{metadata}{children}</div>
+  </article>;
 }
