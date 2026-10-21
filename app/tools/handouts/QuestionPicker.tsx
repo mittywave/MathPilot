@@ -50,6 +50,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     try { const value = JSON.parse(localStorage.getItem("mathpilot-picker-scope") || "{}"); return { moduleId: typeof value.moduleId === "string" ? value.moduleId : "", categoryId: typeof value.categoryId === "string" ? value.categoryId : "" }; } catch { return { moduleId: "", categoryId: "" }; }
   });
   const [paperLocation, setPaperLocation] = useState(pickerPaperLocation);
+  const [paperQuery, setPaperQuery] = useState("");
   const [paperVisited, setPaperVisited] = useState(paperLocation.view !== "modules");
   const [paperFolders, setPaperFolders] = useState<PaperFolder[]>([]);
   const [paperRefresh, setPaperRefresh] = useState(0);
@@ -213,6 +214,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       {temporary && <button className="secondary" onClick={onImport}>导入文件</button>}
       </div>
       <div className="picker-filters">
+        {papersOpen && <input type="search" aria-label="搜索试卷" placeholder="搜索试卷标题…" value={paperQuery} onChange={(event) => setPaperQuery(event.target.value)} />}
         {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
         {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={!availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
         {temporary && <>
@@ -221,7 +223,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </>}
       </div>
       <div className="picker-results" ref={resultsPane}>
-      {paperVisited && <div className="picker-paper-center" hidden={!papersOpen} inert={!papersOpen}><PaperCenter readOnly folderId={paperLocation.folder} folders={paperFolders} refresh={paperRefresh} user={user} modules={modules} onOpen={id => navigatePapers("paper", id)} onAdd={replacing ? undefined : selectPaper} addLabel="整卷选择" onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={() => void onLibraryChanged().catch(error => onNotice(error instanceof Error ? error.message : "题库更新失败", "error"))} /></div>}
+      {paperVisited && <div className="picker-paper-center" hidden={!papersOpen} inert={!papersOpen}><PaperCenter readOnly searchQuery={paperQuery} folderId={paperLocation.folder} folders={paperFolders} refresh={paperRefresh} user={user} modules={modules} onOpen={id => navigatePapers("paper", id)} onAdd={replacing ? undefined : selectPaper} addLabel="整卷选择" onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={() => void onLibraryChanged().catch(error => onNotice(error instanceof Error ? error.message : "题库更新失败", "error"))} /></div>}
       {paperOpen && <header className="paper-detail-header"><button className="text-button" onClick={() => navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper && <div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{!replacing && <button onClick={() => void selectPaper(activePaper)}>整卷选择</button>}<a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></div>}</header>}
       {!temporary && paperError && <p className="paper-error" role="alert">{paperError}<button onClick={() => setPaperRefresh(value => value + 1)}>重试</button></p>}
       {!temporary && !papersOpen && !paperOpen && paperLocation.returnId && <div className="paper-return"><button className="text-button" onClick={() => navigatePapers("paper", paperLocation.returnId)}>← 返回刚才的试卷</button></div>}

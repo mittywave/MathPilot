@@ -221,10 +221,6 @@
 .handout-bank .question-presentation.with-images{gap:12px;min-height:0}
 .handout-bank .question-presentation.layout-right{grid-template-columns:minmax(0,1fr) minmax(120px,32%)}
 .handout-bank .stem{margin:4px 0 6px;font-size:14px;line-height:1.7}
-.handout-bank .paper-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;top:0;height:auto;padding:0 0 8px}
-.handout-bank .paper-filters .search{grid-column:1/-1;min-width:0;width:auto}
-.handout-bank .paper-filters>select{min-width:0;max-width:none;width:100%;padding:8px 6px;font-size:12px}
-.handout-bank .paper-filters>select:last-child{grid-column:1/-1}
 .handout-bank .paper-list{gap:10px}
 .handout-bank .paper-row{display:block;padding:12px}
 .handout-bank .paper-row h2{margin-bottom:6px;font-size:14px}

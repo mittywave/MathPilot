@@ -61,30 +61,31 @@ export function PaperDirectory({folders,selected,onSelect,onChanged,user,onNotic
     </section></div>,document.body)}{confirmNode&&createPortal(confirmNode,document.body)}</>;
 }
 
-export function PaperCenter({folderId,folders,refresh,user,modules,onOpen,onAdd,addLabel="加入组卷篮",onNotice,onFolders,onLibraryChanged,readOnly=false}:{folderId:string;folders:PaperFolder[];refresh:number;user:AuthUser|null;modules:LibraryModule[];onOpen:(id:string)=>void;onAdd?:(paper:PaperDetail)=>void|Promise<void>;addLabel?:string;onNotice:Notice;onFolders:(folders:PaperFolder[])=>void;onLibraryChanged:()=>void;readOnly?:boolean}) {
+export function PaperCenter({folderId,folders,refresh,user,modules,onOpen,onAdd,addLabel="加入组卷篮",onNotice,onFolders,onLibraryChanged,readOnly=false,searchQuery}:{folderId:string;folders:PaperFolder[];refresh:number;user:AuthUser|null;modules:LibraryModule[];onOpen:(id:string)=>void;onAdd?:(paper:PaperDetail)=>void|Promise<void>;addLabel?:string;onNotice:Notice;onFolders:(folders:PaperFolder[])=>void;onLibraryChanged:()=>void;readOnly?:boolean;searchQuery?:string}) {
   const [query,setQuery]=useState(""),[filters,setFilters]=useState({year:"",grade:"",examType:""}),[pagination,setPagination]=useState({key:"",offset:0}),[total,setTotal]=useState(0),[papers,setPapers]=useState<ExamPaper[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState("");
   const [facets,setFacets]=useState<Record<string,string[]>>({}),[editing,setEditing]=useState<ExamPaper|null>(null),[version,setVersion]=useState(0),[confirmNode,confirm]=useConfirm();
   const prior=useRef(new Map<string,string>()),latestReady=useRef(onLibraryChanged);latestReady.current=onLibraryChanged;
   const moving=papers.some(p=>["queued","running"].includes(p.status)&&!p.stalled);
-  const filterKey=JSON.stringify([folderId,query,filters]),offset=pagination.key===filterKey?pagination.offset:0;
+  const search=searchQuery??query;
+  const filterKey=JSON.stringify([folderId,search,filters]),offset=pagination.key===filterKey?pagination.offset:0;
   const setOffset=(update:(n:number)=>number)=>setPagination({key:filterKey,offset:update(offset)});
   useEffect(()=>{
     const controller=new AbortController();
-    const fetchList=async()=>{try{const params=new URLSearchParams({folder:folderId,q:query,...filters,offset:String(offset)}), result=await jobsApi<{papers:ExamPaper[];total:number;folders:PaperFolder[];facets:Record<string,string[]>}>(`/api/papers?${params}`,{signal:controller.signal});
+    const fetchList=async()=>{try{const params=new URLSearchParams({folder:folderId,q:search,...filters,offset:String(offset)}), result=await jobsApi<{papers:ExamPaper[];total:number;folders:PaperFolder[];facets:Record<string,string[]>}>(`/api/papers?${params}`,{signal:controller.signal});
       if(result.papers.some(p=>p.status==="done"&&prior.current.has(p.id)&&prior.current.get(p.id)!=="done"))latestReady.current();
       for(const p of result.papers)prior.current.set(p.id,p.status);setPapers(result.papers);setTotal(result.total);setFacets(result.facets);onFolders(result.folders);setError("");
     }catch(e){if(!controller.signal.aborted)setError(errorText(e));}finally{if(!controller.signal.aborted)setLoading(false);}};
     const timeout=setTimeout(()=>void fetchList(),180),timer=moving?setInterval(()=>void fetchList(),3000):undefined;
     return()=>{controller.abort();clearTimeout(timeout);clearInterval(timer);};
-  },[folderId,query,filters,offset,refresh,version,moving,onFolders]);
+  },[folderId,search,filters,offset,refresh,version,moving,onFolders]);
   async function action(paper:ExamPaper,action:"start"|"cancel"){try{await jobsApi(`/api/papers/${paper.id}`,patch({action}));setVersion(v=>v+1);}catch(e){onNotice(errorText(e),"error");}}
   async function remove(paper:ExamPaper){if(!await confirm({title:`删除试卷「${paper.title}」`,body:"删除试卷及上传原件，已经入库的题目和永久 ID 会保留。",confirmLabel:"删除试卷",danger:true}))return;try{await jobsApi(`/api/papers/${paper.id}`,{method:"DELETE"});setVersion(v=>v+1);onNotice("试卷已删除，题库题目仍保留");}catch(e){onNotice(errorText(e),"error");}}
   async function add(paper:ExamPaper){try{const result=await jobsApi<{paper:PaperDetail}>(`/api/papers/${paper.id}`);await onAdd?.(result.paper);}catch(e){onNotice(errorText(e),"error");}}
-  return <div className="paper-center"><div className="filters paper-filters"><label className="search"><span>⌕</span><input aria-label="搜索试卷" placeholder="搜索试卷标题…" value={query} onChange={e=>setQuery(e.target.value)}/></label>
-    {([ ["year","年份 / 学年"],["grade","年级"],["examType","考试类型"] ] as const).map(([key,label])=><select key={key} aria-label={label} value={filters[key]} onChange={e=>setFilters({...filters,[key]:e.target.value})}><option value="">全部{label}</option>{facets[key]?.map(v=><option key={v}>{v}</option>)}</select>)}
-  </div><div className="library-position">{folderId?paperFolderPath(folders,folderId):"全部试卷"} · {total} 套</div>
+  return <div className="paper-center">{(!readOnly||searchQuery===undefined)&&<div className="filters paper-filters">{searchQuery===undefined&&<label className="search"><span>⌕</span><input aria-label="搜索试卷" placeholder="搜索试卷标题…" value={query} onChange={e=>setQuery(e.target.value)}/></label>}
+    {!readOnly&&([ ["year","年份 / 学年"],["grade","年级"],["examType","考试类型"] ] as const).map(([key,label])=><select key={key} aria-label={label} value={filters[key]} onChange={e=>setFilters({...filters,[key]:e.target.value})}><option value="">全部{label}</option>{facets[key]?.map(v=><option key={v}>{v}</option>)}</select>)}
+  </div>}<div className="library-position">{folderId?paperFolderPath(folders,folderId):"全部试卷"} · {total} 套</div>
   {error&&<p role="alert" className="paper-error">{error}<button onClick={()=>setVersion(v=>v+1)}>重试</button></p>}
-  {loading?<div className="wrong-book-loading">正在读取试卷…</div>:!papers.length?<div className="empty-state"><div>卷</div><h3>{query||Object.values(filters).some(Boolean)?"没有符合条件的试卷":"这里还没有试卷"}</h3><p>{user?"可在题库的试卷中心录入 Word 或 PDF。":"试卷收录后会显示在这里。"}</p></div>:<div className="paper-list">{papers.map(paper=><article className="paper-row" key={paper.id}>
+  {loading?<div className="wrong-book-loading">正在读取试卷…</div>:!papers.length?<div className="empty-state"><div>卷</div><h3>{search||Object.values(filters).some(Boolean)?"没有符合条件的试卷":"这里还没有试卷"}</h3><p>{user?"可在题库的试卷中心录入 Word 或 PDF。":"试卷收录后会显示在这里。"}</p></div>:<div className="paper-list">{papers.map(paper=><article className="paper-row" key={paper.id}>
     <div className="paper-row-main"><h2><button disabled={paper.status!=="done"} onClick={()=>onOpen(paper.id)}>{paper.title}</button></h2><div className="paper-row-meta">{[paper.metadata.year,paper.metadata.school||paper.metadata.district,`${paper.metadata.grade}${paper.metadata.term?`（${paper.metadata.term}）`:""}`,paper.metadata.examType,paper.status==="done"?`${paper.questionCount} 题`:""].filter(Boolean).map((label,i)=><span key={`${i}-${label}`}>{label}</span>)}<span>{new Date(paper.createdAt).toLocaleDateString("zh-CN")} 录入</span></div>
       {paper.status!=="done"&&<p className={`paper-job-state ${paper.error||paper.stalled?"error":""}`} role="status">{paper.stalled?"处理已中断，可从断点继续":paper.error||paper.progress||({uploading:"上传尚未完成，请重新选择原文件继续",queued:"等待识别…",running:"正在识别与归类…",failed:"录入未完成"} as Record<string,string>)[paper.status]}</p>}
     </div><div className="paper-row-actions">
