@@ -1485,7 +1485,6 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 main p.missing-reason{grid-column:1/-1;margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
 .missing-reason .text-button{min-height:0;height:auto;margin:0;padding:0;border:0;background:transparent;box-shadow:none;color:var(--green);font:inherit;text-decoration:underline;text-underline-offset:3px;white-space:normal}
 .studio-controls>.missing-reason,.completed-upload-controls>.missing-reason{margin-top:-14px}
-.handout-editor>.missing-reason{flex:none;margin:0;padding:2px 20px;text-align:right;border-bottom:1px solid var(--line)}
 main:not(.kg-shell) select:not([multiple]){appearance:none;padding-right:30px;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px;background-repeat:no-repeat}
 input[type="checkbox"],input[type="radio"]{accent-color:var(--accent-strong)}
 

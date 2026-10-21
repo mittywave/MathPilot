@@ -946,9 +946,8 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
       <a className="handout-brand" href={backHref} aria-label="返回讲义书架" title="返回讲义书架"><BrandWordmark /></a>
       <span className="handout-location"><span>讲义编撰</span><span aria-hidden="true">/</span><span title={backLabel}>{backLabel}</span></span>
       <span className={`handout-save ${saveState}`} role="status">{saveLabel}{saveState === "failed" && <button className="text-button" onClick={() => void flush().catch(() => {})}>重试</button>}</span>
-      <button className="primary-button" aria-describedby={!questionCount&&libraryReady?"handout-export-missing":undefined} disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
+      <button className="primary-button" disabled={!questionCount || !libraryReady} onClick={() => void openExport()}>导出</button>
     </header>
-    {!questionCount&&libraryReady&&<p className="missing-reason" id="handout-export-missing">还差：<button type="button" className="text-button" onClick={()=>{setPanels(current=>({...current,bank:true}));requestAnimationFrame(()=>{const control=bankPane.current?.querySelector<HTMLInputElement>('input[type="search"]');control?.focus({preventScroll:true});control?.scrollIntoView({block:"nearest"});});}}>至少一道题</button></p>}
     <div className={`handout-workspace${panels.bank ? "" : " bank-closed"}${panels.outline ? "" : " outline-closed"}`} style={{ "--handout-bank-full": `${bankFull}px`, "--handout-outline-full": `${outlineFull}px`, "--handout-tree-full": `${treeFull}px` } as CSSProperties}>
       <div className="handout-bank-pane" ref={bankPane}>
         <button type="button" className="handout-panel-toggle" title={panels.bank ? "收起题库" : "展开题库"} aria-label={panels.bank ? "收起题库" : "展开题库"} aria-expanded={panels.bank} aria-controls="handout-bank-content" onClick={() => setPanels(current => ({ ...current, bank: !current.bank }))}>
