@@ -41,6 +41,13 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
     else if(evidence.answer_state==='unreadable'||badPage){verdict='unreadable';feedback=curriculum==='international'?'本题作答看不清，按 0 分计；补交清晰照片后可重新批改':'本题作答无法可靠辨认，请补充清晰页面';}
     else if(evidence.answer_state==='blank'){verdict='incorrect';feedback='本题作答区域清晰完整但为空白，属于漏答';}
     if(verdict)await upsertResult({submissionId,question:q,pageId:page?.id??null,verdict,score:reconcileHomeworkScore(verdict,0,evidence.max_score,curriculum).score,studentAnswer:evidence.student_answer,feedback,errorType:verdict==='incorrect'?evidence.answer_state==='blank'?'漏答':'字迹不清':'待处理',evidenceSummary:feedback,confidence:verdict==='incorrect'?1:0,bbox:evidence.bbox,requiresReview:verdict!=='incorrect'});
+    else if(curriculum==='school'&&['单选题','多选题'].includes(q.type)&&evidence.answer_state==='readable'
+      &&isSimpleObjectiveAnswer(q.type,q.answer)&&isSimpleObjectiveAnswer(q.type,evidence.student_answer)){
+      // A clear option has already been read from the paper. Compare it once instead of letting a second transcription veto it.
+      const final=finalizeHomeworkVerdict({type:q.type,standardAnswer:q.answer,studentAnswer:evidence.student_answer,modelVerdict:'correct',confidence:1,maxScore:evidence.max_score,curriculum});
+      await upsertResult({submissionId,question:q,pageId:page?.id??null,...final,studentAnswer:evidence.student_answer,
+        feedback:final.verdict==='incorrect'?`所选答案为 ${normalizeHomeworkAnswer(evidence.student_answer,q.type)}，正确选项为 ${normalizeHomeworkAnswer(q.answer,q.type)}`:'',errorType:'',bbox:evidence.bbox});
+    }
     else gradeable.push(q);
   }
   if(!gradeable.length)return;

@@ -32,13 +32,13 @@ async function gradingRunFixture(t, phase) {
     INSERT INTO students(id,owner_user_id,name,class_name,notes,created_at,updated_at) VALUES('student','u','Fixture','','',0,0);
     INSERT INTO homework_assignments(id,owner_user_id,title,status,input_mode,created_at,updated_at) VALUES('assignment','u','Original','closed','completed_homework',0,0);
     INSERT INTO homework_submissions(id,assignment_id,student_id,status,submitted_by_type,submitted_by_id,submitted_at,created_at,updated_at) VALUES('submission','assignment','student','submitted','teacher','u',1,0,0);`);
-  const database = d1(sqlite), fixture = { sqlite, database, calls: 0, queued: [], api: null, model: async () => ({ status: 200, text: "{}" }) };
+  const database = d1(sqlite), fixture = { sqlite, database, calls: 0, queued: [], api: null, model: async () => ({ status: 200, text: "{}" }), asset: async () => null };
   const hooks = {
     phase: async () => { fixture.calls++; return phase(fixture); },
     callStructuredAi: input => fixture.model(input),
   };
   const compiled = await build({
-    stdin: { contents: `export * from './lib/server/homework-grading'; export * from './lib/server/homework'; export { callHomeworkModel } from './lib/server/homework-model'; export { AiQueueFailure } from './lib/server/ai/queue-policy';`, resolveDir: process.cwd() },
+    stdin: { contents: `export * from './lib/server/homework-grading'; export * from './lib/server/homework'; export { gradeCompletedQuestions } from './lib/server/completed-homework-grading'; export { callHomeworkModel } from './lib/server/homework-model'; export { AiQueueFailure } from './lib/server/ai/queue-policy';`, resolveDir: process.cwd() },
     bundle: true, write: false, format: "cjs", platform: "node", packages: "external", logLevel: "silent", external: ["fixture:grading"],
     plugins: [{ name: "controlled-grading-phase", setup(plugin) {
       plugin.onResolve({ filter: /^(?:\.\/completed-homework|\.\/ai-gateway)$/ }, args => {
@@ -51,13 +51,73 @@ async function gradingRunFixture(t, phase) {
     } }],
   });
   const require = createRequire(import.meta.url), module = { exports: {} };
-  new Function("require", "module", "exports", compiled.outputFiles[0].text)(id => id === "cloudflare:workers" ? { env: { DB: database, HOMEWORK_GRADING_QUEUE: { send: async message => { fixture.queued.push(message); } } } } : id === "fixture:grading" ? hooks : require(id), module, module.exports);
+  new Function("require", "module", "exports", compiled.outputFiles[0].text)(id => id === "cloudflare:workers" ? { env: { DB: database, HOMEWORK_ASSETS: { get: key => fixture.asset(key) }, HOMEWORK_GRADING_QUEUE: { send: async message => { fixture.queued.push(message); } } } } : id === "fixture:grading" ? hooks : require(id), module, module.exports);
   fixture.api = module.exports;
   fixture.row = () => sqlite.prepare("SELECT * FROM homework_submissions WHERE id='submission'").get();
   fixture.message = (attempts = 1) => ({ body: { kind: "grade_submission", submissionId: "submission" }, attempts, acknowledged: false, retried: null,
     ack() { this.acknowledged = true; }, retry(options) { this.retried = options; } });
   return fixture;
 }
+
+test("readable school choices use the recognized option once; uncertain answers and exam scoring keep their existing gates", async t => {
+  const f = await gradingRunFixture(t, async () => {});
+  f.sqlite.exec(`INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,original_name,created_at)
+      VALUES('asset','u','fixture','image/jpeg',1,'hash','fixture.jpg',0);
+    INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at)
+      VALUES('page','submission','asset','asset',0,0);
+    INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,answer,sort_order,created_at,updated_at)
+      VALUES('q','assignment','5',1,'单选题','按规律选择','C',0,0,0);`);
+  f.asset = async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer });
+  const base = { question_number: "5", page_numbers: [1], type: "单选题", student_answer: "C", answer_state: "readable", question_complete: true,
+    teacher_mark: "none", max_score: null, bbox: { x: 708, y: 595, width: 62, height: 50 } };
+  for (const scenario of [
+    { name: "C matches C even if a second model would read D", modelAnswer: "D", verdict: "correct" },
+    { name: "a different recognized choice stays wrong", student: "D", verdict: "incorrect" },
+    { name: "full-width and math delimiters", student: "$ｃ$", verdict: "correct" },
+    { name: "multiple-choice order", type: "多选题", answer: "AC", student: "Ｃ、Ａ", verdict: "correct" },
+    { name: "multiple-choice missing option", type: "多选题", answer: "AC", student: "C", verdict: "incorrect" },
+    { name: "school printed marks", max: 2, assigned: false, verdict: "correct", score: 2 },
+    { name: "teacher cross wins", mark: "incorrect", verdict: "incorrect" },
+    { name: "unreadable recognition is not a confirmed C", state: "unreadable", verdict: "incorrect" },
+    { name: "blank recognition is not a confirmed C", state: "blank", verdict: "incorrect" },
+    { name: "blocking page quality wins", blocking: true, verdict: "incorrect" },
+    { name: "incomplete question cannot be marked", complete: false, error: /题目或参考答案尚未就绪/ },
+    { name: "unverified reference cannot be used", verified: false, error: /题目或参考答案尚未就绪/ },
+    { name: "ambiguous options still need the model", student: "C或D", modelVerdict: "unreadable", model: true, verdict: "incorrect" },
+    { name: "duplicate selections are not silently accepted", type: "多选题", answer: "AC", student: "AAC", model: true, verdict: "incorrect" },
+    { name: "fill-in final form still needs the model", type: "填空题", answer: "1", student: "2/2", modelVerdict: "incorrect", model: true, verdict: "incorrect" },
+    { name: "international marking keeps model scoring", curriculum: "international", max: 2, model: true, verdict: "correct", score: 2 },
+  ]) {
+    let calls = 0;
+    const evidence = { ...base, type: scenario.type ?? base.type, student_answer: scenario.student ?? "C", answer_state: scenario.state ?? "readable",
+      teacher_mark: scenario.mark ?? "none", question_complete: scenario.complete ?? true, max_score: scenario.max ?? null };
+    const question = { id: "q", question_number: "5", page_number: 1, type: evidence.type, stem: "按规律选择", answer: scenario.answer ?? "C", analysis: "",
+      reference_verified: scenario.verified === false ? 0 : 1, input_evidence_json: JSON.stringify(evidence) };
+    f.sqlite.prepare("UPDATE homework_assignments SET curriculum=?,sheet_json=?").run(scenario.curriculum ?? "school", scenario.assigned === false ? "" : "{}");
+    f.sqlite.prepare("UPDATE submission_pages SET quality_json=?").run(JSON.stringify({ blocking: scenario.blocking ?? false }));
+    f.model = async () => { calls++; return { status: 200, text: JSON.stringify({ results: [{ question_number: "5", page_number: 1,
+      student_answer: scenario.modelAnswer ?? evidence.student_answer, verdict: scenario.modelVerdict ?? "correct", confidence: .99, bbox: evidence.bbox }] }) }; };
+    if (scenario.error) {
+      await assert.rejects(f.api.gradeCompletedQuestions("submission", [question], 1), scenario.error, scenario.name);
+      assert.equal(calls, 0, scenario.name); continue;
+    }
+    await f.api.gradeCompletedQuestions("submission", [question], 1);
+    const saved = f.sqlite.prepare("SELECT * FROM grading_items WHERE assignment_question_id='q'").get();
+    assert.equal(saved.verdict, scenario.verdict, scenario.name);
+    assert.equal(saved.student_answer, evidence.student_answer, scenario.name);
+    assert.equal(saved.score, scenario.score ?? null, scenario.name);
+    assert.equal(calls, scenario.model ? 1 : 0, scenario.name);
+    if (scenario.verdict === "correct") {
+      assert.equal(saved.feedback, "", scenario.name);
+      assert.equal(saved.requires_review, 0, scenario.name);
+      assert.equal(JSON.parse(saved.bbox_json).errors, undefined, scenario.name);
+    }
+    if (!scenario.model && scenario.verdict === "incorrect" && evidence.answer_state === "readable" && !scenario.blocking && !scenario.mark) {
+      assert.match(saved.feedback, /选项/, scenario.name);
+      assert.doesNotMatch(saved.feedback, /转录不一致|识别阶段/, scenario.name);
+    }
+  }
+});
 
 test("duplicate grading deliveries cannot enter the recognition phase together and a busy delivery is retried", async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
