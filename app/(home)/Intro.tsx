@@ -12,8 +12,8 @@ import "./intro.css";
 
 // MathPilot product page, the site's home. The hero is the liquid particle sculpture, the ∞ of the tab icon (the
 // pictures come from scripts/intro-infinity.html), beside the opening words. It stays where the page puts it: it
-// leaves with the hero and is back above the last words. In between, the teaching loop turns as a wheel and the app's screens stream past in a
-// curved row.
+// leaves with the hero, runs through the teaching loop, which turns as a wheel, and at the end is the full stop of the
+// last words. In between, the app's screens stream past in a curved row.
 //
 // 进入工作台 without an account stays on this page: the page gives way to the formulas that changed the world, made of
 // the same sand, and the ∞ gathers into the frame of the login window (/login is this page with the window open).
@@ -184,6 +184,69 @@ function cordOf(g: WheelGeometry, start: Vec3, out: Vec3, across0: Vec3, end: Ve
   }
   return { strands, length };
 }
+// from one shape into the next through `cord`, `length` being a lobe's in the first (SculptureMorph.cord)
+const pour = (from: SculptureShape, to: SculptureShape, length: number, mix: number, cord: { strands: SculptureStrands; length: number }): SculptureMorph =>
+  ({ from, to, mix, cord: { strands: cord.strands, share: cord.length / length } });
+
+// The last words end on a full stop of sand. Coming in, the ∞'s two lobes lie scattered along two arms round it, half
+// a turn apart and both turning clockwise, and as the page scrolls on they wind into it: 学 into its right half from
+// the top, 教 into its left half from the bottom. There it keeps turning slowly, the way they came in. An arm winds
+// STOP.arms turns from STOP.reach of the screen's height out, its band STOP.band of that wide either side out there,
+// where only a few of its grains show; the stop's band is STOP.stroke of its radius, and it turns once in STOP.spin ms.
+const STOP = { arms: 1.75, reach: 0.34, band: 0.22, stroke: 0.12, spin: 30000, points: 480 };
+// Where the font draws "。" in `span`, in px on the screen: its ink, measured once per font on a canvas.
+let stopInk: { font: string; box: [number, number, number, number] } | null = null;
+function inkOf(span: HTMLElement): Rect {
+  const style = getComputedStyle(span);
+  const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  if (stopInk?.font !== font) {
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.font = font;
+    const m = ctx.measureText("。");
+    // from the left of the span and the top of its font's ascent, where the box's top is
+    stopInk = { font, box: [-m.actualBoundingBoxLeft, m.fontBoundingBoxAscent - m.actualBoundingBoxAscent,
+      m.actualBoundingBoxLeft + m.actualBoundingBoxRight, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent] };
+  }
+  const r = span.getBoundingClientRect(), [x, y, w, h] = stopInk.box;
+  return { x: r.left + x, y: r.top + y, w, h };
+}
+// The full stop of sand over the glyph's ink, the two arms that wind into it and where they meet, all turned by `spin`
+// (radians). An arm runs from out in the page in to the stop, a half of the stop on from there clockwise.
+function stopOf(ink: Rect, view: { w: number; h: number }, spin: number) {
+  const cx = ink.x + ink.w / 2, cy = ink.y + ink.h / 2, outer = Math.min(ink.w, ink.h) / 2;
+  const stroke = outer * STOP.stroke, r0 = outer - stroke, reach = Math.max(view.h * STOP.reach, outer * 4);
+  const n = STOP.points;
+  const round = (a: number) => [cx + r0 * Math.cos(a), cy + r0 * Math.sin(a), stroke, 0];
+  const half = (a: number) => {
+    const out = new Float32Array(n * 4);
+    for (let k = 0; k < n; k++) out.set(round(a + (Math.PI * k) / (n - 1)), k * 4);
+    return out;
+  };
+  // The radius closes in on the stop's as the arm comes round, so that it runs on into the stop along it, and the band
+  // narrows to the stop's only near the end. Out there it lies far back (SculptureStrands), so that only a few grains
+  // show, more and more of them as they come in. Its points are laid evenly along its length.
+  const arm = (a: number) => {
+    const N = 1024, fine: number[][] = [], run = [0];
+    for (let j = 0; j <= N; j++) {
+      const f = 1 - j / N, angle = a - 2 * Math.PI * STOP.arms * f, r = r0 + (reach - r0) * f ** 1.5;
+      fine.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle), stroke + (reach * STOP.band - stroke) * f ** 0.6, -1.85 * f ** 0.4]);
+      if (j) run.push(run[j - 1] + Math.hypot(fine[j][0] - fine[j - 1][0], fine[j][1] - fine[j - 1][1]));
+    }
+    const out = new Float32Array(n * 4);
+    for (let k = 0, j = 0; k < n; k++) {
+      const want = (k / (n - 1)) * run[N];
+      while (j < N - 1 && run[j + 1] < want) j++;
+      const t = (want - run[j]) / (run[j + 1] - run[j] || 1);
+      out.set(fine[j].map((v, e) => v + (fine[j + 1][e] - v) * t), k * 4);
+    }
+    return out;
+  };
+  const top = spin - Math.PI / 2, bottom = spin + Math.PI / 2, span = view.h * 0.8;
+  const arms: SculptureShape = { kind: "path", strands: [arm(top), arm(bottom)], span };
+  const stop: SculptureShape = { kind: "path", strands: [half(top), half(bottom)], span };
+  const meet: SculptureStrands = [new Float32Array([...round(top), ...round(top)]), new Float32Array([...round(bottom), ...round(bottom)])];
+  return { arms, stop, meet: { strands: meet, length: 0 } };
+}
 type Gather = { from: number; to: number; start: number };
 // how far the ∞ has gathered (0 … 1), taking `ms` there and SCATTER_MS back; a move starts on the first frame drawn
 // after it was asked for
@@ -234,6 +297,7 @@ function Arrow() {
 export default function IntroPage({ login: opened }: { login?: string }) {
   const mode = useSyncExternalStore(followTheme, themeNow, themeOnServer);
   const shade = mode ?? "light";
+  const reduced = useSyncExternalStore(followMotion, motionReduced, () => false);
   const [front, setFront] = useState(-1);
   const wheel = STEPS.map((step, i) => ({
     title: step.name,
@@ -241,7 +305,8 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     face: <StepDemo step={step} front={i === front} near={front >= 0 && Math.abs(i - front) <= 1} mode={shade} />,
   }));
   const root = useRef<HTMLDivElement>(null);
-  const closingArt = useRef<HTMLImageElement>(null);
+  const closing = useRef<HTMLElement>(null);
+  const closingStop = useRef<HTMLSpanElement>(null);
   const ringArt = useRef<HTMLDivElement>(null);
   const loopRef = useRef<HTMLElement | null>(null);
   const scrolled = useRef(-1);
@@ -450,8 +515,6 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       const [x, y] = crossingOf(r);
       return [[x - g.origin[0], y - g.origin[1], 0], [0, 1, 0], [1, 0, 0]] as [Vec3, Vec3, Vec3];
     };
-    const pour = (from: SculptureShape, to: SculptureShape, length: number, mix: number, cord: ReturnType<typeof cordOf>): SculptureMorph =>
-      ({ from, to, mix, cord: { strands: cord.strands, share: cord.length / length } });
     let form: SculptureMorph;
     if (box.top > 0) {
       const eye = eyeOf(g, 0);
@@ -471,16 +534,25 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     return { form, turn };
   };
 
-  // Asked by the sculpture every frame: which two shapes it is between, and how far along. On the page the ∞ stays where
-  // the page puts it: it scrolls away with the hero, and the one above the last words scrolls in with them. It is the
-  // hero's until the page is nearer the last words, both out of sight where that changes, and while neither is on the
-  // screen the sculpture rests.
+  // The last words' full stop (stopOf): the arms wind into it as the section comes up the screen, from when its top is
+  // 15% up from the bottom until it is a tenth from the top, and back out as the page scrolls back. The stop is a few
+  // px across, so as it forms the sand stops swaying under the cursor, which would bend it out of shape; passing over
+  // it still stirs it.
+  const stopForms = (section: DOMRect, stop: HTMLElement, view: { w: number; h: number }, now: number): SculptureMorph => {
+    const { arms, stop: full, meet } = stopOf(inkOf(stop), view, reduced ? 0 : (now / STOP.spin) * 2 * Math.PI);
+    const gathered = smooth(view.h * 0.85, view.h * 0.1, section.top);
+    return { ...pour(arms, full, 1, gathered, meet), liquid: 1 - gathered };
+  };
+
+  // Asked by the sculpture every frame: which two shapes it is between, and how far along. On the page the sand stays
+  // where the page puts it: the ∞ scrolls away with the hero, and the last words' full stop scrolls in with them. It is
+  // the hero's until the page is nearer the last words, both out of sight where that changes, and while neither is on
+  // the screen the sculpture rests.
   const scrollForms = (hero: Rect, view: { w: number; h: number }): SculptureMorph => {
-    const art = closingArt.current?.getBoundingClientRect();
+    const section = closing.current?.getBoundingClientRect();
     const middle = (top: number, height: number) => Math.abs(top + height / 2 - view.h / 2);
-    const place: SculptureShape = art && middle(art.top, art.height) < middle(hero.y, hero.h)
-      ? { kind: "image", rect: { x: art.left, y: art.top, w: art.width, h: art.height } }
-      : { kind: "image", rect: hero };
+    const last = section && closingStop.current && middle(section.top, section.height) < middle(hero.y, hero.h) ? section : null;
+    const place: Rect = last ? { x: last.left, y: last.top, w: last.width, h: last.height } : hero;
     const wheel = loopForms(hero, view);
     // drawn every frame while the page scrolls or the wheel turns, so it keeps step with them
     const moving = window.scrollY !== scrolled.current || wheel?.turn !== turned.current;
@@ -493,10 +565,13 @@ export default function IntroPage({ login: opened }: { login?: string }) {
     const into = gatheredAt(g, now);
     const out = gatheredAt(e, now, ENTER_MS);
     // out of sight, and not on its way into a window or back (stirred grains stray a little past the picture)
-    const { x, y, w, h } = place.rect;
+    const { x, y, w, h } = place;
     const away = !wheel && !g.to && !e.to && !into && !out && (y + h * 1.1 < 0 || y - h * 0.1 > view.h || x + w < 0 || x > view.w);
     const box = glass.current?.getBoundingClientRect();
-    let form: SculptureMorph = wheel ? { ...wheel.form, moving } : { from: place, to: place, mix: 0, moving, away };
+    const still: SculptureShape = { kind: "image", rect: hero };
+    let form: SculptureMorph = wheel ? { ...wheel.form, moving }
+      : last ? { ...stopForms(last, closingStop.current!, view, now), moving, away }
+      : { from: still, to: still, mix: 0, moving, away };
     // where the sand is now, to move on from: part way through a pour it stays where the pour has it
     const held = (m: SculptureMorph): SculptureShape => m.cord && m.mix > 0 && m.mix < 1 ? { kind: "pour", pour: m } : m.mix < 0.5 ? m.from : m.to;
     if (into > 0 && box) {
@@ -587,11 +662,9 @@ export default function IntroPage({ login: opened }: { login?: string }) {
       </ol>
     </section>
 
-    <section className="mp-closing">
-      {/* the sculpture comes to rest here; without WebGL this picture stands in for it */}
-      {/* eslint-disable-next-line @next/next/no-img-element -- a stand-in the canvas draws over at the same place */}
-      <img ref={closingArt} className="mp-closing-art" src={picture(shade)} alt="" />
-      <h2 className="mp-reveal">从下一份作业<em>开始。</em></h2>
+    <section ref={closing} className="mp-closing">
+      {/* the sand comes to rest as the full stop; without WebGL the font's own stands */}
+      <h2 className="mp-reveal">从下一份作业<em>开始<span ref={closingStop} className="mp-stop">。</span></em></h2>
       <a className="mp-btn" href={workbench}>进入工作台<Arrow /></a>
     </section>
 
