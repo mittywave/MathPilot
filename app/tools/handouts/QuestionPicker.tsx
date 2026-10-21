@@ -232,7 +232,12 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
           const section = item.section && item.section !== displayed[index - 1]?.section ? <li className="picker-paper-section"><h3>{item.section}</h3></li> : null;
           if (!question) return <Fragment key={`${index}-${item.questionId}`}>{section}<li className="paper-missing">第 {item.number} 题已移入回收站或不再可用。原题位仍保留。</li></Fragment>;
           const inHandout = taken.has(question.id); const chosen = isSelected(question.id); const elsewhere = usedIn.get(question.id);
-          return <Fragment key={`${index}-${question.id}`}>{section}<li className={`picker-item${chosen ? " chosen" : ""}`}>
+          // eslint-disable-next-line jsx-a11y/click-events-have-key-events -- The selection button remains the keyboard control; the card click is a pointer shortcut.
+          return <Fragment key={`${index}-${question.id}`}>{section}<li className={`picker-item${chosen ? " chosen" : ""}`} onClick={inHandout || replacing ? undefined : (event) => {
+            if ((event.target as Element).closest("button, a, input, label, select, textarea, details, [contenteditable='true']")) return;
+            if (window.getSelection()?.isCollapsed === false) return;
+            toggle(question.id);
+          }}>
             <QuestionBody question={question} number={item.number} />
             <div className="picker-item-foot"><small>{question.code && `ID ${question.code} · `}{question.type} · {question.difficulty} · {temporary ? question.importFileName || "临时录入" : pathOf(question.categoryId)}</small>
               {elsewhere && !inHandout && <span className="picker-taken">{[...elsewhere].join("、")}已用</span>}
