@@ -161,7 +161,7 @@ export function useDirectoryDrag({ modules, categories, enabled, onDrop }: {
   });
 }
 
-export function CategoryTree({ module, categories, activeId, countFor, onSelect, light = null, collapsible = false, dragProps }: {
+export function CategoryTree({ module, categories, activeId, countFor, onSelect, light = null, collapsible = false, rootOpen, onRootToggle, dragProps }: {
   module: LibraryModule | null;
   categories: Category[];
   activeId: string | null;
@@ -169,6 +169,8 @@ export function CategoryTree({ module, categories, activeId, countFor, onSelect,
   onSelect: (id: string) => void;
   light?: TreeLight | null;
   collapsible?: boolean;
+  rootOpen?: boolean;
+  onRootToggle?: () => void;
   dragProps?: (id: string, expand?: () => void) => HTMLAttributes<HTMLDivElement> & RefAttributes<HTMLDivElement>;
 }) {
   const treeId = useId();
@@ -179,11 +181,12 @@ export function CategoryTree({ module, categories, activeId, countFor, onSelect,
   function renderTree(node: LibraryModule | Category, depth: number) {
     const children = childrenOf(node.id);
     const lit = Boolean(light?.ids.includes(node.id));
-    const open = !collapsible || !collapsed.includes(node.id);
+    const open = !collapsible || (depth === 0 && rootOpen !== undefined ? rootOpen : !collapsed.includes(node.id));
     const label = `${open ? "收起" : "展开"}${node.name}`;
     const childrenId = `${treeId}-${node.id}`;
     const toggle = () => {
-      setCollapsed((current) => open ? [...current, node.id] : current.filter((id) => id !== node.id));
+      if (depth === 0 && onRootToggle) onRootToggle();
+      else setCollapsed((current) => open ? [...current, node.id] : current.filter((id) => id !== node.id));
       setMoving(window.matchMedia("(prefers-reduced-motion: reduce)").matches ? null : node.id);
     };
     return <div key={node.id} className={depth > 0 && dragProps ? "tree-category" : undefined} {...(depth > 0 ? dragProps?.(node.id, !open && children.length ? () => setCollapsed(current => current.filter(id => id !== node.id)) : undefined) : {})}>

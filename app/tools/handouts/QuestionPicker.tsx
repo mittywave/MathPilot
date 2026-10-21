@@ -51,6 +51,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const [scope, setScope] = useState<{ moduleId: string; categoryId: string }>(() => {
     try { const value = JSON.parse(localStorage.getItem("mathpilot-picker-scope") || "{}"); return { moduleId: typeof value.moduleId === "string" ? value.moduleId : "", categoryId: typeof value.categoryId === "string" ? value.categoryId : "" }; } catch { return { moduleId: "", categoryId: "" }; }
   });
+  const [expandedModuleId, setExpandedModuleId] = useState<string | null>(null);
   const [paperLocation, setPaperLocation] = useState(() => pickerPaperLocation(practice));
   const [paperQuery, setPaperQuery] = useState("");
   const [paperVisited, setPaperVisited] = useState(paperLocation.view !== "modules");
@@ -186,8 +187,9 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       <div className={`paper-directory-flip${papersOpen ? " is-papers" : ""}`} hidden={temporary}>
         <div className="picker-directory-face paper-directory-face paper-directory-front" inert={temporary || papersOpen} aria-hidden={temporary || papersOpen}>
           <header><h2>模块</h2><button type="button" className="paper-view-toggle" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header>
-          <div className="picker-module-directory">{modules.map(module => <CategoryTree key={module.id} module={module} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} collapsible onSelect={id => {
+          <div className="picker-module-directory">{modules.map(module => <CategoryTree key={module.id} module={module} categories={categories} activeId={activeCategoryId || activeModuleId} countFor={countFor} collapsible rootOpen={module.id === (expandedModuleId ?? activeModuleId)} onRootToggle={() => setExpandedModuleId(current => (current ?? activeModuleId) === module.id ? "" : module.id)} onSelect={id => {
             if (paperOpen) { navigatePapers("modules", "", paperLocation.folder, paperLocation.id); setKeyword(""); }
+            setExpandedModuleId(module.id);
             setScope({ moduleId: module.id, categoryId: id === module.id ? "" : id }); setLimit(PAGE_SIZE);
           }} />)}</div>
         </div>
