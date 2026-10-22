@@ -422,7 +422,7 @@ export type HomeworkDay = HomeworkSheetGroup & {
  */
 export type AssignedHomework = {
   days: HomeworkDay[];
-  questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified"> & { submissionId: string; wasIncorrect: boolean }) | null }>;
+  questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "standardAnalysis" | "referenceVerified"> & { submissionId: string; wasIncorrect: boolean }) | null }>;
   uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
 };
 

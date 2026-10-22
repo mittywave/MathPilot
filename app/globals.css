@@ -432,7 +432,7 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .standard-answer { padding:10px 12px; border-left:3px solid var(--green); border-radius:0 calc(8px*var(--radius-scale)) calc(8px*var(--radius-scale)) 0; background:var(--green-soft); }
 .standard-answer b { color:var(--green); font-size:12px; }
 .standard-answer p { margin:5px 0; font-size:14px; white-space:pre-wrap; }
-.standard-answer small { color:var(--muted); font-size:12px; white-space:pre-wrap; }
+.standard-answer small { display:block; margin-top:5px; color:var(--muted); font-size:12px; white-space:pre-wrap; }
 
 /* Student mobile portal */
 

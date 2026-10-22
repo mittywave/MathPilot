@@ -76,7 +76,7 @@ async function gradeBatch(submissionId:string,questions:Row[],upperAttempt:numbe
 /** Add local marks and their reasons without rewriting verdicts, scores, evidence or wrong-book history. */
 export async function locateHomeworkErrors(submission: HomeworkSubmission, upperAttempt = 1) {
   const candidates = submission.gradingItems.filter(item => ["incorrect", "partial"].includes(item.verdict)
-    && !item.requiresReview && item.referenceVerified && item.standardAnswer && item.bbox && item.pageId
+    && !item.requiresReview && item.referenceVerified && (item.standardAnswer || item.standardAnalysis) && item.bbox && item.pageId
     && (item.bbox.errors?.length ? item.bbox.errors.some(error => !error.reason?.trim()) : !item.feedback.trim()
       || item.feedback === "本题已判为有错，但无法从原图可靠确认具体错处，请结合原卷和参考答案核对。"));
   const batches = submission.pages.flatMap(page => homeworkQuestionBatches(candidates.filter(item => item.pageId === page.id), upperAttempt).map(items => ({ page, items })));

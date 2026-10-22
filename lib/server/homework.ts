@@ -142,7 +142,7 @@ function gradingItem(row: Record<string, unknown>, assigned = false): GradingIte
     id: String(row.id), submissionId: String(row.submission_id), assignmentQuestionId: String(row.assignment_question_id),
     pageId: row.page_id == null ? null : String(row.page_id), questionNumber: String(row.question_number), questionType: row.question_type as QuestionType,
     referenceSource: row.reference_source as GradingItem["referenceSource"], referenceVerified: Number(row.reference_verified) === 1, referenceEvidence: String(row.reference_evidence ?? ""),
-    stem: String(row.stem), figures: questionFigures(row.question_evidence_json), teacherMark: teacherMark(row.question_evidence_json), standardAnswer: String(row.standard_answer), standardAnalysis: String(row.standard_analysis),
+    stem: String(row.stem), figures: questionFigures(row.question_evidence_json), teacherMark: teacherMark(row.question_evidence_json), standardAnswer: String(row.standard_answer ?? ""), standardAnalysis: String(row.standard_analysis ?? ""),
     verdict: VERDICTS.includes(row.verdict as GradingVerdict) ? row.verdict as GradingVerdict : "review_required",
     score: row.score == null ? null : Number(row.score), maxScore: normalizeMaxScore(parseJson<{ max_score?: unknown }>(row.question_evidence_json, {}).max_score),
     studentAnswer: String(row.student_answer ?? ""), feedback: String(row.feedback ?? ""), errorType: String(row.error_type ?? ""),
@@ -160,7 +160,8 @@ function gradingRows(submissionIds: string | string[], summary = false): Promise
   return appEnv().DB.prepare(`SELECT ${summary ? `grading_items.id,grading_items.submission_id,grading_items.assignment_question_id,grading_items.verdict,
       grading_items.requires_review,grading_items.score,grading_items.wrong_book_applied_at,
       json_object('teacher_mark',json_extract(assignment_questions.input_evidence_json,'$.teacher_mark'),'max_score',json_extract(assignment_questions.input_evidence_json,'$.max_score')) AS question_evidence_json,
-      CASE WHEN assignment_questions.answer<>'' THEN 'present' ELSE '' END AS standard_answer` : `grading_items.*,assignment_questions.stem,
+      CASE WHEN trim(assignment_questions.answer)<>'' THEN 'present' ELSE '' END AS standard_answer,
+      CASE WHEN trim(assignment_questions.analysis)<>'' THEN 'present' ELSE '' END AS standard_analysis` : `grading_items.*,assignment_questions.stem,
       assignment_questions.input_evidence_json AS question_evidence_json,assignment_questions.answer AS standard_answer,assignment_questions.analysis AS standard_analysis`},
       assignment_questions.question_number,assignment_questions.type AS question_type,assignment_questions.reference_source,assignment_questions.reference_verified,assignment_questions.reference_evidence
     FROM grading_items JOIN assignment_questions ON assignment_questions.id=grading_items.assignment_question_id
@@ -224,13 +225,14 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
 }
 
 type UploadRow = { id: string; assignment_id: string; student_id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
-type ResultRow = { submission_id: string; assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; reference_verified: number; question_evidence_json: string };
+type ResultRow = { submission_id: string; assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; standard_analysis: string; reference_verified: number; question_evidence_json: string };
 
 // The published results of one upload, without questions a later reading of its pages no longer finds.
 async function uploadResults(submissionIds: string[], bodies = false) {
   const [rows, recognized] = await Promise.all([
     appEnv().DB.prepare(`SELECT g.submission_id,g.assignment_question_id,q.question_number,g.verdict,g.requires_review,
-        ${bodies ? "q.answer" : "CASE WHEN q.answer<>'' THEN 'present' ELSE '' END"} AS standard_answer,q.reference_verified,
+        ${bodies ? "q.answer" : "CASE WHEN trim(q.answer)<>'' THEN 'present' ELSE '' END"} AS standard_answer,
+        ${bodies ? "q.analysis" : "CASE WHEN trim(q.analysis)<>'' THEN 'present' ELSE '' END"} AS standard_analysis,q.reference_verified,
         json_object('teacher_mark',json_extract(q.input_evidence_json,'$.teacher_mark')) AS question_evidence_json FROM grading_items g
       JOIN assignment_questions q ON q.id=g.assignment_question_id WHERE g.submission_id IN (SELECT value FROM json_each(?))`)
       .bind(JSON.stringify(submissionIds)).all<ResultRow>(),
@@ -245,7 +247,7 @@ async function uploadResults(submissionIds: string[], bodies = false) {
       .map(row => ({ assignmentQuestionId: row.assignment_question_id,
         verdict: VERDICTS.includes(row.verdict) ? row.verdict : "review_required" as GradingVerdict,
         requiresReview: Number(row.requires_review) === 1, teacherMark: teacherMark(row.question_evidence_json),
-        standardAnswer: String(row.standard_answer ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
+        standardAnswer: String(row.standard_answer ?? ""), standardAnalysis: String(row.standard_analysis ?? ""), referenceVerified: Number(row.reference_verified) === 1 }));
     return [id, results] as const;
   }));
 }
@@ -876,7 +878,7 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
   if(row.status!=="published") throw responseError("请等待本次批改完成后再补充",409);
   if(row.sheet_json && homeworkCurriculum(row.curriculum)==="school")throw responseError("这份作业只判正确或错误，请上传错题订正",409);
   const pending=await appEnv().DB.prepare(`SELECT g.assignment_question_id FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id
-    WHERE g.submission_id=? AND (g.requires_review=1 OR g.verdict IN ('unreadable','review_required') OR (g.verdict IN ('incorrect','partial') AND (q.answer='' OR q.reference_verified=0)))`).bind(id).all<{assignment_question_id:string}>();
+    WHERE g.submission_id=? AND (g.requires_review=1 OR g.verdict IN ('unreadable','review_required') OR (g.verdict IN ('incorrect','partial') AND ((trim(q.answer)='' AND trim(q.analysis)='') OR q.reference_verified=0)))`).bind(id).all<{assignment_question_id:string}>();
   const coverage=await (await import("./homework-page-coverage")).readPageCoverage(id);
   const pendingPages=coverage.pages.filter(p=>p.kind==='unreadable').map(p=>`page:${p.pageNumber}`);
   if(!pending.results.length && !pendingPages.length)throw responseError("没有待处理的题目",409);
@@ -892,7 +894,7 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
   // Reuse pending-item recovery for historical mistakes whose reference answer was never generated or verified.
   changes.push(appEnv().DB.prepare(`UPDATE assignment_questions SET reference_fingerprint='' WHERE id IN
     (SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND verdict IN ('incorrect','partial'))
-    AND (answer='' OR reference_verified=0) AND reference_fingerprint NOT LIKE 'pending:%' AND reference_evidence NOT LIKE '教师补充并确认%'`).bind(id));
+    AND ((trim(answer)='' AND trim(analysis)='') OR reference_verified=0) AND reference_fingerprint NOT LIKE 'pending:%' AND reference_evidence NOT LIKE '教师补充并确认%'`).bind(id));
   changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
   changes.push(appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id));
   await appEnv().DB.batch(changes);

@@ -38,7 +38,7 @@ async function gradingRunFixture(t, phase) {
     callStructuredAi: input => fixture.model(input),
   };
   const compiled = await build({
-    stdin: { contents: `export * from './lib/server/homework-grading'; export * from './lib/server/homework'; export { gradeCompletedQuestions } from './lib/server/completed-homework-grading'; export { callHomeworkModel } from './lib/server/homework-model'; export { AiQueueFailure } from './lib/server/ai/queue-policy';`, resolveDir: process.cwd() },
+    stdin: { contents: `export * from './lib/server/homework-grading'; export * from './lib/server/homework'; export { gradeCompletedQuestions, locateHomeworkErrors } from './lib/server/completed-homework-grading'; export { callHomeworkModel } from './lib/server/homework-model'; export { AiQueueFailure } from './lib/server/ai/queue-policy';`, resolveDir: process.cwd() },
     bundle: true, write: false, format: "cjs", platform: "node", packages: "external", logLevel: "silent", external: ["fixture:grading"],
     plugins: [{ name: "controlled-grading-phase", setup(plugin) {
       plugin.onResolve({ filter: /^(?:\.\/completed-homework|\.\/ai-gateway)$/ }, args => {
@@ -291,6 +291,11 @@ test("pending counts separate unsettled answers from the teacher's existing judg
     [{}, false],
     [{ verdict: "correct", standardAnswer: "", referenceVerified: false }, false],
     [{ standardAnswer: "" }, true],
+    [{ standardAnswer: "", standardAnalysis: "由 a+b=2026，原式=2(a+b)=4052。" }, false],
+    [{ verdict: "partial", standardAnswer: "", standardAnalysis: "完整参考解析" }, false],
+    [{ standardAnswer: "", standardAnalysis: "完整参考解析", referenceVerified: false }, true],
+    [{ standardAnswer: "", standardAnalysis: "完整参考解析", requiresReview: true }, true],
+    [{ standardAnswer: " ", standardAnalysis: "\n " }, true],
     [{ referenceVerified: false }, true],
     [{ referenceVerified: undefined }, true],
     [{ verdict: "partial", standardAnswer: "" }, true],
@@ -302,6 +307,64 @@ test("pending counts separate unsettled answers from the teacher's existing judg
     [{ verdict: "unreadable", teacherMark: "correct" }, true],
     [{ verdict: "review_required", teacherMark: "incorrect" }, true],
   ]) assert.equal(isPendingGradingItem({ ...settled, ...patch }), expected, JSON.stringify(patch));
+});
+
+test("verified analysis-only references agree across details, compact summaries, days and student progress", async t => {
+  const f = await gradingRunFixture(t, async () => {});
+  const user = { id: "u", email: "u@test", role: "admin" };
+  const analysis = "由 a+b=2026，原式=2(a+b)=4052。";
+  const question = { id: "q", type: "填空题", stem: "求整式的值", answer: "", analysis };
+  f.sqlite.exec(`UPDATE homework_assignments SET sheet_json='{}',template_confirmed=1;
+    UPDATE homework_submissions SET status='published',published_at=1;
+    INSERT INTO assignment_questions(id,assignment_id,question_number,page_number,type,stem,answer,analysis,reference_verified,source_json,sort_order,created_at,updated_at)
+      VALUES('q','assignment','18',1,'填空题','求整式的值','','',1,'',0,0,0);
+    INSERT INTO grading_items(id,submission_id,assignment_question_id,verdict,requires_review,student_answer,created_at,updated_at)
+      VALUES('g','submission','q','incorrect',0,'4152',0,0);`);
+  f.sqlite.prepare("UPDATE assignment_questions SET analysis=?,source_json=? WHERE id='q'").run(analysis, JSON.stringify(question));
+  for (const assigned of [true, false]) {
+    f.sqlite.prepare("UPDATE homework_assignments SET sheet_json=?").run(assigned ? "{}" : "");
+    for (const [reference, verified, review, pending] of [[analysis, 1, 0, 0], [analysis, 0, 0, 1], [analysis, 1, 1, 1], ["", 1, 0, 1]]) {
+      f.sqlite.prepare("UPDATE assignment_questions SET analysis=?,reference_verified=?").run(reference, verified);
+      f.sqlite.prepare("UPDATE grading_items SET requires_review=?").run(review);
+      const detail = await f.api.readTeacherSubmission("submission", user);
+      assert.deepEqual([detail.gradingItems[0].standardAnswer, detail.gradingItems[0].standardAnalysis], ["", reference]);
+      assert.equal(detail.gradingSummary.unresolved, pending);
+      assert.equal(detail.gradingSummary.incorrect, 1 - pending);
+      const listed = (await f.api.readTeacherSubmissions(user)).submissions[0];
+      assert.deepEqual(listed.gradingSummary, detail.gradingSummary, "compact reads must preserve reference availability without loading its body");
+      const homework = (await f.api.readStudentHomework("student", user))[0];
+      assert.deepEqual([homework.incorrect, homework.pending], [1 - pending, pending]);
+      if (assigned) {
+        assert.equal(detail.assigned.questions[0].result.standardAnalysis, reference);
+        assert.equal(isPendingGradingItem(detail.assigned.questions[0].result), Boolean(pending));
+        assert.deepEqual([homework.days[0].incorrect, homework.days[0].pending], [1 - pending, pending]);
+        assert.equal((await f.api.readHomeworkProgress(user)).student, pending ? "assigned" : undefined);
+      }
+    }
+  }
+  f.sqlite.prepare("UPDATE assignment_questions SET analysis=?,reference_verified=1").run(analysis);
+  await assert.rejects(f.api.reprocessPendingSubmission("submission", [], user), error => error instanceof Response && error.status === 409,
+    "verified analysis-only references must not be selected for pending-item reprocessing");
+  assert.equal(f.queued.length, 0);
+  f.sqlite.exec(`INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,created_at)
+      VALUES('asset','u','fixture','image/jpeg',1,'hash',0);
+    INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at)
+      VALUES('page','submission','asset','asset',0,0);
+    UPDATE grading_items SET page_id='page',bbox_json='{"x":100,"y":100,"width":300,"height":300}' WHERE id='g';`);
+  f.asset = async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer });
+  let calls = 0;
+  f.model = async input => {
+    calls++;
+    assert.equal(input.schemaName, "homework_error_locations");
+    assert.ok(input.prompt.includes(analysis), "error explanations receive the verified working even without a separate answer");
+    return { status: 200, text: JSON.stringify({ results: [{ question_number: "18", feedback: "学生把 2026×2 算为 4152，正确应为 4052。", bbox: { errors: [] } }] }) };
+  };
+  assert.equal(await f.api.locateHomeworkErrors(await f.api.readTeacherSubmission("submission", user)), 1);
+  const explained = await f.api.readTeacherSubmission("submission", user);
+  assert.deepEqual([explained.gradingItems[0].verdict, explained.gradingItems[0].studentAnswer], ["incorrect", "4152"]);
+  assert.match(explained.gradingItems[0].feedback, /4052/);
+  assert.equal(await f.api.locateHomeworkErrors(explained), 0, "complete explanations are reused");
+  assert.equal(calls, 1);
 });
 
 test("day captions keep first-attempt marks after every mistake is corrected", async () => {

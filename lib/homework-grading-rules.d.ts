@@ -1,7 +1,7 @@
 import type { GradingItem, GradingVerdict, HomeworkCurriculum, HomeworkProgress, HomeworkScoreSummary, QuestionType, StudentHomework } from "./types";
 export function isHomeworkGrading(item: Pick<StudentHomework, "latest">): boolean;
 export function homeworkProgress(items: Array<Pick<StudentHomework, "latest" | "assigned" | "pending" | "done" | "total">>): HomeworkProgress | null;
-export function isPendingGradingItem(item: Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified">): boolean;
+export function isPendingGradingItem(item: Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "referenceVerified"> & Partial<Pick<GradingItem, "standardAnalysis">>): boolean;
 export function titleWithoutStudent(title: string, studentName?: string | null): string;
 export function normalizeHomeworkAnswer(value: unknown, type?: QuestionType): string;
 export function isSimpleObjectiveAnswer(type: QuestionType, answer: string): boolean;
