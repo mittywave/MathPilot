@@ -1,12 +1,13 @@
 import { ImportedXmlComponent, TextRun, type ParagraphChild } from 'docx';
 import { splitMathText } from './answer-studio-math-text';
 import { needsWordMathEquation } from './math-notation.mjs';
-import { isStudioDisplayMathLine, studioWordDisplayXml, studioWordEquationXml } from './studio-math-layout';
+import { isStudioDisplayMathLine, studioWordDisplayXml, studioWordEquationXml, STUDIO_WORD_STYLE } from './studio-math-layout';
 import { repairMathSource, scanMathSource } from './math-source.mjs';
 import { xmlSafeText } from './xml-text';
-// Match the Normal and StudioAnswer paragraph styles (11 pt).
-const BODY_SIZE=22;
-const BODY_FONT={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman',hint:'eastAsia'} as const;
+import { plainMathPieces } from './math-text';
+import { readMathGroup } from './math-grid';
+const BODY_SIZE=STUDIO_WORD_STYLE.size;
+const BODY_FONT=STUDIO_WORD_STYLE.font;
 type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right';size?:number};
 class NativeMathXml extends ImportedXmlComponent {
   static fromMathXml(xml:string):ParagraphChild {
@@ -23,6 +24,8 @@ function textRuns(text:string,style:RunStyle={}) {
 }
 export function richText(text:string,style:RunStyle={},onMathError?:(error:unknown)=>void):ParagraphChild[] {
   text=repairMathSource(text);
+  const marked=text.match(/<u>([\s\S]*?)<\/u>/i);
+  if(marked&&(text.slice(0,marked.index).match(/(?<!\\)\$/g)?.length||0)%2===0)return [...richText(text.slice(0,marked.index),style,onMathError),...richText(marked[1],{...style,underline:true,displayMath:false},onMathError),...richText(text.slice(marked.index!+marked[0].length),style,onMathError)];
   const delimiterIssues=scanMathSource(text).issues;
   if(delimiterIssues.length) {
     const error=new Error('公式分隔符不完整，请核对原文');
@@ -36,7 +39,19 @@ export function richText(text:string,style:RunStyle={},onMathError?:(error:unkno
   }
   return splitMathText(text).flatMap(segment=>{
     if(segment.kind!=='math'||!needsWordMathEquation(segment.value,segment.explicit))return textRuns(segment.value,style);
-    try{return [NativeMathXml.fromMathXml(studioWordEquationXml(segment.value.trim(),style.displayMath!==false&&segment.display===true,style))];}
+    try{
+      const source=segment.value.trim(),command=source.match(/^\\underline\s*(?=\{)/)?.[0],group=command?readMathGroup(source,command.length):null;
+      const marked=group?.end===source.length?group:null,underline=style.underline||!!marked;
+      let math=marked?marked.body:segment.value,left='',right='';
+      if(marked){
+        left=math.match(/^(?:(?:\\qquad|\\quad)(?![A-Za-z])|\s)+/)?.[0]||'';math=math.slice(left.length);
+        right=math.match(/(?:(?:\\qquad|\\quad)(?![A-Za-z])|\s)+$/)?.[0]||'';math=math.slice(0,math.length-right.length);
+      }
+      const edges=[left,right].map(pad=>pad.replace(/\\qquad/g,'\u3000\u3000').replace(/\\quad/g,'\u3000').replace(/[ \t\r\n]/g,''));
+      const pieces=plainMathPieces(math)||plainMathPieces(math.replace(/∵/g,'\\because ').replace(/∴/g,'\\therefore ').replace(/\*/g,'\\text{*}'));
+      const runs=pieces?pieces.map(piece=>new TextRun({text:piece.text.replace(/＋/g,'+'),font:BODY_FONT,size:piece.script?STUDIO_WORD_STYLE.scriptSize:style.size??BODY_SIZE,color:style.color,bold:style.bold,italics:style.italicMath!==false&&piece.italic===true,superScript:piece.script==='super',subScript:piece.script==='sub',underline:underline||piece.underline?{}:undefined})):math.trim()?[NativeMathXml.fromMathXml(studioWordEquationXml(math,style.displayMath!==false&&segment.display===true,{...style,underline}))]:[];
+      return [...(edges[0]?textRuns(edges[0],{...style,underline:true}):[]),...runs,...(edges[1]?textRuns(edges[1],{...style,underline:true}):[])];
+    }
     catch(error){
       if(!onMathError)throw error;
       onMathError(error);

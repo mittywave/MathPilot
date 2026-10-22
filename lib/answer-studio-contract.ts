@@ -37,7 +37,7 @@ PDF 原生文字层（可辅助核对印刷文字；公式映射可能损坏，�
 }
 
 const chinese=(text:string)=>(text.match(/[\u3400-\u9fff]/g)||[]).join('');
-function documentEvidence(hint:string) {
+export function documentEvidence(hint:string) {
   const points:Array<{x:number;y:number;text:string;size:number}>=[];
   for(const line of hint.split('\n'))try{
     const row=JSON.parse(line);if(!Array.isArray(row)||![3,4].includes(row.length)||!Number.isFinite(row[0])||!Number.isFinite(row[1])||typeof row.at(-1)!=='string')continue;

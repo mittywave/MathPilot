@@ -1,3 +1,5 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
@@ -6,6 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const require=createRequire(import.meta.url);
 const box={x:0,y:0,width:500,height:500};
 const shape={id:'line',kind:'line',x:10,y:10,width:60,height:40,color:'#C00000',weight:2,dash:false,text:'',points:[]};
@@ -41,7 +46,7 @@ test('legacy math exports natively without mutating drafts and failures identify
   const draft={version:1,inputMode:'answers',title:'兼容验证',questions:[q],answers:[],pages:[]};
   const original=structuredClone(draft);
   const xml=await(await JSZip.loadAsync(await(await buildStudioWord(draft,'text',{transcription:true})).arrayBuffer())).file('word/document.xml').async('string');
-  assert.match(xml,/<m:chr m:val="⏠"/);assert.match(xml,/>⨀<\/m:t>/);assert.match(xml,/>∠<\/m:t>/);assert.match(xml,/>°<\/m:t>/);
+  assert.match(xml,/<m:chr m:val="⏠"/);assert.match(xml,/>⨀<\/m:t>/);assert.match(xml,/>∠<\/w:t>/);assert.match(xml,/>°<\/w:t>/);
   assert.doesNotMatch(xml,/overgroup|bigodot|angle|<w:drawing|<v:|>\\<\/m:t>/);
   assert.deepEqual(draft,original);
   q.stem='题干 $\\unknown{AB}$';
@@ -56,7 +61,7 @@ test('warning evidence containing undelimited LaTeX stays literal and cannot blo
   const draft={version:1,inputMode:'answers',title:'提示文字公式',questions:[q],answers:[],pages:[]};
   const zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'full',{transcription:true})).arrayBuffer());
   const xml=await zip.file('word/document.xml').async('string');
-  assert.match(xml,/6\\sqrt\{3\}/);assert.match(xml,/分值/);assert.match(xml,/<m:oMath>/);
+  assert.match(xml,/6\\sqrt\{3\}/);assert.match(xml,/分值/);assert.match(xml,/>2<\/w:t>/);assert.doesNotMatch(xml,/<m:rad>/);
 });
 test('structured transcription tables remain native Word tables with editable cell math',async t=>{
   const {buildStudioWord}=await modules(t);
@@ -72,8 +77,8 @@ test('composite blank export contains the final answer rather than the placehold
   const draft={version:1,inputMode:'answers',title:'填空验证',questions:[q],answers:[],pages:[]};
   const zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'text',{transcription:true})).arrayBuffer());
   const xml=await zip.file('word/document.xml').async('string');
-  assert.match(xml,/>C00000<|w:color w:val="C00000"/);assert.match(xml,/>\+<\/m:t>/);assert.doesNotMatch(xml,/答案空位位于复合公式/);
-  assert.ok((xml.match(/<m:bar>/g)||[]).length>=1,'answer remains visibly underlined');
+  assert.match(xml,/>C00000<|w:color w:val="C00000"/);assert.match(xml,/>\+<\/w:t>/);assert.doesNotMatch(xml,/答案空位位于复合公式/);
+  assert.match(xml,/<w:u w:val="single"\/>/,'answer remains visibly underlined');
 });
 test('steps-only output excludes structured tables just like it excludes question text',async t=>{
   const {buildStudioWord}=await modules(t);

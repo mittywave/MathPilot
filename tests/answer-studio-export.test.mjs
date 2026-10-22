@@ -1,3 +1,5 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
@@ -7,7 +9,64 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
 import {loadSource} from './load-source.mjs';
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const require=createRequire(import.meta.url);
+test('standard figure padding preserves boundary labels without capturing the adjacent allocated paragraph',async t=>{
+  const originals={Image:globalThis.Image,document:globalThis.document,FileReader:globalThis.FileReader};t.after(()=>Object.assign(globalThis,originals));
+  const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',draws=[];
+  globalThis.Image=class {width=1000;height=1000;set src(value){void value;queueMicrotask(()=>this.onload());}};
+  globalThis.FileReader=class {readAsDataURL(){this.result=png;queueMicrotask(()=>this.onload());}};
+  globalThis.document={createElement:()=>{const canvas={width:0,height:0,toBlob:callback=>callback(new Blob([Uint8Array.from(Buffer.from(png.split(',')[1],'base64'))]))};canvas.getContext=()=>({fillStyle:'',fillRect(){},drawImage(image,...args){if(args.length===8)draws.push({x:args[0],y:args[1],width:args[2],height:args[3]});},getImageData:()=>({width:canvas.width,height:canvas.height,data:new Uint8ClampedArray(canvas.width*canvas.height*4).fill(255).map((value,i)=>i%4===3?value:0)})});return canvas;}};
+  const {buildStudioWord}=await loadSource('lib/answer-studio-export.ts');
+  const blocks=[{id:'stem',role:'stem',text:'1．如图，求证。',rows:[],box:{x:100,y:100,width:700,height:30},continuation:false},{id:'figure',role:'figure',text:'',rows:[],box:{x:200,y:200,width:200,height:200},continuation:false},{id:'proof',role:'body',text:'在三角形中，继续证明。',rows:[],box:{x:100,y:402,width:700,height:30},continuation:false}];
+  const draft={version:1,title:'图文边界',inputMode:'questions',pages:[{id:'p',role:'question',name:'source.pdf',page:1,image:png,hash:'p',selected:true,processed:true,document:{printed:true,parts:[{kind:'questions',title:'图文边界',heading:'',continuation:false,sections:[{title:'',continuation:false,questions:[{number:'1',continuation:false,blocks}]}]}],warnings:[]}}],questions:[],answers:[]};
+  const before=structuredClone(draft),zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'full')).arrayBuffer()),crop=draws.at(-1);
+  assert.ok(crop.y+crop.height>400,'the figure can still grow to preserve its boundary labels');
+  assert.ok(crop.y+crop.height<402,'growth must stop before the already allocated following text');
+  const xml=await zip.file('word/document.xml').async('string');assert.equal((xml.match(/在三角形中/g)||[]).length,1);assert.match(xml,/<w:drawing>/);assert.deepEqual(draft,before);
+  draws.length=0;const precise=structuredClone(draft);precise.pages[0].textHint=[[100,50,15,'图文边界'],[100,115,10.5,'1．如图，求证。'],[100,412,10.5,'在三角形中，继续证明。']].map(x=>JSON.stringify(x)).join('\n');
+  await buildStudioWord(precise,'full');assert.ok(draws.at(-1).y+draws.at(-1).height<400,'PDF baseline evidence excludes glyphs overhanging an approximate paragraph box');
+  draws.length=0;const loose=structuredClone(precise);loose.pages[0].document.parts[0].sections[0].questions[0].blocks[0].box.height=99;loose.pages[0].textHint=loose.pages[0].textHint.replace('[100,115,','[100,180,');
+  await buildStudioWord(loose,'full');assert.ok(draws.at(-1).y<190,'an overestimated preceding paragraph box must not cut off figure labels above a tight figure box');
+  draws.length=0;const {cropStudioImage}=await loadSource('lib/answer-studio-images.ts');await cropStudioImage(png,blocks[1].box);
+  assert.ok(draws.at(-1).y+draws.at(-1).height>=402,'unstructured legacy crops retain their existing padding policy');
+});
+test('every transcription mode uses one retained framework for prose, simple scripts, complex math and paragraph flow',async()=>{
+  const {buildStudioWord}=await loadSource('lib/answer-studio-export.ts');
+  const coordinate=String.raw`1．设 $F(m,\frac{2}{m})$，并求 $x_1^2$。`;
+  const calculation=String.raw`$=m\times\frac4m-\frac12(m-\frac12m)$`;
+  const cases=String.raw`$\begin{cases}x=\frac12\\y=2\end{cases}$`;
+  const matrix=String.raw`$\begin{bmatrix}1&2\\3&4\end{bmatrix}$`;
+  const q={id:'q',lesson:'Reference lesson',section:'Part I 一、解答题',number:'1',stem:coordinate,analysis:[coordinate,calculation,cases,matrix].join('\n'),questionSources:[],answerIds:[],diagrams:[],warnings:[],resolutions:{},reviewed:true,drawingsChecked:true};
+  const legacy={version:1,title:'共用格式',inputMode:'questions',pages:[],questions:[q],answers:[]};
+  const blocks=[coordinate,calculation,cases,matrix].map((text,i)=>({id:`b${i}`,role:i?'body':'stem',text,rows:[],box:{x:40,y:100+i*100,width:900,height:80},continuation:false}));
+  const printed={...legacy,questions:[],pages:[{id:'p',role:'question',name:'paper.pdf',page:1,image:'',hash:'p',selected:true,processed:true,document:{printed:true,parts:[{kind:'questions',title:'共用格式',heading:'',continuation:false,sections:[{title:'一、解答题',continuation:false,questions:[{number:'1',continuation:false,blocks}]}]}],warnings:[]}}]};
+  const template=await JSZip.loadAsync(await readFile('public/standard-math-paper.docx'));
+  for(const draft of [legacy,printed])for(const mode of draft===legacy?['full','text','steps','answers']:['full','text']){
+    const before=structuredClone(draft),zip=await JSZip.loadAsync(await(await buildStudioWord(draft,mode,{transcription:true,includeTranscriptionWarnings:false})).arrayBuffer());
+    const xml=await zip.file('word/document.xml').async('string');
+    for(const part of ['word/styles.xml','word/theme/theme1.xml','word/fontTable.xml','word/footer1.xml'])assert.equal(await zip.file(part).async('string'),await template.file(part).async('string'),`${mode}: ${part}`);
+    assert.match(xml,/<w:pgMar w:top="1418"[^>]*w:right="1134"[^>]*w:bottom="1418"[^>]*w:left="1134"/);
+    assert.doesNotMatch(xml,/Songti SC|MP_TEMPLATE_|MP_DOCUMENT_|<w:sz w:val="22"|<m:oMathPara>/);
+    for(const [run] of xml.matchAll(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g))if(/<w:t(?:\s|>)/.test(run)){
+      assert.match(run,/w:ascii="Times New Roman"/,'headings, labels and prose must not inherit an editor default Latin font');
+      assert.match(run,/w:eastAsia="新宋体"/,'every text run follows the reference Chinese font');
+    }
+    assert.match(xml,/<w:sz w:val="24"\/>[\s\S]*?<w:vertAlign/,'simple scripts share the reference text formatting');
+    const paragraphs=[...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].map(m=>m[0]);
+    const coordinateParagraph=paragraphs.find(p=>p.includes('设'));
+    assert.ok(coordinateParagraph);assert.doesNotMatch(coordinateParagraph,/<m:d>/,'ordinary coordinate parentheses stay literal body-size characters');
+    assert.match(coordinateParagraph,/<m:t>\(<\/m:t>/);assert.match(coordinateParagraph,/<m:t>\)<\/m:t>/);
+    const independent=paragraphs.filter(p=>p.includes('<m:oMath>')&&!p.includes('设'));
+    assert.ok(independent.length>=3);
+    for(const p of independent){assert.match(p,/<w:t>\u200C<\/w:t><\/w:r><m:oMath>/);assert.match(p,/<w:ind w:left="312"/);assert.doesNotMatch(p,/<w:r>(?:(?!<\/w:r>)[\s\S])*?<m:oMath>/,'native math is a valid paragraph child');}
+    assert.match(xml,/<m:begChr m:val="\{"/);assert.match(xml,/<m:begChr m:val="\["/,'matrix brackets retain scalable native structure');
+    assert.ok((xml.match(/<m:m>/g)||[]).length>=2);assert.match(xml,/<m:mcJc m:val="left"/);
+    assert.deepEqual(draft,before);
+  }
+});
 test('standard paper output uses the supplied Word structure and paragraph styles rather than floating OCR text boxes',async t=>{
   const templateBytes=await readFile('public/standard-math-paper.docx'),source=await JSZip.loadAsync(templateBytes),originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
   globalThis.fetch=async url=>{assert.equal(url,'/standard-math-paper.docx');return new Response(templateBytes);};
@@ -57,11 +116,11 @@ test('both studio exports preserve OMML, native geometry, media relationships an
       const paragraphs=[...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].map(m=>m[0]);
       const caption=paragraphs.find(p=>p.includes('解答图'));
       assert.match(caption,/<w:keepNext\b/,'caption must stay with its drawing');
-      for(const p of paragraphs.filter(p=>p.includes('w:val="StudioAnswer"'))) {
+      for(const p of paragraphs.filter(p=>/第一步|第二步/.test(p))) {
         assert.match(p,/<w:pPr>[\s\S]*?<w:rPr><w:color w:val="C00000"\/><\/w:rPr><\/w:pPr>/);
         for(const m of p.matchAll(/<m:r>[\s\S]*?<\/m:r>/g)) assert.match(m[0],/<w:color w:val="C00000"\/>/);
       }
-      if(mode==='full')assert.match(xml,/<m:t(?:\s[^>]*)?>°<\/m:t>/);
+      if(mode==='full')assert.match(xml,/<(?:m|w):t(?:\s[^>]*)?>°<\/(?:m|w):t>/);
     }
     q.analysis='已经修改 $x=2$\n$y=3$';
     for(const mode of ['full','answers']) {const zip=await JSZip.loadAsync(await (await buildStudioWord(draft,mode)).arrayBuffer());const xml=await zip.file('word/document.xml').async('string');assert.match(xml,/已经修改/);assert.doesNotMatch(xml,/第一步/);}
@@ -73,7 +132,7 @@ test('both studio exports preserve OMML, native geometry, media relationships an
     q.analysis='(1) $\\sin\\alpha=\\frac{1}{2}$\n(2) $\\begin{cases}x+y=3\\\\x-y=1\\end{cases}$\n$\\widehat{AB}=\\overparen{CD}$\n$EF\\xlongequal{//}CD$';
     const reviewZip=await JSZip.loadAsync(await(await buildStudioWord(draft,'answers',{reviewCopy:true})).arrayBuffer());
     const reviewXml=await reviewZip.file('word/document.xml').async('string');
-    assert.match(reviewXml,/待校对样张/);assert.match(reviewXml,/不可作为完成稿/);assert.match(reviewXml,/<m:eqArr>/);assert.match(reviewXml,/<m:acc>/);assert.match(reviewXml,/<m:limUpp>/);
+    assert.match(reviewXml,/待校对样张/);assert.match(reviewXml,/不可作为完成稿/);assert.match(reviewXml,/<m:m>/);assert.match(reviewXml,/<m:acc>/);assert.match(reviewXml,/<m:limUpp>/);
     assert.match(reviewXml,/<m:sty m:val="p"\/>[\s\S]*?>sin<\/m:t>/);
     for(const r of reviewXml.matchAll(/<m:r>[\s\S]*?<\/m:r>/g))if(/<m:t[^>]*>[0-9]/.test(r[0]))assert.match(r[0],/<m:sty m:val="p"\/>/);
     assert.equal(q.reviewed,false);await assert.rejects(()=>buildStudioWord(draft,'answers'));
@@ -85,7 +144,7 @@ test('both studio exports preserve OMML, native geometry, media relationships an
       const p=[...layoutXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(m=>m[0].includes(`>${label}</w:t>`))?.[0];
       assert.ok(p);
       if(label==='证明：')assert.match(p,/<w:keepNext\b/);
-      else {assert.doesNotMatch(p,/<w:tab\/>|<w:tabs>/);assert.ok(p.includes(`>${label}</w:t></w:r><m:oMath`),'the label runs straight into its text');assert.match(p,/w:hanging="420"/);}
+      else {assert.doesNotMatch(p,/<w:tab\/>|<w:tabs>/);assert.ok(p.includes(`>${label}</w:t></w:r><w:r>`),'the label runs straight into its text');assert.match(p,/w:left="312"/);assert.doesNotMatch(p,/w:hanging=/);}
     }
     assert.match(layoutXml,/<w:i w:val="false"\/>[^]*?<w:t xml:space="preserve">12点<\/w:t>/);
     q.analysis='$\\sqrt{10}$';q.answerPlacements=[{kind:'blank',placeholder:'____',answer:q.analysis}];q.drawingsChecked=true;
@@ -143,15 +202,15 @@ test('source pictures keep their place and print size from the original page; a 
     const xml=await zip.file('word/document.xml').async('string');
     const rows=[...xml.matchAll(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ >])[\s\S])*?<v:group[\s\S]*?<\/w:p>/g)].map(m=>m[0]);
     assert.deepEqual(rows.map(p=>[p.match(/<w:jc w:val="(\w+)"\/>/)?.[1],(p.match(/<v:group /g)||[]).length]),[['right',2],['center',1],['left',1],['center',1],['center',1],['right',1]]);
-    // A row keeps its share of the original line (a quarter each here, beside a 22 pt gap), a lone picture gets at least
-    // 40% of the 487.3 pt line, an unplaced one keeps the compact size, and none is taller than 240 pt.
+    // A row keeps its share of the original line (a quarter each here, beside a 21 pt gap), a lone picture gets at least
+    // 40% of the 466.3 pt line, an unplaced one keeps the compact size, and none is taller than 240 pt.
     const sizes=[...xml.matchAll(/<v:group id="studio\d+" style="width:([\d.]+)pt;height:([\d.]+)pt"/g)].map(m=>[Number(m[1]),Number(m[2])]);
-    const line=487.3;
-    for(const [[width],expected] of sizes.slice(0,6).map((size,i)=>[size,[(line-22)/4,(line-22)/4,line*.4,line*.4,130,130][i]]))assert.ok(Math.abs(width-expected)<.01,`${width} ≠ ${expected}`);
+    const line=466.3;
+    for(const [[width],expected] of sizes.slice(0,6).map((size,i)=>[size,[(line-21)/4,(line-21)/4,line*.4,line*.4,130,130][i]]))assert.ok(Math.abs(width-expected)<.01,`${width} ≠ ${expected}`);
     assert.ok(Math.abs(sizes[6][1]-240)<.01&&sizes[6][0]<80,'a tall picture is capped at 240 pt high');
     assert.match(xml,/<w:t xml:space="preserve">2\.<\/w:t><\/w:r><w:r>(?:<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<\/w:rPr>)?<w:t xml:space="preserve">如图/,'the printed question number is one run, straight before its text');
-    assert.match(rows[0],/<v:group [\s\S]*?<\/w:pict><\/w:r><w:r><w:t xml:space="preserve">\u3000\u3000<\/w:t><\/w:r><w:r><w:pict /,'pictures on one row sit side by side');
-    for(const p of rows)assert.match(p,/<w:spacing (?=[^>]*w:before="100")(?=[^>]*w:after="140")[^>]*\/>/);
+    assert.match(rows[0],/<v:group [\s\S]*?<\/w:pict><\/w:r><w:r>(?:<w:rPr>[\s\S]*?<\/w:rPr>)?<w:t xml:space="preserve">\u3000\u3000<\/w:t><\/w:r><w:r><w:pict /,'pictures on one row sit side by side');
+    for(const p of rows)assert.match(p,/<w:spacing w:line="360" w:lineRule="auto"\/>/);
     assert.doesNotMatch(xml,/STUDIO_DIAGRAM_/);
   }finally{await rm(dir,{recursive:true,force:true});}
 });

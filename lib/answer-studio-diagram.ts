@@ -1,4 +1,5 @@
 import type { StudioDiagram, StudioShape } from "./answer-studio";
+import { STUDIO_WORD_STYLE } from './studio-math-layout';
 
 export const xmlEscape = (s: string) => s.replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&apos;"}[c]!));
 // Geometry variables are italic, but digits, punctuation and Chinese labels are upright.
@@ -72,7 +73,7 @@ export function studioDiagramVml(d: StudioDiagram, imageRelation: string, unique
     }
     const fontSize=Math.max(15,Math.round(s.height*scale*1.7));
     const labelStyle=`position:absolute;left:${s.x};top:${s.y};width:${Math.max(s.width,(s.text.length*fontSize*.3+2)/scale)};height:${Math.max(s.height,(fontSize*.65)/scale)}`;
-    const runs=labelParts(s.text).map(p=>`<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Songti SC"/><w:i w:val="${p.italic?'true':'false'}"/><w:color w:val="${color.slice(1)}"/><w:sz w:val="${fontSize}"/></w:rPr><w:t xml:space="preserve">${xmlEscape(p.text)}</w:t></w:r>`).join('');
+    const runs=labelParts(s.text).map(p=>`<w:r><w:rPr><w:rFonts w:ascii="${STUDIO_WORD_STYLE.font.ascii}" w:hAnsi="${STUDIO_WORD_STYLE.font.hAnsi}" w:eastAsia="${STUDIO_WORD_STYLE.font.eastAsia}"/><w:i w:val="${p.italic?'true':'false'}"/><w:color w:val="${color.slice(1)}"/><w:sz w:val="${fontSize}"/></w:rPr><w:t xml:space="preserve">${xmlEscape(p.text)}</w:t></w:r>`).join('');
     return `<v:rect id="${id}" style="${labelStyle}" filled="f" stroked="f"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>${runs}</w:p></w:txbxContent></v:textbox></v:rect>`;
   }
   const image = d.baseImage ? `<v:rect id="${unique}_base" style="position:absolute;left:0;top:0;width:${d.width};height:${d.height}" stroked="f"><v:imagedata r:id="${imageRelation}" o:title="原题底图"/></v:rect>` : "";
