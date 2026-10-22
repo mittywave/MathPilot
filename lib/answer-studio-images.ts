@@ -19,10 +19,10 @@ export async function loadStudioImage(source:string):Promise<HTMLImageElement> {
   return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error("无法读取原图"));image.src=source;});
 }
 /** Read only the pixels around the box, then let a tight model box grow to the figure's blank edges. */
-function growStudioBox(image:HTMLImageElement,box:StudioBox):StudioBox {
+function growStudioBox(image:HTMLImageElement,box:StudioBox,bounds:StudioBox):StudioBox {
   const max=Math.round(Math.max(image.width,image.height)*0.04);
-  const x0=Math.max(0,Math.floor(image.width*box.x/1000)-max),y0=Math.max(0,Math.floor(image.height*box.y/1000)-max);
-  const x1=Math.min(image.width,Math.ceil(image.width*(box.x+box.width)/1000)+max),y1=Math.min(image.height,Math.ceil(image.height*(box.y+box.height)/1000)+max);
+  const x0=Math.max(0,Math.floor(image.width*box.x/1000)-max,Math.ceil(image.width*bounds.x/1000)),y0=Math.max(0,Math.floor(image.height*box.y/1000)-max,Math.ceil(image.height*bounds.y/1000));
+  const x1=Math.min(image.width,Math.ceil(image.width*(box.x+box.width)/1000)+max,Math.floor(image.width*(bounds.x+bounds.width)/1000)),y1=Math.min(image.height,Math.ceil(image.height*(box.y+box.height)/1000)+max,Math.floor(image.height*(bounds.y+bounds.height)/1000));
   const canvas=document.createElement("canvas");canvas.width=x1-x0;canvas.height=y1-y0;
   const ctx=canvas.getContext("2d",{willReadFrequently:true})!;ctx.drawImage(image,x0,y0,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
   const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);canvas.width=0;canvas.height=0;
@@ -32,8 +32,8 @@ function growStudioBox(image:HTMLImageElement,box:StudioBox):StudioBox {
   },max);
   return {x:(r.left+x0)*1000/image.width,y:(r.top+y0)*1000/image.height,width:(r.right-r.left+1)*1000/image.width,height:(r.bottom-r.top+1)*1000/image.height};
 }
-export async function cropStudioImage(source:string,cropBox:StudioBox,width=600) {
-  const image=await loadStudioImage(source),canvas=document.createElement("canvas"),box=growStudioBox(image,cropBox);
+export async function cropStudioImage(source:string,cropBox:StudioBox,width=600,bounds:StudioBox={x:0,y:0,width:1000,height:1000}) {
+  const image=await loadStudioImage(source),canvas=document.createElement("canvas"),box=growStudioBox(image,cropBox,bounds);
   const sw=image.width*box.width/1000,sh=image.height*box.height/1000;
   canvas.width=Math.min(width,sw);canvas.height=Math.max(1,Math.round(canvas.width*sh/sw));
   const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);

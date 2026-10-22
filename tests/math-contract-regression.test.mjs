@@ -1,11 +1,16 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import {loadSource} from './load-source.mjs';
-import {SUPPORTED_MATH_SYMBOLS,SUPPORTED_MATH_ENVIRONMENTS,WORD_MATH_STYLE} from '../lib/math-capabilities.mjs';
+import {SUPPORTED_MATH_SYMBOLS,SUPPORTED_MATH_ENVIRONMENTS} from '../lib/math-capabilities.mjs';
 import {mathContractDraft} from './fixtures/math-contract.mjs';
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const {mathOmml}=await loadSource('lib/math-omml.ts');
-const {studioMathIssues,studioWordEquationXml}=await loadSource('lib/studio-math-layout.ts');
+const {studioMathIssues,studioWordEquationXml,STUDIO_MATH_SIZE}=await loadSource('lib/studio-math-layout.ts');
 const {buildStudioWord,assertStudioMathSupported}=await loadSource('lib/answer-studio-export.ts');
 const {parseMathGrid,parseArrayColumns}=await loadSource('lib/math-grid.ts');
 const read=async blob=>(await JSZip.loadAsync(await blob.arrayBuffer())).file('word/document.xml').async('string');
@@ -33,11 +38,11 @@ test('array columns and whitespace are explicit; unsupported material is not dis
 test('malformed and excessive grids fail closed before export',()=>{
   for(const text of [String.raw`\begin{matrix}1\end{cases}`,String.raw`\begin{array}{r}1&2\end{array}`,String.raw`\begin{matrix}1\\[3pt]2\end{matrix}`,String.raw`x\\y`, '{'.repeat(70)+'1'+'}'.repeat(70)])assert.throws(()=>mathOmml(text));
 });
-test('all inline and display math runs share 22 half-points, independent of depth',()=>{
+test('all inline and display math runs share the reference body size, independent of depth',()=>{
   for(const display of [false,true])for(const expression of ['x_1',String.raw`\frac{\frac12}{\sqrt{x^2}}`]){
     const xml=studioWordEquationXml(expression,display);
     const sizes=[...xml.matchAll(/<w:sz w:val="(\d+)"/g)].map(m=>Number(m[1]));
-    assert.ok(sizes.length);assert.ok(sizes.every(size=>size===WORD_MATH_STYLE.baseSize));
+    assert.ok(sizes.length);assert.ok(sizes.every(size=>size===STUDIO_MATH_SIZE));
   }
 });
 test('formal fixture has native matrices, fractions and ruled editable tables, no placeholders',async()=>{

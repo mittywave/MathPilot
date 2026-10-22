@@ -1,3 +1,5 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -10,6 +12,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import JSZip from 'jszip';
 import katex from 'katex';
 import { loadSource } from './load-source.mjs';
+import {wordMathFractionDepth} from '../lib/word-math-sizing.mjs';
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const require = createRequire(import.meta.url);
 
 test('fractions in every cases row use body-size digits in inline and display math', async () => {
@@ -99,21 +105,31 @@ test('both web renderers share explicit math styles and expose parse failures', 
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
-test('generated Studio DOCX retains native nested math without forced font sizes', async () => {
+test('generated Studio DOCX uses reference fraction sizing while preserving native nested math', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'zhiti-word-sizing-'));
   try {
     const output = join(dir,'export.cjs');
     await build({entryPoints:['lib/answer-studio-export.ts'],bundle:true,platform:'node',format:'cjs',packages:'external',alias:{docx:require.resolve('docx'),jszip:require.resolve('jszip')},external:[require.resolve('docx'),require.resolve('jszip')],outfile:output,logLevel:'silent'});
     const {buildStudioWord} = require(output);
-    const question = {id:'q',lesson:'Regression',section:'Examples',number:'1',stem:'$x=1$',analysis:String.raw`ordinary $\frac{1}{8}$; nested $\frac{\frac{5\sqrt{2}}{4}}{\frac{25}{2}}$`,questionSources:[],answerIds:[],diagrams:[],warnings:[],resolutions:{},reviewed:true};
+    const question = {id:'q',lesson:'Regression',section:'Examples',number:'1',stem:'$x=1$',analysis:String.raw`ordinary $\frac{1}{8}$; nested $\frac{\frac{5\sqrt{2}}{4}}{\frac{25}{2}}$; continued $1+\frac{1}{1+\frac{1}{1+\frac{1}{4x}}}$`,questionSources:[],answerIds:[],diagrams:[],warnings:[],resolutions:{},reviewed:true};
     const draft = {version:1,title:'Regression',pages:[],questions:[question],answers:[]};
     const blob = await buildStudioWord(draft,'answers',{reviewCopy:true});
     const zip = await JSZip.loadAsync(await blob.arrayBuffer());
     const xml = await zip.file('word/document.xml').async('string');
     const equations = [...xml.matchAll(/<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>/g)].map(m=>m[0]);
-    assert.equal(equations.length,2);
+    assert.equal(equations.length,3);
     assert.equal([...equations[1].matchAll(/<m:f>/g)].length,3);
-    for(const equation of equations) assert.doesNotMatch(equation,/<w:sz w:val="(?:26|30)"\/>|<m:ctrlPr>/);
+    assert.equal(wordMathFractionDepth(equations[2]),3);
+    for(const equation of equations){
+      assert.doesNotMatch(equation,/<w:sz w:val="(?:26|30)"\/>/);
+      assert.equal((equation.match(/<m:ctrlPr>/g)||[]).length,(equation.match(/<m:f>/g)||[]).length,'every fraction retains the reference control size');
+      assert.match(equation,/<m:ctrlPr><w:rPr><w:sz w:val="28"\/>/);
+      let depth=0;
+      for(const token of equation.matchAll(/<m:f>|<\/m:f>|<m:r>[\s\S]*?<\/m:r>/g)){
+        if(token[0]==='<m:f>')depth++;else if(token[0]==='</m:f>')depth--;else assert.match(token[0],new RegExp(`<w:sz w:val="${depth?28:21}"/>`));
+      }
+    }
+    assert.doesNotMatch(equations[1],/<w:sz w:val="21"\/>/,'nested fraction arguments use the same nominal size; Office handles script reduction');
     assert.doesNotMatch(xml,/<undefined>|\\frac|\\dfrac/);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });

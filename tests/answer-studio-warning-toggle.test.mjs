@@ -1,3 +1,5 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
@@ -7,6 +9,9 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
 
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const require=createRequire(import.meta.url);
 
 test('Word export can include or omit transcription problem hints without changing content',async()=>{

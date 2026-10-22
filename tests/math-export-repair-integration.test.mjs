@@ -1,3 +1,5 @@
+import {before,after} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -6,9 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
+const nativeFetch=globalThis.fetch;
+before(()=>{globalThis.fetch=(url,...args)=>url==='/standard-math-paper.docx'?Promise.resolve(new Response(readFileSync('public/standard-math-paper.docx'))):nativeFetch(url,...args);});
+after(()=>{globalThis.fetch=nativeFetch;});
 const require=createRequire(import.meta.url);
 
-test('all Studio Word modes preserve repaired math and consistent native display blocks',async t=>{
+test('all Studio Word modes preserve repaired math and the same reference paragraph framework',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'studio-word-repair-'));
   t.after(()=>rm(directory,{recursive:true,force:true}));
   const output=join(directory,'export.cjs');
@@ -32,10 +37,10 @@ test('all Studio Word modes preserve repaired math and consistent native display
     const zip=await JSZip.loadAsync(await blob.arrayBuffer());
     const xml=await zip.file('word/document.xml').async('string');
     assert.match(xml,/\u211d/);
-    assert.match(xml,/<m:oMathPara>/);
-    assert.match(xml,/w:val="StudioMathAnswer"/);
-    assert.match(xml,/<w:sz w:val="24"\/>/);
-    assert.match(xml,/<w:sz w:val="22"\/>/);
+    assert.match(xml,/<m:oMath>/);assert.doesNotMatch(xml,/<m:oMathPara>/);
+    assert.match(xml,/w:line="360"/);
+    assert.match(xml,/<w:sz w:val="30"\/>/);
+    assert.match(xml,/<w:sz w:val="21"\/>/);
     assert.doesNotMatch(xml,/mathbb|Rightarrow|\$\$\$|\u516c\u5f0f\u5f85\u6838\u5bf9|<undefined>/);
     assert.ok((xml.match(/<m:sSub>/g)||[]).length>=3);
     assert.deepEqual(draft,original,'export and repairs must not mutate the caller draft');

@@ -1,15 +1,14 @@
-import { WORD_MATH_STYLE } from './math-capabilities.mjs';
 import { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell, BorderStyle, WidthType, TableLayoutType, ImageRun, type IParagraphOptions, type ParagraphChild } from "docx";
 import JSZip from "jszip";
 import { richText } from "./answer-studio-rich-text";
 import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, type StudioQuestion, type StudioSource, type StudioDocumentBlock } from "./answer-studio";
-import {studioDocumentReady,studioDocumentParts,fillStudioDocumentTemplate,normalizeStudioDocumentTemplate} from './answer-studio-contract';
+import {studioDocumentReady,studioDocumentParts,fillStudioDocumentTemplate,normalizeStudioDocumentTemplate,documentEvidence} from './answer-studio-contract';
 import { diagramBounds, studioDiagramVml, xmlEscape } from "./answer-studio-diagram";
-import { ensureWordMathSettings, fullSizeInlineFractions } from "./word-math-sizing.mjs";
+import { ensureWordMathSettings } from "./word-math-sizing.mjs";
 import { splitMathText } from "./answer-studio-math-text";
-import { readMathGroup, standaloneRuledArray, standaloneRuledArrayLine as ruledArrayLine } from './math-grid';
+import { standaloneRuledArray, standaloneRuledArrayLine as ruledArrayLine } from './math-grid';
 import { mathOmml } from './math-omml';
-import { isStudioDisplayMathLine } from './studio-math-layout';
+import { isStudioDisplayMathLine, STUDIO_WORD_STYLE } from './studio-math-layout';
 import { repairMathSource, scanMathSource, splitMathParagraphs } from './math-source.mjs';
 import { normalizeStudioTextFields } from './answer-studio-normalize';
 import { xmlSafeText } from './xml-text';
@@ -40,11 +39,14 @@ export function studioAnswerParagraphs(text: string) {
   return lines.map((text, index)=>({text, keepNext:index<lines.length-1 && /^(?:(?:证明|解|解答)\s*[：:]|[（(]\d+[)）])$/.test(text)}));
 }
 
-// A4 with 1080-twip margins; the body line is 9746 twips (about 487 pt) wide.
-const PAGE={width:11906,height:16838,margin:1080};
-const LINE_PT=(PAGE.width-2*PAGE.margin)/20;
-// The two ideographic spaces between pictures on one row, in 11 pt body text.
-const FIGURE_GAP_PT=22;
+const PAGE=STUDIO_WORD_STYLE.page;
+const LINE_PT=(PAGE.width-PAGE.margin.left-PAGE.margin.right-312)/20;
+const FIGURE_GAP_PT=STUDIO_WORD_STYLE.size;
+
+// Role markers are removed when the reference paragraph properties are applied.
+function standardParagraph(role:string,options:IParagraphOptions) {
+  return new Paragraph({...options,style:`MP_TEMPLATE_${role}`});
+}
 
 /** A question's source pictures as the original page printed them: pictures on one row share a paragraph, side by
  * side, and each row keeps its side of the question — right, centre or left, by the space left on either side.
@@ -114,31 +116,30 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   });
   const diagrams: Array<{ token: string; question: StudioQuestion; index: number; widthPt?: number }> = [];
   const outputLabel=studioOutputs(draft).find(output=>output.value===mode)?.label||'答案解析';
-  const children: Array<Paragraph|Table> = [new Paragraph({ style:"Title", alignment:AlignmentType.CENTER, children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,bold:true,size:32,color:"000000"})],spacing:{after:300} })];
-  if(options.reviewCopy)children.push(new Paragraph({children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000'})]}));
+  const children: Array<Paragraph|Table> = [standardParagraph('TITLE',{alignment:AlignmentType.CENTER,children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,font:STUDIO_WORD_STYLE.font,bold:true,size:30,color:'000000'})]})];
+  if(options.reviewCopy)children.push(standardParagraph('BODY',{children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000',font:STUDIO_WORD_STYLE.font,size:STUDIO_WORD_STYLE.size})]}));
   const safeRichText=(text:string,style:{color?:string;underline?:boolean;italicMath?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right'},q:StudioQuestion,field:string):ParagraphChild[]=>{
     if(xmlSafeText(text)!==text)addIssue(q,`${field}：含不可显示字符，已用替代符标记`);
-    return richText(text,style,error=>{
+    return richText(text,{displayMath:false,...style},error=>{
       const detail=error instanceof Error?error.message:'公式转换失败';
       if(!bestEffort)throw new Error(`${q.number} / ${field}: ${detail}`,{cause:error});
       addIssue(q,`${field}：${detail}`);
     });
   };
-  const paragraph = (text: string, red: boolean, keepNext=false,q?:StudioQuestion,field='文本') => new Paragraph({ keepNext, style:red?'StudioAnswer':'Normal', spacing:{line:360,after:80}, children:q?safeRichText(text,{ color:red?'C00000':'000000' },q,field):richText(text,{ color:red?'C00000':'000000' }) });
+  const paragraph = (text: string, red: boolean, keepNext=false,q?:StudioQuestion,field='文本') => standardParagraph('BODY',{keepNext,children:q?safeRichText(text,{color:red?'C00000':'000000'},q,field):richText(text,{color:red?'C00000':'000000',displayMath:false})});
   // Warnings are evidence about recognition, not mathematical content to be
   // typeset. They often quote damaged OCR such as `6\sqrt{3}` without math
   // delimiters; sending the whole sentence through the math splitter makes
   // the backslash start a false equation and can block an otherwise valid
   // full export. Preserve warning text literally so the original evidence is
   // still visible and editable in Word.
-  const warningParagraph = (text:string) => new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:[new TextRun({text,color:'C00000',size:22,font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman'}})]});
+  const warningParagraph = (text:string) => standardParagraph('BODY',{children:[new TextRun({text,color:'C00000',size:STUDIO_WORD_STYLE.size,font:STUDIO_WORD_STYLE.font})]});
   if(includeTranscriptionWarnings&&globalIssues.length)children.push(warningParagraph('格式问题：'+[...new Set(globalIssues)].join('；')));
-  const figureSpacing={before:100,after:140};
   const studioTable = (table:{rows:string[][];red?:boolean},q:StudioQuestion,tableIndex:number) => {
     const columns=Math.max(...table.rows.map(row=>row.length));
-    const width=Math.max(1,Math.floor(9300/columns));
-    const border={style:BorderStyle.SINGLE,size:4,color:'D9D9D9'};
-    return new Table({layout:TableLayoutType.FIXED,width:{size:9300,type:WidthType.DXA},columnWidths:Array.from({length:columns},()=>width),borders:{top:border,bottom:border,left:border,right:border,insideHorizontal:border,insideVertical:border},rows:table.rows.map((row,rowIndex)=>new TableRow({children:Array.from({length:columns},(_,index)=>new TableCell({width:{size:width,type:WidthType.DXA},margins:{top:80,bottom:80,left:120,right:120},children:[new Paragraph({spacing:{line:300,after:0},children:safeRichText(row[index]??'', {color:table.red?'C00000':'000000',italicMath:table.red?false:undefined,displayMath:false},q,`表格${tableIndex+1}第${rowIndex+1}行第${index+1}列`)})]}))}))});
+    const width=Math.max(1,Math.floor(LINE_PT*20/columns));
+    const border={style:BorderStyle.SINGLE,size:4,color:'000000'};
+    return new Table({layout:TableLayoutType.FIXED,width:{size:LINE_PT*20,type:WidthType.DXA},indent:{size:312,type:WidthType.DXA},columnWidths:Array.from({length:columns},()=>width),borders:{top:border,bottom:border,left:border,right:border,insideHorizontal:border,insideVertical:border},rows:table.rows.map((row,rowIndex)=>new TableRow({children:Array.from({length:columns},(_,index)=>new TableCell({width:{size:width,type:WidthType.DXA},margins:{top:40,bottom:40,left:80,right:80},children:[new Paragraph({spacing:{line:STUDIO_WORD_STYLE.line,after:0},children:safeRichText(row[index]??'', {color:table.red?'C00000':'000000',italicMath:table.red?false:undefined,displayMath:false},q,`表格${tableIndex+1}第${rowIndex+1}行第${index+1}列`)})]}))}))});
   };
   const ruledTable=(grid:NonNullable<ReturnType<typeof standaloneRuledArray>>,red:boolean,q:StudioQuestion,field:string)=>{
     // One table shares actual column widths across every row. Borders cannot
@@ -156,7 +157,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       return Math.max(360,widest*220+120)+(c<grid.columns.length-1?(column.gap===undefined?110:spaces[column.gap]??110):0);
     });
     const width=widths.reduce((a,b)=>a+b,0);
-    if(width>9300)throw new Error('Ruled array is too wide for the page; split it into smaller standalone blocks');
+    if(width>LINE_PT*20)throw new Error('Ruled array is too wide for the page; split it into smaller standalone blocks');
     return new Table({layout:TableLayoutType.FIXED,columnWidths:widths,width:{size:width,type:WidthType.DXA},borders:{top:none,bottom:none,left:none,right:none,insideHorizontal:none,insideVertical:none},rows:grid.rows.map((row,r)=>new TableRow({cantSplit:true,children:grid.columns.map((column,c)=>new TableCell({
       width:{size:widths[c],type:WidthType.DXA},margins:{top:20,bottom:20,left:0,right:c<grid.columns.length-1?(column.gap===undefined?110:spaces[column.gap]??110):0},
       borders:{left:none,right:none,top:r===0?rule(grid.rules.get(0)):none,bottom:rule(grid.rules.get(r+1))},
@@ -164,7 +165,6 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     }))}))});
   };
   const aligned=(text:string,red:boolean,q:StudioQuestion,field:string)=>{
-    let inPart=false;
     return studioAnswerParagraphs(text).flatMap((line,lineIndex)=>{
       try {
         const ruled=ruledArrayLine(line.text);
@@ -172,10 +172,9 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       }catch(error){
         if(!bestEffort)throw error;
         addIssue(q,`${field}: ${error instanceof Error?error.message:String(error)}`);
-        return new Paragraph({children:[new TextRun({text:`〔公式待核对：${line.text}〕`,color:'C00000',size:WORD_MATH_STYLE.baseSize})]});
+        return standardParagraph('BODY',{children:[new TextRun({text:`〔公式待核对：${line.text}〕`,color:'C00000',font:STUDIO_WORD_STYLE.font,size:STUDIO_WORD_STYLE.size})]});
       }
       const match=line.text.match(/^([（(]\d+[)）])\s*([\s\S]*)$/);
-      if(match)inPart=true;
       const display=isStudioDisplayMathLine(match?match[2]:line.text);
       // A question number printed at the very start (“2.”) is one run as well; split into “2” and “.” the library
       // cannot recognise it and prints the paper's number in front of it (“4．2.”).
@@ -183,30 +182,30 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       const lead=match??number;
       // The label runs straight into its text, as printed. A tab after it overran the two-character hanging indent
       // when the label was a full-width “（1）”, leaving a gap that every reader drew at a different width.
-      return new Paragraph({style:display?(red?'StudioMathAnswer':'StudioMathBody'):red?'StudioAnswer':'Normal',keepNext:line.keepNext,spacing:{line:360,after:80},indent:inPart?{left:420,...(match?{hanging:420}:{})}:undefined,children:lead?[new TextRun({text:lead[1],italics:false,color:red?'C00000':'000000'}),...safeRichText(lead[2],{color:red?'C00000':'000000',...(number?{displayMath:false}:{})},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
+      return standardParagraph(number?'QUESTION':'BODY',{keepNext:line.keepNext,children:lead?[new TextRun({text:lead[1],font:STUDIO_WORD_STYLE.font,size:STUDIO_WORD_STYLE.size,italics:false,color:red?'C00000':'000000'}),...safeRichText(lead[2],{color:red?'C00000':'000000'},q,field)]:safeRichText(line.text,{color:red?'C00000':'000000'},q,field)});
     });
   };
   let lesson='';
   for (const q of draft.questions) {
-    if(q.lesson!==lesson){lesson=q.lesson;if(lesson!==draft.title)children.push(new Paragraph({keepNext:true,spacing:{before:300,after:120},children:[new TextRun({text:lesson,bold:true,size:28,color:'000000'})]}));}
-    children.push(new Paragraph({ keepNext:true,spacing:{before:240,after:120}, children:[new TextRun({text:`${q.section} ${q.number}${options.reviewCopy?' 待校对':''}`,bold:true,color:"000000",size:24})] }));
+    if(q.lesson!==lesson){lesson=q.lesson;if(lesson!==draft.title)children.push(standardParagraph('SECTION',{keepNext:true,children:[new TextRun({text:lesson,font:STUDIO_WORD_STYLE.font,bold:true,size:STUDIO_WORD_STYLE.size,color:'000000'})]}));}
+    children.push(standardParagraph('SECTION',{keepNext:true,children:[new TextRun({text:`${q.section} ${q.number}${options.reviewCopy?' 待校对':''}`,font:STUDIO_WORD_STYLE.font,bold:true,color:'000000',size:STUDIO_WORD_STYLE.size})]}));
     const placed=placeStudioAnswers(q.stem,q.answerPlacements);
     placed.warnings.forEach(warning=>addIssue(q,warning));
     if (withStem) {
       if(q.answerPlacements?.length&&!placed.warnings.length){
         const lines:ParagraphChild[][]=[[]];
         for(const part of placed.parts)splitMathParagraphs(part.text).forEach((line,i)=>{if(i)lines.push([]);lines.at(-1)!.push(...safeRichText(line,{color:part.red?'C00000':'000000',underline:part.underline,italicMath:part.red?false:undefined,displayMath:false},q,'题干'));});
-        lines.forEach(runs=>children.push(new Paragraph({spacing:{line:360,after:80},children:runs})));
+        lines.forEach((runs,index)=>children.push(standardParagraph(index?'BODY':'QUESTION',{children:runs})));
       }else children.push(...aligned(q.stem,false,q,'题干'));
     }
     // Source pictures remain unchanged and keep their place on the original page; solution overlays accompany the analysis below.
-    if (withQuestionFigures) for (const row of studioFigureRows(q)) children.push(new Paragraph({alignment:row.alignment,spacing:figureSpacing,children:row.indexes.flatMap((index,i)=>{
+    if (withQuestionFigures) for (const row of studioFigureRows(q)) children.push(standardParagraph('FIGURE',{alignment:row.alignment,children:row.indexes.flatMap((index,i)=>{
       const token=`STUDIO_DIAGRAM_${diagrams.length}`;
       diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,j)=>j===index?{...x,shapes:[]}:x)},index,widthPt:row.widths?.[i]});
-      return [...(i?[new TextRun('\u3000\u3000')]:[]),new TextRun(token)];
+      return [...(i?[new TextRun({text:'\u3000\u3000',font:STUDIO_WORD_STYLE.font,size:STUDIO_WORD_STYLE.size})]:[]),new TextRun(token)];
     })}));
     if(mode!=='steps')(q.tables||[]).forEach((table,tableIndex)=>{try{children.push(studioTable(table,q,tableIndex));}catch(error){if(!bestEffort)throw new Error(`${q.number} / table ${tableIndex+1}`,{cause:error});addIssue(q,`表格${tableIndex+1}：${error instanceof Error?error.message:'表格排版失败'}`);}});
-    if(!withStem)for(const p of q.answerPlacements||[])children.push(new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:p.kind==='choice'?[...safeRichText('（',{color:'C00000'},q,'短答案'),...safeRichText(p.answer,{color:'C00000',italicMath:false,displayMath:false},q,'短答案'),...safeRichText('）',{color:'C00000'},q,'短答案')]:safeRichText(p.answer,{color:'C00000',underline:true,displayMath:false},q,'短答案')}));
+    if(!withStem)for(const p of q.answerPlacements||[])children.push(standardParagraph('BODY',{children:p.kind==='choice'?[...safeRichText('（',{color:'C00000'},q,'短答案'),...safeRichText(p.answer,{color:'C00000',italicMath:false,displayMath:false},q,'短答案'),...safeRichText('）',{color:'C00000'},q,'短答案')]:safeRichText(p.answer,{color:'C00000',underline:true,displayMath:false},q,'短答案')}));
     // When the entire recorded solution is exactly the short answer, the
     // placed/underlined answer already contains all its content.
     const shortOnly=q.answerPlacements?.length===1&&q.analysis.trim()===q.answerPlacements[0].answer.trim();
@@ -215,7 +214,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if (mode === "full" && !d.shapes.length) return;
       const token=`STUDIO_DIAGRAM_${diagrams.length}`; diagrams.push({token,question:q,index});
       if (d.caption) children.push(paragraph(d.caption,true,true,q,'图注'));
-      children.push(new Paragraph({alignment:AlignmentType.CENTER,spacing:figureSpacing,children:[new TextRun(token)]}));
+      children.push(standardParagraph('FIGURE',{alignment:AlignmentType.CENTER,children:[new TextRun(token)]}));
     });
     if(options.transcription&&includeTranscriptionWarnings){
       const textWarnings=q.warnings.filter(w=>withFigures||!['尚未检查解答图与辅助线','仅答案材料：请确认未补写原件没有的步骤'].includes(w));
@@ -226,8 +225,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       if(issues.length)children.push(warningParagraph('格式问题：'+issues.join('；')));
     }
   }
-  const font={ascii:"Times New Roman",hAnsi:"Times New Roman",eastAsia:"Songti SC",cs:"Times New Roman"};
-  const document = new Document({styles:{default:{document:{run:{font,size:22},paragraph:{spacing:{line:360}}}},paragraphStyles:[{id:"Title",name:"Title",basedOn:"Normal",run:{color:"000000",size:32,bold:true}},{id:"StudioAnswer",name:"Studio Answer",basedOn:"Normal",run:{color:"C00000",font,size:22}},{id:"StudioMathAnswer",name:"Studio Display Math Answer",basedOn:"StudioAnswer",run:{color:"C00000",font,size:WORD_MATH_STYLE.baseSize}},{id:"StudioMathBody",name:"Studio Display Math",basedOn:"Normal",run:{color:"000000",font,size:WORD_MATH_STYLE.baseSize}}]},sections:[{properties:{page:{size:{width:PAGE.width,height:PAGE.height},margin:{top:PAGE.margin,right:PAGE.margin,bottom:PAGE.margin,left:PAGE.margin}}},children}]});
+  const document = new Document({styles:{default:{document:{run:{font:STUDIO_WORD_STYLE.font,size:STUDIO_WORD_STYLE.size}}}},sections:[{children}]});
   const zip = await JSZip.loadAsync(await (await Packer.toBlob(document)).arrayBuffer());
   let xml = await zip.file("word/document.xml")!.async("string");
   let rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
@@ -254,22 +252,9 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       xml=xml.replace(pattern,'');
     }
   }
-  // Include the paragraph end-mark properties as well as OMML run properties:
-  // equation importers may use the surrounding paragraph's character color.
-  xml=xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,p=>/w:val="Studio(?:Math)?Answer"/.test(p) ? p.replace('</w:pPr>',`<w:rPr><w:color w:val="C00000"/></w:rPr></w:pPr>`) : p);
-  zip.file("word/document.xml",fullSizeInlineFractions(xml));
-  zip.file("word/_rels/document.xml.rels",rels); zip.file("[Content_Types].xml",contentTypes);
-  // Word/WPS can promote a formula-only paragraph to display math. Keep those
-  // lines aligned with the proof instead of inheriting the exam export's center.
-  const mathSettings=ensureWordMathSettings(await zip.file("word/settings.xml")!.async("string"));
-  zip.file("word/settings.xml",mathSettings.replace(/<m:defJc\b[^>]*\/>/,'<m:defJc m:val="left"/>'));
-  // All output paths (plain text, metadata, native equations and VML labels)
-  // must produce XML 1.0 even when unrecognized OCR is retained as evidence.
-  for(const file of Object.values(zip.files))if(!file.dir&&/\.(xml|rels)$/.test(file.name)){
-    const content=await file.async('string');const safe=xmlSafeText(content);
-    if(safe!==content)zip.file(file.name,safe);
-  }
-  return zip.generateAsync({type:"blob",mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+  zip.file('word/document.xml',xml);
+  zip.file('word/_rels/document.xml.rels',rels);zip.file('[Content_Types].xml',contentTypes);
+  return packStudioWord(zip,draft.title);
 }
 
 /** The common format measured in the supplied standard papers. Recognition fills this tree;
@@ -280,42 +265,11 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
     const template=normalizeStudioDocumentTemplate(page.document,page.textHint||'');
     return {...page,document:fillStudioDocumentTemplate(template,{blocks:page.document.parts.flatMap(p=>p.sections.flatMap(s=>s.questions.flatMap(q=>q.blocks.map(b=>({id:b.id,text:b.text||'',rows:b.rows||[]}))))),warnings:page.document.warnings},page.textHint||'')};
   })};
-  const {plainMathPieces}=await import('./export-word');
-  const response=await fetch('/standard-math-paper.docx');
-  if(!response.ok)throw new Error('标准试卷 Word 模板读取失败，请刷新后重试');
-  // Start with the sanitized copy of the retained reference package. Its real styles,
-  // theme, font table, section properties and footer remain the design authority.
-  const template=await JSZip.loadAsync(await response.arrayBuffer());
-  const templateXml=await template.file('word/document.xml')!.async('string');
-  const patterns=new Map([...templateXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].flatMap(match=>{const role=match[0].match(/MP_TEMPLATE_([A-Z_]+)/)?.[1];return role?[[role,match[0]] as const]:[];}));
-  const paragraphRoles=new Map<string,{role:string;newPage:boolean}>();
-  const standardParagraph=(role:string,options:IParagraphOptions)=>{
-    const token=`MP_DOCUMENT_${paragraphRoles.size}`;paragraphRoles.set(token,{role,newPage:!!options.pageBreakBefore});
-    return new Paragraph({...options,children:[new TextRun(token),...(options.children||[])]});
-  };
-  const font={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'新宋体',cs:'Times New Roman',hint:'eastAsia'};
+  const font=STUDIO_WORD_STYLE.font;
   const spacing={before:0,after:0,line:360};
   const children:Array<Paragraph|Table>=[];
   const text=(value:string,style:{bold?:boolean;color?:string;size?:number;underline?:{type:'single'}}={})=>new TextRun({text:xmlSafeText(value),font,size:21,color:'000000',...style});
-  const content=(value:string,underline=false):ParagraphChild[]=>{
-    // Some recognition providers express a printed answer underline as an inline
-    // u element. Retain its formatting as Word runs instead of printing the tag.
-    const marked=value.match(/<u>([\s\S]*?)<\/u>/i);
-    if(marked&&(value.slice(0,marked.index).match(/(?<!\\)\$/g)?.length||0)%2===0)return [...content(value.slice(0,marked.index),underline),...content(marked[1],true),...content(value.slice(marked.index!+marked[0].length),underline)];
-    return splitMathText(value).flatMap(segment=>{
-    if(segment.kind!=='math')return [text(segment.value,underline?{underline:{type:'single'}}:{})];
-    const source=segment.value.trim(),command=source.match(/^\\underline\s*(?=\{)/)?.[0],group=command?readMathGroup(source,command.length):null;
-    const marked=group?.end===source.length?group:null,mathUnderline=underline||!!marked;let math=marked?marked.body:segment.value,left='',right='';
-    if(marked){
-      left=math.match(/^(?:(?:\\qquad|\\quad)(?![A-Za-z])|\s)+/)?.[0]||'';math=math.slice(left.length);
-      right=math.match(/(?:(?:\\qquad|\\quad)(?![A-Za-z])|\s)+$/)?.[0]||'';math=math.slice(0,math.length-right.length);
-    }
-    const edges=[left,right].map(pad=>pad.replace(/\\qquad/g,'\u3000\u3000').replace(/\\quad/g,'\u3000').replace(/[ \t\r\n]/g,''));
-    const pieces=plainMathPieces(math)||plainMathPieces(math.replace(/∵/g,'\\because ').replace(/∴/g,'\\therefore ').replace(/\*/g,'\\text{*}'));
-    const runs=pieces?pieces.map(piece=>new TextRun({text:piece.text.replace(/＋/g,'+'),font,size:piece.script?24:21,color:'000000',italics:piece.italic===true,superScript:piece.script==='super',subScript:piece.script==='sub',underline:mathUnderline||piece.underline?{}:undefined})):math.trim()?richText(`$${math}$`,{color:'000000',displayMath:false,size:21,underline:mathUnderline}):[];
-    return [...(edges[0]?[text(edges[0],{underline:{type:'single'}})]:[]),...runs,...(edges[1]?[text(edges[1],{underline:{type:'single'}})]:[])];
-    });
-  };
+  const content=(value:string,underline=false)=>richText(value,{color:'000000',displayMath:false,underline});
   const paragraph=(value:string,first=false,filled?:StudioTextPart[])=>{
     const label=value.match(/^(【(?:分析|解答|点评)】)/)?.[1];
     const number=first?value.match(/^(\d{1,3}[．.、])/)?.[1]:undefined;
@@ -340,7 +294,19 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
             if(!withFigures)continue;
             const page=draft.pages.find(p=>p.id===block.pageId);if(!page?.image)throw new Error(`第 ${question.number} 题配图原件缺失`);
             const {cropStudioImage}=await import('./answer-studio-images');
-            const crop=await cropStudioImage(page.image,block.box,1800);
+            // Grow to preserve edge labels, but never cross into an allocated text block.
+            // Use the blank gap between blocks as the boundary, not a paper-specific crop.
+            let left=0,top=0,right=1000,bottom=1000;const box=block.box,evidence=documentEvidence(page.textHint||'');
+            for(const neighbor of page.document!.parts.flatMap(p=>p.sections.flatMap(s=>s.questions.flatMap(q=>q.blocks)))){
+              if(neighbor.role==='figure')continue;const b=neighbor.box;
+              // Native PDF points are baselines. The reference A4 font height also
+              // covers glyphs that slightly overhang the model's paragraph box.
+              const points=evidence.filter(p=>p.x>=b.x-4&&p.x<=b.x+b.width+4&&p.y>=b.y-4&&p.y<=b.y+b.height+4);
+              const textTop=points.length?Math.min(...points.map(p=>p.y-p.size*20000/PAGE.height)):(b.y+box.y+box.height)/2,textBottom=points.length?Math.max(...points.map(p=>p.y+p.size*5000/PAGE.height)):(b.y+b.height+box.y)/2;
+              if(b.x<box.x+box.width&&b.x+b.width>box.x){if(b.y+b.height<=box.y)top=Math.max(top,textBottom);if(b.y>=box.y+box.height)bottom=Math.min(bottom,textTop);}
+              if(b.y<box.y+box.height&&b.y+b.height>box.y){if(b.x+b.width<=box.x)left=Math.max(left,(b.x+b.width+box.x)/2);if(b.x>=box.x+box.width)right=Math.min(right,(b.x+box.x+box.width)/2);}
+            }
+            const crop=await cropStudioImage(page.image,box,1800,{x:left,y:top,width:right-left,height:bottom-top});
             const width=Math.min((11906-2268-312)/20,block.box.width*11906/20000),height=width*crop.height/crop.width,scale=Math.min(1,600/height);
             const data=Uint8Array.from(atob(crop.image.split(',')[1]),c=>c.charCodeAt(0));
             children.push(standardParagraph('FIGURE',{spacing,children:[new ImageRun({type:'png',data,transformation:{width:width*scale*4/3,height:height*scale*4/3}})]}));
@@ -374,22 +340,48 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
   if(!children.length)throw new Error('原件中没有可输出的试卷正文');
   const notes=draft.pages.filter(p=>p.selected).flatMap(p=>(p.document?.warnings||[]).map(w=>`第 ${p.page} 页：${w}`));
   if(withWarnings&&notes.length){children.push(standardParagraph('BODY',{pageBreakBefore:true,spacing,children:[text('转录问题提示',{bold:true})]}));for(const note of notes)children.push(standardParagraph('BODY',{spacing,children:[text(note,{color:'C00000'})]}));}
-  // Packer authors content nodes only; it does not replace the reference package or its formatting parts.
-  const generated=await JSZip.loadAsync(await(await Packer.toBlob(new Document({sections:[{children}]}))).arrayBuffer());
+  return packStudioWord(await JSZip.loadAsync(await(await Packer.toBlob(new Document({sections:[{children}]}))).arrayBuffer()),parts[0]?.title||draft.title);
+}
+
+/** All transcription modes enter the same retained Word package and formatting rules. */
+async function packStudioWord(generated:JSZip,title:string) {
+  const response=await fetch('/standard-math-paper.docx');
+  if(!response.ok)throw new Error('标准试卷 Word 模板读取失败，请刷新后重试');
+  // Start with the sanitized copy of the retained reference package. Its real styles,
+  // theme, font table, section properties and footer remain the design authority.
+  const template=await JSZip.loadAsync(await response.arrayBuffer());
+  const templateXml=await template.file('word/document.xml')!.async('string');
+  const patterns=new Map([...templateXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].flatMap(match=>{const role=match[0].match(/MP_TEMPLATE_([A-Z_]+)/)?.[1];return role?[[role,match[0]] as const]:[];}));
   let body=(await generated.file('word/document.xml')!.async('string')).match(/<w:body>([\s\S]*)<\/w:body>/)![1].replace(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g,'');
   body=body.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,paragraph=>{
-    const token=paragraph.match(/MP_DOCUMENT_\d+/)?.[0];if(!token)return paragraph;
-    const format=paragraphRoles.get(token)!,pattern=patterns.get(format.role);if(!pattern)throw new Error(`标准模板缺少 ${format.role} 段落`);
+    const role=paragraph.match(/<w:pStyle w:val="MP_TEMPLATE_([A-Z_]+)"\/>/)?.[1];if(!role)return paragraph;
+    const pattern=patterns.get(role);if(!pattern)throw new Error(`标准模板缺少 ${role} 段落`);
     let properties=pattern.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>|<w:pPr\b[^>]*\/>/)?.[0]||'<w:pPr/>';
-    if(format.newPage)properties=properties.endsWith('/>')?properties.replace('/>','><w:pageBreakBefore/></w:pPr>'):properties.replace(/^(<w:pPr\b[^>]*>)/,'$1<w:pageBreakBefore/>');
-    let clean=paragraph.replace(new RegExp(`<w:r>(?:(?!<w:r>)[\\s\\S])*?<w:t[^>]*>${token}</w:t></w:r>`),'');
-    clean=/<w:pPr\b/.test(clean)?clean.replace(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>|<w:pPr\b[^>]*\/>/,properties):clean.replace(/^(<w:p(?:\s[^>]*)?>)/,'$1'+properties);
+    if(properties.endsWith('/>'))properties=properties.replace('/>','></w:pPr>');
+    const existing=paragraph.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/)?.[0]||'';
+    const retain=['pageBreakBefore','keepNext',...(role==='FIGURE'?['jc']:[])];
+    for(const name of retain){
+      const property=existing.match(new RegExp(`<w:${name}\\b[^>]*\\/>`))?.[0];if(!property)continue;
+      properties=properties.replace(new RegExp(`<w:${name}\\b[^>]*\\/>`),'').replace('</w:pPr>',property+'</w:pPr>');
+    }
+    // Keep the teacher's red solution annotation while sharing the reference font and layout.
+    if(paragraph.includes('w:val="C00000"')&&!paragraph.includes('w:val="000000"'))properties=properties.replace('</w:pPr>','<w:rPr><w:color w:val="C00000"/></w:rPr></w:pPr>');
+    const clean=/<w:pPr\b/.test(paragraph)?paragraph.replace(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>|<w:pPr\b[^>]*\/>/,properties):paragraph.replace(/^(<w:p(?:\s[^>]*)?>)/,'$1'+properties);
     return clean;
   });
-  // The references use body-size roots/grids and 14 pt top-level fraction arguments.
-  // Reuse the existing fraction-sizing rule, leaving ordinary prose and simple scripts untouched.
+  // The source uses fixed ordinary parentheses, and scalable braces only for grids/cases.
+  // Work from the innermost delimiter so nested coordinates and fractions remain balanced.
   const caseMatrixProperties=mathOmml('\\begin{array}{l}0\\end{array}').match(/<m:mPr>[\s\S]*?<\/m:mPr>/)![0];
   body=body.replace(/<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>/g,math=>{
+    while(true){
+      const fixed=math.replace(/<m:d>(<m:dPr>[\s\S]*?<\/m:dPr>)<m:e>((?:(?!<m:d>)[\s\S])*?)<\/m:e><\/m:d>/g,(whole,properties:string,inner:string)=>{
+        const begin=properties.match(/<m:begChr m:val="([^"]*)"\/>/)?.[1],end=properties.match(/<m:endChr m:val="([^"]*)"\/>/)?.[1];
+        if(!['()','[]'].includes((begin||'')+(end||''))||/<m:(?:m|eqArr)>/.test(inner))return whole;
+        const font=inner.match(/<m:r>(?:<m:rPr>[\s\S]*?<\/m:rPr>)?(<w:rPr>[\s\S]*?<\/w:rPr>)/)?.[1]||math.match(/<w:rPr>[\s\S]*?<\/w:rPr>/)?.[0]||'';
+        return `<m:r><m:rPr><m:sty m:val="p"/></m:rPr>${font}<m:t>${begin}</m:t></m:r>${inner}<m:r><m:rPr><m:sty m:val="p"/></m:rPr>${font}<m:t>${end}</m:t></m:r>`;
+      });
+      if(fixed===math)break;math=fixed;
+    }
     // The retained papers use one left-aligned matrix column under a case brace.
     // Replace innermost equation arrays first so nested cases remain balanced.
     while(math.includes('<m:eqArr>')){
@@ -405,20 +397,36 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
     }
     const withoutSizes=math.replace(/w:eastAsia="Songti SC"/g,'w:eastAsia="新宋体"').replace(/<m:r>[\s\S]*?<\/m:r>/g,run=>run.replace(/<w:sz(?:Cs)? w:val="21"\/>/g,''));
     let depth=0;
-    const fractions:string=fullSizeInlineFractions(withoutSizes).replace(/<m:f>|<\/m:f>/g,(tag:string,offset:number,source:string)=>{
-      if(tag.startsWith('</')){depth--;return tag;}
-      return depth++===0&&!source.startsWith('<m:fPr>',offset+tag.length)?`${tag}<m:fPr><m:type m:val="bar"/><m:ctrlPr><w:rPr><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></m:ctrlPr></m:fPr>`:tag;
+    // Every fraction argument in the source has the same nominal size, including
+    // three-level continued fractions. Office alone applies script-level reduction.
+    const fractionSize=STUDIO_WORD_STYLE.fractionSize;
+    const fractions:string=withoutSizes.replace(/<m:f>|<\/m:f>|<m:r>([\s\S]*?)<\/m:r>/g,(tag:string,inner:string|undefined,offset:number,source:string)=>{
+      if(inner===undefined){
+        if(tag.startsWith('</')){depth--;return tag;}
+        depth++;return !source.startsWith('<m:fPr>',offset+tag.length)?`${tag}<m:fPr><m:type m:val="bar"/><m:ctrlPr><w:rPr><w:sz w:val="${fractionSize}"/><w:szCs w:val="${fractionSize}"/></w:rPr></m:ctrlPr></m:fPr>`:tag;
+      }
+      if(!depth||/<w:sz\b/.test(inner))return tag;
+      return `<m:r>${inner.replace('</w:rPr>',`<w:sz w:val="${fractionSize}"/><w:szCs w:val="${fractionSize}"/></w:rPr>`)}</m:r>`;
     });
     return fractions.replace(/<m:r>(<m:rPr>[\s\S]*?<\/m:rPr>)?<w:rPr>([\s\S]*?)<\/w:rPr>/g,(whole,properties='',word:string)=>/<w:sz\b/.test(word)?whole:`<m:r>${properties}<w:rPr>${word}<w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr>`);
+  });
+  // A zero-width non-joiner retains inline context for a formula-only paragraph.
+  // Unlike U+200B, U+200C adds no width in WPS. Without it Word/WPS can promote the equation to display mode and render the
+  // reference's 14 pt fraction arguments at full size instead of their inline size.
+  const inlineContext='<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="新宋体"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr><w:t>\u200C</w:t></w:r>';
+  body=body.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,paragraph=>{
+    if(!paragraph.includes('<m:oMath>'))return paragraph;
+    const surrounding=paragraph.replace(/<m:oMath>[\s\S]*?<\/m:oMath>/g,'');
+    return [...surrounding.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].some(match=>match[1].trim())?paragraph:paragraph.replace('<m:oMath>',inlineContext+'<m:oMath>');
   });
   let relationships=await template.file('word/_rels/document.xml.rels')!.async('string'),types=await template.file('[Content_Types].xml')!.async('string'),imageId=0;
   const generatedRelationships=await generated.file('word/_rels/document.xml.rels')!.async('string');
   for(const relation of generatedRelationships.matchAll(/<Relationship\b[^>]*\/>/g)){
     const attribute=(name:string)=>relation[0].match(new RegExp(`\\b${name}="([^"]*)"`))?.[1]||'';
     if(!attribute('Type').endsWith('/image'))continue;
-    const old=attribute('Id'),source=attribute('Target').replace(/^\//,''),extension=source.split('.').at(-1)!,id=`rIdPrinted${++imageId}`,target=`media/printed-${imageId}.${extension}`;
+    const old=attribute('Id'),source=attribute('Target').replace(/^\//,''),extension=source.split('.').at(-1)!,id=`rIdStudioImage${++imageId}`,target=`media/studio-${imageId}.${extension}`;
     const file=generated.file(source.startsWith('word/')?source:'word/'+source);if(!file)throw new Error('生成的题图关系不完整');
-    template.file('word/'+target,await file.async('uint8array'));body=body.split(`r:embed="${old}"`).join(`r:embed="${id}"`);
+    template.file('word/'+target,await file.async('uint8array'));body=body.split(`r:embed="${old}"`).join(`r:embed="${id}"`).split(`r:id="${old}"`).join(`r:id="${id}"`);
     relationships=relationships.replace('</Relationships>',`<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${target}"/></Relationships>`);
     if(!types.includes(`Extension="${extension}"`))types=types.replace('</Types>',`<Default Extension="${extension}" ContentType="image/${extension==='jpg'?'jpeg':extension}"/></Types>`);
   }
@@ -428,7 +436,11 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
   let settings=ensureWordMathSettings(await template.file('word/settings.xml')!.async('string')).replace(/<m:defJc\b[^>]*\/>/,'<m:defJc m:val="left"/>');
   settings=/<w:updateFields\b/.test(settings)?settings.replace(/<w:updateFields\b[^>]*\/>/,'<w:updateFields w:val="true"/>'):settings.replace('</w:settings>','<w:updateFields w:val="true"/></w:settings>');
   template.file('word/settings.xml',settings);
-  template.file('docProps/core.xml',(await template.file('docProps/core.xml')!.async('string')).replace(/<dc:title>[\s\S]*?<\/dc:title>/,`<dc:title>${xmlEscape(parts[0]?.title||draft.title)}</dc:title>`));
+  template.file('docProps/core.xml',(await template.file('docProps/core.xml')!.async('string')).replace(/<dc:title>[\s\S]*?<\/dc:title>/,`<dc:title>${xmlEscape(title)}</dc:title>`));
+  for(const file of Object.values(template.files))if(!file.dir&&/\.(xml|rels)$/.test(file.name)){
+    const content=await file.async('string');const safe=xmlSafeText(content);
+    if(safe!==content)template.file(file.name,safe);
+  }
   return template.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
 }
 export function downloadStudioBlob(blob: Blob, name: string) {

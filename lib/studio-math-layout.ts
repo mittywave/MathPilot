@@ -4,7 +4,14 @@ import { splitMathText } from './math-text';
 import { mathOmml } from './math-omml';
 import { repairMathSource, scanMathSource, splitMathParagraphs } from './math-source.mjs';
 
-export const STUDIO_MATH_SIZE = WORD_MATH_STYLE.baseSize;
+// One transcription framework, measured from the four retained source papers.
+// Recognition and output mode select content, never a different font or page geometry.
+export const STUDIO_WORD_STYLE = Object.freeze({
+  font:{ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'新宋体',cs:'Times New Roman',hint:'eastAsia'} as const,
+  size:21,scriptSize:24,fractionSize:28,line:360,
+  page:{width:11906,height:16838,margin:{top:1418,right:1134,bottom:1418,left:1134}},
+});
+export const STUDIO_MATH_SIZE = STUDIO_WORD_STYLE.size;
 export type StudioMathStyle = { color?:string; bold?:boolean; underline?:boolean;mathAlignment?:'left'|'center'|'right';size?:number };
 const escapeXml = (s:string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 
@@ -21,7 +28,7 @@ export function isStudioDisplayMathLine(text:string) {
 function styledMathXml(xml:string,display:boolean,style:StudioMathStyle) {
   if(style.color&&!/^[\da-f]{6}$/i.test(style.color))throw new Error('Invalid equation color');
   const size=style.size??STUDIO_MATH_SIZE;
-  const properties=`<w:rPr><w:rFonts w:ascii="${WORD_MATH_STYLE.font}" w:hAnsi="${WORD_MATH_STYLE.font}" w:eastAsia="Songti SC"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${style.bold?'<w:b/>':''}${style.color?`<w:color w:val="${style.color}"/>`:''}</w:rPr>`;
+  const properties=`<w:rPr><w:rFonts w:ascii="${WORD_MATH_STYLE.font}" w:hAnsi="${WORD_MATH_STYLE.font}" w:eastAsia="${STUDIO_WORD_STYLE.font.eastAsia}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${style.bold?'<w:b/>':''}${style.color?`<w:color w:val="${style.color}"/>`:''}</w:rPr>`;
   // Identical base size for every run. Word retains its own script scaling.
   const body=xml.replace(/<m:r>(<m:rPr>[\s\S]*?<\/m:rPr>)?/g,`<m:r>$1${properties}`);
   const equation=`<m:oMath>${body}</m:oMath>`;

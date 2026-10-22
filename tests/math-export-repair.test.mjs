@@ -142,16 +142,16 @@ for(const command of ['frac','dfrac','tfrac']) test(`native ${command} remains e
   const xml=studioWordEquationXml(`\\${command}{1}{\\frac{1}{2}}`,true);
   assert.match(xml,/^<m:oMathPara>/);
   assert.equal((xml.match(/<m:f>/g)||[]).length,2);
-  assert.ok([...xml.matchAll(/<w:sz w:val="(\d+)"\/>/g)].every(m=>m[1]==='22'));
+  assert.ok([...xml.matchAll(/<w:sz w:val="(\d+)"\/>/g)].every(m=>m[1]==='21'));
 });
-test('plain and complex display lines share one 11 pt base size',()=>{
+test('plain and complex display lines share the reference 10.5 pt base size',()=>{
   for(const value of [String.raw`k_{CD}=-\frac{1}{2}`,String.raw`\frac{\frac12 k_{CD}}{1+\frac12 k_{CD}}=\frac43`]) {
     const xml=studioWordEquationXml(value,true);
-    assert.match(xml,/<w:sz w:val="22"\/>/);
+    assert.match(xml,/<w:sz w:val="21"\/>/);
     assert.doesNotMatch(xml,/<w:sz w:val="(?:24|26|30)"\/>/);
   }
   const inline=studioWordEquationXml(String.raw`\mathbb{R}`,false);
-  assert.match(inline,/^<m:oMath>/);assert.match(inline,/<w:sz w:val="22"\/>/);
+  assert.match(inline,/^<m:oMath>/);assert.match(inline,/<w:sz w:val="21"\/>/);
 });
 test('proof cues do not shrink a complex calculation; prose stays inline',()=>{
   assert.equal(isStudioDisplayMathLine(String.raw`\u53ef $\frac{a}{b}=2$`.replace('\\u53ef','\u53ef')),true);
