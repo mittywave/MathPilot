@@ -99,6 +99,18 @@ test('the 工具箱 badge counts only the owner\'s queued and running jobs that 
   assert.equal(await f.api.countActiveStudioJobs(f.user,'transcription'),3);
   assert.equal(await f.api.countActiveStudioJobs({id:'another-user'},'transcription'),0);
 });
+test('opening a completed printed draft requeues only invalid cached pages and leaves valid drafts and source evidence intact',async t=>{
+  const f=jobFixture(t),rect={x:50,y:100,width:850,height:100};
+  const source={...emptyStudioDraft(),inputMode:'questions',title:'标准试卷',pages:[1,2,3].map(n=>({...page(n,'question'),processed:true,document:{printed:true,parts:[{kind:'questions',title:'标准试卷',heading:'',continuation:false,sections:[{title:'解答题',continuation:false,questions:[{number:String(n),continuation:false,blocks:[{id:'b1',role:'stem',box:rect,continuation:false,text:`${n}．原文题干。`,rows:[]}]}]}]}],warnings:[]}}))};
+  source.pages[1].document.parts[0].sections[0].questions[0].blocks[0]={id:'b1',role:'figure',box,continuation:false,text:'',rows:[]};
+  source.pages[2].document.parts[0].sections[0].questions[0].blocks[0].text='9．错误题号。';
+  const before=structuredClone(source),id=await f.seed('done',source),resumed=await f.api.startStudioJob(f.user,id);
+  assert.equal(resumed.status,'queued');assert.equal(resumed.processedCount,1);assert.equal(f.messages.length,1);assert.equal(f.requests.length,0,'validation itself makes no provider calls');
+  const saved=JSON.parse(f.objects.get(`studio/${id}/draft.json`));assert.deepEqual(saved.pages[0],{...before.pages[0],image:''});assert.equal(f.objects.get(`studio/${id}/${source.pages[1].id}.recognize.jpg`),'image','the separate original-page evidence is retained');assert.equal(saved.pages[1].processed,false);assert.equal(saved.pages[1].document,undefined);assert.equal(saved.pages[2].processed,false);assert.equal(saved.pages[2].document.parts[0].sections[0].questions[0].blocks[0].text,undefined,'content errors reuse the outline without retaining stale OCR text');assert.deepEqual(source,before);
+  const valid=await f.seed('done',{...source,pages:[before.pages[0]]}),messageCount=f.messages.length;
+  assert.equal((await f.api.startStudioJob(f.user,valid)).status,'done');assert.equal(f.messages.length,messageCount,'a valid completed draft never reruns recognition');
+  await assert.rejects(f.api.startStudioJob({id:'another-user'},valid),error=>error instanceof Response&&error.status===404);
+});
 // 题库 file imports run in the same job system, one batch-recognition request per page.
 const importQuestion=(number,stem)=>({question_number:number,type:'解答题',stem,options:[],answer:'',analysis:'',difficulty:'中等',source:'',tags:[],confidence:.9,warnings:[]});
 async function importJob(f,pages=3){

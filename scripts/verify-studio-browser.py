@@ -42,6 +42,9 @@ def main():
           return route.fulfill(json={'job':entry['job']})
         if len(parts)==3:return route.fulfill(body=base64.b64decode(entry['images'][parts[2]].split(',',1)[1]),content_type='image/jpeg')
         if request.method=='POST':
+          # Opening a completed job validates and reuses its cached result; it
+          # does not repeat model recognition when the checkpoint is valid.
+          if entry['job']['status']=='done':return route.fulfill(json={'job':entry['job']})
           calls.extend(item['id'] for item in entry['pages'])
           entry['draft']=page.evaluate(transcribe,{'title':entry['job']['title'],'pages':entry['pages'],'invalid':invalid})
           entry['job'].update(status='done',processedCount=len(entry['pages']),questionCount=len(entry['draft']['questions']))

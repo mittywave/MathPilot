@@ -1,4 +1,5 @@
 import type { StudioDraft, StudioQuestion } from './answer-studio';
+import {studioDocumentReady} from './answer-studio-contract';
 
 /** Input describes evidence; output describes which content to include. */
 export type StudioOutputMode = 'full' | 'text' | 'steps';
@@ -8,7 +9,11 @@ const questionOutputs: StudioOutput[] = [
   { value: 'text', label: '题目版（无图）', description: '题干、选项和表格，不含配图。' },
 ];
 /** An originals-only paper has no solutions, so it offers only the question versions. */
-export function studioOutputs(draft: Pick<StudioDraft, 'inputMode'>): StudioOutput[] {
+export function studioOutputs(draft: Pick<StudioDraft, 'inputMode'> & Partial<Pick<StudioDraft,'pages'>>): StudioOutput[] {
+  if(draft.pages&&studioDocumentReady({...draft,pages:draft.pages}))return [
+    {value:'full',label:'标准试卷版',description:'按标准 Word 结构输出题目及原件中的完整答案解析，保留配图。'},
+    {value:'text',label:'标准试卷版（无图）',description:'相同的题目和答案解析结构，省略配图。'},
+  ];
   if (draft.inputMode === 'questions') return questionOutputs;
   return [
     { value: 'full', label: '完整解题版', description: studioIncludesQuestionFigures(draft) ? '原题、解析、原题图和解答图。' : '原题文字、解析和解答图（含必要底图）。' },
@@ -18,6 +23,7 @@ export function studioOutputs(draft: Pick<StudioDraft, 'inputMode'>): StudioOutp
 }
 
 export function studioTextReady(draft: StudioDraft) {
+  if(studioDocumentReady(draft))return true;
   const used = draft.questions.flatMap(q => q.answerIds);
   return draft.questions.length > 0 && !draft.pages.some(p => p.selected && !p.processed)
     && new Set(used).size === used.length && draft.answers.every(a => used.includes(a.id));

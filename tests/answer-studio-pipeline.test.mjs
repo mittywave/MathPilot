@@ -14,9 +14,77 @@ const record=(id,pageId,patch={})=>({id,lesson:'第一讲',section:'例题',numb
 
 async function moduleFixture(t){
   const dir=await mkdtemp(join(tmpdir(),'studio-pipeline-'));t.after(()=>rm(dir,{recursive:true,force:true}));
-  await build({entryPoints:['lib/answer-studio-pipeline.ts','lib/answer-studio-layout.ts','lib/answer-studio-normalize.ts','lib/answer-studio-drawings.ts'],outdir:dir,bundle:true,platform:'node',format:'cjs',outExtension:{'.js':'.cjs'},logLevel:'silent'});
-  return {...require(join(dir,'answer-studio-pipeline.cjs')),...require(join(dir,'answer-studio-layout.cjs')),...require(join(dir,'answer-studio-normalize.cjs')),...require(join(dir,'answer-studio-drawings.cjs'))};
+  await build({entryPoints:['lib/answer-studio-pipeline.ts','lib/answer-studio-layout.ts','lib/answer-studio-normalize.ts','lib/answer-studio-drawings.ts','lib/answer-studio-contract.ts'],outdir:dir,bundle:true,platform:'node',format:'cjs',outExtension:{'.js':'.cjs'},logLevel:'silent'});
+  return {...require(join(dir,'answer-studio-pipeline.cjs')),...require(join(dir,'answer-studio-layout.cjs')),...require(join(dir,'answer-studio-normalize.cjs')),...require(join(dir,'answer-studio-drawings.cjs')),...require(join(dir,'answer-studio-contract.cjs'))};
 }
+test('document templates are all committed before content fill; retries reuse templates and merge answer continuations without dropping repeated stems',async t=>{
+  const {transcribeStudio,fillStudioDocumentTemplate,studioDocumentReady,studioDocumentParts,studioDocumentQuestionCount}=await moduleFixture(t);
+  const structure=(kind,role,continued=false)=>({printed:true,parts:[{kind,title:continued?'':'原卷标题',heading:kind==='answers'&&!continued?'参考答案与试题解析':'',continuation:continued,sections:[{title:'解答题',continuation:continued,questions:[{number:'1',continuation:continued,blocks:[{id:'b1',role,box,continuation:continued}]}]}]}],warnings:[]});
+  const templates=[structure('questions','stem'),structure('answers','solution'),structure('answers','body',true)];
+  templates[2].parts[0].sections[0].title='原栏目简称（续）';
+  templates[2].parts[0].sections[0].questions[0].number='26';
+  const draft={version:1,inputMode:'questions',title:'任务名称',updatedAt:0,pages:[1,2,3].map(n=>({...page(`p${n}`,'question'),page:n,textHint:`第${n}页正文`})),questions:[],answers:[]};
+  let last,structureCalls=0,fail=true;const contentCalls=[];
+  const services={structure:async p=>{structureCalls++;return templates[p.page-1];},recognize:async(p,context,options)=>{
+    assert.equal(options.structured,true);assert.ok(last.pages.every(p=>p.document),'recognition must not run before the complete outline is committed');contentCalls.push(p.page);
+    if(p.page===2&&fail)throw new Error('一次内容识别失败');
+    const text=['1．计算 $x^2$。','【解答】解：$x=1$，','续页原文。'][p.page-1];
+    return {records:[],document:fillStudioDocumentTemplate(p.document,{blocks:[{id:'b1',text,rows:[]}],warnings:[]})};
+  },checkpoint:async value=>{last=value;},progress:()=>{},crop:async()=>assert.fail('printed figures are copied from source, never redrawn'),drawings:async()=>assert.fail()};
+  await assert.rejects(()=>transcribeStudio(draft,services,{drawings:false,textConcurrency:4}),/一次内容识别失败/);
+  assert.equal(structureCalls,3);assert.equal(last.pages[0].processed,true);assert.equal(last.pages[1].processed,undefined);assert.equal(last.pages[2].processed,undefined);
+  fail=false;const result=await transcribeStudio(last,services,{drawings:true,textConcurrency:4});
+  assert.equal(structureCalls,3);assert.deepEqual(contentCalls,[1,2,3,2]);assert.ok(studioDocumentReady(result));assert.equal(studioDocumentQuestionCount(result),1);
+  const parts=studioDocumentParts(result);assert.equal(parts.length,2);assert.equal(parts[1].sections[0].title,'解答题','an explicit continuation keeps the original printed section, even when a page infers a shorter title');assert.equal(parts[1].sections[0].questions[0].number,'1','a formula number inferred on a continuation must not replace the original question number');assert.equal(parts[0].sections[0].questions[0].blocks[0].text,'1．计算 $x^2$。');assert.equal(parts[1].sections[0].questions[0].blocks[0].text,'【解答】解：$x=1$，续页原文。');assert.equal(draft.pages[0].document,undefined);
+  const illustrated=structuredClone(result);illustrated.pages[2].document.parts[0].sections[0].questions[0].blocks.unshift({id:'figure',role:'figure',box,continuation:true,text:'',rows:[]});
+  const illustration=studioDocumentParts(illustrated)[1].sections[0].questions[0].blocks;assert.deepEqual(illustration.map(b=>b.role),['solution','figure','body']);assert.equal(illustration[2].text,'续页原文。','a diagram continued with the question cannot swallow following text or be concatenated into a paragraph');
+  const numbered=structuredClone(result);numbered.pages[2].document.parts[0].sections[0].questions[0].blocks[0].text='（2）另起的分问。';assert.equal(studioDocumentParts(numbered)[1].sections[0].questions[0].blocks.length,2,'a new numbered subpart starts its own paragraph even when the question continues across pages');
+  const samePage=structuredClone(result),sameBlocks=samePage.pages[2].document.parts[0].sections[0].questions[0].blocks;sameBlocks.push({...sameBlocks[0],id:'b2',text:'同页独立段落。'});assert.equal(studioDocumentParts(samePage)[1].sections[0].questions[0].blocks.length,2,'continuation cannot concatenate later independent blocks on the same page');
+});
+test('document filling requires every template slot exactly once and retains native table cell math',async t=>{
+  const {normalizeStudioDocumentTemplate,fillStudioDocumentTemplate}=await moduleFixture(t);
+  const template=normalizeStudioDocumentTemplate({printed:true,parts:[{kind:'questions',title:'标准试卷',heading:'',continuation:false,sections:[{title:'填空题',continuation:false,questions:[{number:'1',continuation:false,blocks:[{id:'b1',role:'stem',box,continuation:false},{id:'b2',role:'table',box,continuation:false}]}]}]}],warnings:[]});
+  const content={blocks:[{id:'b1',text:'1．填表。',rows:[]},{id:'b2',text:'',rows:[['数','值'],['$\\frac{1}{2}$','$\\sqrt{3}$']]}],warnings:[]};
+  const result=fillStudioDocumentTemplate(template,content);assert.equal(result.parts[0].sections[0].questions[0].blocks[1].rows[1][0],'$\\frac{1}{2}$');assert.equal(template.parts[0].sections[0].questions[0].blocks[0].text,undefined);
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:content.blocks.slice(0,1)}),/不能遗漏/);
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[content.blocks[0],content.blocks[0]]}),/重复/);
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[content.blocks[0],{...content.blocks[1],id:'unknown'}]}),/未知/);
+  assert.throws(()=>normalizeStudioDocumentTemplate({...template,parts:[{...template.parts[0],sections:[{...template.parts[0].sections[0],questions:[{number:'1',continuation:false,blocks:[{id:'b1',role:'figure',box:{x:0,y:0,width:1000,height:1000},continuation:false}]}]}]}]}),/整页正文/);
+});
+test('digital PDF prose preserves source typos and rejects omitted paragraphs, wrong numbers and wrong marks',async t=>{
+  const {normalizeStudioDocumentTemplate,fillStudioDocumentTemplate}=await moduleFixture(t);
+  const raw={printed:true,parts:[{kind:'questions',title:'标准试卷',heading:'',continuation:false,sections:[{title:'填空题',continuation:false,questions:[{number:'1',continuation:false,blocks:[{id:'b1',role:'stem',box,continuation:false}]}]}]}],warnings:[]};
+  const hint=[[200,20,15,'标准试卷'],[50,40,10.5,'填空题'],[60,100,10.5,'1．（3分）原文表知敷。'],[100,900,.5,'白字元数据'],[450,940,9,'第1页']].map(JSON.stringify).join('\n');
+  const template=normalizeStudioDocumentTemplate(raw,hint);
+  const content={blocks:[{id:'b1',text:'1．（3分）原文未知数。',rows:[]}],warnings:[]};
+  const result=fillStudioDocumentTemplate(template,content,hint);assert.equal(result.parts[0].sections[0].questions[0].blocks[0].text,'1．（3分）原文表知敷。');assert.equal(content.blocks[0].text,'1．（3分）原文未知数。');
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[{...content.blocks[0],text:'1．（3分）原文。'}]},hint),/印刷文字不完整/);
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[{...content.blocks[0],text:'2．（3分）原文未知数。'}]},hint),/题号/);
+  assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[{...content.blocks[0],text:'1．（4分）原文未知数。'}]},hint),/分值/);
+  assert.throws(()=>normalizeStudioDocumentTemplate({printed:true,parts:[],warnings:[]},hint),/结构模板漏掉/);
+  assert.throws(()=>normalizeStudioDocumentTemplate(raw,hint+'\n'+JSON.stringify([60,500,10.5,'x=2'])),/段落或公式行/,'math-only lines cannot disappear merely because they contain no Chinese');
+  const mergedSteps=structuredClone(raw);mergedSteps.parts[0].sections[0].questions[0].blocks[0].role='solution';
+  assert.throws(()=>normalizeStudioDocumentTemplate(mergedSteps,hint+'\n'+[[50,200,10.5,'=1'],[50,250,10.5,'=2']].map(JSON.stringify).join('\n')),/独立演算行/,'independent left-aligned derivation rows must not be packed into a single solution slot');
+  mergedSteps.parts[0].sections[0].questions[0].blocks[0].role='body';assert.throws(()=>normalizeStudioDocumentTemplate(mergedSteps,hint+'\n'+[[50,200,10.5,'=1'],[50,250,10.5,'=2']].map(JSON.stringify).join('\n')),/独立演算行/,'renaming a merged solution as body cannot bypass paragraph validation');
+  const headers=hint.split('\n').slice(0,2).join('\n'),shortRows=[[50,100,10.5,'第一段。'],[50,170,10.5,'第二段。'],[50,240,10.5,'第三段。']];
+  assert.throws(()=>normalizeStudioDocumentTemplate(mergedSteps,headers+'\n'+shortRows.map(JSON.stringify).join('\n')),/已经结束的短段落/,'short finished prose rows must not merge whole inequality proofs into a single slot');
+  assert.throws(()=>normalizeStudioDocumentTemplate(mergedSteps,headers+'\n'+shortRows.slice(0,2).map(JSON.stringify).join('\n')),/已经结束的短段落/,'an introductory sentence and a separate case heading must remain separate paragraphs');
+  assert.doesNotThrow(()=>normalizeStudioDocumentTemplate(mergedSteps,headers+'\n'+shortRows.map(r=>JSON.stringify([...r.slice(0,3),'甲'.repeat(50)+'，'])).join('\n')),'natural full-width prose wrapping remains a single paragraph');
+  const wrongYear=structuredClone(raw);wrongYear.parts[0].title='2024标准试卷';assert.throws(()=>normalizeStudioDocumentTemplate(wrongYear,hint.replace('标准试卷','2025标准试卷')),/卷名年份/);
+  const geometryHint=hint+'\n'+JSON.stringify([200,100,10.5,'∠=180°，△≌△']);
+  const geometry={blocks:[{id:'b1',text:'1．（3分）原文未知数。$\\triangle A=180^\top$，$\\triangle ABC\\sim\\triangle DEF$。',rows:[]}],warnings:[]};
+  const restored=fillStudioDocumentTemplate(template,geometry,geometryHint).parts[0].sections[0].questions[0].blocks[0].text;
+  assert.match(restored,/\\angle\s+A=180\^\\circ/);assert.match(restored,/\\cong/);assert.doesNotMatch(restored,/\top/,'a decoded unknown tab escape cannot leak op in place of a printed degree');
+  assert.throws(()=>fillStudioDocumentTemplate(template,content,geometryHint),/几何符号不完整/);
+  const wrong=structuredClone(raw);wrong.parts[0].sections[0].questions[0].number='2';assert.throws(()=>normalizeStudioDocumentTemplate(wrong,hint),/题号结构与原件不一致/);
+});
+test('a structure-stage run slice preserves its cause and successful template for queue resumption',async t=>{
+  const {transcribeStudio}=await moduleFixture(t);const yieldError=new Error('本轮运行时间已到');
+  const template={printed:true,parts:[],warnings:[]};let last,calls=0;
+  const draft={version:1,inputMode:'questions',title:'模板断点',updatedAt:0,pages:[1,2].map(n=>({...page('p'+n,'question'),page:n})),questions:[],answers:[]};
+  await assert.rejects(()=>transcribeStudio(draft,{structure:async p=>{calls++;if(p.page===2)throw yieldError;return template;},recognize:async()=>assert.fail('content cannot start before all templates exist'),checkpoint:async value=>{last=value;},progress:()=>{},crop:async()=>assert.fail(),drawings:async()=>assert.fail()},{drawings:false}),error=>error.cause===yieldError);
+  assert.equal(calls,2);assert.equal(last.pages[0].document.printed,true);assert.equal(last.pages[1].document,undefined);
+});
 test('both workflows automatically inspect drawings, preserve continuation and never fabricate review',async t=>{
   const {transcribeStudio}=await moduleFixture(t);
   for(const mode of ['answers','paired']){

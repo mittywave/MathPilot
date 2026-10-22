@@ -3,10 +3,11 @@ import { randomClientId } from './client-random-id.mjs';
 import {
   attachAnswerOnlyRecords, matchStudioAnswers, mergeStudioRecords, sameStudioStem, studioKey,
   type StudioBox, type StudioDiagram, type StudioDraft, type StudioPage, type StudioQuestion,
-  type StudioRecord, type StudioShape,
+  type StudioRecord, type StudioShape, type StudioDocumentPage,
 } from './answer-studio';
 import { normalizeStudioTextFields } from './answer-studio-normalize';
 import { studioFullFiguresReady, studioFiguresReady, studioTextReady } from './answer-studio-output';
+import { studioDocumentReady, studioDocumentParts,studioDocumentQuestionCount,normalizeStudioDocumentTemplate } from './answer-studio-contract';
 import { runStudioOrdered, runStudioWindow, studioConcurrencyState, StudioRequestError, type StudioRetryNotice, type StudioRetryRuntime } from './answer-studio-concurrency';
 export const STUDIO_DRAWINGS_REVISION=3;
 export type StudioDrawingContext={answerOnly:boolean;hasSourceDiagrams:boolean};
@@ -29,7 +30,8 @@ export function studioDrawingMissing(question:Pick<StudioQuestion,'analysis'|'an
   return requiresGeometry&&!result.diagrams.some(d=>d.shapes.some(s=>s.kind!=='label'))&&!studioMayOmitQuestionFigures(context,result);
 }
 export type StudioPipelineServices = {
-  recognize(page:StudioPage, context:string, options?:{concurrent:boolean}):Promise<StudioRecord[]>;
+  structure?(page:StudioPage,context:string):Promise<StudioDocumentPage>;
+  recognize(page:StudioPage, context:string, options?:{concurrent:boolean;structured?:boolean}):Promise<StudioRecord[]|{records:StudioRecord[];document:StudioDocumentPage}>;
   crop(image:string, box:StudioBox):Promise<{image:string;width:number;height:number}>;
   drawings(question:StudioQuestion, bases:StudioDiagram[], evidence:string[],context:StudioDrawingContext):Promise<StudioDrawingResult>;
   checkpoint(draft:StudioDraft):Promise<void>;
@@ -37,7 +39,7 @@ export type StudioPipelineServices = {
 };
 
 export type StudioPipelineOptions={drawings?:boolean;includeQuestionFigures?:boolean;textConcurrency?:number;drawingConcurrency?:number;retryRuntime?:StudioRetryRuntime};
-type PendingPage={hash:string;context:string;concurrent:boolean;records:StudioRecord[]};
+type PendingPage={hash:string;context:string;concurrent:boolean;records:StudioRecord[];document?:StudioDocumentPage};
 /** Additive local checkpoint metadata; no images or API keys are duplicated. */
 type StudioRunDraft=StudioDraft&{pendingTranscriptions?:Record<string,PendingPage>};
 function needsFreshContext(records:StudioRecord[],draft:StudioDraft,role:StudioPage['role']) {
@@ -57,11 +59,33 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
   const hadUnprocessedPages=pages.some(p=>!p.processed);
   const textState=studioConcurrencyState(options.textConcurrency);
   const reportRetry=(notice:StudioRetryNotice)=>service.progress(`服务暂时繁忙（${notice.status||'网络'}），${Math.ceil(notice.delayMs/1000)} 秒后重试 ${notice.attempt}/2；当前并发 ${notice.limit} 路…`);
+  // Establish the complete document template BEFORE recognizing its contents. Successful
+  // templates are durable independently, so a content retry never rediscovers the outline.
+  if(next.inputMode==='questions'&&service.structure){
+    for(const page of pages.filter(p=>!p.processed&&p.document))try{normalizeStudioDocumentTemplate(page.document,page.textHint||'');}catch{
+      delete page.document;if(next.pendingTranscriptions)delete next.pendingTranscriptions[page.id];
+    }
+    const pending=pages.filter(p=>!p.processed&&!p.document);
+    const state=studioConcurrencyState(pending.every(p=>p.textHint?.trim())?options.textConcurrency:1);
+    let persistence:Promise<void>=Promise.resolve();
+    const persist=(page:StudioPage,document:StudioDocumentPage)=>{persistence=persistence.then(async()=>{page.document=document;await save();});return persistence;};
+    await runStudioOrdered(pending,async page=>{
+      const index=pages.indexOf(page),previous=index>0&&pages[index-1].name===page.name?pages[index-1]:undefined;
+      const context=previous?JSON.stringify({page:previous.page,structure:previous.document,text:previous.textHint?.slice(-7000)}):'';
+      service.progress(`正在提取试卷结构 ${pages.filter(p=>p.document).length+1}/${pages.length} 页…`);
+      const [result]=await runStudioWindow([page],target=>service.structure!(target,context),state,reportRetry,options.retryRuntime);
+      if(result.status==='rejected')throw new Error(`第 ${page.page} 页结构提取失败：${result.reason instanceof Error?result.reason.message:String(result.reason)}`,{cause:result.reason});
+      return result.value;
+    },state,async()=>{await persistence;},persist);
+    await persistence;
+  }
   const contextNow=()=>[...next.questions,...next.answers].slice(-18).map(q=>`${q.lesson}｜${q.section} ${q.number} ${q.stem.slice(0,150)} ${q.analysis.slice(-120)}`).join('\n');
   const pending=next.pendingTranscriptions??={};
+  const structured=next.inputMode==='questions'&&pages.every(p=>p.document?.printed===true);
+  const unpack=(value:StudioRecord[]|{records:StudioRecord[];document:StudioDocumentPage})=>{const result=Array.isArray(value)?{records:value}:value;return {...result,records:result.records.map(normalizeStudioTextFields)};};
   const cached=(page:StudioPage)=>{
     const entry=pending[page.id];
-    return entry&&entry.hash===page.hash&&typeof entry.context==='string'&&Array.isArray(entry.records)?entry:undefined;
+    return entry&&entry.hash===page.hash&&typeof entry.context==='string'&&Array.isArray(entry.records)&&(!structured||entry.document)?entry:undefined;
   };
   const retried=(error:unknown)=>error instanceof StudioRequestError&&error.retryable&&error.retryAfterMs<=60_000;
   const pageFailure=(page:StudioPage,error:unknown)=>new Error(`第 ${page.page} 页（${page.name}）转录失败：${error instanceof Error?error.message:'识别服务异常'}${retried(error)?'，自动重试 2 次仍未成功':''}。已保存完成页及本批成功结果，可点击“继续”重试。`,{cause:error});
@@ -79,7 +103,7 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
       const context=contextNow(),concurrent=textState.limit>1&&pages.some(p=>p.role===role&&p.processed);
       const [result]=await runStudioWindow([page],async target=>cached(target)||{
         hash:target.hash,context,concurrent,
-        records:(await service.recognize(target,context,{concurrent})).map(normalizeStudioTextFields),
+        ...unpack(await service.recognize(target,context,{concurrent,...(structured?{structured:true}:{})})),
       },textState,reportRetry,options.retryRuntime);
       if(result.status==='rejected')throw pageFailure(page,result.reason);
       return result.value;
@@ -92,13 +116,14 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
         const freshContext=contextNow();
         if(entry.concurrent&&entry.context!==freshContext&&needsFreshContext(entry.records,next,page.role)) {
           service.progress(`正在复核第 ${page.page} 页（${page.name}）的跨页归属…`);
-          const [review]=await runStudioWindow([page],async target=>(await service.recognize(target,freshContext,{concurrent:false})).map(normalizeStudioTextFields),textState,reportRetry,options.retryRuntime);
+          const [review]=await runStudioWindow([page],async target=>unpack(await service.recognize(target,freshContext,{concurrent:false,...(structured?{structured:true}:{})})),textState,reportRetry,options.retryRuntime);
           if(review.status==='rejected')throw pageFailure(page,review.reason);
-          entry={hash:page.hash,context:freshContext,concurrent:false,records:review.value};
+          entry={hash:page.hash,context:freshContext,concurrent:false,...review.value};
           pending[page.id]=entry;
           await persist(page,entry);
         }
         const records=entry.records;
+        if(entry.document)page.document=entry.document;
         if(page.role==='answer') {
           next.answers=mergeStudioRecords([...next.answers,...records]);
           if(next.inputMode==='answers')next.questions=attachAnswerOnlyRecords(next);
@@ -137,11 +162,15 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
     extras.forEach(q=>q.warnings.push('未能唯一匹配干净原题，答案已独立保留'));
     next.questions.push(...extras);
   }
-  if(!next.questions.length)throw new Error('所选页面未识别出题目或答案，请检查材料和页码');
+  if(!next.questions.length&&!studioDocumentReady(next))throw new Error('所选页面未识别出题目或答案，请检查材料和页码');
+  if(studioDocumentReady(next)){
+    if(!studioDocumentQuestionCount(next))throw new Error('原件中没有识别到标准试卷题目');
+    studioDocumentParts(next); // Cross-page ownership must be valid before marking the job done.
+  }
   for(const q of next.questions)q.answerPlacements=q.answerIds.flatMap(id=>next.answers.find(a=>a.id===id)?.answerPlacements||[]);
   await save();
   // Text-only downloads must neither call drawing AI nor mark diagrams complete.
-  if(options.drawings===false)return next;
+  if(options.drawings===false||studioDocumentReady(next))return next;
   const drawingState=studioConcurrencyState(options.drawingConcurrency,2,2);
   const drawingReady=(q:StudioQuestion)=>q.drawingsChecked&&q.drawingsRevision===STUDIO_DRAWINGS_REVISION&&(options.includeQuestionFigures?studioFullFiguresReady(q,next):studioFiguresReady(q,next));
   async function processDrawing(sourceQuestion:StudioQuestion):Promise<StudioQuestion> {

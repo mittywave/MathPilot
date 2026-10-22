@@ -5,7 +5,7 @@ import { mathOmml } from './math-omml';
 import { repairMathSource, scanMathSource, splitMathParagraphs } from './math-source.mjs';
 
 export const STUDIO_MATH_SIZE = WORD_MATH_STYLE.baseSize;
-export type StudioMathStyle = { color?:string; bold?:boolean; underline?:boolean;mathAlignment?:'left'|'center'|'right' };
+export type StudioMathStyle = { color?:string; bold?:boolean; underline?:boolean;mathAlignment?:'left'|'center'|'right';size?:number };
 const escapeXml = (s:string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 
 /** A calculation line, optionally introduced by a short Chinese proof cue.
@@ -20,7 +20,7 @@ export function isStudioDisplayMathLine(text:string) {
 }
 function styledMathXml(xml:string,display:boolean,style:StudioMathStyle) {
   if(style.color&&!/^[\da-f]{6}$/i.test(style.color))throw new Error('Invalid equation color');
-  const size=STUDIO_MATH_SIZE;
+  const size=style.size??STUDIO_MATH_SIZE;
   const properties=`<w:rPr><w:rFonts w:ascii="${WORD_MATH_STYLE.font}" w:hAnsi="${WORD_MATH_STYLE.font}" w:eastAsia="Songti SC"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${style.bold?'<w:b/>':''}${style.color?`<w:color w:val="${style.color}"/>`:''}</w:rPr>`;
   // Identical base size for every run. Word retains its own script scaling.
   const body=xml.replace(/<m:r>(<m:rPr>[\s\S]*?<\/m:rPr>)?/g,`<m:r>$1${properties}`);

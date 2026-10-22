@@ -5,6 +5,7 @@ import { jobPageImage, jobsApi, postJson, RecognitionJobTable, uploadJobPage, us
 import { fetchMe, loginPath } from '../../../lib/api-client';
 import type { AuthUser } from '../../../lib/types';
 import { studioInputMode, type StudioDraft, type StudioInputMode } from '../../../lib/answer-studio';
+import {studioDocumentReady,studioDocumentQuestionCount} from '../../../lib/answer-studio-contract';
 import type { StudioJob } from '../../../lib/server/answer-studio-jobs';
 import { studioSnapshot } from '../../../lib/answer-studio-snapshot';
 import { studioStorage } from '../../../lib/answer-studio-storage';
@@ -126,7 +127,7 @@ export default function AnswerStudioPage() {
           await uploadJobPage(job.id,page);
           uploaded++;
         }
-      });
+      },undefined,true);
       await jobsApi(`/api/answer-studio/jobs/${job.id}`,{method:'POST'});
       unfinished='';setQuestionFiles([]);setAnswerFiles([]);setTitle('');
     }catch(e){
@@ -140,6 +141,11 @@ export default function AnswerStudioPage() {
     if(running.current)return;
     running.current=true;setBusy(true);setFailed(false);setDownloads(links.current.invalidate());
     try{
+      const {job:checked}=await jobsApi<{job:StudioJob}>(`/api/answer-studio/jobs/${job.id}`,{method:'POST'});
+      if(checked.status!=='done'){
+        setSaved(null);setOpenJobId('');setFailed(true);setNotice('需要更新的页面已加入后台重识别，其余完成页保留。完成后请再次打开。');
+        void transcriptions.refresh();return;
+      }
       const {draft}=await jobsApi<{draft:StudioDraft}>(`/api/answer-studio/jobs/${job.id}`);
       // Figures are cut from the original pages, so Word generation needs them back in the browser.
       for(const [index,page] of draft.pages.entries()){
@@ -204,7 +210,7 @@ export default function AnswerStudioPage() {
         </div>
       {saved&&studioTextReady(saved)&&<section className="studio-results" aria-labelledby="studio-results-title">
         <h2 id="studio-results-title">转录结果</h2>
-        <div className="result-summary" role="status"><span className="result-summary-icon"><StudioIcon name="check"/></span><span className="result-summary-number">{saved.questions.length}</span><span className="result-summary-label">道题已识别</span></div>
+        <div className="result-summary" role="status"><span className="result-summary-icon"><StudioIcon name="check"/></span><span className="result-summary-number">{studioDocumentReady(saved)?studioDocumentQuestionCount(saved):saved.questions.length}</span><span className="result-summary-label">道题已识别</span></div>
         <fieldset className="studio-fields output-choices" disabled={busy}><legend className="output-legend"><span className="section-icon"><StudioIcon name="download"/></span>选择下载内容</legend>
           {studioOutputs(saved).map(item=><label key={item.value} htmlFor={`studio-output-${item.value}`} aria-label={item.label} className={output===item.value?'output-choice selected':'output-choice'}>
             <input id={`studio-output-${item.value}`} type="radio" name="studio-output" value={item.value} checked={output===item.value} onChange={()=>{setOutput(item.value);setDownloads(links.current.invalidate());setNotice(item.value==='full'?'已选择完整解题版，生成时将处理尚未完成的配图。':'已选择无图版本，将跳过配图处理，直接生成 Word。');setFailed(false);}}/>

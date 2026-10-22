@@ -7,7 +7,7 @@ import { xmlSafeText } from './xml-text';
 // Match the Normal and StudioAnswer paragraph styles (11 pt).
 const BODY_SIZE=22;
 const BODY_FONT={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman',hint:'eastAsia'} as const;
-type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right'};
+type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right';size?:number};
 class NativeMathXml extends ImportedXmlComponent {
   static fromMathXml(xml:string):ParagraphChild {
     // Import the actual OMML element, never the nameless XML container.
@@ -18,7 +18,7 @@ class NativeMathXml extends ImportedXmlComponent {
   }
 }
 function textRuns(text:string,style:RunStyle={}) {
-  return xmlSafeText(text).split(/([A-Za-z]+)/g).filter(Boolean).map(piece=>new TextRun({text:piece,size:BODY_SIZE,bold:style.bold,color:style.color,
+  return xmlSafeText(text).split(/([A-Za-z]+)/g).filter(Boolean).map(piece=>new TextRun({text:piece,size:style.size??BODY_SIZE,bold:style.bold,color:style.color,
     underline:style.underline?{}:undefined,italics:style.italicMath!==false&&(/^[A-Z]{1,4}$/.test(piece)||/^[a-z]$/.test(piece)),font:BODY_FONT}));
 }
 export function richText(text:string,style:RunStyle={},onMathError?:(error:unknown)=>void):ParagraphChild[] {
