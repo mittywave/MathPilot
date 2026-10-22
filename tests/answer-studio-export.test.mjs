@@ -1,12 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
+import {loadSource} from './load-source.mjs';
 const require=createRequire(import.meta.url);
+test('standard paper output uses the supplied Word structure and paragraph styles rather than floating OCR text boxes',async t=>{
+  const templateBytes=await readFile('public/standard-math-paper.docx'),source=await JSZip.loadAsync(templateBytes),originalFetch=globalThis.fetch;t.after(()=>{globalThis.fetch=originalFetch;});
+  globalThis.fetch=async url=>{assert.equal(url,'/standard-math-paper.docx');return new Response(templateBytes);};
+  const {buildStudioWord}=await loadSource('lib/answer-studio-export.ts');
+  const box={x:50,y:100,width:850,height:100};const block=(id,role,text,rows=[])=>({id,role,box,continuation:false,text,rows});
+  const part=(kind,blocks)=>({kind,title:'标准原卷标题',heading:kind==='answers'?'参考答案与试题解析':'',continuation:false,sections:[{title:'一、填空题。',continuation:false,questions:[{number:'1',continuation:false,blocks}]}]});
+  const document={printed:true,parts:[part('questions',[block('q1','stem','1．已知 $a^2+b^2=4ab$，求 $\\frac{a+b}{a-b}$为_____。'),block('table','table','',[['条件','结论'],['$x^2=1$','$\\sqrt{3}$']])]),part('answers',[block('a1','stem','1．已知 $a^{2}+b^{2}=4ab$，求 $\\frac{a+b}{a-b}$为____$\\pm\\sqrt{3}$____。'),block('analysis','analysis','【分析】完整原文分析。'),block('solution','solution','【解答】解：$x=1$。'),block('proof','body','∵$x=1$，∴$20*24=22$。填空$\\underline{\\quad6\\quad}$后续$x=2$。另一个空<u> 305 </u>。'),block('comment','comment','【点评】完整原文点评。'),block('html-math','body','含公式<u>$\\sqrt{3}$</u>。'),block('two-blanks','body','两个独立下划线$\\underline{x}+\\underline{y}$。'),block('cases','body','嵌套方程组$\\begin{cases}x=1\\\\y=\\begin{cases}2\\\\3\\end{cases}\\end{cases}$。')])],warnings:[]};
+  const draft={version:1,inputMode:'questions',title:'任务名称不应覆盖原卷',pages:[{id:'p',role:'question',name:'sample.pdf',page:1,image:'',hash:'p',selected:true,processed:true,document}],questions:[],answers:[],updatedAt:0};const before=structuredClone(draft);
+  const zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'full',{transcription:true,includeTranscriptionWarnings:false})).arrayBuffer());const xml=await zip.file('word/document.xml').async('string');
+  const plain=[...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m=>m[1]).join('');
+  assert.equal((xml.match(/标准原卷标题/g)||[]).length,2);assert.equal((plain.match(/1．已知/g)||[]).length,2);assert.match(xml,/参考答案与试题解析/);assert.match(xml,/完整原文分析/);assert.match(xml,/完整原文点评/);assert.doesNotMatch(xml,/任务名称不应覆盖原卷|待校对样张/);
+  assert.match(xml,/<w:pgMar w:top="1418"[^>]*w:right="1134"[^>]*w:bottom="1418"[^>]*w:left="1134"/);assert.match(xml,/<w:docGrid w:type="lines" w:linePitch="312"/);assert.match(xml,/w:hanging="312"/);assert.match(xml,/<w:sz w:val="30"/);assert.match(xml,/<w:sz w:val="21"/);assert.match(xml,/新宋体/);assert.match(xml,/Times New Roman/);
+  assert.match(xml,/<w:color w:val="0000FF"\/>/);assert.match(xml,/<w:vertAlign w:val="superscript"\/>/);assert.match(xml,/<m:f>/);assert.match(xml,/<m:rad>/);assert.match(xml,/<w:tbl>/);assert.match(xml,/<w:pageBreakBefore\/>/);assert.doesNotMatch(xml,/<wp:anchor|<w:framePr|<wps:txbx/);
+  assert.match(xml,/<w:sz w:val="28"\/>/,'top-level fraction arguments retain the reference size');
+  assert.match(plain,/a2\+b2＝4ab/,'the references use the narrow plus glyph in editable text math');
+  const script=[...xml.matchAll(/<w:r>[\s\S]*?<\/w:r>/g)].find(r=>r[0].includes('w:val="superscript"'))?.[0];assert.match(script,/<w:sz w:val="24"\/>/,'all four references use 12 pt before Word reduces simple scripts');
+  assert.match(xml,/<m:fPr><m:type m:val="bar"\/><m:ctrlPr><w:rPr><w:sz w:val="28"\/>/,'the fraction bar uses the same control size as the reference');
+  for(const math of xml.matchAll(/<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>/g))assert.doesNotMatch(math[0],/w:eastAsia="Songti SC"/,'Chinese inside native equations uses the reference Chinese font as well');
+  assert.doesNotMatch(xml,/<m:eqArr>/);assert.ok((xml.match(/<m:m>/g)||[]).length>=2,'nested cases retain separate native matrices');assert.ok((xml.match(/<m:mcJc m:val="left"/g)||[]).length>=2,'case rows keep the reference left alignment');
+  assert.match(xml,/<m:bar>/,'a clearly matched filled blank keeps the standard underline even when OCR returns the value between underscores');assert.equal((plain.match(/_{2,}/g)||[]).length,1,'only the unanswered question retains literal underscores');
+  const proof=[...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(p=>p[0].includes('>∵<'))?.[0];assert.ok(proof);assert.doesNotMatch(proof,/<m:oMath>/,'ordinary proof cues and a simple custom operator stay body-sized editable text');
+  const padded=[...proof.matchAll(/<w:r>[\s\S]*?<\/w:r>/g)].map(m=>m[0]);assert.ok(padded.some(r=>r.includes('>　</w:t>')&&r.includes('<w:u ')),'native underlined spaces retain the source answer-slot width');assert.ok(padded.some(r=>r.includes('>6</w:t>')&&r.includes('<w:u ')));assert.ok(padded.some(r=>r.includes('>后续</w:t>')&&!r.includes('<w:u ')),'underline does not leak into following content');
+  assert.doesNotMatch(plain,/&lt;\/?u|<\/?u>/,'provider underline tags never leak into printed content');assert.ok(padded.some(r=>r.includes('305')&&r.includes('<w:u ')),'recognized inline underline becomes an editable native underline');assert.match(xml,/<m:bar>[\s\S]*?<m:rad>/,'inline underline can contain native math as well');
+  const footer=await zip.file('word/footer1.xml').async('string');assert.match(footer,/NUMPAGES/);assert.match(footer,/PAGE/);assert.deepEqual(draft,before);
+  for(const part of ['word/styles.xml','word/theme/theme1.xml','word/fontTable.xml','word/footer1.xml','word/footnotes.xml','word/endnotes.xml'])assert.equal(await zip.file(part).async('string'),await source.file(part).async('string'),`${part} must be copied from the reference template unchanged`);
+  assert.doesNotMatch(xml,/MP_DOCUMENT_|MP_TEMPLATE_/);assert.match(await zip.file('word/settings.xml').async('string'),/<w:updateFields w:val="true"/);
+});
 test('both studio exports preserve OMML, native geometry, media relationships and updated content',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'mitty-studio-export-'));
   try {

@@ -2,7 +2,14 @@ import { randomClientId } from "./client-random-id.mjs";
 
 /** Independent transcription model. Never use ordinary question cleanup on teacher answers. */
 export type StudioBox = { x: number; y: number; width: number; height: number };
-export type StudioPage = { id: string; role: "question" | "answer"; name: string; page: number; image: string; hash: string; selected: boolean; processed?: boolean };
+/** A printed paper is a document tree, not a collection of positioned text boxes.
+ * Boxes locate evidence for transcription and figure crops; Word consumes the hierarchy only. */
+export type StudioDocumentBlock = { id:string; role:'stem'|'body'|'subquestion'|'option'|'analysis'|'solution'|'comment'|'figure'|'table'; box:StudioBox; continuation:boolean; text?:string; rows?:string[][] };
+export type StudioDocumentQuestion = { number:string; continuation:boolean; blocks:StudioDocumentBlock[] };
+export type StudioDocumentSection = { title:string; continuation:boolean; questions:StudioDocumentQuestion[] };
+export type StudioDocumentPart = { kind:'questions'|'answers'; title:string; heading:string; continuation:boolean; sections:StudioDocumentSection[] };
+export type StudioDocumentPage = { printed:boolean; parts:StudioDocumentPart[]; warnings:string[] };
+export type StudioPage = { id: string; role: "question" | "answer"; name: string; page: number; image: string; hash: string; selected: boolean; processed?: boolean; textHint?:string; document?:StudioDocumentPage };
 export type StudioSource = { pageId: string; box: StudioBox };
 export type StudioShape = {
   id: string; kind: "line" | "ellipse" | "path" | "label" | "point";

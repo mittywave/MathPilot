@@ -52,12 +52,12 @@ export type StudioPageBatchHandler = (pages:StudioPage[],meta:StudioPageBatchMet
 const STUDIO_PAGE_BATCH_SIZE=40;
 
 /** Read source files in bounded batches so a large PDF never has to stay fully rasterized in memory. */
-export async function readStudioFilesInBatches(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void,onBatch:StudioPageBatchHandler,batchSize=STUDIO_PAGE_BATCH_SIZE) {
+export async function readStudioFilesInBatches(files:File[],role:StudioPage["role"],range:string,progress:(message:string)=>void,onBatch:StudioPageBatchHandler,batchSize=STUDIO_PAGE_BATCH_SIZE,includeDocumentText=false) {
   if(!Number.isInteger(batchSize)||batchSize<1) throw new Error("无效的页面批次大小");
   for (const file of files) {
     if (file.size>80_000_000) throw new Error("单个文件不得超过80MB");
-    const add=async(image:string,page:number,target:StudioPage[])=> {
-      target.push({id:randomClientId(),role,name:file.name,page,image,hash:await contentFingerprint(image),selected:true});
+    const add=async(image:string,page:number,target:StudioPage[],textHint?:string)=> {
+      target.push({id:randomClientId(),role,name:file.name,page,image,hash:await contentFingerprint(image),selected:true,...(textHint?{textHint}:{})});
     };
     if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
       const task=await openPdf(new Uint8Array(await file.arrayBuffer()));
@@ -68,9 +68,17 @@ export async function readStudioFilesInBatches(files:File[],role:StudioPage["rol
           progress(`读取 ${file.name}：第 ${Math.floor(offset/batchSize)+1}/${batchCount} 批（${batch[0]}–${batch[batch.length-1]} 页）`);
           for (const n of batch) {
             const page=await pdf.getPage(n),base=page.getViewport({scale:1}),viewport=page.getViewport({scale:3200/Math.max(base.width,base.height)});
+            // Opt-in for document transcription. Other readers' Word-derived text hints
+            // have a stronger math contract and must not receive PDF font-map glyphs.
+            const content=includeDocumentText&&role==='question'?await page.getTextContent():null;
+            const textHint=content?.items.flatMap(item=>{
+              if(!('str' in item)||!item.str.trim())return [];
+              const [x,y]=base.convertToViewportPoint(item.transform[4],item.transform[5]);
+              return [JSON.stringify([Math.round(x/base.width*1000),Math.round(y/base.height*1000),Math.round(Math.hypot(item.transform[2],item.transform[3])*10)/10,item.str])];
+            }).join('\n').slice(0,50000);
             const canvas=document.createElement("canvas");canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
             await page.render({canvas,canvasContext:canvas.getContext("2d")!,viewport}).promise;
-            await add(await canvasDataUrl(canvas,"image/jpeg",.97),n,pages);page.cleanup();
+            await add(await canvasDataUrl(canvas,"image/jpeg",.97),n,pages,textHint);page.cleanup();
           }
           await onBatch(pages,{fileName:file.name,batchIndex:Math.floor(offset/batchSize)+1,batchCount,pageStart:batch[0],pageEnd:batch[batch.length-1]});
         }

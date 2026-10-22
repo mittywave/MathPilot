@@ -1,11 +1,48 @@
-# Handwritten transcription: bounded concurrency
+# File transcription: bounded concurrency
 
 ## Scope
 
-This change applies to Answer Studio on `fix/math-rendering-consistency`.
-It does not change the model ID, API key, image resolution, math formatting,
-Word content modes, or the transcription-warning checkbox. No dependencies,
-server database migrations, deployments, or merges into `main` are required.
+This describes Answer Studio's shared scheduler, queue and resumable page
+checkpoints. Printed originals use the structured-document stage described
+below; handwritten answers and paired materials retain their existing stages.
+There are no additional dependencies or database migrations.
+
+## Printed document structure before recognition
+
+With originals only, every selected page first receives a structure template:
+question/answer part, source section, major question and logical paragraph,
+subquestion, option, table or figure slots. The complete template is saved
+before content recognition starts. Digital PDFs with positional text evidence
+can use the chosen lane count during this stage; scans run sequentially to
+retain ownership context. Each successful template is checkpointed in source
+order. The existing two-minute run slice and ownership fencing also apply to
+this stage, including errors wrapped with their original yield cause.
+
+If all pages are printed, recognition fills every slot exactly once. The same
+ordered coordinator stores completed peers in pendingTranscriptions and marks
+pages processed in source order. Resume reuses valid templates and filled
+pages; invalid templates are discarded with their stale pending content. Opening
+a completed printed job revalidates its checkpoints: valid pages incur no provider
+calls, invalid content retains its outline, and invalid outlines are rebuilt through
+the same queue. The original page assets and valid peers are preserved. Final
+assembly joins only a continued question's first paragraph on a new page and retains the
+question stems repeated in the answer part. Explicit continuations inherit the
+previous printed section and question identity; inferred shorthand titles or
+numbers appearing only inside a continuation's formulas cannot replace them.
+Original question counts derive
+from this tree, not the number of pages or repeated solution stems. Figures
+are copied at Word generation time without a drawing-model pass.
+
+The optional PDF positional text hint is enabled only by the transcription
+entry. Other callers of the shared reader keep their previous text-hint
+behavior, in particular structured Word imports whose original math text is
+authoritative. The printed path validates prose coverage, major question
+boundaries, marks and separate equation/prose paragraphs against reliable native text;
+one-to-one geometry glyph checks preserve angles, congruence, similarity and degrees.
+Mathematical recognition
+still uses page pixels because embedded math-font character maps may be wrong.
+If a selected page contains handwriting, the existing recognition workflow
+handles the materials instead of mixing two output contracts in one document.
 
 ## Controls and scheduling
 
