@@ -22,7 +22,7 @@ function pickerPaperLocation(practice = false) {
 // The same bank stays open while adding to different lanes or replacing a question.
 // For a 小测 or 作业 the chosen module is the one the new questions test, and there is no band to choose.
 // taken: already in the open sheet, so not offered again; usedIn: where else in this 讲 a question is used.
-export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTreeOpenChange: setTreeOpen, mode, sheet, disabled = false, taken, usedIn, onPick, sections, onModeChange, source = "library", onSourceChange, temporaryQuestions = [], onImport, onArchive, onEdit, onRemove, onNotice }: {
+export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTreeOpenChange: setTreeOpen, mode, sheet, disabled = false, taken, usedIn, onPick, sections, onModeChange, source = "library", onSourceChange, temporaryQuestions = [], onImport, onNotice }: {
   library: LibraryData | null;
   user: AuthUser;
   onLibraryChanged: () => Promise<void>;
@@ -40,9 +40,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   onSourceChange?: (source: "library" | "temporary") => void;
   temporaryQuestions?: Question[];
   onImport?: () => void;
-  onArchive?: (ids: string[], categoryId: string) => Promise<string[]>;
-  onEdit?: (question: Question) => void;
-  onRemove?: (id: string) => void;
   onNotice: (message: string, tone?: "success" | "error") => void;
 }) {
   const replacing = mode.kind === "replace";
@@ -102,9 +99,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const [keyword, setKeyword] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<string[]>([]);
-  const [archiveIds, setArchiveIds] = useState<string[]>([]);
-  const [archiveCategory, setArchiveCategory] = useState("");
-  const [archiving, setArchiving] = useState(false);
   const [fileName, setFileName] = useState("");
   const temporary = source === "temporary";
   const papersOpen = !temporary && paperLocation.view === "papers";
@@ -140,9 +134,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     && (type === "全部" || question.type === type) && (!search || questionMatchesKeyword(question, search, question.importFileName ?? ""))) : byCode ? [byCode] : moduleQuestions.filter((question) => (!allowed || allowed.has(question.categoryId))
     && (!search || questionMatchesKeyword(question, search, pathOf(question.categoryId))));
   const visibleIds = new Set((temporary ? temporaryQuestions : library?.questions ?? []).map((question) => question.id));
-  const archived = new Set((library?.questions ?? []).map((question) => question.id));
   const availableSelection = selected.filter((id) => visibleIds.has(id) && !taken.has(id));
-  const pendingArchive = archiveIds.filter((id) => visibleIds.has(id) && !archived.has(id));
   const isSelected = (id: string) => availableSelection.includes(id);
 
   function toggle(id: string) { setSelected((current) => isSelected(id) ? current.filter((item) => item !== id) : [...current, id]); }
@@ -258,13 +250,11 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
                 ? <button className="secondary" disabled={disabled} onClick={() => onPick([question.id])}>换成这道</button>
                 : <button className={chosen ? "picker-toggle on" : "picker-toggle"} aria-pressed={chosen} onClick={() => toggle(question.id)}>{chosen ? "✓ 已选" : "＋ 选择"}</button>}
             </div>
-            {temporary && <div className="picker-archive-item"><label><input type="checkbox" aria-label={`第 ${index + 1} 题存入正式题库`} checked={archived.has(question.id) || archiveIds.includes(question.id)} disabled={archived.has(question.id) || archiving} onChange={(event) => setArchiveIds((ids) => event.target.checked ? [...ids, question.id] : ids.filter((id) => id !== question.id))} />{archived.has(question.id) ? "已存入正式题库" : "存入正式题库"}</label><button className="text-button" onClick={() => onEdit?.(question)}>校对</button><button className="text-button" onClick={() => onRemove?.(question.id)}>删除</button></div>}
           </li></Fragment>;
         })}</ol>
         {!paperOpen && results.length > limit && <button className="secondary picker-more" onClick={() => setLimit((current) => current + PAGE_SIZE)}>再显示 {Math.min(PAGE_SIZE, results.length - limit)} 道</button>}
       </>}
       </div>
-      {temporary && !!pendingArchive.length && <div className="picker-archive"><select aria-label="入库分类" value={archiveCategory} disabled={archiving} onChange={(event) => setArchiveCategory(event.target.value)}><option value="">选择正式题库分类</option>{modules.map((module) => <optgroup key={module.id} label={module.name}><option value={module.id}>{module.name}（根目录）</option>{categories.filter((category) => category.moduleId === module.id).map((category) => <option value={category.id} key={category.id}>{pathOf(category.id)}</option>)}</optgroup>)}</select><button className="secondary" disabled={!archiveCategory || archiving} onClick={async () => { setArchiving(true); try { const saved = await onArchive!(pendingArchive, archiveCategory); setArchiveIds((ids) => ids.filter((id) => !saved.includes(id))); } catch (error) { onNotice(error instanceof Error ? error.message : "入库失败，请重试", "error"); } finally { setArchiving(false); } }}>{archiving ? "正在入库…" : `保存勾选 ${pendingArchive.length} 题`}</button></div>}
     </div>
   </section>;
 }

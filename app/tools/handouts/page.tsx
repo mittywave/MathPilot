@@ -1,7 +1,6 @@
 "use client";
 import { type DragEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { arrangeHandouts, authorizeDownload, createCloudQuestion, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, loginPath, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
-import { saveQuestionImportBatch } from "../../../lib/question-import-save.mjs";
+import { arrangeHandouts, authorizeDownload, createHandout, deleteHandout, fetchHandout, fetchHandouts, fetchLibrary, fetchMe, fetchStudents, loginPath, saveHandoutCourse, deleteHandoutCourse, updateHandout, uploadHandoutImage } from "../../../lib/api-client";
 import { DEFAULT_HANDOUT_TITLE, HANDOUT_BANDS, HANDOUT_TOPIC_ROOT, HANDOUT_LIMITS, HANDOUT_PARTS, HANDOUT_SHEETS, HANDOUT_SHELVES, UNSORTED_TOPIC_LABEL, copyHandoutItems, coursePath, ensureLeadingModule, groupLabel, handoutModules, handoutNumbers, handoutSections, dropHandoutItem, insertIndexForSection, moduleHeading, moveHandoutItem, questionPoints, removeHandoutModule, sameGroup, setItemBand, sheetLabel, sheetQuestions, shelfOf } from "../../../lib/handout-rules.mjs";
 import { categoryPath } from "../../../lib/library-tree";
 import { noteFromBlocks, type RecognizedNoteFigure } from "../../../lib/handout-note.mjs";
@@ -686,17 +685,6 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     return latest.current!.temporaryQuestions.filter((item) => questions.some((question) => question.id === item.id));
   }
 
-  async function archiveTemporaryQuestions(ids: string[], categoryId: string) {
-    const moduleId = library?.categories.find((item) => item.id === categoryId)?.moduleId ?? categoryId;
-    if (!library?.modules.some((item) => item.id === moduleId)) throw new Error("请先选择正式题库的保存分类");
-    const questions = latest.current!.temporaryQuestions.filter((question) => ids.includes(question.id) && !library.questions.some((item) => item.id === question.id));
-    const result = await saveQuestionImportBatch(questions, async (question) => (await createCloudQuestion({ ...question, categoryId, moduleId })).question);
-    const saved = result.saved.map((item) => item.question);
-    setLibrary((current) => current && { ...current, questions: [...saved, ...current.questions.filter((item) => !saved.some((question) => question.id === item.id))] });
-    onNotice(`已将 ${saved.length} 道题加入正式题库${result.failed.length ? `；${result.failed.length} 道失败，可重试：${result.failed[0].error}` : ""}`, result.failed.length ? "error" : "success");
-    return saved.map((question) => question.id);
-  }
-
   function entrySaved(current: EntryState, saved: Question[]) {
     // Temporary edits only change this handout's snapshot; imports already have permanent IDs.
     if (current.temporary && current.draft.id) return;
@@ -912,11 +900,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     </header>
     <QuestionWorkspace {...workspace} outlineLabel={sheetLabel(sheet)} draftLabel="讲义编辑" bank={
         <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} treeOpen={treeOpen} onTreeOpenChange={setTreeOpen} mode={activePicker} sheet={sheet} taken={taken} usedIn={usedIn} onPick={(ids) => pick(ids, activePicker)} onModeChange={setPicker}
-          source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onArchive={archiveTemporaryQuestions} onNotice={onNotice}
-          onEdit={openEditEntry} onRemove={async (questionId) => {
-            if (placed.some((item) => item.questionId === questionId)) { onNotice("请先从讲义、小测和作业中移出这道题，再从临时题库删除"); return; }
-            if (await confirm({ title: "删除临时题", body: "从当前讲义的临时题库删除这道题，无法恢复。已保存到正式题库的内容不受影响。", confirmLabel: "删除临时题", danger: true })) edit({ temporaryQuestions: latest.current!.temporaryQuestions.filter((question) => question.id !== questionId) });
-          }}
+          source={bankSource} onSourceChange={setBankSource} temporaryQuestions={doc.temporaryQuestions} onImport={openTemporaryImport} onNotice={onNotice}
           sections={moduleOptions} />
     } outline={<>
           <header><h2>{sheetLabel(sheet)}结构</h2><span>{questionCount} 题</span></header>
