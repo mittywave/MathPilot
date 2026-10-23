@@ -104,6 +104,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   const [shelf, setShelf] = useState<HandoutShelf>(() => linkShelf ?? knownShelf(readStored(SHELF_KEY)) ?? "course");
   const [courseNodes, setCourseNodes] = useState<HandoutCourseNode[] | null>(null);
   const [courseId, setCourseId] = useState(() => link.get("course") || (link.get("grade") ? "course-default" : readStored(COURSE_KEY)));
+  const [courseOpen, setCourseOpen] = useState(true);
   const [stageId, setStageId] = useState(() => link.get("stage") || (link.get("grade") ? `course-grade-${link.get("grade")}` : readStored(STAGE_KEY)));
   const [topicId, setTopicId] = useState(() => link.get("topic") || readStored(TOPIC_KEY));
   const [outlineEdit, setOutlineEdit] = useState<{ id?: string; parentId: string | null; name: string; label: string; error: string } | null>(null);
@@ -150,11 +151,17 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
   }, [shelf, courseNodes, activeSystem, activeStage, activeTopic, activeOutline, activeStudent]);
 
   function choose(next: HandoutShelf, value?: string) {
+    if (next === "course") {
+      if (value && value === activeSystem?.id && shelf === "course" && !query.trim()) {
+        setCourseOpen((open) => !open); return;
+      }
+      setCourseOpen(true);
+    }
     setShelf(next); setQuery("");
     if (next === "course" && value) {
       const node = courseNodes?.find((item) => item.id === value);
       if (node?.parentId) { setCourseId(node.parentId); setStageId(node.id); }
-      else { setCourseId(value); setStageId(""); }
+      else { setCourseId(value); if (value !== activeSystem?.id) setStageId(""); }
     }
     if (next === "student" && value) setStudentId(value);
     if (next === "topic" && value) setTopicId(value);
@@ -170,7 +177,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       if (path[0]?.id === HANDOUT_TOPIC_ROOT) {
         setShelf("topic"); setTopicId(path[2]?.id ?? path[1].id); onNotice(path.length === 4 ? "专题已保存" : path.length === 3 ? "大纲目录已保存" : "专题分类已保存");
       } else {
-        setShelf("course");
+        setShelf("course"); setCourseOpen(true);
         setCourseId(path[0].id); setStageId(path[1]?.id ?? "");
         onNotice("大纲已保存");
       }
@@ -340,8 +347,8 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
 
   const keyword = query.trim().toLowerCase();
   const matches = (handout: HandoutSummary) => [handout.title, ...handout.outline.map((module) => module.title)].some((text) => text.toLowerCase().includes(keyword));
-  const navItem = (key: string, label: string, count: number, active: boolean, onClick: () => void, top = false) =>
-    <button key={key} className={`${top ? "shelf" : "item"}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} onClick={onClick}><span>{label}</span>{count ? <em>{count}</em> : null}</button>;
+  const navItem = (key: string, label: string, count: number, active: boolean, onClick: () => void, top = false, expanded?: boolean) =>
+    <button key={key} className={`${top ? "shelf" : "item"}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} aria-expanded={expanded} aria-controls={expanded === undefined ? undefined : `handout-stages-${key}`} onClick={onClick}><span>{label}</span>{count ? <em>{count}</em> : null}</button>;
   const all = handouts ?? [];
   const unsorted = countIn(NOWHERE);
   const viewing = keyword ? null : shelf;
@@ -351,13 +358,16 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <input className="handout-find" type="search" aria-label="查找讲义" placeholder="查找讲义或模块" value={query} onChange={(event) => setQuery(event.target.value)} />
       <nav>
         <div className="handout-nav-heading">{navItem("course", "课程体系", 0, false, () => choose("course"), true)}<button className="icon-button" aria-label="新建体系" title="新建体系" disabled={busy || !courseNodes} onClick={() => addNode(null, "体系")}>＋</button></div>
-        {systems.map((system) => <div key={system.id} {...systemDragProps(system.id)}>
-          <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id))}{nodeMenu(system)}</div>
-          <div className="tree-children" data-open={activeSystem?.id === system.id} inert={activeSystem?.id !== system.id} aria-hidden={activeSystem?.id !== system.id}><div className="tree-children-content"><div className="handout-stage-nav">
-            {(courseNodes ?? []).filter((node) => node.parentId === system.id).map((stage) => <div className="handout-nav-row row-tail" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeSystem?.id === system.id && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
-            <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>
-          </div></div></div>
-        </div>)}
+        {systems.map((system) => {
+          const open = courseOpen && activeSystem?.id === system.id;
+          return <div key={system.id} {...systemDragProps(system.id)}>
+            <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id), false, open)}{nodeMenu(system)}</div>
+            <div id={`handout-stages-${system.id}`} className="tree-children" data-open={open} inert={!open} aria-hidden={!open}><div className="tree-children-content"><div className="handout-stage-nav">
+              {(courseNodes ?? []).filter((node) => node.parentId === system.id).map((stage) => <div className="handout-nav-row row-tail" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeSystem?.id === system.id && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
+              <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>
+            </div></div></div>
+          </div>;
+        })}
         <div className="handout-nav-heading">{navItem("topic", "专题库", 0, false, () => choose("topic"), true)}<button className="icon-button" aria-label="新建专题分类" title="新建专题分类" disabled={busy || !courseNodes} onClick={() => addNode(HANDOUT_TOPIC_ROOT, "专题分类")}>＋</button></div>
         {topics.map((topic) => <div key={topic.id}>
           <div className={`handout-nav-row row-tail${viewing === "topic" && activeTopic?.id === topic.id ? " current-path" : ""}`}>{navItem(topic.id, topic.name, all.filter((item) => coursePath(courseNodes ?? [], item.domain)[1]?.id === topic.id).length, viewing === "topic" && activeTopic?.id === topic.id && !activeOutline, () => choose("topic", topic.id))}{nodeMenu(topic)}</div>
