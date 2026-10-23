@@ -365,10 +365,17 @@ async function verifyCourses() {
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   assert.equal((await api(`/api/handouts/${lessonId}`)).handout.coursePath[0].name, '我的数学体系');
-  await (await nodeMenu('我的数学体系')).getByRole('button', { name: '删除空目录…', exact: true }).click();
-  await page.getByRole('dialog', { name: '删除目录「我的数学体系」' }).getByRole('button', { name: '删除目录', exact: true }).click();
-  await page.getByRole('alert').filter({ hasText: '请先移走讲义' }).waitFor();
-  assert.equal((await api('/api/handouts')).handouts.length, 2);
+  for (const cancel of ['取消', 'Escape', '关闭']) {
+    await (await nodeMenu('我的数学体系')).getByRole('button', { name: '删除目录…', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: '删除目录「我的数学体系」' });
+    assert.match(await dialog.innerText(), /2 个下级目录/);
+    assert.match(await dialog.innerText(), /2 份讲义/);
+    assert.match(await dialog.innerText(), /无法恢复.*正式题库/);
+    if (cancel === 'Escape') await page.keyboard.press('Escape');
+    else await dialog.getByRole('button', { name: cancel, exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal((await api('/api/handouts')).handouts.length, 2);
+  }
   await addNode('＋ 添加学期 / 单元', '几何单元');
   await page.getByRole('region', { name: '我的数学体系 / 基础阶段 / 几何单元', exact: true }).getByRole('button', { name: '几何单元 目录操作', exact: true }).click();
   await page.getByRole('group', { name: '几何单元 目录操作' }).getByRole('button', { name: '上移', exact: true }).click();
@@ -376,7 +383,7 @@ async function verifyCourses() {
   await page.reload();
   await page.locator('.handout-column h2').first().waitFor();
   assert.equal(await page.locator('.handout-column h2').first().innerText(), '几何单元');
-  step('edit and reload a lesson; return to its system; rename leaves content attached; nonempty deletion is refused; unit order persists');
+  step('edit and reload a lesson; return to its system; deletion lists descendants and lectures; cancel, Escape and close retain content; unit order persists');
 
   await addNode('新建体系', '另一套课程');
   await addNode('＋ 添加年级 / 阶段', '进阶阶段');
@@ -400,6 +407,72 @@ async function verifyCourses() {
   assert.equal((await api(`/api/handouts/${copyId}`)).handout.coursePath[0].name, '另一套课程');
   await page.screenshot({ path: join(out, 'courses-desktop.png'), fullPage: true });
   step('copy and move a lesson across systems without affecting source');
+
+  await page.getByRole('searchbox', { name: '查找讲义' }).fill('代数基础');
+  assert.equal(await page.locator('.handout-entry').count(), 2);
+  let failDelete = true;
+  await page.route('**/api/handout-courses', route => {
+    if (route.request().method() === 'DELETE' && failDelete) {
+      failDelete = false;
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '验收注入：目录删除失败' }) });
+    }
+    return route.continue();
+  });
+  for (const attempt of ['failed', 'retry']) {
+    await (await nodeMenu('我的数学体系')).getByRole('button', { name: '删除目录…', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: '删除目录「我的数学体系」' });
+    assert.match(await dialog.innerText(), /3 个下级目录/);
+    assert.match(await dialog.innerText(), /2 份讲义/);
+    if (attempt === 'retry') await page.screenshot({ path: join(out, 'directory-delete-confirm.png'), fullPage: true });
+    await dialog.getByRole('button', { name: '删除目录', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden' });
+    if (attempt === 'failed') {
+      await page.getByRole('alert').filter({ hasText: '目录删除失败' }).waitFor();
+      assert.equal(await page.locator('.handout-entry').count(), 2);
+      assert.equal((await api(`/api/handouts/${lessonId}`)).handout.coursePath[0].id, systemId);
+    }
+  }
+  await page.unroute('**/api/handout-courses');
+  await page.getByRole('status').filter({ hasText: '目录已删除' }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '我的数学体系 目录操作', exact: true }).count(), 0);
+  assert.deepEqual(await page.locator('.handout-entry strong').allTextContents(), ['代数基础（副本）']);
+  const after = await api('/api/handouts');
+  assert.ok(!after.courseNodes.some(node => node.id === systemId || node.id === stageId));
+  assert.deepEqual(after.handouts.map(item => item.id), [copyId]);
+  await page.screenshot({ path: join(out, 'directory-delete-search.png'), fullPage: true });
+  await page.reload();
+  await page.getByRole('heading', { name: '另一套课程', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '我的数学体系 目录操作', exact: true }).count(), 0);
+  await page.locator('.handout-entry').filter({ hasText: '代数基础（副本）' }).waitFor();
+  step('nonempty system deletion: failed request retains content; retry deletes all descendants and lectures, updates search immediately, preserves the other system after reload');
+
+  const topic = await api('/api/handout-courses', { name: '专题删除验收', parentId: 'topic-library' });
+  const outline = await api('/api/handout-courses', { name: '专题大纲', parentId: topic.id });
+  const group = await api('/api/handout-courses', { name: '待删除专题', parentId: outline.id });
+  await api('/api/handout-courses', { name: '空专题', parentId: outline.id });
+  for (const [domain, title] of [[topic.id, '分类直属讲义'], [outline.id, '大纲直属讲义'], [group.id, '专题第一讲'], [group.id, '专题第二讲']]) {
+    await api('/api/handouts', { handout: { title, domain, items: [] } });
+  }
+  await page.goto(`${base}/tools/handouts?shelf=topic&topic=${outline.id}`);
+  await page.locator('.handout-entry').filter({ hasText: '专题第一讲' }).waitFor();
+  for (const [name, children, lectures] of [['待删除专题', 0, 2], ['专题大纲', 1, 1], ['专题删除验收', 0, 1]]) {
+    await page.getByRole('button', { name: `${name} 目录操作`, exact: true }).click();
+    await page.getByRole('group', { name: `${name} 目录操作`, exact: true }).getByRole('button', { name: '删除目录…', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: `删除目录「${name}」` });
+    assert.match(await dialog.innerText(), new RegExp(`${children} 个下级目录`));
+    assert.match(await dialog.innerText(), new RegExp(`${lectures} 份讲义`));
+    const deleted = page.waitForResponse(response => response.url().endsWith('/api/handout-courses') && response.request().method() === 'DELETE' && response.ok());
+    await dialog.getByRole('button', { name: '删除目录', exact: true }).click();
+    await deleted;
+    await page.getByRole('button', { name: `${name} 目录操作`, exact: true }).waitFor({ state: 'detached' });
+    if (name === '专题大纲') await page.locator('.handout-entry').filter({ hasText: '分类直属讲义' }).waitFor();
+  }
+  await page.reload();
+  await page.getByRole('heading', { name: '函数', exact: true }).waitFor();
+  assert.deepEqual((await api('/api/handouts')).handouts.map(item => item.id), [copyId]);
+  assert.ok((await api('/api/handouts')).courseNodes.some(node => node.id === 'topic-library'));
+  await page.screenshot({ path: join(out, 'directory-delete-topic.png'), fullPage: true });
+  step('topic group, selected outline and category deletion remove their lectures and legacy direct lectures; selection returns to the parent and persists after reload');
 }
 
 try {

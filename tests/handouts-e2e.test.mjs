@@ -213,7 +213,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
     assert.equal((await jsonRequest(base, `/api/handouts/${handout.id}`, { cookie: one })).response.status, 404);
 
-    // Empty systems persist independently; teachers can author, admins alone delete empty nodes.
+    // Empty systems persist independently; teachers can author, admins alone delete directories.
     const course = async (body, cookie = one) => jsonRequest(base, "/api/handout-courses", { cookie, method: "POST", body });
     assert.equal((await course({ name: "" })).response.status, 400);
     assert.equal((await course({ name: "too long".repeat(20) })).response.status, 400);
@@ -234,7 +234,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: two })).payload.handout.coursePath[0].name, "独立体系");
     const reorderedUnits = (await course({ id: secondUnit, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === stage);
     assert.deepEqual(reorderedUnits.map((node) => node.id), [secondUnit, unit]);
-    for (const id of [system, stage, unit]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 409, "nonempty outline nodes cannot delete lessons");
+    for (const id of [system, stage, unit]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id } })).response.status, 403, "members cannot delete directories or their lessons");
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: secondUnit } })).response.status, 403);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: secondUnit, ids: [diy.id] } });
     const movedDiy = (await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: two })).payload.handout;
@@ -263,7 +263,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await course({ id: topic, name: "空专题" })).response.status, 409);
     const reorderedTopics = (await course({ id: emptyTopic, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === "topic-library");
     assert.deepEqual(reorderedTopics.slice(-2).map((node) => node.id), [emptyTopic, topic]);
-    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: topic } })).response.status, 409, "a topic containing handouts cannot be deleted");
+    assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: topic } })).response.status, 403, "members cannot delete a topic containing handouts");
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: emptyTopic } })).response.status, 403);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: emptyTopic, ids: [topicHandout.id] } });
     const movedTopicHandout = (await jsonRequest(base, `/api/handouts/${topicHandout.id}`, { cookie: two })).payload.handout;
@@ -306,7 +306,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.deepEqual(sharedSeriesLesson.outline, [{ title: "自编模块", questionIds: [] }]);
     const reorderedSeries = (await course({ id: quadratic, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === "function");
     assert.deepEqual(reorderedSeries.map((node) => node.id), [quadratic, inverse, movingPoint]);
-    for (const id of ["function", inverse]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 409);
+    for (const id of ["function", inverse]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id } })).response.status, 403);
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: movingPoint } })).response.status, 403);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: quadratic, ids: [quadraticLesson.id, ...inverseLessons.map((item) => item.id)] } });
     const movedSeriesLesson = (await jsonRequest(base, `/api/handouts/${savedSeriesLesson.id}`, { cookie: two })).payload.handout;
@@ -344,7 +344,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.deepEqual(sharedGroupedLesson.coursePath, savedGroupedLesson.coursePath);
     const reorderedGroups = (await course({ id: graph, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === quadratic);
     assert.deepEqual(reorderedGroups.map((node) => node.id), [graph, properties]);
-    for (const id of ["function", quadratic, properties]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 409, "nonempty groups and every ancestor protect lectures");
+    for (const id of ["function", quadratic, properties]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id } })).response.status, 403, "members cannot delete nonempty groups or their ancestors");
     assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: graph, ids: [groupedLesson.id] } })).response.status, 400);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: graph, ids: [quadraticLesson.id, groupedLesson.id] } });
     const movedGroupedLesson = (await jsonRequest(base, `/api/handouts/${groupedLesson.id}`, { cookie: two })).payload.handout;
@@ -393,6 +393,44 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await fetch(base + privateUrl, { headers: { Cookie: two } })).status, 404, "an unauthorized move cannot grant figure access");
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { domain: "function", ids: [privateHandout.id] } });
     assert.equal((await fetch(base + privateUrl, { headers: { Cookie: two } })).status, 200, "an authorized move to the shared shelf shares its figures too");
+
+    // Deleting any course/topic level removes the whole subtree, without touching other shelves or formal questions.
+    const formalBefore = (await jsonRequest(base, "/api/library", { cookie: one })).payload.questions;
+    for (const topicShelf of [false, true]) {
+      const root = (await course({ name: topicShelf ? "专题删除验证" : "体系删除验证", parentId: topicShelf ? "topic-library" : null })).payload.id;
+      const middle = (await course({ name: "下级目录", parentId: root })).payload.id;
+      const leaf = (await course({ name: "内容分组", parentId: middle })).payload.id;
+      const empty = (await course({ name: "空分组", parentId: middle })).payload.id;
+      const ids = [root, middle, leaf, empty];
+      const lessons = [];
+      for (const domain of topicShelf ? [root, middle, leaf] : [leaf]) {
+        const created = await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: {
+          title: "随目录删除", ...(topicShelf ? { domain } : { courseUnitId: leaf }), items: temp.items, temporaryQuestions: temp.temporaryQuestions,
+        } } });
+        assert.equal(created.response.status, 201);
+        lessons.push(created.payload.handout.id);
+      }
+      const before = (await jsonRequest(base, "/api/handouts", { cookie: one })).payload;
+      if (!topicShelf) {
+        // Fail after lectures and children have been removed: D1 must roll back the entire batch.
+        const trigger = `CREATE TRIGGER reject_directory_delete BEFORE DELETE ON handout_course_nodes WHEN OLD.id = '${root}' BEGIN SELECT RAISE(ABORT, 'injected deletion failure'); END`;
+        const inject = spawnSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", state, "--config", "wrangler.jsonc", "--command", trigger], { cwd: ROOT, encoding: "utf8" });
+        assert.equal(inject.status, 0, inject.stdout + inject.stderr);
+        assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: root } })).response.status, 500);
+        assert.deepEqual((await jsonRequest(base, "/api/handouts", { cookie: one })).payload, before, "failed deletion leaves every directory and lecture intact");
+        const remove = spawnSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", state, "--config", "wrangler.jsonc", "--command", "DROP TRIGGER reject_directory_delete"], { cwd: ROOT, encoding: "utf8" });
+        assert.equal(remove.status, 0, remove.stdout + remove.stderr);
+      }
+      const deleted = await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: root } });
+      assert.equal(deleted.response.status, 200);
+      assert.deepEqual(deleted.payload.courseNodes, before.courseNodes.filter((node) => !ids.includes(node.id)));
+      const after = (await jsonRequest(base, "/api/handouts", { cookie: one })).payload;
+      assert.deepEqual(after.handouts, before.handouts.filter((item) => !lessons.includes(item.id)), "unrelated and student handouts stay unchanged");
+      for (const id of lessons) assert.equal((await jsonRequest(base, `/api/handouts/${id}`, { cookie: one })).response.status, 404);
+      assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id: root } })).response.status, 404);
+      assert.equal((await course({ name: "已删除位置", parentId: middle })).response.status, 400);
+    }
+    assert.deepEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions, formalBefore, "formal questions survive directory deletion");
   } finally {
     worker.kill("SIGINT");
     await Promise.race([new Promise((done) => worker.once("exit", done)), new Promise((done) => setTimeout(done, 3_000))]);

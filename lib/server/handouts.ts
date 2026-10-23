@@ -222,9 +222,16 @@ export async function deleteHandoutCourse(user: AuthUser, id: unknown) {
   requireAdmin(user);
   if (typeof id !== "string") throw responseError("大纲位置无效", 400);
   if (id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能删除", 400);
-  const result = await db().prepare(`DELETE FROM handout_course_nodes WHERE id = ?
-    AND NOT EXISTS (SELECT 1 FROM handout_course_nodes child WHERE child.parent_id = ?)
-    AND NOT EXISTS (SELECT 1 FROM handouts WHERE course_unit_id = ? OR domain = ?)`).bind(id, id, id, id).run();
-  if (!result.meta.changes) throw responseError("请先移走讲义，并删除空的下级目录，再删除这里", 409);
+  const nodes = await listHandoutCourses();
+  const paths = nodes.map((node) => coursePath(nodes, node.id))
+    .filter((path) => path.some((node) => node.id === id)).sort((a, b) => b.length - a.length);
+  if (!paths.length) throw responseError("大纲位置不存在，请刷新后重试", 404);
+  const ids = JSON.stringify(paths.map((path) => path[path.length - 1].id));
+  // One transaction removes lectures first, then children before parents, respecting RESTRICT foreign keys.
+  await db().batch([
+    db().prepare(`DELETE FROM handouts WHERE course_unit_id IN (SELECT value FROM json_each(?))
+      OR domain IN (SELECT value FROM json_each(?))`).bind(ids, ids),
+    ...paths.map((path) => db().prepare("DELETE FROM handout_course_nodes WHERE id = ?").bind(path[path.length - 1].id)),
+  ]);
   return { courseNodes: await listHandoutCourses() };
 }

@@ -178,12 +178,16 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
 
   async function changeNode(node: HandoutCourseNode, direction?: -1 | 1) {
     if (busy) return;
-    if (!direction && !await confirm({ title: `删除目录「${node.name}」`, body: "只能删除没有下级目录、没有讲义的空目录。删除后无法恢复。", confirmLabel: "删除目录", danger: true })) return;
+    const deletedIds = new Set((courseNodes ?? []).filter((item) => coursePath(courseNodes ?? [], item.id).some((parent) => parent.id === node.id)).map((item) => item.id));
+    if (!direction && !await confirm({ title: `删除目录「${node.name}」`,
+      items: [`此目录及 ${deletedIds.size - 1} 个下级目录`, `${(handouts ?? []).filter((item) => deletedIds.has(item.courseUnitId ?? item.domain ?? "")).length} 份讲义（含小测、作业和临时题库）`],
+      body: "以上内容会一起删除，无法恢复。已存入正式题库的题不受影响。", confirmLabel: "删除目录", danger: true })) return;
     setBusy(true);
     try {
       const result = direction ? await saveHandoutCourse({ id: node.id, direction }) : await deleteHandoutCourse(node.id);
       if (!direction && node.id === activeOutline?.id) setTopicId(node.parentId ?? "");
-      setCourseNodes(result.courseNodes); onNotice(direction ? "顺序已调整" : "空目录已删除");
+      if (!direction) setHandouts((current) => current?.filter((item) => !deletedIds.has(item.courseUnitId ?? item.domain ?? "")) ?? null);
+      setCourseNodes(result.courseNodes); onNotice(direction ? "顺序已调整" : "目录已删除");
     } catch (error) { onNotice(error instanceof Error ? error.message : "大纲调整失败", "error"); }
     finally { setBusy(false); }
   }
@@ -195,7 +199,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <button disabled={busy} onClick={() => setOutlineEdit({ id: node.id, parentId: node.parentId, name: node.name, label: "目录", error: "" })}>重命名</button>
       <button disabled={busy || index === 0} onClick={() => changeNode(node, -1)}>上移</button>
       <button disabled={busy || index === siblings.length - 1} onClick={() => changeNode(node, 1)}>下移</button>
-      {isAdmin && <><hr /><button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除空目录…</button></>}
+      {isAdmin && <><hr /><button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除目录…</button></>}
     </PaperMoreMenu>;
   };
   const addNode = (parentId: string | null, label: string) => setOutlineEdit({ parentId, label, name: "", error: "" });
