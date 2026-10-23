@@ -112,17 +112,22 @@ export async function getHandout(user: AuthUser, id: string): Promise<Handout> {
 }
 
 // Public systems and topics are shared; private systems are restricted to administrators.
-// A new handout becomes the last of its group.
+// Reuse position for a chosen lesson number (zero-based); omitted positions append.
 export async function createHandout(user: AuthUser, raw: unknown): Promise<Handout> {
   const group = await groupOf(user, raw);
   const studentName = group.studentId ? await ownStudentName(user, group.studentId) : null;
+  const position = raw && typeof raw === "object" && "position" in raw ? raw.position : undefined;
+  if (position !== undefined && (typeof position !== "number" || !Number.isSafeInteger(position) || position < 0 || position >= Number.MAX_SAFE_INTEGER)) throw responseError("讲次请填写正整数", 400);
   const { title, items, temporaryQuestions, itemsJson } = await encode(raw, user, [], group.studentId);
   const id = crypto.randomUUID(); const now = Date.now();
+  // Check and insert together so two teachers cannot create the same lesson number.
   const row = await db().prepare(`INSERT INTO handouts (id, title, items_json, course_unit_id, domain, student_id, position, created_at, updated_at, owner_user_id)
-    SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?, ?, ? FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ?
-    RETURNING position`).bind(id, title, itemsJson, group.courseUnitId, group.domain, group.studentId, now, now, user.id, group.courseUnitId, group.domain, group.studentId).first<{ position: number }>();
+    SELECT ?, ?, ?, ?, ?, ?, COALESCE(?, MAX(position) + 1, 0), ?, ?, ? FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ?
+    HAVING ? IS NULL OR COUNT(CASE WHEN position = ? THEN 1 END) = 0
+    RETURNING position`).bind(id, title, itemsJson, group.courseUnitId, group.domain, group.studentId, position ?? null, now, now, user.id, group.courseUnitId, group.domain, group.studentId, position ?? null, position ?? null).first<{ position: number }>();
+  if (!row) throw responseError(`第${Number(position) + 1}讲已存在，请填写其他讲次`, 409);
   const nodes = await listHandoutCourses(user);
-  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
+  return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row.position, createdAt: now, updatedAt: now };
 }
 
 export async function updateHandout(user: AuthUser, id: string, raw: unknown): Promise<Handout> {
@@ -147,6 +152,11 @@ export async function arrangeHandouts(user: AuthUser, raw: unknown) {
   if (group.studentId) await ownStudentName(user, group.studentId);
   const ids = Array.isArray(source.ids) ? [...new Set(source.ids.filter((id): id is string => typeof id === "string" && Boolean(id)))] : [];
   if (!ids.length || ids.length > MAX_ARRANGE) throw responseError("讲义列表无效", 400);
+  const current = await db().prepare("SELECT id, position FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ? ORDER BY position, created_at")
+    .bind(group.courseUnitId, group.domain, group.studentId).all<{ id: string; position: number }>();
+  // Reordering uses the occupied lesson slots; incoming handouts append after the highest one.
+  const positions = current.results.filter((item) => ids.includes(item.id)).map((item) => item.position);
+  let next = current.results.reduce((max, item) => Math.max(max, item.position + 1), 0);
   // Moving one's student handout to a shared shelf also shares its temporary figures.
   // Do not inspect or grant media for another teacher's invisible student handout.
   if (!group.studentId) {
@@ -154,7 +164,7 @@ export async function arrangeHandouts(user: AuthUser, raw: unknown) {
     for (const row of visible.results) if (row.student_id) for (const question of toHandout(row).temporaryQuestions) await retainQuestionAssetsForUser(question, user);
   }
   const statement = db().prepare(`${VISIBLE_COURSES} UPDATE handouts SET course_unit_id = ?, domain = ?, student_id = ?, position = ? WHERE id = ? AND ${WRITABLE}`);
-  await db().batch(ids.map((id, position) => statement.bind(user.role === "admin" ? 1 : 0, group.courseUnitId, group.domain, group.studentId, position, id, user.id)));
+  await db().batch(ids.map((id, index) => statement.bind(user.role === "admin" ? 1 : 0, group.courseUnitId, group.domain, group.studentId, positions[index] ?? next++, id, user.id)));
   return { ...group, ids };
 }
 
