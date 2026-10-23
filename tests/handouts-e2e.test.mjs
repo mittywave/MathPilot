@@ -234,6 +234,18 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: two })).payload.handout.coursePath[0].name, "独立体系");
     const reorderedUnits = (await course({ id: secondUnit, direction: -1 })).payload.courseNodes.filter((node) => node.parentId === stage);
     assert.deepEqual(reorderedUnits.map((node) => node.id), [secondUnit, unit]);
+    const extraSystems = [];
+    for (const name of ["排序体系 A", "排序体系 B"]) extraSystems.push((await course({ name })).payload.id);
+    const beforeDrag = (await jsonRequest(base, "/api/handouts", { cookie: one })).payload.courseNodes;
+    const roots = beforeDrag.filter((node) => !node.parentId && node.id !== "topic-library").map((node) => node.id);
+    const dragged = (await course({ id: system, direction: 2 })).payload.courseNodes;
+    assert.deepEqual(dragged.filter((node) => !node.parentId && node.id !== "topic-library").map((node) => node.id), [roots[0], ...extraSystems, system]);
+    assert.deepEqual(dragged.filter((node) => node.parentId || node.id === "topic-library"), beforeDrag.filter((node) => node.parentId || node.id === "topic-library"), "system sorting preserves all descendants and the topic shelf");
+    const restored = (await course({ id: system, direction: -2 })).payload.courseNodes;
+    assert.deepEqual(restored.filter((node) => !node.parentId && node.id !== "topic-library").map((node) => node.id), roots);
+    assert.deepEqual((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: two })).payload.handout.items, diy.items);
+    for (const direction of [0, 1.5, "1", null]) assert.equal((await course({ id: system, direction })).response.status, 400);
+    for (const id of extraSystems) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 200);
     for (const id of [system, stage, unit]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id } })).response.status, 403, "members cannot delete directories or their lessons");
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: secondUnit } })).response.status, 403);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: secondUnit, ids: [diy.id] } });

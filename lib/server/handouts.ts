@@ -191,11 +191,12 @@ export async function saveHandoutCourse(raw: unknown) {
   if (source.id !== undefined && !existing) throw responseError("大纲位置不存在，请刷新后重试", 404);
   if (existing?.id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能修改", 400);
   if (existing && source.direction !== undefined) {
-    if (source.direction !== -1 && source.direction !== 1) throw responseError("调整方向无效", 400);
+    if (typeof source.direction !== "number" || !Number.isSafeInteger(source.direction) || source.direction === 0) throw responseError("调整方向无效", 400);
     const siblings = nodes.filter((node) => node.parentId === existing.parentId && node.id !== HANDOUT_TOPIC_ROOT);
     const from = siblings.findIndex((node) => node.id === existing.id); const to = from + source.direction;
     if (to >= 0 && to < siblings.length) {
-      [siblings[from], siblings[to]] = [siblings[to], siblings[from]];
+      // A drag can cross several siblings; the menu still sends a one-step offset.
+      siblings.splice(to, 0, siblings.splice(from, 1)[0]);
       await db().batch(siblings.map((node, position) => db().prepare("UPDATE handout_course_nodes SET position = ? WHERE id = ?").bind(position, node.id)));
     }
     return { id: existing.id, courseNodes: await listHandoutCourses() };

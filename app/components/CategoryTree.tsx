@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type HTMLAttributes, type RefAttributes, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent, type DragEvent } from "react";
+import { flushSync } from "react-dom";
 import { categoryDescendants } from "../../lib/library-tree";
 import type { Category, LibraryModule } from "../../lib/types";
 
@@ -14,8 +15,8 @@ export type DirectoryDrop = { id: string; kind: "module" | "category"; targetId:
 
 // Pointer motion stays outside React; only a completed drop changes the library.
 // Both the sidebar and the management window use these same gestures.
-export function useDirectoryDrag({ modules, categories, enabled, onDrop }: {
-  modules: LibraryModule[]; categories: Category[]; enabled: boolean;
+export function useDirectoryDrag({ modules, categories, enabled, onDrop, rowSelector }: {
+  modules: Pick<LibraryModule, "id" | "name">[]; categories: Category[]; enabled: boolean; rowSelector?: string;
   onDrop: (drop: DirectoryDrop) => void;
 }) {
   const gesture = useRef<{ cancel?: () => void; suppressClick: boolean }>({ suppressClick: false });
@@ -34,16 +35,19 @@ export function useDirectoryDrag({ modules, categories, enabled, onDrop }: {
     onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button === 0) gesture.current.suppressClick = false;
       if (!enabled || event.button !== 0 || event.pointerType === "touch") return;
+      const source = event.currentTarget;
+      const rowOf = (node: HTMLElement) => node.querySelector<HTMLElement>(rowSelector ?? ".tree-row, .module-select") ?? node;
       const clicked = event.target as Element;
-      if (clicked.closest("input, select, textarea, a, button:not(.tree-row):not(.module-select):not(.tree-fold)")) return;
+      if (rowSelector && !rowOf(source).contains(clicked)) return;
+      const button = clicked.closest("button");
+      if (clicked.closest("input, select, textarea, a") || (button && button !== rowOf(source) && !button.matches(".tree-fold"))) return;
       event.stopPropagation();
       gesture.current.cancel?.(); gesture.current.suppressClick = false;
-      const source = event.currentTarget;
       const item = (kind === "module" ? modules : categories).find(node => node.id === id);
       if (!item) return;
       const moduleId = kind === "module" ? id : (item as Category).moduleId;
       const blocked = new Set(kind === "category" ? categoryDescendants(categories, id) : [id]);
-      const rowOf = (node: HTMLElement) => node.querySelector<HTMLElement>(".tree-row, .module-select") ?? node;
+      const motionOf = (node: HTMLElement) => kind === "module" ? node : rowOf(node);
       const scope = source.closest<HTMLElement>(".library-management-grid") ?? source.closest<HTMLElement>("#library-directory") ?? source.parentElement!;
       const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       const startX = event.clientX, startY = event.clientY, pointerId = event.pointerId;
@@ -104,27 +108,33 @@ export function useDirectoryDrag({ modules, categories, enabled, onDrop }: {
         source.removeAttribute("data-dragging"); target?.removeAttribute("data-drop-position");
         const before = new Map<string, DOMRect>();
         if (commit && plan) {
-          if (!reduced) for (const node of scope.querySelectorAll<HTMLElement>("[data-directory-id]")) before.set(`${node.dataset.directoryKind}:${node.dataset.directoryId}`, rowOf(node).getBoundingClientRect());
-          if (plan.position === "inside" && target) expanders.current.get(target)?.();
-          onDrop(plan);
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            for (const node of scope.querySelectorAll<HTMLElement>("[data-directory-id]")) {
-              const row = rowOf(node), previous = before.get(`${node.dataset.directoryKind}:${node.dataset.directoryId}`), next = row.getBoundingClientRect();
-              if (node.dataset.directoryKind === kind && node.dataset.directoryId === id) {
-                let pane = node.parentElement;
-                while (pane && pane !== scope.parentElement && !(pane.scrollHeight > pane.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(pane).overflowY))) pane = pane.parentElement;
-                if (pane && pane !== scope.parentElement) {
-                  const viewport = pane.getBoundingClientRect();
-                  const offset = next.top < viewport.top ? next.top - viewport.top - 8 : next.bottom > viewport.bottom ? next.bottom - viewport.bottom + 8 : 0;
-                  if (offset) pane.scrollTo({ top: pane.scrollTop + offset, behavior: reduced ? "instant" : "smooth" });
-                }
+          for (const node of scope.querySelectorAll<HTMLElement>("[data-directory-id]")) {
+            const row = motionOf(node);
+            if (!reduced) before.set(`${node.dataset.directoryKind}:${node.dataset.directoryId}`, row.getBoundingClientRect());
+            for (const animation of row.getAnimations()) if (animation.id === "directory-move") animation.cancel();
+          }
+          // Commit and invert before the next paint, avoiding a frame at the final position.
+          flushSync(() => {
+            if (plan!.position === "inside" && target) expanders.current.get(target)?.();
+            onDrop(plan!);
+          });
+          for (const node of scope.querySelectorAll<HTMLElement>("[data-directory-id]")) {
+            if (kind === "module" && node.dataset.directoryKind !== "module") continue;
+            const row = motionOf(node), previous = before.get(`${node.dataset.directoryKind}:${node.dataset.directoryId}`), next = row.getBoundingClientRect();
+            if (node.dataset.directoryKind === kind && node.dataset.directoryId === id) {
+              let pane = node.parentElement;
+              while (pane && pane !== scope.parentElement && !(pane.scrollHeight > pane.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(pane).overflowY))) pane = pane.parentElement;
+              if (pane && pane !== scope.parentElement) {
+                const viewport = pane.getBoundingClientRect();
+                const offset = next.top < viewport.top ? next.top - viewport.top - 8 : next.bottom > viewport.bottom ? next.bottom - viewport.bottom + 8 : 0;
+                if (offset) pane.scrollTo({ top: pane.scrollTop + offset, behavior: reduced ? "instant" : "smooth" });
               }
-              if (reduced) continue;
-              if (!previous || !next.height || next.bottom < 0 || next.top > innerHeight) continue;
-              const dx = previous.left - next.left, dy = previous.top - next.top;
-              if (Math.abs(dx) + Math.abs(dy) > 1) row.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: "translate(0,0)" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
             }
-          }));
+            if (reduced) continue;
+            if (!previous || !next.height || next.bottom < 0 || next.top > innerHeight) continue;
+            const dx = previous.left - next.left, dy = previous.top - next.top;
+            if (Math.abs(dx) + Math.abs(dy) > 1) row.animate([{ transform: `translate(${dx}px,${dy}px)` }, { transform: "translate(0,0)" }], { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" }).id = "directory-move";
+          }
         }
         if (preview) {
           const fading = preview;
