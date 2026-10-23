@@ -1,6 +1,6 @@
 import { Schema, Slice, type Fragment, type Node as ProseNode } from "prosemirror-model";
 import type { Transaction } from "prosemirror-state";
-import { ITEM_MARKER, SAFE_IMAGE, escapeCaption, parseHandoutNote, type NoteSpan } from "./handout-note.mjs";
+import { ITEM_MARKER, SAFE_IMAGE, escapeCaption, noteTableMarkup, parseHandoutNote, type NoteSpan } from "./handout-note.mjs";
 import { scanMathSource } from "./math-source.mjs";
 import { splitMathText } from "./math-text";
 
@@ -18,6 +18,17 @@ export const noteSchema = new Schema({
       group: "block", content: "inline*", marks: "", attrs: { level: { default: 2 } },
       parseDOM: [1, 2, 3].map((level) => ({ tag: `h${level + 2}`, attrs: { level } })),
       toDOM: (node) => [`h${Number(node.attrs.level) + 2}`, 0],
+    },
+    table: {
+      group: "block", content: "table_row+", isolating: true,
+      parseDOM: [{ tag: "table.note-table" }], toDOM: () => ["table", { class: "note-table" }, ["tbody", 0]],
+    },
+    table_row: { content: "table_cell*", parseDOM: [{ tag: "tr" }], toDOM: () => ["tr", 0] },
+    table_cell: {
+      content: "(paragraph | heading | figure_row)+", isolating: true,
+      attrs: { colSpan: { default: 1 }, rowSpan: { default: 1 } },
+      parseDOM: [{ tag: "td", getAttrs: (dom) => ({ colSpan: (dom as HTMLTableCellElement).colSpan, rowSpan: (dom as HTMLTableCellElement).rowSpan }) }],
+      toDOM: (node) => ["td", { colspan: node.attrs.colSpan, rowspan: node.attrs.rowSpan }, 0],
     },
     // A row of figures side by side, each with a caption typed under it, and an optional note beside the row.
     figure_row: { group: "block", content: "figure+ figure_side?", isolating: true, parseDOM: [{ tag: "div.note-figure-row" }], toDOM: () => ["div", { class: "note-figure-row" }, 0] },
@@ -62,8 +73,11 @@ function inlineNodes(spans: NoteSpan[], allowBold: boolean) {
   return nodes.filter((node, index) => !(node.isText && !node.text?.trim() && (display(nodes[index - 1]) || display(nodes[index + 1]))));
 }
 
-export function docFromNote(note: string | null | undefined) {
+export function docFromNote(note: string | null | undefined): ProseNode {
   const blocks = parseHandoutNote(note).map((line) => {
+    if (line.kind === "table") return noteSchema.nodes.table.create(null, line.rows.map((row) => noteSchema.nodes.table_row.create(null,
+      row.map((cell) => noteSchema.nodes.table_cell.create({ colSpan: cell.colSpan, rowSpan: cell.rowSpan }, docFromNote(cell.content).content)),
+    )));
     if (line.kind === "figures") return figureRow.create(null, [
       ...line.figures.map((item) => figure.create({ src: item.src }, inlineNodes(item.caption, true))),
       ...(line.side.length ? [figureSide.create(null, line.side.map((spans) => sideLine.create(null, inlineNodes(spans, true))))] : []),
@@ -92,6 +106,15 @@ export function noteFromContent(content: Fragment) {
   if (content.firstChild?.isInline) return inlineMarkup(content).trim();
   const lines: string[] = [];
   content.forEach((block) => {
+    if (block.type === noteSchema.nodes.table) {
+      const rows: Array<Array<{ colSpan: number; rowSpan: number; content: string }>> = [];
+      block.forEach((row) => {
+        const cells: typeof rows[number] = [];
+        row.forEach((cell) => cells.push({ colSpan: cell.attrs.colSpan, rowSpan: cell.attrs.rowSpan, content: noteFromContent(cell.content) }));
+        rows.push(cells);
+      });
+      lines.push(noteTableMarkup(rows)); return;
+    }
     if (block.type === figureRow) {
       // The images make the row's line; each line of the note beside it follows as “> …”.
       const figures: string[] = []; const notes: string[] = [];

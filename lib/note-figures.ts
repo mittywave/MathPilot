@@ -132,7 +132,37 @@ export function renderFigure(pixels: Pixels, labels: Int32Array, owners: Int32Ar
 export function cutNoteFigures(pixels: Pixels, blocks: RecognizedNoteBlock[]) {
   const { width, height } = pixels;
   const regions: Region[] = []; const figures: RecognizedNoteFigure[] = [];
+  const mask = inkMask(pixels);
   for (const block of blocks) {
+    if (block.type === "table") {
+      // A table's connected frame must never be assigned to a diagram in one cell. Remove only long
+      // ruling strokes before finding components; short axes and curves inside the cells stay intact.
+      if (block.bbox) {
+        const rect = toRect(block.bbox, width, height);
+        const lines: number[] = []; const columns: number[] = [];
+        for (let y = rect.minY; y < rect.maxY; y += 1) {
+          let count = 0;
+          for (let x = rect.minX; x < rect.maxX; x += 1) count += mask[y * width + x];
+          if (count > (rect.maxX - rect.minX) * .55) lines.push(y);
+        }
+        for (let x = rect.minX; x < rect.maxX; x += 1) {
+          let count = 0;
+          for (let y = rect.minY; y < rect.maxY; y += 1) count += mask[y * width + x];
+          if (count > (rect.maxY - rect.minY) * .55) columns.push(x);
+        }
+        for (const y of lines) for (let x = rect.minX; x < rect.maxX; x += 1) mask[y * width + x] = 0;
+        for (const x of columns) for (let y = rect.minY; y < rect.maxY; y += 1) mask[y * width + x] = 0;
+      }
+      for (const row of block.rows) for (const cell of row) {
+        if (!cell.figures.length && cell.bbox) regions.push({ owner: -2, text: true, rect: toRect(cell.bbox, width, height) });
+        for (const figure of cell.figures) {
+          if (figure.captionBox) regions.push({ owner: -2, text: true, rect: toRect(figure.captionBox, width, height) });
+          regions.push({ owner: figures.length, text: false, rect: toRect(figure.bbox, width, height) });
+          figures.push(figure);
+        }
+      }
+      continue;
+    }
     if (block.type !== "figures") { if (block.bbox) regions.push({ owner: -2, text: true, rect: toRect(block.bbox, width, height) }); continue; }
     if (block.sideBox) regions.push({ owner: -2, text: true, rect: toRect(block.sideBox, width, height) });
     for (const figure of block.figures) {
@@ -141,7 +171,7 @@ export function cutNoteFigures(pixels: Pixels, blocks: RecognizedNoteBlock[]) {
       figures.push(figure);
     }
   }
-  const { labels, components } = strokeComponents(inkMask(pixels), width, height, pixels.data);
+  const { labels, components } = strokeComponents(mask, width, height, pixels.data);
   const owners = assignStrokes(components, regions, width, height);
   const cuts = new Map<RecognizedNoteFigure, Pixels>();
   figures.forEach((figure, owner) => {

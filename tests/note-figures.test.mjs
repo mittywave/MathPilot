@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadSource } from "./load-source.mjs";
+import { readFile } from "node:fs/promises";
+import { PNG } from "pngjs";
 
 const { cutNoteFigures } = await loadSource("lib/note-figures.ts");
 
@@ -62,4 +64,25 @@ test("figures in one row are told apart and a figure with no strokes is skipped"
   assert.ok(cuts.has(left) && cuts.has(right));
   assert.equal(cuts.has(empty), false);
   assert.ok(cuts.get(right).width < 40, "the label A is a figure of its own here");
+});
+
+test("the original comparison-table screenshot yields two clean graphs without its connected grid", async () => {
+  const source = PNG.sync.read(await readFile(new URL("./fixtures/note-comparison-table.png", import.meta.url)));
+  const pixels = { width: source.width, height: source.height, data: new Uint8ClampedArray(source.data) };
+  const at = (x, y, w, h) => box(x, y, w, h, source.width, source.height);
+  const left = { bbox: at(395, 355, 145, 145), caption: "", captionBox: null };
+  const right = { bbox: at(780, 355, 145, 145), caption: "", captionBox: null };
+  const cell = (bbox, figures = []) => ({ bbox, figures, text: "", colSpan: 1, rowSpan: 1 });
+  const cuts = cutNoteFigures(pixels, [{ type: "table", bbox: at(23, 15, 1022, 726), rows: [
+    [cell(at(24, 16, 1019, 309))],
+    [cell(at(24, 325, 250, 201)), cell(at(274, 325, 385, 201), [left]), cell(at(659, 325, 384, 201), [right])],
+    [cell(at(24, 526, 1019, 213))],
+  ] }]);
+  assert.equal(cuts.size, 2);
+  for (const figure of [left, right]) {
+    const cut = cuts.get(figure);
+    assert.ok(cut.width > 115 && cut.width < 175, `graph width ${cut.width} excludes table grid`);
+    assert.ok(cut.height > 115 && cut.height < 175, `graph height ${cut.height} excludes table grid`);
+    assert.equal(cut.data[3], 0, "background is transparent");
+  }
 });

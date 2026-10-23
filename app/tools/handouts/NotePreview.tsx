@@ -8,6 +8,9 @@ function Spans({ spans }: { spans: NoteSpan[] }) {
 // Reads the note exactly as the PDF and Word exports do.
 export function NotePreview({ note }: { note: string }) {
   return <div className="note-preview">{parseHandoutNote(note).map((line, index) => {
+    if (line.kind === "table") return <table key={index} className="note-table"><tbody>{line.rows.map((row, rowIndex) => <tr key={rowIndex}>
+      {row.map((cell, cellIndex) => <td key={cellIndex} colSpan={cell.colSpan} rowSpan={cell.rowSpan}><NotePreview note={cell.content} /></td>)}
+    </tr>)}</tbody></table>;
     if (line.kind === "figures") return <div key={index} className="note-figure-row">
       {line.figures.map((figure, figureIndex) => <figure key={figureIndex} className="note-figure">
         {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { loadSource } from "./load-source.mjs";
+import { noteTableMarkup } from "../lib/handout-note.mjs";
 
 // The editor module is loaded through require, so EditorState must come from the same ProseMirror copy.
 const require = createRequire(import.meta.url);
@@ -10,6 +11,28 @@ const { convertTypedMarkup, docFromNote, itemMarker, itemMarkerWidth, noteFromCo
 
 const asset = "/api/assets/fb8325ca-36b9-4fc3-8665-954d96a84eb2";
 const second = "/api/assets/0b8325ca-36b9-4fc3-8665-954d96a84eb2";
+
+test("native table cells stay editable without losing spans, formulas, images or empty cells", () => {
+  const cell = (content, colSpan = 1, rowSpan = 1) => ({ content, colSpan, rowSpan });
+  const note = noteTableMarkup([
+    [cell("反比例函数"), cell("$y=\\frac{k}{x}$，$k\\ne0$", 2)],
+    [cell("图象", 1, 2), cell("$k>0$"), cell("$k<0$")],
+    [cell(`![](${asset})`), cell(`![](${second})`)],
+    [cell("性质"), cell("**增大而减小**"), cell("")],
+  ]);
+  const doc = docFromNote(note); doc.check();
+  const table = doc.firstChild;
+  assert.equal(table.type.name, "table");
+  assert.equal(table.child(0).child(1).attrs.colSpan, 2);
+  assert.equal(table.child(1).child(0).attrs.rowSpan, 2);
+  assert.equal(table.child(2).child(0).firstChild.type.name, "figure_row");
+  assert.equal(table.child(0).child(1).firstChild.firstChild.type.name, "math");
+  assert.equal(noteFromDoc(doc), note);
+  const tr = EditorState.create({ doc }).tr.insertText("可编辑", 4);
+  tr.doc.check();
+  assert.match(noteFromDoc(tr.doc), /可编辑反比例函数/);
+  assert.equal(noteFromDoc(docFromNote(noteFromDoc(tr.doc))), noteFromDoc(tr.doc));
+});
 const recognized = [
   "# 正方形的概念与性质",
   "## 正方形的概念",

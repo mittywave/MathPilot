@@ -208,11 +208,16 @@ export const noteRecognitionSchema: Record<string, unknown> = {
   additionalProperties: false,
   properties: {
     blocks: { type: "array", items: { type: "object", additionalProperties: false, properties: {
-      type: { type: "string", enum: ["heading", "paragraph", "item", "figures"] },
+      type: { type: "string", enum: ["heading", "paragraph", "item", "figures", "table"] },
       level: { type: "integer" },
       marker: { type: "string" }, text: { type: "string" }, bbox: diagramBoxSchema,
       figures: { type: "array", items: noteFigureSchema },
-    }, required: ["type", "level", "marker", "text", "bbox", "figures"] } },
+      rows: { type: "array", items: { type: "array", items: {
+        type: "object", additionalProperties: false,
+        properties: { col_span: { type: "integer" }, row_span: { type: "integer" }, text: { type: "string" }, bbox: diagramBoxSchema, figures: { type: "array", items: noteFigureSchema } },
+        required: ["col_span", "row_span", "text", "bbox", "figures"],
+      } } },
+    }, required: ["type", "level", "marker", "text", "bbox", "figures", "rows"] } },
     warnings: { type: "array", items: { type: "string" } },
   },
   required: ["blocks", "warnings"],
@@ -225,6 +230,8 @@ export function buildNoteRecognitionPrompt() {
     "heading：标题。level 1 是整页的大标题；2 是“一、”“二、”这类小节；3 是“1.”“（一）”或色块标签这类更小的小节。保留原有序号，去掉装饰色块。",
     "item：以（1）、①、1. 等序号开头的要点；marker 原样保留序号，text 不含序号。",
     "paragraph：其余正文。同一段里因排版产生的换行合并成一段；独立成行的公式推导各自成段。",
+    "table：有行列关系的表格必须作为一个完整 table block，bbox 框住整张表，rows 按原表逐行逐格输出。每格给 text、bbox、col_span、row_span 和 figures；普通格的跨度均为 1，合并格只在左上起始处输出一次，其余被覆盖位置不输出占位格。空白但未被合并的格仍输出。",
+    "表格中的文字与公式只放入所属单元格的 text，配图只放入该格的 figures。表格边框不属于配图；配图 bbox 须紧贴单元格内部的坐标轴、曲线和标签。不得把整张表或文字行当成配图，不得把表格拆成表外段落、散图或用 LaTeX array、tabular、\\multicolumn 拼表。单元格中独立的文字段可用换行分隔，数学公式仍用 $…$。",
     "figures：一张或几张并排的配图放进同一个 figures block，按从左到右排列；上下排列的配图分成几个 figures block。",
     "每张配图的 bbox 框住完整的图形：坐标轴、曲线、阴影和图上的字母标签都要在内，图下或图旁的说明文字不要框进来。",
     "caption 是紧贴某张图、专门说明这张图的文字（如“$S_①=S_②$”“$O$ 可在 $y$ 轴上移动”），caption_bbox 是这段文字的位置；没有就写空字符串和 null。",
@@ -232,7 +239,7 @@ export function buildNoteRecognitionPrompt() {
     "原图用颜色、色块或荧光笔突出的文字用 **…** 包住；☆、※、→、①② 等符号照原样保留。",
     "**…** 只用在公式外的文字上，公式里要强调用 \\textbf{…}；所有 LaTeX 命令（如 \\underline）都写在 $…$ 里。",
     "平行写作 $\\parallel$，垂直写作 $\\perp$；手写时上下叠写的并列字母（如箭头后上下写的 C、D）写成一行，用顿号隔开。",
-    "非 heading 的 level 为 0；非 item 的 marker 为空字符串；非 figures 的 figures 为空数组。",
+    "非 heading 的 level 为 0；非 item 的 marker 为空字符串；非 figures 的顶层 figures 为空数组；非 table 的 rows 为空数组；table 的顶层 text 为空字符串。",
     ...mathOutputRequirements,
     "看不清或存疑的地方写入 warnings。",
   ];
@@ -248,18 +255,42 @@ function joinedLines(value: unknown, limit = 4000) {
 export function normalizeNoteRecognitionResult(value: unknown): NoteRecognitionResult {
   const raw = record(value);
   const blocks: RecognizedNoteBlock[] = [];
+  const figuresOf = (value: unknown) => (Array.isArray(value) ? value.slice(0, 6) : []).flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const figure = entry as Record<string, unknown>; const box = normalizeBox(figure.bbox);
+    return box && box.width >= 20 && box.height >= 20 ? [{ bbox: box, caption: joinedLines(figure.caption, 300), captionBox: normalizeBox(figure.caption_bbox) }] : [];
+  });
   for (const item of Array.isArray(raw.blocks) ? raw.blocks.slice(0, 160) : []) {
     // One malformed block is skipped rather than losing the whole screenshot.
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const block = item as Record<string, unknown>;
     const bbox = normalizeBox(block.bbox);
     const content = joinedLines(block.text);
-    if (block.type === "figures") {
-      const figures = (Array.isArray(block.figures) ? block.figures.slice(0, 6) : []).flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-        const figure = entry as Record<string, unknown>; const box = normalizeBox(figure.bbox);
-        return box && box.width >= 20 && box.height >= 20 ? [{ bbox: box, caption: joinedLines(figure.caption, 300), captionBox: normalizeBox(figure.caption_bbox) }] : [];
+    if (block.type === "table") {
+      const sourceRows = (Array.isArray(block.rows) ? block.rows : []).filter(Array.isArray).slice(0, 40);
+      const occupied: number[] = [];
+      const rows = sourceRows.map((row, rowIndex) => {
+        let column = 0;
+        const cells = [];
+        for (const entry of row.slice(0, 12)) {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+          while ((occupied[column] ?? 0) > rowIndex) column += 1;
+          if (column >= 12) break;
+          const cell = entry as Record<string, unknown>;
+          let colSpan = Math.round(clamp(cell.col_span, 1, 12 - column, 1));
+          for (let offset = 1; offset < colSpan; offset += 1) if ((occupied[column + offset] ?? 0) > rowIndex) { colSpan = offset; break; }
+          const rowSpan = Math.round(clamp(cell.row_span, 1, sourceRows.length - rowIndex, 1));
+          for (let offset = 0; offset < colSpan; offset += 1) occupied[column + offset] = rowIndex + rowSpan;
+          cells.push({ colSpan, rowSpan, text: text(cell.text, 4000), bbox: normalizeBox(cell.bbox), figures: figuresOf(cell.figures) });
+          column += colSpan;
+        }
+        return cells;
       });
+      if (rows.some((row) => row.length)) blocks.push({ type: "table", rows, bbox });
+      continue;
+    }
+    if (block.type === "figures") {
+      const figures = figuresOf(block.figures);
       if (figures.length) blocks.push({ type: "figures", figures, side: content, sideBox: content ? bbox : null });
       else if (content) blocks.push({ type: "paragraph", text: content, bbox });
       continue;

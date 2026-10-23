@@ -20,6 +20,14 @@
 html[data-theme="dark"] .note-preview .note-figure>img,html[data-theme="dark"] .note-preview .note-figure-frame>img{padding:4px;border-radius:calc(6px*var(--radius-scale));background:#fff}
 .note-preview figcaption{min-height:1em;margin-top:4px;font-size:13px;line-height:1.5;text-indent:0}
 .note-preview .note-figure-side{flex:1 1 220px;min-width:0;line-height:1.8}
+.note-preview .note-table{width:100%;margin:10px 0;border-collapse:collapse;table-layout:fixed;white-space:normal}
+.note-preview .note-table td{padding:10px 12px;border:1px solid var(--muted,#88958e);vertical-align:middle;text-align:center;overflow-wrap:anywhere}
+.note-preview .note-table td>:last-child{margin-bottom:0}
+.note-preview .note-table .note-figure-row{justify-content:center;gap:8px;margin:4px 0}
+.note-preview .note-table .note-figure{flex:0 1 200px;min-width:0;max-width:100%}
+.note-preview .note-table .note-figure-frame{height:150px}
+.note-preview .note-table .note-figure>img,.note-preview .note-table .note-figure-frame>img{max-height:150px}
+.note-preview .note-table .katex-display>.katex{max-width:100%;overflow-x:auto;overflow-y:hidden}
 .note-editor{position:relative;border:1px solid var(--line,#e4e9e6);border-radius:calc(8px*var(--radius-scale));background:color-mix(in srgb,var(--green-soft,#edf5f0) 45%,var(--surface,#fff));transition:border-color .15s ease,box-shadow .15s ease}
 .note-editor:hover{border-color:color-mix(in srgb,var(--green,#2f6b53) 45%,var(--line,#e4e9e6))}
 .note-editor.editing{border-color:var(--green,#2f6b53);box-shadow:0 0 0 3px color-mix(in srgb,var(--green,#2f6b53) 14%,transparent)}

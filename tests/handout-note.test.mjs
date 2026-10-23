@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { noteFromBlocks, noteImageSources, noteSpans, parseHandoutNote, proofSteps } from "../lib/handout-note.mjs";
+import { noteFromBlocks, noteImageSources, noteSpans, noteTableMarkup, parseHandoutNote, proofSteps } from "../lib/handout-note.mjs";
 import { loadSource } from "./load-source.mjs";
 
 const asset = "/api/assets/0123abcd-0123-4567-89ab-0123456789ab";
@@ -135,4 +135,43 @@ test("bold never splits a formula, and LaTeX written outside $ is read as a form
   assert.equal(rest.text, "；$\\begin{cases}\\text{\\textbf{整数}：正整数}\\\\\\text{\\textbf{分数}：负分数}\\end{cases}$");
   assert.equal(noteSpans("是\\underline{有理数}；$\\pi$ 等\\underline{不是有理数}。")[0].text, "是$\\underline{\\text{有理数}}$；$\\pi$ 等$\\underline{\\text{不是有理数}}$。");
   assert.equal(noteSpans("$\\frac{1}{2}$ 与 \\\\ 换行")[0].text, "$\\frac{1}{2}$ 与 \\\\ 换行", "an escaped backslash is left alone");
+});
+
+test("a comparison table keeps merged cells, formulas and figures together through storage and PDF generation", async () => {
+  const { normalizeNoteRecognitionResult, buildNoteRecognitionPrompt, noteRecognitionSchema } = await loadSource("lib/recognition-contract.ts");
+  const cell = (text, col_span = 1, row_span = 1, figures = []) => ({ text, col_span, row_span, figures, bbox: null });
+  const result = normalizeNoteRecognitionResult({ blocks: [{ type: "table", bbox: box(20, 20, 940, 940), rows: [
+    [cell("反比例函数"), cell("$y=\\frac{k}{x}$（$k\\ne0$）", 2)],
+    [cell("图象", 1, 2), cell("$k>0$"), cell("$k<0$")],
+    [cell("", 1, 1, [{ bbox: box(390, 470, 120, 160), caption: "", caption_bbox: null }]), cell("", 1, 1, [{ bbox: box(740, 470, 120, 160), caption: "", caption_bbox: null }])],
+    [cell("性质"), cell("在每一象限内，**增大而减小**\n$x>0$ & $y>0$"), cell("在每一象限内，**增大而增大**\n$x<0$")],
+  ] }], warnings: [] });
+  const note = noteFromBlocks(result.blocks, figure => figure.bbox.x === 390 ? asset : second);
+  assert.equal(note.split("\n").length, 1, "cell paragraphs are escaped inside one table block");
+  assert.match(note, /colspan="2" rowspan="1"/);
+  assert.match(note, /colspan="1" rowspan="2"/);
+  assert.match(note, /&amp;/);
+  assert.match(note, /&lt;/);
+  const [table] = parseHandoutNote(note);
+  assert.equal(table.kind, "table");
+  assert.equal(table.rows.length, 4);
+  assert.equal(table.rows[2].length, 2, "a row-spanning cell has no duplicate placeholder");
+  assert.equal(table.rows[3][2].content, "在每一象限内，**增大而增大**\n$x<0$");
+  assert.deepEqual(noteImageSources(note), [asset, second]);
+  assert.equal(noteTableMarkup(table.rows), note);
+  const { buildHandoutLatex } = await loadSource("lib/handout-latex.ts");
+  const latex = buildHandoutLatex({ title: "知识表格", answers: "none", modules: [{ heading: "反比例函数", note, bands: { example: [], practice: [], variant: [] } }] }, source => source === asset ? "fig-1.png" : "fig-2.png");
+  assert.match(latex, /\\begin\{tabularx\}\{\\linewidth\}/);
+  assert.match(latex, /\\multicolumn\{2\}/);
+  assert.match(latex, /\\multirow\{2\}\{=\}/);
+  assert.match(latex, /\\handoutrowfigure\{0\.980\\linewidth\}\{32mm\}\{fig-1.png\}/);
+  assert.match(latex, /fig-2.png/);
+  assert.match(buildNoteRecognitionPrompt(), /不得把表格拆成/);
+  assert.ok(noteRecognitionSchema.properties.blocks.items.properties.type.enum.includes("table"));
+  const combined = noteTableMarkup([
+    [{ content: "横纵合并", colSpan: 2, rowSpan: 2 }, { content: "甲", colSpan: 1, rowSpan: 1 }],
+    [{ content: "乙", colSpan: 1, rowSpan: 1 }],
+  ]);
+  const mergedLatex = buildHandoutLatex({ title: "合并表格", answers: "none", modules: [{ heading: "", note: combined, bands: { example: [], practice: [], variant: [] } }] });
+  assert.match(mergedLatex, /\\multicolumn\{2\}\{\|c\|\}\{\} & 乙/, "a merge spanning both rows and columns has no interior ruling in its continuation");
 });
