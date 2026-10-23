@@ -357,12 +357,12 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
     imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment, before);
   const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: string; questionCode?: string }> = [];
   // A row of figures side by side, captions under each and the row's note beside them, as a borderless table.
-  const figureRow = async (line: Extract<NoteLine, { kind: "figures" }>): Promise<Array<Paragraph | Table>> => {
+  const figureRow = async (line: Extract<NoteLine, { kind: "figures" }>, availableWidth = 9746): Promise<Array<Paragraph | Table>> => {
     const spansRuns = (spans: NoteSpan[], size = BODY_SIZE) => spans.flatMap((span) => richText(span.text, { bold: span.bold, size }));
     const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
     // Every figure gets a cell of one width and the table starts at the left margin, so figures line up row to row.
-    const figureWidth = Math.min(2900, Math.floor((9746 - (line.side.length ? 2900 : 0)) / line.figures.length));
-    const sideWidth = line.side.length ? 9746 - figureWidth * line.figures.length : 0;
+    const figureWidth = Math.min(2900, Math.floor((availableWidth - (line.side.length ? availableWidth * .3 : 0)) / line.figures.length));
+    const sideWidth = line.side.length ? availableWidth - figureWidth * line.figures.length : 0;
     const maxWidth = Math.min(260, Math.floor(figureWidth / 15) - 12); const maxHeight = line.figures.length >= 3 ? 130 : 150;
     const cells = await Promise.all(line.figures.map(async (figure) => new TableCell({
       width: { size: figureWidth, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER, margins: { top: 40, bottom: 40, left: 60, right: 60 },
@@ -377,6 +377,37 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
       borders: { top: none, bottom: none, left: none, right: none, insideHorizontal: none, insideVertical: none },
       rows: [new TableRow({ children: cells })],
     }), new Paragraph({ spacing: { after: 60 }, children: [] })];
+  };
+  const noteChildren = async (note: string | undefined, availableWidth = 9746): Promise<Array<Paragraph | Table>> => {
+    const result: Array<Paragraph | Table> = [];
+    for (const line of parseHandoutNote(note)) {
+      if (line.kind === "figures") { result.push(...await figureRow(line, availableWidth)); continue; }
+      if (line.kind === "table") {
+        const columns = Math.max(1, ...line.rows.map((row) => row.reduce((sum, cell) => sum + cell.colSpan, 0)));
+        const widths = Array.from({ length: columns }, () => Math.floor(availableWidth / columns));
+        const border = { style: BorderStyle.SINGLE, size: 4, color: "88958E" };
+        result.push(new Table({
+          width: { size: availableWidth, type: WidthType.DXA }, columnWidths: widths, layout: TableLayoutType.FIXED,
+          borders: { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border },
+          rows: await Promise.all(line.rows.map(async (row) => new TableRow({ cantSplit: true, children: await Promise.all(row.map(async (cell) => new TableCell({
+            columnSpan: cell.colSpan, rowSpan: cell.rowSpan,
+            width: { size: widths[0] * cell.colSpan, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 100, bottom: 100, left: 120, right: 120 },
+            children: await noteChildren(cell.content, widths[0] * cell.colSpan - 240),
+          }))) }))),
+        }), new Paragraph({ spacing: { after: 80 }, children: [] }));
+        continue;
+      }
+      const size = line.kind === "heading" ? HEADING_SIZES[line.level] : BODY_SIZE;
+      const runs = line.spans.flatMap((span) => richText(span.text, line.kind === "heading" || span.bold ? { bold: true, size } : {}));
+      result.push(new Paragraph({
+        alignment: availableWidth < 9746 ? AlignmentType.CENTER : undefined,
+        spacing: { ...BODY_LINE, after: availableWidth < 9746 ? 0 : 80 },
+        ...(line.kind === "item" ? { indent: { left: 420, hanging: 420 } } : {}),
+        children: line.kind === "item" ? [...textRuns(line.marker, BODY_SIZE, { bold: true }), ...runs] : runs,
+      }));
+    }
+    return result.length ? result : [new Paragraph({ children: [] })];
   };
   const children: Array<Paragraph | Table> = [
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }),
@@ -417,16 +448,7 @@ export async function buildWordBlob({ title, sections, answers, answerHeadings =
     if (heading) children.push(new Paragraph({ keepNext: true, spacing: { before: 180, after: 120 }, children: textRuns(heading, BODY_SIZE, { bold: true }) }));
     const part = section.part;
     if (part) children.push(new Paragraph({ keepNext: true, spacing: { before: 160, after: 100 }, children: [...textRuns(part.label, BODY_SIZE, { bold: true, color: "2F6B53" }), ...textRuns(`\u3000${part.tagline}`, 18, { color: "6F7D76" })] }));
-    for (const line of parseHandoutNote(section.note)) {
-      if (line.kind === "figures") { children.push(...await figureRow(line)); continue; }
-      const size = line.kind === "heading" ? HEADING_SIZES[line.level] : BODY_SIZE;
-      const runs = line.spans.flatMap((span) => richText(span.text, line.kind === "heading" || span.bold ? { bold: true, size } : {}));
-      children.push(new Paragraph({
-        spacing: { ...BODY_LINE, after: 80 },
-        ...(line.kind === "item" ? { indent: { left: 420, hanging: 420 } } : {}),
-        children: line.kind === "item" ? [...textRuns(line.marker, BODY_SIZE, { bold: true }), ...runs] : runs,
-      }));
-    }
+    if (section.note?.trim()) children.push(...await noteChildren(section.note));
     for (const question of section.questions) {
       let label = String(number);
       if (part) { const count = (partCounters.get(part.key) ?? 0) + 1; partCounters.set(part.key, count); label = `${part.prefix ?? ""}${count}`; }

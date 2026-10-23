@@ -8,10 +8,11 @@ import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { AlignmentType, Document, ImageRun, Math as WordMath, MathFraction, MathRadical, MathRun, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx';
 import { loopbackFetch as fetch } from '../tests/helpers/loopback-fetch.mjs';
+import { noteTableMarkup } from '../lib/handout-note.mjs';
 // Run after npm run build. The compiled app, D1 and the browser are real; no AI
 // service is configured, so only the manual and Word-structure entry paths run.
 // Usage: PLAYWRIGHT_PACKAGE=<package.json beside playwright> CHROMIUM_PATH=<chrome> node scripts/verify-handouts-browser.mjs
-// Add --notes for screenshot queue/concurrency regression with controlled AI replies.
+// Add --notes for queue/concurrency or --note-tables for editable screenshot tables with controlled AI replies.
 const require = createRequire(process.env.PLAYWRIGHT_PACKAGE || import.meta.url);
 const { chromium } = require('playwright');
 const root = process.cwd();
@@ -399,6 +400,103 @@ async function verifyNoteQueue(pngUrl) {
   step('invalid-image decoding does not stall later submissions; pending work warns before leaving and a completed queue removes the warning');
 }
 
+async function verifyNoteTables() {
+  const at = (x, y, width, height) => ({ x: x / 1088 * 1000, y: y / 772 * 1000, width: width / 1088 * 1000, height: height / 772 * 1000 });
+  const cell = (text, bbox, colSpan = 1, figures = []) => ({ text, bbox, colSpan, rowSpan: 1, figures });
+  const figure = x => ({ bbox: at(x, 355, 145, 145), caption: '', captionBox: null });
+  const rows = [
+    [cell('反比例函数', at(24, 16, 250, 103)), cell('$y=\\frac{k}{x}$（$k$ 为常数，$k\\ne0$）', at(274, 16, 769, 103), 2)],
+    [cell('$x$、$y$ 的取值范围', at(24, 119, 250, 103)), cell('$x\\ne0$、$y\\ne0$（与坐标轴无交点）', at(274, 119, 769, 103), 2)],
+    [cell('$k$ 的符号', at(24, 222, 250, 103)), cell('$k>0$', at(274, 222, 385, 103)), cell('$k<0$', at(659, 222, 384, 103))],
+    [cell('图像', at(24, 325, 250, 201)), cell('', at(274, 325, 385, 201), 1, [figure(395)]), cell('', at(659, 325, 384, 201), 1, [figure(780)])],
+    [cell('图像的位置', at(24, 526, 250, 103)), cell('两支曲线分别位于第**一、三**象限', at(274, 526, 385, 103)), cell('两支曲线分别位于第**二、四**象限', at(659, 526, 384, 103))],
+    [cell('性质', at(24, 629, 250, 110)), cell('在每一象限内，$y$ 的值随 $x$ 值的**增大而减小**', at(274, 629, 385, 110)), cell('在每一象限内，$y$ 的值随 $x$ 值的**增大而增大**', at(659, 629, 384, 110))],
+  ];
+  const { module } = await api('/api/modules', { scope: 'mine', module: { name: '表格验收', subtitle: '' } });
+  await api('/api/questions', { scope: 'mine', question: { id: 'table-test-q', moduleId: module.id, categoryId: module.id, type: '填空题', difficulty: '基础', stem: '若 $xy=2$，则 $k=$____。', options: [], answer: '2', analysis: '', source: '', createdAt: Date.now(), updatedAt: Date.now() } });
+  const { handout } = await api('/api/handouts', { handout: { title: '知识点表格回归', items: [{ id: 'table-section', kind: 'section', title: '反比例函数', note: '截图前的原有知识' }, { id: 'table-q-ref', kind: 'question', scope: 'mine', questionId: 'table-test-q', band: 'practice' }] } });
+  await page.route('**/api/recognize-note', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ result: { warnings: [], blocks: [{ type: 'table', bbox: at(23, 15, 1022, 726), rows }] } }) }));
+  await page.goto(`${base}/tools/handouts?id=${handout.id}`);
+  const note = page.getByRole('textbox', { name: '模块一知识点' });
+  const lane = page.locator('#knowledge-table-section');
+  const chooser = page.waitForEvent('filechooser');
+  await lane.getByRole('button', { name: '截图识别', exact: true }).click();
+  await (await chooser).setFiles(join(root, 'tests/fixtures/note-comparison-table.png'));
+  const table = note.locator('table.note-table').first();
+  await table.locator('tr').nth(5).waitFor();
+  assert.equal(await table.locator('tr').count(), 6);
+  assert.equal(await table.locator('td').count(), 16);
+  assert.equal(await table.locator('td[colspan="2"]').count(), 2);
+  assert.equal(await table.locator('.math-render-error').count(), 0);
+  assert.ok(await table.locator('.katex').count() >= 8);
+  assert.match(await note.innerText(), /^截图前的原有知识/);
+  const graphSizes = await table.locator('.note-figure-frame>img').evaluateAll(async images => Promise.all(images.map(async img => { await img.decode(); return [img.naturalWidth, img.naturalHeight]; })));
+  assert.equal(graphSizes.length, 2);
+  for (const [width, height] of graphSizes) assert.ok(width > 200 && width < 350 && height > 200 && height < 350, `clean graph ${width}×${height}, with no table frame`);
+  await lane.screenshot({ path: join(out, 'note-table-import.png') });
+  step('original screenshot enters as one editable 6-row table, two merged cells, native formulas and two clean graphs in their cells');
+
+  await table.locator('td').first().click();
+  await page.keyboard.press('Meta+ArrowRight');
+  await page.keyboard.type('（校对）');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => getSelection()?.anchorNode?.parentElement?.closest('td')?.colSpan), 2);
+  await page.keyboard.press('Shift+Tab');
+  assert.match(await page.evaluate(() => getSelection()?.anchorNode?.parentElement?.closest('td')?.innerText), /反比例函数/);
+  await table.locator('.note-math').first().click();
+  const formula = page.getByRole('dialog', { name: '编辑公式' });
+  await formula.getByRole('textbox').fill('y=\\frac{2k}{x}');
+  await formula.getByRole('button', { name: '确定', exact: true }).click();
+  await table.locator('td').last().click();
+  await page.keyboard.press('Meta+ArrowRight');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('表格后的补充');
+  assert.equal(await page.evaluate(() => Boolean(getSelection()?.anchorNode?.parentElement?.closest('table'))), false);
+  const vertical = noteTableMarkup([
+    [{ content: '横向且纵向合并', colSpan: 2, rowSpan: 2 }, { content: '$a=1$', colSpan: 1, rowSpan: 1 }],
+    [{ content: '末格', colSpan: 1, rowSpan: 1 }],
+    [{ content: '', colSpan: 1, rowSpan: 1 }, { content: '$b=2$', colSpan: 1, rowSpan: 1 }, { content: '保留空格', colSpan: 1, rowSpan: 1 }],
+  ]);
+  await note.evaluate((target, text) => {
+    const data = new DataTransfer(); data.setData('text/plain', '\n' + text);
+    target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, vertical);
+  await note.locator('td[rowspan="2"]').waitFor();
+  await lane.getByRole('button', { name: '完成', exact: true }).click();
+  await page.locator('.handout-save.saved').waitFor();
+  const saved = (await api(`/api/handouts/${handout.id}`)).handout;
+  assert.match(saved.items[0].note, /反比例函数（校对）/);
+  assert.match(saved.items[0].note, /y=\\frac\{2k\}\{x\}/);
+  assert.match(saved.items[0].note, /表格后的补充/);
+  await page.reload();
+  await note.locator('td[rowspan="2"]').waitFor();
+  assert.equal(await note.locator('table.note-table').count(), 2);
+  assert.equal(await note.locator('.note-figure-frame>img').count(), 2);
+  assert.equal(await note.locator('.math-render-error').count(), 0);
+  await lane.screenshot({ path: join(out, 'note-table-edited.png') });
+  step('cell text and formula editing, Tab/Shift+Tab, leaving the table, a vertical merge, empty cells and save/reload all preserve the table');
+
+  await page.getByRole('button', { name: '快速排版', exact: true }).click();
+  const modal = page.locator('.handout-typeset');
+  const download = page.waitForEvent('download');
+  await modal.getByRole('button', { name: '其他格式', exact: true }).click();
+  await modal.getByRole('button', { name: '导出 Word', exact: true }).click();
+  const file = join(out, 'note-table.docx');
+  await (await download).saveAs(file);
+  const docx = await inspectDocx(file);
+  assert.ok(docx.songti && docx.timesNewRoman);
+  assert.ok(docx.formulas >= 1);
+  assert.equal(docx.images, 2);
+  assert.match(docx.xml, /<w:gridSpan w:val="2"/);
+  assert.match(docx.xml, /<w:vMerge w:val="restart"/);
+  assert.match(docx.xml, /<w:vMerge w:val="continue"/);
+  assert.doesNotMatch(docx.text, /multicolumn|begin\{array\}/);
+  result.exports.table = { formulas: docx.formulas, tables: docx.tables, images: docx.images, graphSizes };
+  await writeFile(join(out, 'note-table-saved.json'), JSON.stringify(saved, null, 2));
+  await page.unroute('**/api/recognize-note');
+  step('actual browser Word export contains editable tables, horizontal and vertical merges, native formulas, the two figures and the edited content');
+}
+
 // Real browser + isolated D1: custom outlines share the existing handout editor.
 async function verifyCourses() {
   await page.goto(base + '/tools/handouts');
@@ -666,7 +764,9 @@ try {
   const png = Buffer.from(pngUrl.split(',')[1], 'base64');
   await writeFile(join(out, 'diagram.png'), png);
   await writeFile(join(out, 'fixture.docx'), await wordFixture(png));
-  if (process.argv.includes('--notes')) {
+  if (process.argv.includes('--note-tables')) {
+    await verifyNoteTables();
+  } else if (process.argv.includes('--notes')) {
     await verifyNoteQueue(pngUrl);
   } else if (process.argv.includes('--courses')) {
     await verifyCourses();

@@ -1,7 +1,7 @@
 import { docxFigureLine, parseDocxWebContent, parseDocxWebOptions, type DocxWebBlock, type DocxWebInline, type DocxWebTable } from "./docx-web-content";
 import { plainTextWebLines, splitMathLines, splitMathText, toLatexMath } from "./math-text";
 import { isCompactConclusionQuestion, questionImages, resolveQuestionImageLayout, sourceFigureWidth } from "./question-layout";
-import { parseHandoutNote, type NoteLine, type NoteSpan } from "./handout-note.mjs";
+import { parseHandoutNote, type NoteLine, type NoteSpan, type NoteTableCell } from "./handout-note.mjs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, bandLabel, moduleHeading, questionPoints, type HandoutExportModule } from "./handout-rules.mjs";
 import type { WordAnswerPlacement } from "./export-word";
 import type { HandoutBand, Question } from "./types";
@@ -234,24 +234,33 @@ function inlinesWeight(inlines: DocxWebInline[]) {
   return inlines.reduce((sum, inline) => sum + (inline.type === "text" ? plainWeight(inline.value) : inline.type === "math" ? plainWeight(inline.latex) : inline.type === "image" ? inline.width / 4 : 1), 0);
 }
 
-function latexTable(table: DocxWebTable) {
+function latexTable(table: DocxWebTable | Extract<NoteLine, { kind: "table" }>, figureName: (source: string) => string | null = () => null) {
   const columns = Math.max(1, ...table.rows.map((row) => row.reduce((count, cell) => count + cell.colSpan, 0)));
-  const cellText = (blocks: DocxWebBlock[]) => blocks.filter((block) => block.type === "paragraph").map((block) => latexInlines(block.inlines)).filter(Boolean);
-  const wide = table.rows.some((row) => row.some((cell) => {
-    const paragraphs = cellText(cell.blocks);
+  const cellText = (cell: NoteTableCell | DocxWebTable["rows"][number][number]) => "content" in cell
+    ? parseHandoutNote(cell.content).map((line) => noteLineLatex(line, figureName, true)).filter(Boolean)
+    : cell.blocks.filter((block) => block.type === "paragraph").map((block) => latexInlines(block.inlines)).filter(Boolean);
+  const wide = "kind" in table || table.rows.some((row) => row.some((cell) => {
+    const paragraphs = cellText(cell);
     return paragraphs.length > 1 || paragraphs.some((paragraph) => plainWeight(paragraph) > 16);
   }));
   const spans: number[] = new Array(columns).fill(0);
+  const mergedWidths: number[] = new Array(columns).fill(1);
   const rows: string[] = [];
   table.rows.forEach((row, rowIndex) => {
     const cells: string[] = []; let column = 0; let cellIndex = 0;
     while (column < columns) {
-      if (spans[column] > 0) { cells.push(""); spans[column] -= 1; column += 1; continue; }
+      if (spans[column] > 0) {
+        const width = mergedWidths[column];
+        cells.push(width > 1 ? `\\multicolumn{${width}}{|c|}{}` : "");
+        for (let offset = 0; offset < width; offset += 1) spans[column + offset] -= 1;
+        column += width; continue;
+      }
       const cell = row[cellIndex++];
       if (!cell) { cells.push(""); column += 1; continue; }
-      let content = cellText(cell.blocks).join(wide ? "\\newline " : " ");
+      let content = cellText(cell).join(wide ? "\\par " : " ");
       if (cell.rowSpan > 1) {
-        content = `\\multirow{${cell.rowSpan}}{*}{${content}}`;
+        content = `\\multirow{${cell.rowSpan}}{${"kind" in table ? "=" : "*"}}{${content}}`;
+        mergedWidths[column] = cell.colSpan;
         for (let offset = 0; offset < cell.colSpan; offset += 1) spans[column + offset] = cell.rowSpan - 1;
       }
       if (cell.colSpan > 1) content = `\\multicolumn{${cell.colSpan}}{|${wide ? `>{\\centering\\arraybackslash}p{${(cell.colSpan / columns * 0.92).toFixed(3)}\\linewidth}` : "c"}|}{${content}}`;
@@ -433,7 +442,7 @@ function spansLatex(spans: NoteSpan[]) {
 }
 
 // A row of figures side by side, each with its caption; a note written beside the row takes a third of it.
-function figureRowLatex(line: Extract<NoteLine, { kind: "figures" }>, figureName: (source: string) => string | null) {
+function figureRowLatex(line: Extract<NoteLine, { kind: "figures" }>, figureName: (source: string) => string | null, inCell = false) {
   const figures = line.figures.flatMap((figure) => { const name = figureName(figure.src); return name ? [{ name, caption: spansLatex(figure.caption) }] : []; });
   // Display formulas beside the figures start at the left edge, like the lines of text around them.
   // Each step of the note is a line of its own.
@@ -442,16 +451,17 @@ function figureRowLatex(line: Extract<NoteLine, { kind: "figures" }>, figureName
   // Every figure gets a cell of one size and rows start at the left edge, so figures line up from row to row;
   // the note beside them takes whatever is left.
   const gaps = figures.length - 1 + (side ? 1 : 0);
-  const width = Math.min(.3, (.98 - (side ? .3 : 0) - gaps * .03) / figures.length);
+  const width = Math.min(inCell ? .98 : .3, (.98 - (side ? .3 : 0) - gaps * .03) / figures.length);
   const sideWidth = side ? .98 - width * figures.length - gaps * .03 : 0;
-  const height = 40;
+  const height = inCell ? 32 : 40;
   const cells = figures.map((figure) => `\\handoutrowfigure{${width.toFixed(3)}\\linewidth}{${height}mm}{${figure.name}}{${figure.caption}}`);
   if (side) cells.push(`\\handoutrowside{${sideWidth.toFixed(2)}\\linewidth}{${side}}`);
   return ["\\begin{handoutfigurerow}", cells.join("\\hspace{0.03\\linewidth}%\n"), "\\end{handoutfigurerow}"].join("\n");
 }
 
-function noteLineLatex(line: NoteLine, figureName: (source: string) => string | null) {
-  if (line.kind === "figures") return figureRowLatex(line, figureName);
+function noteLineLatex(line: NoteLine, figureName: (source: string) => string | null, inCell = false): string {
+  if (line.kind === "table") return latexTable(line, figureName);
+  if (line.kind === "figures") return figureRowLatex(line, figureName, inCell);
   if (line.kind === "heading") return `\\handoutnoteheading[${line.level}]{${spansLatex(line.spans)}}`;
   if (line.kind === "item") return `\\handoutnoteitem{${latexPlain(line.marker)}}{${spansLatex(line.spans)}}`;
   return spansLatex(line.spans);

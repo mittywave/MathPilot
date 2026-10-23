@@ -736,8 +736,8 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
       const cuts = await extractNoteFigures(image, result.blocks);
       const figures = new Map<RecognizedNoteFigure, string>(); let missedFigures = 0;
       for (const block of result.blocks) {
-        if (block.type !== "figures") continue;
-        for (const figure of block.figures) {
+        const blockFigures = block.type === "figures" ? block.figures : block.type === "table" ? block.rows.flatMap((row) => row.flatMap((cell) => cell.figures)) : [];
+        for (const figure of blockFigures) {
           const cut = cuts.get(figure);
           try { if (!cut) throw new Error("没有裁出配图"); figures.set(figure, (await uploadHandoutImage(cut)).url); } catch { missedFigures += 1; }
         }

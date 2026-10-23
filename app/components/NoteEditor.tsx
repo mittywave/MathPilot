@@ -78,6 +78,28 @@ function toolsFor(state: EditorState): Tools {
 }
 const sameTools = (a: Tools, b: Tools) => a.heading === b.heading && a.bold === b.bold && a.canHeading === b.canHeading && a.canBold === b.canBold && a.canFormula === b.canFormula;
 
+// Tab follows actual cells, including merged ones; leaving either end returns to ordinary note text.
+const nextTableCell = (backward: boolean): Command => (state, dispatch) => {
+  const { $from } = state.selection;
+  let depth = $from.depth;
+  while (depth > 0 && $from.node(depth).type !== noteSchema.nodes.table_cell) depth -= 1;
+  if (!depth) return false;
+  const table = $from.node(depth - 2); const start = $from.before(depth - 2);
+  const positions: number[] = [];
+  table.descendants((node, pos) => { if (node.type === noteSchema.nodes.table_cell) { positions.push(start + 1 + pos); return false; } });
+  const target = positions[positions.indexOf($from.before(depth)) + (backward ? -1 : 1)];
+  if (dispatch) {
+    const tr = state.tr;
+    if (target !== undefined) tr.setSelection(TextSelection.near(tr.doc.resolve(target + 1)));
+    else {
+      const at = backward ? start : start + table.nodeSize;
+      tr.insert(at, paragraph.create()).setSelection(TextSelection.create(tr.doc, at + 1));
+    }
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+};
+
 class MathView implements NodeView {
   dom = document.createElement("span");
   node: ProseNode;
@@ -253,6 +275,7 @@ export default function NoteEditor({ value, label, placeholder, onChange, onComm
           },
           Escape: (_state, _dispatch, current) => { current?.dom.blur(); return true; },
           "Shift-Enter": leaveFigureRow, Backspace: keepFigureText(false), Delete: keepFigureText(true),
+          Tab: nextTableCell(false), "Shift-Tab": nextTableCell(true),
         }),
         keymap(formatRef.current.singleLine ? { Enter: () => true, "Shift-Enter": () => true } : { Enter: leaveFigureRow }),
         keymap(baseKeymap),
@@ -279,6 +302,13 @@ export default function NoteEditor({ value, label, placeholder, onChange, onComm
       },
       handleDrop: (_current, _event, _slice, moved) => !moved,
       handleClickOn(current, _pos, node, nodePos, event) {
+        // In a table, clicking padding or a wrapped line's gap still puts the caret in that cell.
+        if (node.type === noteSchema.nodes.table_cell) {
+          const at = current.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? nodePos + 1;
+          const caret = Math.min(Math.max(at, nodePos + 1), nodePos + node.nodeSize - 1);
+          current.dispatch(current.state.tr.setSelection(TextSelection.near(current.state.doc.resolve(caret))));
+          return true;
+        }
         // Clicking a figure's image selects that figure, ready for 删除图片 or Backspace.
         if (node.type === figure && event.target instanceof HTMLImageElement) {
           current.dispatch(current.state.tr.setSelection(NodeSelection.create(current.state.doc, nodePos)));
