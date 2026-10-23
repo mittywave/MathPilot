@@ -93,7 +93,7 @@ function movedGroup(state: MoveState): HandoutGroup {
   return { ...NOWHERE, domain: state.domain };
 }
 
-// 课程体系和专题库全员共用：任何老师都能新建、编辑、调整顺序，删除只开放给管理员。学生讲义只有学生的老师能看到和管理。
+// Public systems and topics are shared; only administrators see and manage private systems.
 // 左侧选择体系和阶段，右侧并列单元；每讲继续使用同一个编辑器。
 function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (message: string, tone?: "success" | "error") => void }) {
   const [confirmNode, confirm] = useConfirm();
@@ -223,6 +223,17 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
     finally { setBusy(false); }
   }
 
+  async function changeVisibility(node: HandoutCourseNode) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await saveHandoutCourse({ id: node.id, isPrivate: !node.isPrivate });
+      setCourseNodes(result.courseNodes);
+      onNotice(node.isPrivate ? "体系已设为公开" : "体系已设为私密，仅管理员可见");
+    } catch (error) { onNotice(error instanceof Error ? error.message : "体系可见性保存失败", "error"); }
+    finally { setBusy(false); }
+  }
+
   const nodeMenu = (node: HandoutCourseNode) => {
     const siblings = (courseNodes ?? []).filter((item) => item.parentId === node.parentId && item.id !== HANDOUT_TOPIC_ROOT);
     const index = siblings.findIndex((item) => item.id === node.id);
@@ -230,6 +241,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
       <button disabled={busy} onClick={() => setOutlineEdit({ id: node.id, parentId: node.parentId, name: node.name, label: "目录", error: "" })}>重命名</button>
       <button disabled={busy || index === 0} onClick={() => changeNode(node, -1)}>上移</button>
       <button disabled={busy || index === siblings.length - 1} onClick={() => changeNode(node, 1)}>下移</button>
+      {isAdmin && !node.parentId && <button disabled={busy} onClick={() => changeVisibility(node)}>{node.isPrivate ? "设为公开" : "设为私密"}</button>}
       {isAdmin && <><hr /><button disabled={busy} className="danger-text" onClick={() => changeNode(node)}>删除目录…</button></>}
     </PaperMoreMenu>;
   };
@@ -347,8 +359,8 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
 
   const keyword = query.trim().toLowerCase();
   const matches = (handout: HandoutSummary) => [handout.title, ...handout.outline.map((module) => module.title)].some((text) => text.toLowerCase().includes(keyword));
-  const navItem = (key: string, label: string, count: number, active: boolean, onClick: () => void, top = false, expanded?: boolean) =>
-    <button key={key} className={`${top ? "shelf" : "item"}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} aria-expanded={expanded} aria-controls={expanded === undefined ? undefined : `handout-stages-${key}`} onClick={onClick}><span>{label}</span>{count ? <em>{count}</em> : null}</button>;
+  const navItem = (key: string, label: string, count: number, active: boolean, onClick: () => void, top = false, expanded?: boolean, isPrivate = false) =>
+    <button key={key} className={`${top ? "shelf" : "item"}${active ? " active" : ""}`} aria-current={active ? "page" : undefined} aria-expanded={expanded} aria-controls={expanded === undefined ? undefined : `handout-stages-${key}`} onClick={onClick}><span>{label}</span>{isPrivate && <small title="仅管理员可见">私密</small>}{count ? <em>{count}</em> : null}</button>;
   const all = handouts ?? [];
   const unsorted = countIn(NOWHERE);
   const viewing = keyword ? null : shelf;
@@ -361,7 +373,7 @@ function HandoutList({ isAdmin, onNotice }: { isAdmin: boolean; onNotice: (messa
         {systems.map((system) => {
           const open = courseOpen && activeSystem?.id === system.id;
           return <div key={system.id} {...systemDragProps(system.id)}>
-            <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id), false, open)}{nodeMenu(system)}</div>
+            <div className={`handout-nav-row row-tail${viewing === "course" && activeSystem?.id === system.id ? " current-path" : ""}`}>{navItem(system.id, system.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[0]?.id === system.id).length, viewing === "course" && activeSystem?.id === system.id && !activeStage, () => choose("course", system.id), false, open, system.isPrivate)}{nodeMenu(system)}</div>
             <div id={`handout-stages-${system.id}`} className="tree-children" data-open={open} inert={!open} aria-hidden={!open}><div className="tree-children-content"><div className="handout-stage-nav">
               {(courseNodes ?? []).filter((node) => node.parentId === system.id).map((stage) => <div className="handout-nav-row row-tail" key={stage.id}>{navItem(stage.id, stage.name, all.filter((item) => coursePath(courseNodes ?? [], item.courseUnitId)[1]?.id === stage.id).length, viewing === "course" && activeSystem?.id === system.id && activeStage?.id === stage.id, () => choose("course", stage.id))}{nodeMenu(stage)}</div>)}
               <button className="handout-outline-add" disabled={busy} onClick={() => addNode(system.id, "年级 / 阶段")}>＋ 添加年级 / 阶段</button>

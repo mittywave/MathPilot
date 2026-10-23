@@ -271,6 +271,7 @@
 .handout-nav .shelf{margin-top:14px;font-family:"Songti SC",serif;font-size:15.5px;font-weight:700}
 .handout-nav .shelf:first-child{margin-top:0}
 .handout-nav .item{padding-left:24px;color:color-mix(in srgb,var(--ink) 80%,var(--surface));font-size:14px}
+.handout-nav .item small{flex-shrink:0;color:var(--muted);font-size:11px;font-weight:400}
 .handout-nav nav>button:hover,.handout-nav-heading>.shelf:hover{background:color-mix(in srgb,var(--line) 50%,transparent)}
 .handout-nav button.active{color:var(--green);font-weight:600}
 .handout-nav em{margin-left:auto;color:var(--muted);font:400 12px "PingFang SC","Microsoft YaHei",system-ui,sans-serif}

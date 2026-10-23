@@ -64,7 +64,7 @@ async function sha256Text(value: string) {
   return sha256Bytes(new TextEncoder().encode(value));
 }
 
-function assetIds(value: unknown) {
+export function assetIds(value: unknown) {
   const result = new Set<string>();
   const text = typeof value === "string" ? value : JSON.stringify(value);
   for (const match of text.matchAll(ASSET_URL)) result.add(match[1]);
@@ -282,6 +282,10 @@ export async function prepareQuestion(raw: Question, user: AuthUser, context: Li
   else delete sanitized.tagsZh;
   if (Array.isArray(raw.tagsEn)) sanitized.tagsEn = normalizedQuestionTags(raw.tagsEn);
   else delete sanitized.tagsEn;
+  // Reusing a URL must not turn an inaccessible private handout image into a public question image.
+  if (user.role !== "admin") for (const id of assetIds(sanitized)) {
+    if (!await readAssetForUser(id, user)) throw new Response(JSON.stringify({ error: "配图不存在或无权访问" }), { status: 403, headers: { "Content-Type": "application/json" } });
+  }
   const mediaSafe = await uploadMediaValue(sanitized, context) as Question;
   const { index: graph } = await loadPublishedKnowledgeGraph();
   return {
@@ -660,11 +664,31 @@ export async function readAssetForUser(id: string, user: AuthUser | null) {
   await ensureLegacyAssetAccess();
   const asset = await readRawAsset(id); if (!asset) return null;
   const db = appEnv().DB;
+  // Handout images reuse the asset store. Their old public grant must not bypass
+  // a system made private later; a separately published question can still use the same image.
+  const url = `/api/assets/${id}`;
+  const handoutUse = await db.prepare(`SELECT COUNT(*) AS total,
+      MAX(CASE WHEN system.is_private = 1 THEN 1 ELSE 0 END) AS private_use,
+      MAX(CASE WHEN COALESCE(system.is_private, 0) = 0 THEN 1 ELSE 0 END) AS public_use
+    FROM handouts handout
+    LEFT JOIN handout_course_nodes unit ON unit.id = handout.course_unit_id
+    LEFT JOIN handout_course_nodes stage ON stage.id = unit.parent_id
+    LEFT JOIN handout_course_nodes system ON system.id = stage.parent_id
+    WHERE handout.student_id IS NULL AND instr(handout.items_json, ?) > 0`).bind(url).first<{ total: number; private_use: number | null; public_use: number | null }>();
+  const questionUse = await db.prepare(`SELECT 1 FROM library_questions_v2 question
+    JOIN libraries_v2 library ON library.id = question.library_id
+    WHERE question.library_id = 'public' AND question.publication_id IS library.active_publication_id
+      AND question.deleted_at IS NULL AND instr(question.payload_json, ?) > 0 LIMIT 1`).bind(url).first();
+  if (handoutUse?.private_use && !handoutUse.public_use) {
+    if (!questionUse) return user?.role === "admin" ? { ...asset, public: false } : null;
+  }
   const publicRow = await db.prepare(`SELECT 1 FROM asset_library_access access
     JOIN libraries_v2 library ON library.id = access.library_id
     WHERE access.asset_id = ? AND access.library_id = 'public'
       AND access.publication_id = library.active_publication_id LIMIT 1`).bind(id).first();
-  if (publicRow) return { ...asset, public: true };
+  // A handout can become private. Unsaved uploads also need revalidation until
+  // their final placement is known; only independent question images are immutable.
+  if (publicRow) return { ...asset, public: Boolean(questionUse) && !handoutUse?.total };
   if (!user) return null;
   const personalRow = await db.prepare(`SELECT 1 FROM asset_library_access access
     JOIN libraries_v2 library ON library.id = access.library_id

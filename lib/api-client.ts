@@ -30,7 +30,7 @@ export function deleteCloudModule(id: string, confirmation: string) { return req
 export function importCloudLibrary(data: LibraryData) { return request<{ imported: number; modules: number; categories: number }>("/api/library/import", { method: "POST", body: JSON.stringify(data) }); }
 export function authorizeDownload(questionIds: string[]) { return request<{ ok: boolean }>("/api/download", { method: "POST", body: JSON.stringify({ questionIds }) }); }
 export function fetchHandouts() { return request<{ handouts: HandoutSummary[]; courseNodes: HandoutCourseNode[] }>("/api/handouts"); }
-export function saveHandoutCourse(change: { id?: string; parentId?: string | null; name?: string; direction?: number }) { return request<{ id: string; courseNodes: HandoutCourseNode[] }>("/api/handout-courses", { method: "POST", body: JSON.stringify(change) }); }
+export function saveHandoutCourse(change: { id?: string; parentId?: string | null; name?: string; direction?: number; isPrivate?: boolean }) { return request<{ id: string; courseNodes: HandoutCourseNode[] }>("/api/handout-courses", { method: "POST", body: JSON.stringify(change) }); }
 export function deleteHandoutCourse(id: string) { return request<{ courseNodes: HandoutCourseNode[] }>("/api/handout-courses", { method: "DELETE", body: JSON.stringify({ id }) }); }
 export function fetchHandout(id: string) { return request<{ handout: Handout }>(`/api/handouts/${encodeURIComponent(id)}`); }
 export function createHandout(handout: Pick<Handout, "title" | "items"> & Partial<HandoutGroup & Pick<Handout, "temporaryQuestions">>) { return request<{ handout: Handout }>("/api/handouts", { method: "POST", body: JSON.stringify({ handout }) }); }

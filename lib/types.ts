@@ -218,7 +218,7 @@ export type HandoutShelf = "course" | "topic" | "student";
 // 专题分组的稳定目录 ID；旧分类和大纲目录直属讲义保留原位置，等待归类。
 export type HandoutDomain = string;
 // 课程体系和专题库复用同一棵目录树，专题挂在固定的专题库根目录下。
-export type HandoutCourseNode = { id: string; parentId: string | null; name: string; position: number };
+export type HandoutCourseNode = { id: string; parentId: string | null; name: string; position: number; isPrivate: boolean };
 export type HandoutGroup = { courseUnitId: string | null; domain: HandoutDomain | null; studentId: string | null };
 
 export type Handout = HandoutGroup & {

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { HANDOUT_TOPIC_ROOT, coursePath, handoutModules, handoutOutline, normalizeHandoutDraft, normalizeHandoutGroup, sheetCounts } from "../handout-rules.mjs";
-import { prepareQuestion, requireAdmin, resolveLibraryContext, retainQuestionAssetsForUser, teacherNamespaceId } from "./library";
+import { assetIds, prepareQuestion, readAssetForUser, requireAdmin, resolveLibraryContext, retainQuestionAssetsForUser, teacherNamespaceId } from "./library";
 import type { AuthUser, CourseLessonDetail, Handout, HandoutCourseNode, HandoutGrade, HandoutGroup, HandoutSummary, Question } from "../types";
 
 type AppEnv = { DB: D1Database };
@@ -8,12 +8,19 @@ type HandoutRow = { id: string; title: string; items_json: string; course_unit_i
 
 // D1 caps a row at 2 MB; media stays in the existing chunked asset store.
 const MAX_ITEMS_BYTES = 1_900_000;
+// Only system roots store privacy. Use the same inherited access rule for reads and writes.
+const VISIBLE_COURSES = `WITH RECURSIVE visible_courses(id) AS (
+  SELECT id FROM handout_course_nodes WHERE parent_id IS NULL AND (is_private = 0 OR ? = 1)
+  UNION ALL SELECT child.id FROM handout_course_nodes child JOIN visible_courses parent ON child.parent_id = parent.id
+)`;
+const VISIBLE_GROUP = `(course_unit_id IS NULL OR course_unit_id IN (SELECT id FROM visible_courses))
+  AND (domain IS NULL OR domain IN (SELECT id FROM visible_courses))`;
 // 学生讲义只属于学生的老师：其他老师读不到、改不到这些行，和学生档案一样。
-const SELECT_VISIBLE = `SELECT handouts.id, handouts.title, handouts.items_json, handouts.course_unit_id, handouts.domain, handouts.student_id,
+const SELECT_VISIBLE = `${VISIBLE_COURSES} SELECT handouts.id, handouts.title, handouts.items_json, handouts.course_unit_id, handouts.domain, handouts.student_id,
     students.name AS student_name, handouts.position, handouts.created_at, handouts.updated_at
   FROM handouts LEFT JOIN students ON students.id = handouts.student_id
-  WHERE (handouts.student_id IS NULL OR students.owner_user_id = ?)`;
-const WRITABLE = "(student_id IS NULL OR student_id IN (SELECT id FROM students WHERE owner_user_id = ?))";
+  WHERE (handouts.student_id IS NULL OR students.owner_user_id = ?) AND ${VISIBLE_GROUP}`;
+const WRITABLE = `(student_id IS NULL OR student_id IN (SELECT id FROM students WHERE owner_user_id = ?)) AND ${VISIBLE_GROUP}`;
 const NO_GROUP: HandoutGroup = { courseUnitId: null, domain: null, studentId: null };
 // One group never holds anywhere near this many handouts; it bounds a single arrange call.
 const MAX_ARRANGE = 200;
@@ -43,6 +50,10 @@ function toHandout(row: HandoutRow, nodes: HandoutCourseNode[] = []): Handout {
 
 async function encode(raw: unknown, user: AuthUser, previous: Question[] = [], studentId: string | null = null) {
   const draft = normalizeHandoutDraft(raw);
+  // Notes can also reference stored images; a public note must not expose a private URL.
+  if (user.role !== "admin") for (const id of assetIds(draft.items)) {
+    if (!await readAssetForUser(id, user)) throw responseError("配图不存在或无权访问", 403);
+  }
   const incoming = raw && typeof raw === "object" && "temporaryQuestions" in raw ? raw.temporaryQuestions : previous;
   if (!Array.isArray(incoming) || incoming.length > 400) throw responseError("临时题库最多保存 400 道题，请拆分讲义", 400);
   const seen = new Set<string>();
@@ -67,10 +78,10 @@ async function encode(raw: unknown, user: AuthUser, previous: Question[] = [], s
   return { ...draft, temporaryQuestions, itemsJson };
 }
 
-async function groupOf(raw: unknown) {
+async function groupOf(user: AuthUser, raw: unknown) {
   const group = normalizeHandoutGroup(raw);
   if (!group) throw responseError("讲义位置无效", 400);
-  const path = group.courseUnitId || group.domain ? coursePath(await listHandoutCourses(), group.courseUnitId ?? group.domain) : [];
+  const path = group.courseUnitId || group.domain ? coursePath(await listHandoutCourses(user), group.courseUnitId ?? group.domain) : [];
   if (group.courseUnitId && (path.length !== 3 || path[0].id === HANDOUT_TOPIC_ROOT)) throw responseError("请选择存在的学期或单元", 400);
   // Old category/outline handouts remain readable; new topic groups use the same domain field.
   if (group.domain && (path[0]?.id !== HANDOUT_TOPIC_ROOT || path.length < 2)) throw responseError("请选择存在的专题分类或系列", 400);
@@ -85,8 +96,8 @@ async function ownStudentName(user: AuthUser, studentId: string) {
 }
 
 export async function listHandouts(user: AuthUser): Promise<HandoutSummary[]> {
-  const rows = await db().prepare(`${SELECT_VISIBLE} ORDER BY handouts.position, handouts.created_at`).bind(user.id).all<HandoutRow>();
-  const nodes = await listHandoutCourses();
+  const rows = await db().prepare(`${SELECT_VISIBLE} ORDER BY handouts.position, handouts.created_at`).bind(user.role === "admin" ? 1 : 0, user.id).all<HandoutRow>();
+  const nodes = await listHandoutCourses(user);
   return rows.results.map((row) => {
     const { items, temporaryQuestions, ...summary } = toHandout(row, nodes);
     void temporaryQuestions; // The directory never carries imported question bodies.
@@ -95,22 +106,22 @@ export async function listHandouts(user: AuthUser): Promise<HandoutSummary[]> {
 }
 
 export async function getHandout(user: AuthUser, id: string): Promise<Handout> {
-  const row = await db().prepare(`${SELECT_VISIBLE} AND handouts.id = ?`).bind(user.id, id).first<HandoutRow>();
+  const row = await db().prepare(`${SELECT_VISIBLE} AND handouts.id = ?`).bind(user.role === "admin" ? 1 : 0, user.id, id).first<HandoutRow>();
   if (!row) throw responseError("讲义不存在", 404);
-  return toHandout(row, await listHandoutCourses());
+  return toHandout(row, await listHandoutCourses(user));
 }
 
-// 课程体系和专题库全员共用：任何登录老师都能查看和编辑，owner_user_id 只记录创建人；删除需要管理员。
+// Public systems and topics are shared; private systems are restricted to administrators.
 // A new handout becomes the last of its group.
 export async function createHandout(user: AuthUser, raw: unknown): Promise<Handout> {
-  const group = await groupOf(raw);
+  const group = await groupOf(user, raw);
   const studentName = group.studentId ? await ownStudentName(user, group.studentId) : null;
   const { title, items, temporaryQuestions, itemsJson } = await encode(raw, user, [], group.studentId);
   const id = crypto.randomUUID(); const now = Date.now();
   const row = await db().prepare(`INSERT INTO handouts (id, title, items_json, course_unit_id, domain, student_id, position, created_at, updated_at, owner_user_id)
     SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(position) + 1, 0), ?, ?, ? FROM handouts WHERE course_unit_id IS ? AND domain IS ? AND student_id IS ?
     RETURNING position`).bind(id, title, itemsJson, group.courseUnitId, group.domain, group.studentId, now, now, user.id, group.courseUnitId, group.domain, group.studentId).first<{ position: number }>();
-  const nodes = await listHandoutCourses();
+  const nodes = await listHandoutCourses(user);
   return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row?.position ?? 0, createdAt: now, updatedAt: now };
 }
 
@@ -118,13 +129,13 @@ export async function updateHandout(user: AuthUser, id: string, raw: unknown): P
   const previous = await getHandout(user, id);
   const { title, items, temporaryQuestions, itemsJson } = await encode(raw, user, previous.temporaryQuestions, previous.studentId);
   const now = Date.now();
-  const row = await db().prepare(`UPDATE handouts SET title = ?, items_json = ?, updated_at = ?
-    WHERE id = ? AND ${WRITABLE} RETURNING course_unit_id, domain, student_id, position, created_at`).bind(title, itemsJson, now, id, user.id)
+  const row = await db().prepare(`${VISIBLE_COURSES} UPDATE handouts SET title = ?, items_json = ?, updated_at = ?
+    WHERE id = ? AND ${WRITABLE} RETURNING course_unit_id, domain, student_id, position, created_at`).bind(user.role === "admin" ? 1 : 0, title, itemsJson, now, id, user.id)
     .first<Pick<HandoutRow, "course_unit_id" | "domain" | "student_id" | "position" | "created_at">>();
   if (!row) throw responseError("讲义不存在", 404);
   const group = storedGroup(row);
   const studentName = group.studentId ? await ownStudentName(user, group.studentId) : null;
-  const nodes = await listHandoutCourses();
+  const nodes = await listHandoutCourses(user);
   return { id, title, items, temporaryQuestions, ...group, coursePath: coursePath(nodes, group.courseUnitId ?? group.domain), domainName: nodes.find((node) => node.id === group.domain)?.name ?? null, studentName, position: row.position, createdAt: row.created_at, updatedAt: now };
 }
 
@@ -132,18 +143,18 @@ export async function updateHandout(user: AuthUser, id: string, raw: unknown): P
 // Handouts already in the group but not listed keep their positions; content timestamps are untouched.
 export async function arrangeHandouts(user: AuthUser, raw: unknown) {
   const source = raw && typeof raw === "object" ? raw as { ids?: unknown } : {};
-  const group = await groupOf(raw);
+  const group = await groupOf(user, raw);
   if (group.studentId) await ownStudentName(user, group.studentId);
   const ids = Array.isArray(source.ids) ? [...new Set(source.ids.filter((id): id is string => typeof id === "string" && Boolean(id)))] : [];
   if (!ids.length || ids.length > MAX_ARRANGE) throw responseError("讲义列表无效", 400);
   // Moving one's student handout to a shared shelf also shares its temporary figures.
   // Do not inspect or grant media for another teacher's invisible student handout.
   if (!group.studentId) {
-    const visible = await db().prepare(`${SELECT_VISIBLE} AND handouts.id IN (SELECT value FROM json_each(?))`).bind(user.id, JSON.stringify(ids)).all<HandoutRow>();
+    const visible = await db().prepare(`${SELECT_VISIBLE} AND handouts.id IN (SELECT value FROM json_each(?))`).bind(user.role === "admin" ? 1 : 0, user.id, JSON.stringify(ids)).all<HandoutRow>();
     for (const row of visible.results) if (row.student_id) for (const question of toHandout(row).temporaryQuestions) await retainQuestionAssetsForUser(question, user);
   }
-  const statement = db().prepare(`UPDATE handouts SET course_unit_id = ?, domain = ?, student_id = ?, position = ? WHERE id = ? AND ${WRITABLE}`);
-  await db().batch(ids.map((id, position) => statement.bind(group.courseUnitId, group.domain, group.studentId, position, id, user.id)));
+  const statement = db().prepare(`${VISIBLE_COURSES} UPDATE handouts SET course_unit_id = ?, domain = ?, student_id = ?, position = ? WHERE id = ? AND ${WRITABLE}`);
+  await db().batch(ids.map((id, position) => statement.bind(user.role === "admin" ? 1 : 0, group.courseUnitId, group.domain, group.studentId, position, id, user.id)));
   return { ...group, ids };
 }
 
@@ -157,7 +168,8 @@ export async function deleteHandout(user: AuthUser, id: string) {
 
 // The published Shenzhen graph stays attached to the original three stages.
 // Custom systems never blend into that graph merely because their titles match.
-export async function readCourseLessons(): Promise<CourseLessonDetail[]> {
+export async function readCourseLessons(user: AuthUser | null): Promise<CourseLessonDetail[]> {
+  if (!(await listHandoutCourses(user)).some((node) => node.id === "course-default")) throw responseError("课程体系不存在", 404);
   const rows = await db().prepare(`SELECT handouts.*, students.name AS student_name,
       CAST(substr(stage.id, 14) AS INTEGER) AS graph_grade
     FROM handouts
@@ -178,18 +190,26 @@ export async function readCourseLessons(): Promise<CourseLessonDetail[]> {
   });
 }
 
-export async function listHandoutCourses(): Promise<HandoutCourseNode[]> {
-  const rows = await db().prepare("SELECT id, parent_id AS parentId, name, position FROM handout_course_nodes ORDER BY position, id").all<HandoutCourseNode>();
-  return rows.results;
+export async function listHandoutCourses(user: AuthUser | null): Promise<HandoutCourseNode[]> {
+  const rows = await db().prepare(`${VISIBLE_COURSES} SELECT id, parent_id AS parentId, name, position, is_private AS isPrivate
+    FROM handout_course_nodes WHERE id IN (SELECT id FROM visible_courses) ORDER BY position, id`).bind(user?.role === "admin" ? 1 : 0).all<HandoutCourseNode>();
+  return rows.results.map((node) => ({ ...node, isPrivate: Boolean(node.isPrivate) }));
 }
 
 // Course outlines and topic folders share names, order, permissions and APIs.
-export async function saveHandoutCourse(raw: unknown) {
-  const source = raw && typeof raw === "object" ? raw as { id?: unknown; parentId?: unknown; name?: unknown; direction?: unknown } : {};
-  const nodes = await listHandoutCourses();
+export async function saveHandoutCourse(user: AuthUser, raw: unknown) {
+  const source = raw && typeof raw === "object" ? raw as { id?: unknown; parentId?: unknown; name?: unknown; direction?: unknown; isPrivate?: unknown } : {};
+  // Reject forged visibility changes even on create, rather than silently ignoring them.
+  if (source.isPrivate !== undefined) requireAdmin(user);
+  const nodes = await listHandoutCourses(user);
   const existing = source.id === undefined ? null : nodes.find((node) => node.id === source.id);
   if (source.id !== undefined && !existing) throw responseError("大纲位置不存在，请刷新后重试", 404);
   if (existing?.id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能修改", 400);
+  if (source.isPrivate !== undefined) {
+    if (!existing || existing.parentId !== null || typeof source.isPrivate !== "boolean" || source.direction !== undefined || source.name !== undefined) throw responseError("请选择课程体系并使用有效的私密设置", 400);
+    await db().prepare("UPDATE handout_course_nodes SET is_private = ? WHERE id = ?").bind(source.isPrivate ? 1 : 0, existing.id).run();
+    return { id: existing.id, courseNodes: await listHandoutCourses(user) };
+  }
   if (existing && source.direction !== undefined) {
     if (typeof source.direction !== "number" || !Number.isSafeInteger(source.direction) || source.direction === 0) throw responseError("调整方向无效", 400);
     const siblings = nodes.filter((node) => node.parentId === existing.parentId && node.id !== HANDOUT_TOPIC_ROOT);
@@ -199,7 +219,7 @@ export async function saveHandoutCourse(raw: unknown) {
       siblings.splice(to, 0, siblings.splice(from, 1)[0]);
       await db().batch(siblings.map((node, position) => db().prepare("UPDATE handout_course_nodes SET position = ? WHERE id = ?").bind(position, node.id)));
     }
-    return { id: existing.id, courseNodes: await listHandoutCourses() };
+    return { id: existing.id, courseNodes: await listHandoutCourses(user) };
   }
   const name = typeof source.name === "string" ? source.name.trim() : "";
   if (!name || name.length > 80) throw responseError("名称请填写 1 至 80 个字", 400);
@@ -216,14 +236,14 @@ export async function saveHandoutCourse(raw: unknown) {
     if (error instanceof Error && /UNIQUE constraint/.test(error.message)) throw responseError("同一层级已有这个名称", 409);
     throw error;
   }
-  return { id, courseNodes: await listHandoutCourses() };
+  return { id, courseNodes: await listHandoutCourses(user) };
 }
 
 export async function deleteHandoutCourse(user: AuthUser, id: unknown) {
   requireAdmin(user);
   if (typeof id !== "string") throw responseError("大纲位置无效", 400);
   if (id === HANDOUT_TOPIC_ROOT) throw responseError("专题库入口不能删除", 400);
-  const nodes = await listHandoutCourses();
+  const nodes = await listHandoutCourses(user);
   const paths = nodes.map((node) => coursePath(nodes, node.id))
     .filter((path) => path.some((node) => node.id === id)).sort((a, b) => b.length - a.length);
   if (!paths.length) throw responseError("大纲位置不存在，请刷新后重试", 404);
@@ -234,5 +254,5 @@ export async function deleteHandoutCourse(user: AuthUser, id: unknown) {
       OR domain IN (SELECT value FROM json_each(?))`).bind(ids, ids),
     ...paths.map((path) => db().prepare("DELETE FROM handout_course_nodes WHERE id = ?").bind(path[path.length - 1].id)),
   ]);
-  return { courseNodes: await listHandoutCourses() };
+  return { courseNodes: await listHandoutCourses(user) };
 }
