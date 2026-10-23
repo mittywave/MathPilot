@@ -5,7 +5,7 @@ export const basketQuestionTypes: QuestionType[] = ["单选题", "多选题", "�
 export type BasketStructure = { sections: { id: string; title: string; questionIds: string[] }[]; unassignedIds: string[] };
 export type BasketDraft = {
   version: 1; structure: BasketStructure; title: string; includeAnswers: boolean;
-  snapshots: Question[]; typeset: { ids: string; settings: TypesetSettings } | null;
+  snapshots: Question[]; temporaryQuestions: Question[]; typeset: { ids: string; settings: TypesetSettings } | null;
 };
 
 export function basketIds(basket: BasketStructure): string[] {
@@ -73,12 +73,14 @@ export function restoreBasketDraft(raw: unknown, library: Question[]): { draft: 
     return [{ id: section.id, title: typeof section.title === "string" ? section.title : "新分组", questionIds: ids(section.questionIds) }];
   }), unassignedIds: ids(value.structure.unassignedIds) };
   const snapshots = (Array.isArray(value.snapshots) ? value.snapshots : []).filter((question) => question && typeof question.id === "string" && typeof question.stem === "string" && typeof question.answer === "string" && typeof question.analysis === "string" && Array.isArray(question.options) && basketQuestionTypes.includes(question.type) && seen.has(question.id));
-  const available = new Set([...library, ...snapshots].map((question) => question.id));
+  const temporaryQuestions = (Array.isArray(value.temporaryQuestions) ? value.temporaryQuestions : []).filter((question, index, all) => question && typeof question.id === "string" && question.id && typeof question.stem === "string" && typeof question.answer === "string" && typeof question.analysis === "string" && Array.isArray(question.options) && basketQuestionTypes.includes(question.type) && all.findIndex((item) => item?.id === question.id) === index);
+  const available = new Set([...library, ...snapshots, ...temporaryQuestions].map((question) => question.id));
   const present = basketIds(structure).filter((id) => available.has(id));
   return { missing: seen.size - present.length, draft: {
     version: 1, structure: selectBasketQuestions(structure, present),
     title: typeof value.title === "string" ? value.title : "专项练习", includeAnswers: value.includeAnswers !== false,
     snapshots: snapshots.filter((question) => !library.some((item) => item.id === question.id)),
+    temporaryQuestions,
     typeset: value.typeset && typeof value.typeset.ids === "string" && value.typeset.settings && typeof value.typeset.settings === "object" ? value.typeset : null,
   } };
 }

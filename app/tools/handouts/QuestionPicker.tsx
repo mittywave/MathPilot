@@ -188,7 +188,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
 
   return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题" data-paper-flipping={paperFlipping || undefined}>
     <aside className="picker-tree" id="picker-directory" aria-label={papersOpen ? "试卷目录" : "知识目录"} inert={!treeOpen} aria-hidden={!treeOpen}>
-      {temporary && <><header><h2>临时题库</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header><div className="picker-temporary-help"><p>仅用于当前讲义、小测和作业，随讲义保存。</p><p>刷新后仍保留；勾选「存入正式题库」后，可在其他讲义中复用。</p></div></>}
+      {temporary && <><header><h2>临时题库</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header><div className="picker-temporary-help"><p>{practice ? "随当前组卷篮保存在本机，刷新后仍保留。" : "当前讲义、小测和作业共用，随讲义保存。"}</p><p>导入时自动分配 ID 并加入正式题库，可在其他资料中复用。</p></div></>}
       <div className={`paper-directory-flip${papersOpen ? " is-papers" : ""}`} hidden={temporary}>
         <div className="picker-directory-face paper-directory-face paper-directory-front" inert={temporary || papersOpen} aria-hidden={temporary || papersOpen}>
           <header><h2>模块</h2><button type="button" className="paper-view-toggle" title="翻转到试卷中心" aria-label="切换到试卷中心" disabled={paperFlipping} onClick={() => navigatePapers("papers")}><span aria-hidden="true">⇄</span></button><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header>
@@ -221,7 +221,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </select>}
         </div>
       </div>}
-      {temporary && <button className="secondary" onClick={onImport}>导入文件</button>}
+      {temporary && <button className="secondary" disabled={disabled} onClick={onImport}>导入文件</button>}
       </div>
       <div className="picker-filters">
         {papersOpen && <input type="search" aria-label="搜索试卷" placeholder="搜索试卷标题…" value={paperQuery} onChange={(event) => setPaperQuery(event.target.value)} />}
@@ -238,7 +238,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
       {paperOpen && <header className="paper-detail-header"><button className="text-button" onClick={() => navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper && <div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{!replacing && <button onClick={() => void selectPaper(activePaper)}>整卷选择</button>}<a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></div>}</header>}
       {!temporary && paperError && <p className="paper-error" role="alert">{paperError}<button onClick={() => setPaperRefresh(value => value + 1)}>重试</button></p>}
       {!temporary && !papersOpen && !paperOpen && paperLocation.returnId && <div className="paper-return"><button className="text-button" onClick={() => navigatePapers("paper", paperLocation.returnId)}>← 返回刚才的试卷</button></div>}
-      {papersOpen ? null : temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>先校对再选题，不自动加入正式题库。</p><button className="secondary" onClick={onImport}>导入文件</button></div> : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">{paperOpen ? "本卷没有符合条件的题目。" : "没有符合条件的题目。"}</p> : <>
+      {papersOpen ? null : temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>校对确认后自动分配 ID 并加入正式题库，再选择题目加入{practice ? "练习卷" : "讲义、小测或作业"}。</p><button className="secondary" disabled={disabled} onClick={onImport}>导入文件</button></div> : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">{paperOpen ? "本卷没有符合条件的题目。" : "没有符合条件的题目。"}</p> : <>
         <p className="picker-count">{paperOpen && paperSearch ? `本卷找到 ${displayed.length} 道（共 ${activePaper?.items.length ?? 0} 道）` : `共 ${displayed.length} 道`}</p>
         <ol className="picker-list">{displayed.slice(0, paperOpen ? displayed.length : limit).map((item, index) => {
           const question = item.question;

@@ -669,7 +669,8 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
 
   function openTemporaryImport() {
     const targetModule = library?.modules[0];
-    const draft: Question = targetModule ? newQuestionDraft(targetModule, targetModule.id) : { id: "", categoryId: "", type: "解答题", difficulty: "中等", stem: "", options: [], answer: "", analysis: "", source: "", createdAt: 0, updatedAt: 0 };
+    if (!targetModule) { onNotice("请先到题库创建一个模块，再导入题目", "error"); return; }
+    const draft = newQuestionDraft(targetModule, targetModule.id);
     setEntry({ draft, sectionId: null, band: "example", sheet, temporary: true });
   }
 
@@ -697,8 +698,10 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   }
 
   function entrySaved(current: EntryState, saved: Question[]) {
-    if (current.temporary) return; // Already saved with this handout; choosing a lane is a separate action.
+    // Temporary edits only change this handout's snapshot; imports already have permanent IDs.
+    if (current.temporary && current.draft.id) return;
     setLibrary((value) => value && { ...value, questions: [...saved, ...value.questions.filter((item) => !saved.some((entryQuestion) => entryQuestion.id === item.id))] });
+    if (current.temporary) return;
     // Editing an existing question only refreshes it; anything newly created joins the handout.
     const created = saved.filter((question) => question.id !== current.draft.id);
     if (!created.length) return;

@@ -130,6 +130,7 @@ export default function Home() {
   const activeDraftOwner = useRef<string | null>(null);
   // A student's wrong book is browsed like a library: its question snapshots join the basket pool, so they can be selected and exported.
   const [basketWrongQuestions, setBasketWrongQuestions] = useState<Question[]>([]);
+  const [basketTemporaryQuestions, setBasketTemporaryQuestions] = useState<Question[]>([]);
   const [wrongMonth, setWrongMonth] = useState("全部");
   const [wrongUploadOpen, setWrongUploadOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -294,11 +295,11 @@ export default function Home() {
       // the draft's own snapshots join them rather than replace them.
       if (raw) {
         const { draft, missing } = restoreBasketDraft(raw, library);
-        setBasketStructure(draft.structure); setPaperTitle(draft.title);
+        setBasketStructure(draft.structure); setPaperTitle(draft.title); setBasketTemporaryQuestions(draft.temporaryQuestions);
         setBasketWrongQuestions((current) => [...draft.snapshots, ...current.filter((question) => !draft.snapshots.some((item) => item.id === question.id))]); setTypesetKept(draft.typeset);
         if (missing) show({ text: `草稿中 ${missing} 道已失效的题目已移除`, tone: "success" });
       } else {
-        setBasketStructure({ sections: [], unassignedIds: [] }); setTypesetKept(null);
+        setBasketStructure({ sections: [], unassignedIds: [] }); setBasketTemporaryQuestions([]); setTypesetKept(null);
       }
       setDraftCanSave(true); setDraftStatus("已保存在本机");
     } catch (error) {
@@ -311,7 +312,7 @@ export default function Home() {
   useEffect(() => {
     if (!authUser || draftOwner !== authUser.id || !draftCanSave) return;
     const owner = authUser.id;
-    const draft: BasketDraft = { version: 1, structure: basketStructure, title: paperTitle, includeAnswers: true, typeset: typesetKept,
+    const draft: BasketDraft = { version: 1, structure: basketStructure, title: paperTitle, includeAnswers: true, typeset: typesetKept, temporaryQuestions: basketTemporaryQuestions,
       snapshots: basketWrongQuestions.filter((question) => selectedIds.includes(question.id) && !questions.some((item) => item.id === question.id)) };
     // Serialize atomic writes; a slow earlier save cannot overwrite a later edit.
     saveQueue.current = saveQueue.current.then(async () => {
@@ -326,7 +327,7 @@ export default function Home() {
         }
       }
     });
-  }, [authUser, draftOwner, draftCanSave, basketStructure, paperTitle, typesetKept, basketWrongQuestions, selectedIds, questions, show]);
+  }, [authUser, draftOwner, draftCanSave, basketStructure, paperTitle, typesetKept, basketWrongQuestions, basketTemporaryQuestions, selectedIds, questions, show]);
 
   useEffect(() => {
     void (async () => {
@@ -383,7 +384,7 @@ export default function Home() {
   }
 
   const basketBusy = isExporting || Boolean(authUser && draftOwner !== authUser.id);
-  const basketPool = useMemo(() => [...basketWrongQuestions, ...questions], [questions, basketWrongQuestions]);
+  const basketPool = useMemo(() => [...basketWrongQuestions, ...questions, ...basketTemporaryQuestions], [questions, basketWrongQuestions, basketTemporaryQuestions]);
   const selectedQuestions = orderedBasketQuestions(basketPool, selectedIds);
   const paperSections = useMemo(() => basketSections(basketStructure, basketPool), [basketStructure, basketPool]);
   const byCode = query.trim() ? questions.find((item) => item.code === query.trim()) : undefined;
@@ -679,7 +680,7 @@ export default function Home() {
 
 
   async function signOut() {
-    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setTypesetKept(null); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
+    try { await logout(); activeDraftOwner.current = null; setDraftOwner(null); setDraftCanSave(false); setAuthUser(null); setBasketStructure({ sections: [], unassignedIds: [] }); setBasketWrongQuestions([]); setBasketTemporaryQuestions([]); setTypesetKept(null); setPaperTitle("专项练习"); setShowSelected(false); setShowWrongBook(false); setStudents([]); setStudentClasses([]); setActiveClassName(null); setWrongEntries([]); await refreshLibrary(false); show({ text: "已退出登录，当前为访客浏览", tone: "success" }); }
     catch (error) { show({ text: error instanceof Error ? error.message : "退出失败", tone: "error" }); }
   }
 
@@ -927,7 +928,7 @@ export default function Home() {
   }} /></Suspense> : null;
 
   if (showSelected && !showWrongBook && authUser) return <>{toastNode}{confirmDialog}<div hidden={typesetting} inert={typesetting}><Suspense fallback={<div className="wrong-book-loading">正在打开组卷篮…</div>}><BasketEditor user={authUser} library={{ scope: "public", modules, categories, questions }} pool={basketPool} structure={basketStructure} title={paperTitle} disabled={basketBusy} exporting={isExporting} status={draftStatus}
-    onChange={setBasketStructure} onTitle={setPaperTitle}
+    onChange={setBasketStructure} onTitle={setPaperTitle} temporaryQuestions={basketTemporaryQuestions} onTemporaryQuestionsChange={setBasketTemporaryQuestions}
     onLibrary={data => { setModules(data.modules); setCategories(data.categories); setQuestions(data.questions); }} onBack={openLibrary}
     onTypeset={() => void openTypeset()} onWord={() => void generateWord()} onGroupByType={() => void classifyBasket()} onNotice={onNotice} /></Suspense></div>{typesetOverlay}</>;
 
