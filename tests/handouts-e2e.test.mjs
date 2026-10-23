@@ -42,6 +42,16 @@ test("0035 and 0036 preserve course, topic and student handouts while adding dir
       { id: "function", name: "函数" }, { id: "geometry", name: "几何" }, { id: "algebra", name: "代数" }, { id: "number", name: "数论" }, { id: "thinking", name: "数学思想" },
     ]);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    const beforePrivacy = db.prepare("SELECT * FROM handout_course_nodes ORDER BY id").all();
+    db.exec(await readFile(join(ROOT, "migrations", "0044_handout_course_privacy.sql"), "utf8"));
+    assert.deepEqual(db.prepare("SELECT * FROM handout_course_nodes ORDER BY id").all().map(({ is_private, ...node }) => {
+      assert.equal(is_private, 0, "all existing systems remain public"); return node;
+    }), beforePrivacy.map((node) => ({ ...node })));
+    db.exec("UPDATE handout_course_nodes SET is_private=1 WHERE id='course-default'");
+    assert.throws(() => db.exec("UPDATE handout_course_nodes SET is_private=1 WHERE id='course-grade-7'"), /CHECK/);
+    assert.throws(() => db.exec("UPDATE handout_course_nodes SET is_private=1 WHERE id='topic-library'"), /CHECK/);
+    assert.throws(() => db.exec("UPDATE handout_course_nodes SET is_private=2 WHERE id='course-default'"), /CHECK/);
+    assert.deepEqual(db.prepare("SELECT * FROM handouts ORDER BY id").all(), beforeTopics, "privacy migration leaves all handout content and placement intact");
   } finally { db.close(); }
 });
 
@@ -246,6 +256,75 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.deepEqual((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: two })).payload.handout.items, diy.items);
     for (const direction of [0, 1.5, "1", null]) assert.equal((await course({ id: system, direction })).response.status, 400);
     for (const id of extraSystems) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: admin, method: "DELETE", body: { id } })).response.status, 200);
+
+    // A private system and every descendant are admin-only, including for its original creator.
+    const beforePrivacy = (await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: one })).payload.handout;
+    const privacyImage = "data:image/gif;base64,R0lGODlhAQABAIAAAIAAgAAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==";
+    const imageUpload = await jsonRequest(base, "/api/handout-images", { cookie: one, method: "POST", body: { image: privacyImage } });
+    assert.equal(imageUpload.response.status, 201);
+    const imageUrl = imageUpload.payload.url;
+    const mediaQuestion = { id: "privacy-question", categoryId: "", type: "解答题", difficulty: "基础", stem: "私密临时题", options: [], answer: "1", analysis: "", source: "", contentImages: [imageUrl] };
+    const mediaLesson = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "私密配图验证", courseUnitId: unit, items: [{ id: "privacy-note", kind: "section", title: "私密模块", note: `配图 ${imageUrl}` }], temporaryQuestions: [mediaQuestion] } } })).payload.handout;
+    assert.equal((await fetch(base + imageUrl)).status, 200);
+    assert.equal((await fetch(base + imageUrl)).headers.get("cache-control"), "private, no-store", "handout images can be made private later");
+    for (const body of [{ id: system, isPrivate: true }, { id: system, isPrivate: false }, { name: "伪造私密体系", isPrivate: true }]) {
+      assert.equal((await course(body)).response.status, 403, "members cannot change or forge privacy");
+    }
+    assert.equal((await course({ id: stage, isPrivate: true }, admin)).response.status, 400);
+    assert.equal((await course({ id: "function", isPrivate: true }, admin)).response.status, 400);
+    assert.equal((await course({ id: system, isPrivate: "true" }, admin)).response.status, 400);
+    const hidden = await course({ id: system, isPrivate: true }, admin);
+    assert.equal(hidden.response.status, 200);
+    assert.equal(hidden.payload.courseNodes.find((node) => node.id === system).isPrivate, true);
+    const hiddenIds = [system, stage, unit, secondUnit];
+    for (const cookie of [one, two]) {
+      const list = await jsonRequest(base, "/api/handouts", { cookie });
+      assert.equal(list.response.headers.get("cache-control"), "private, no-store");
+      assert.ok(list.payload.courseNodes.every((node) => !hiddenIds.includes(node.id)), "all private descendants are omitted");
+      assert.ok(list.payload.handouts.every((item) => item.id !== diy.id && item.id !== mediaLesson.id), "private titles and module outlines never enter search results");
+      assert.equal((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie })).response.status, 404, "an old editor link cannot read private content");
+      assert.equal((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie, method: "PUT", body: { handout: { title: "越权", items: [] } } })).response.status, 404);
+      assert.equal((await course({ id: system, name: "越权" }, cookie)).response.status, 404);
+      assert.equal((await course({ id: unit, direction: -1 }, cookie)).response.status, 404);
+      assert.equal((await course({ parentId: system, name: "越权阶段" }, cookie)).response.status, 400);
+      assert.equal((await jsonRequest(base, "/api/handouts", { cookie, method: "POST", body: { handout: { title: "越权讲义", courseUnitId: unit } } })).response.status, 400);
+      assert.equal((await jsonRequest(base, "/api/handouts", { cookie, method: "PATCH", body: { courseUnitId: unit, ids: [mediaLesson.id] } })).response.status, 400, "private targets cannot receive moves");
+      assert.equal((await jsonRequest(base, "/api/handouts", { cookie, method: "PATCH", body: { domain: "function", ids: [diy.id, mediaLesson.id] } })).response.status, 200);
+      assert.equal((await fetch(base + imageUrl, { headers: { Cookie: cookie } })).status, 404, "known asset URLs cannot bypass privacy");
+    }
+    assert.equal((await fetch(base + imageUrl)).status, 404, "guests cannot fetch private handout images");
+    const adminRead = (await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: admin })).payload.handout;
+    assert.deepEqual(adminRead, { ...beforePrivacy, coursePath: beforePrivacy.coursePath.map((node) => node.id === system ? { ...node, isPrivate: true } : node) }, "blocked writes and moves preserve private handout content and order");
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: admin } })).status, 200);
+    assert.equal((await course({ id: unit, name: "单元 A" }, admin)).response.status, 200, "administrators can maintain private descendants");
+
+    // A reused image remains public when it is independently present in a public handout.
+    const publicMedia = (await jsonRequest(base, "/api/handouts", { cookie: admin, method: "POST", body: { handout: { title: "公开复用配图", domain: "function", items: mediaLesson.items } } })).payload.handout;
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: two } })).status, 200);
+    await jsonRequest(base, `/api/handouts/${publicMedia.id}`, { cookie: admin, method: "DELETE" });
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: two } })).status, 404, "removing the independent public reference restores private-only access");
+    assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two, method: "POST", body: { handout: { title: "伪造公开配图引用", domain: "function", items: mediaLesson.items } } })).response.status, 403, "copying a known private URL into a public note cannot expose its bytes");
+    const mediaModule = (await jsonRequest(base, "/api/modules", { cookie: admin, method: "POST", body: { module: { name: "配图权限验证", subtitle: "" } } })).payload.module;
+    const publicQuestion = { ...mediaQuestion, id: "public-privacy-image-question", moduleId: mediaModule.id, categoryId: mediaModule.id };
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: two, method: "POST", body: { question: publicQuestion } })).response.status, 403, "copying a known private URL cannot publish its bytes");
+    assert.equal((await jsonRequest(base, "/api/questions", { cookie: admin, method: "POST", body: { question: publicQuestion } })).response.status, 201);
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: two } })).status, 200, "an administrator can independently publish a reused image in the question library");
+    await jsonRequest(base, `/api/questions/${publicQuestion.id}`, { cookie: admin, method: "DELETE" });
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: two } })).status, 404, "a deleted question no longer makes private images public");
+    const publishedAgain = await course({ id: system, isPrivate: false }, admin);
+    assert.equal(publishedAgain.payload.courseNodes.find((node) => node.id === system).isPrivate, false);
+    assert.deepEqual((await jsonRequest(base, `/api/handouts/${diy.id}`, { cookie: one })).payload.handout, beforePrivacy, "publishing again restores access without changing content");
+    assert.equal((await fetch(base + imageUrl, { headers: { Cookie: two } })).status, 200);
+    await jsonRequest(base, `/api/handouts/${mediaLesson.id}`, { cookie: admin, method: "DELETE" });
+
+    // The default system's alternate knowledge graph view obeys the same privacy.
+    assert.equal((await course({ id: "course-default", isPrivate: true }, admin)).response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/knowledge-graph?graph=sz-innovation-course", { cookie: two })).response.status, 404);
+    assert.equal((await jsonRequest(base, "/api/knowledge-graph?graph=sz-innovation-course", { cookie: admin })).response.status, 200);
+    assert.equal((await jsonRequest(base, "/api/knowledge-graph", { cookie: two })).response.status, 200, "the independent general graph stays available");
+    await course({ id: "course-default", isPrivate: false }, admin);
+    assert.equal((await jsonRequest(base, "/api/knowledge-graph?graph=sz-innovation-course", { cookie: two })).response.status, 200);
+
     for (const id of [system, stage, unit]) assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id } })).response.status, 403, "members cannot delete directories or their lessons");
     assert.equal((await jsonRequest(base, "/api/handout-courses", { cookie: one, method: "DELETE", body: { id: secondUnit } })).response.status, 403);
     await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { courseUnitId: secondUnit, ids: [diy.id] } });

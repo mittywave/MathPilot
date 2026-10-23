@@ -88,11 +88,11 @@ async function readStoredGraph(spec: GraphSpec): Promise<StoredGraph> {
 
 // One cheap pointer read per request. A course graph is brought in line with the 课程体系 on every read,
 // so renaming or adding a module shows at once; the 人教版 graph's index is cached until the next publish.
-export async function loadPublishedKnowledgeGraph(graphId?: unknown): Promise<LoadedKnowledgeGraph> {
+export async function loadPublishedKnowledgeGraph(graphId?: unknown, user: AuthUser | null = null): Promise<LoadedKnowledgeGraph> {
   const spec = knowledgeGraphSpec(graphId);
   const stored = await readStoredGraph(spec);
   if (spec.course) {
-    const lessons = await readCourseLessons();
+    const lessons = await readCourseLessons(user);
     return loaded(syncCourseGraph(stored.document, lessons, stored.document), stored, lessons);
   }
   const cacheKey = `${spec.id}@${stored.version}`;
@@ -143,7 +143,7 @@ function inLine(spec: GraphSpec, document: KnowledgeGraphDocument, published: Lo
 export async function readKnowledgeGraphEditor(user: AuthUser, graphId?: unknown): Promise<KnowledgeGraphEditorState> {
   requireKnowledgeGraphEditor(user);
   const spec = knowledgeGraphSpec(graphId);
-  const row = await graphRow(spec); const published = await loadPublishedKnowledgeGraph(spec.id);
+  const row = await graphRow(spec); const published = await loadPublishedKnowledgeGraph(spec.id, user);
   const draft = row.draft_json ? inLine(spec, normalizeKnowledgeGraph(JSON.parse(row.draft_json)), published) : null;
   return {
     published: publicView(published),
@@ -168,7 +168,7 @@ export async function saveKnowledgeGraphDraft(user: AuthUser, input: { graph?: u
   requireKnowledgeGraphEditor(user);
   const spec = knowledgeGraphSpec(input.graph);
   const { document, json } = parseDocument(input.document);
-  await graphRow(spec); const published = await loadPublishedKnowledgeGraph(spec.id);
+  await graphRow(spec); const published = await loadPublishedKnowledgeGraph(spec.id, user);
   const saved = await writeDraft(user, spec, Number(input.revision), json, published.version);
   return { ...saved, issues: validateKnowledgeGraph(inLine(spec, document, published), { previous: published.document }).errors };
 }
@@ -220,7 +220,7 @@ export async function publishKnowledgeGraph(user: AuthUser, input: { graph?: unk
   const row = await graphRow(spec); const revision = Number(input.revision);
   if (revision !== Number(row.draft_revision)) throw revisionConflict();
   if (!row.draft_json) throw responseError("没有需要发布的草稿", 400);
-  const current = await loadPublishedKnowledgeGraph(spec.id);
+  const current = await loadPublishedKnowledgeGraph(spec.id, user);
   const document = inLine(spec, normalizeKnowledgeGraph(JSON.parse(row.draft_json)), current);
   const { errors } = validateKnowledgeGraph(document, { previous: current.document });
   if (errors.length) throw responseError(`草稿还有 ${errors.length} 个问题需要处理`, 400, { issues: errors });
@@ -257,7 +257,7 @@ export async function restoreKnowledgeGraphVersion(user: AuthUser, input: { grap
   requireKnowledgeGraphEditor(user);
   const spec = knowledgeGraphSpec(input.graph);
   const version = Math.round(Number(input.version));
-  const current = await loadPublishedKnowledgeGraph(spec.id);
+  const current = await loadPublishedKnowledgeGraph(spec.id, user);
   let document: KnowledgeGraphDocument = spec.seed;
   if (version !== SEED_VERSION) {
     const stored = await db().prepare("SELECT document_json FROM knowledge_graph_versions WHERE graph_id = ? AND version = ?")

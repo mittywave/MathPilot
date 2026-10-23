@@ -7,7 +7,7 @@ export async function GET(request: Request) {
     const user = await requireUser(request);
     const params = new URL(request.url).searchParams;
     const studentId = params.get("studentId") ?? "";
-    const graph = await loadPublishedKnowledgeGraph(params.get("graph"));
+    const graph = await loadPublishedKnowledgeGraph(params.get("graph"), user);
     const [profile, coverage] = await Promise.all([readTeacherKnowledgeGraph(user, studentId, graph), readKnowledgeGraphCoverage(graph)]);
     return Response.json({
       profile, coverage, permissions: { canEdit: Boolean(user.local) },

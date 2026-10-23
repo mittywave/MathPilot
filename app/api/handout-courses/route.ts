@@ -4,8 +4,8 @@ import { deleteHandoutCourse, saveHandoutCourse } from "../../../lib/server/hand
 export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
-    await requireUser(request);
-    return Response.json(await saveHandoutCourse(await request.json().catch(() => ({}))));
+    const user = await requireUser(request);
+    return Response.json(await saveHandoutCourse(user, await request.json().catch(() => ({}))));
   } catch (error) {
     if (error instanceof Response) return error;
     return Response.json({ error: error instanceof Error ? error.message : "大纲保存失败" }, { status: 500 });
