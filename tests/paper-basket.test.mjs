@@ -54,7 +54,21 @@ test("draft restore uses live library content, retains selected wrong snapshots 
   assert.deepEqual(draft.snapshots, [wrong]);
   assert.equal(orderedBasketQuestions([...draft.snapshots, ...pool], ["a"])[0].stem, "a");
   assert.equal(draft.title, raw.title); assert.equal(draft.includeAnswers, false);
+  assert.deepEqual(draft.temporaryQuestions, [], "older drafts have an empty temporary bank");
   assert.throws(() => restoreBasketDraft({ version: 9 }, pool), /保留原记录/);
+});
+
+test("temporary imports survive without selection and override the formal version only inside the basket", () => {
+  const imported = { ...pool[0], id: "imported", code: "0101", stem: "temporary correction", importFileName: "practice.docx" };
+  const unused = { ...imported, id: "unused", code: "0102" };
+  const raw = { version: 1, structure: { sections: [], unassignedIds: ["imported"] }, snapshots: [], temporaryQuestions: [imported, unused, imported, null, { id: "invalid" }] };
+  const formal = { ...imported, stem: "formal original" };
+  const { draft, missing } = restoreBasketDraft(raw, [formal]);
+  assert.equal(missing, 0);
+  assert.deepEqual(draft.temporaryQuestions, [imported, unused], "unused imports remain available and duplicate or invalid entries are ignored");
+  assert.equal(orderedBasketQuestions([formal, ...draft.temporaryQuestions], [imported.id])[0].stem, imported.stem);
+  assert.deepEqual(basketIds(restoreBasketDraft(raw, []).draft.structure), [imported.id], "temporary snapshots do not depend on the formal row remaining available");
+  assert.equal(formal.stem, "formal original");
 });
 
 test("basket follows selected order across modules and omits deleted or repeated IDs", () => {

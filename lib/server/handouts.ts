@@ -59,6 +59,17 @@ async function encode(raw: unknown, user: AuthUser, previous: Question[] = [], s
   const seen = new Set<string>();
   const temporaryQuestions: Question[] = [];
   const context = incoming.length ? await resolveLibraryContext(user) : null;
+  // prepareQuestion strips client-supplied codes. Retain only IDs assigned by the formal library.
+  const codes = new Map<string, string>();
+  if (context) for (let offset = 0; offset < incoming.length; offset += 80) {
+    const ids = incoming.slice(offset, offset + 80).flatMap((question) => typeof question?.id === "string" ? [question.id] : []);
+    if (!ids.length) continue;
+    const assigned = await db().prepare(`SELECT q.source_id, printf('%04d', c.number) AS code
+      FROM library_questions_v2 q JOIN question_codes c ON c.question_id = q.source_id
+      WHERE q.library_id = ? AND q.publication_id IS ? AND q.source_id IN (${ids.map(() => "?").join(",")})`)
+      .bind(context.libraryId, context.publicationId, ...ids).all<{ source_id: string; code: string }>();
+    for (const question of assigned.results) codes.set(question.source_id, question.code);
+  }
   if (context && studentId) Object.assign(context, { libraryId: await teacherNamespaceId(user), scope: "mine", publicationId: null, ownerUserId: user.id });
   for (const question of incoming) {
     if (!question || typeof question.id !== "string" || !question.id.trim() || question.id.length > 200 || seen.has(question.id)
@@ -69,8 +80,10 @@ async function encode(raw: unknown, user: AuthUser, previous: Question[] = [], s
     }
     seen.add(question.id);
     const old = previous.find((item) => item.id === question.id);
-    temporaryQuestions.push(old && JSON.stringify(old) === JSON.stringify(question) ? old
-      : { ...await prepareQuestion({ ...question, answer: String(question.answer ?? ""), analysis: String(question.analysis ?? ""), source: String(question.source ?? "") }, user, context!), canEdit: true });
+    const prepared = old && JSON.stringify(old) === JSON.stringify(question) ? old
+      : { ...await prepareQuestion({ ...question, answer: String(question.answer ?? ""), analysis: String(question.analysis ?? ""), source: String(question.source ?? "") }, user, context!), canEdit: true };
+    const code = codes.get(question.id) ?? old?.code;
+    temporaryQuestions.push(code ? { ...prepared, code } : prepared);
   }
   // Reuse items_json, without a parallel table or changing question references.
   const itemsJson = JSON.stringify(temporaryQuestions.length ? { items: draft.items, temporaryQuestions } : draft.items);

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { basketIds, basketSections, moveBasketQuestion, placeBasketQuestion, removeBasketSection, selectBasketQuestions, type BasketStructure } from "../../lib/paper-basket";
 import { randomClientId } from "../../lib/client-random-id.mjs";
 import { moduleHeading } from "../../lib/handout-rules.mjs";
-import { fetchLibrary } from "../../lib/api-client";
+import { createCloudQuestion, fetchLibrary } from "../../lib/api-client";
+import { saveQuestionImportBatch } from "../../lib/question-import-save.mjs";
 import { categoryPath } from "../../lib/library-tree";
 import { QuestionPicker, type PickerMode } from "../tools/handouts/QuestionPicker";
 import { QuestionWorkspace, useQuestionWorkspace } from "../tools/handouts/QuestionWorkspace";
@@ -14,6 +15,8 @@ import { PaperMoreMenu } from "./PaperMoreMenu";
 import { DocxContent } from "./DocxContent";
 import { MathText } from "./MathText";
 import { StudioSolution } from "./StudioSolution";
+import { editableQuestionDraft, newQuestionDraft, QuestionEntry } from "./QuestionEntry";
+import { useConfirm } from "./ConfirmDialog";
 import "../tools/tools.css";
 import type { AuthUser, LibraryData, Question } from "../../lib/types";
 
@@ -128,11 +131,15 @@ function BasketOutline({ structure, pool, disabled, activeId, onChange, onLocate
 
 // The basket owns placements and local persistence; the workspace, picker and
 // assessment rows are the same components used by handout quizzes and homework.
-export default function BasketEditor({ user, library, pool, structure, title, disabled, exporting, status, onChange, onTitle, onLibrary, onBack, onTypeset, onWord, onGroupByType, onNotice }: {
+export default function BasketEditor({ user, library, pool, structure, title, disabled, exporting, status, temporaryQuestions, onTemporaryQuestionsChange, onChange, onTitle, onLibrary, onBack, onTypeset, onWord, onGroupByType, onNotice }: {
   user: AuthUser; library: LibraryData; pool: Question[]; structure: BasketStructure; title: string; disabled: boolean; exporting: boolean; status: string;
+  temporaryQuestions: Question[]; onTemporaryQuestionsChange: Dispatch<SetStateAction<Question[]>>;
   onChange: Dispatch<SetStateAction<BasketStructure>>; onTitle: (title: string) => void; onLibrary: (library: LibraryData) => void; onBack: () => void; onTypeset: () => void; onWord: () => void; onGroupByType: () => void; onNotice: (message: string, tone?: "success" | "error") => void;
 }) {
   const [treeOpen, setTreeOpen] = useState(false);
+  const [source, setSource] = useState<"library" | "temporary">("library");
+  const [entry, setEntry] = useState<Question | null>(null);
+  const [confirmNode, confirm] = useConfirm();
   const workspace = useQuestionWorkspace("mathpilot-basket-panels", treeOpen);
   const [picker, setPicker] = useState<PickerMode | null>(null);
   const [activeId, setActiveId] = useState("");
@@ -153,6 +160,30 @@ export default function BasketEditor({ user, library, pool, structure, title, di
   const usedIn = useMemo(() => new Map<string, Set<string>>(), []);
   const options = sections.map(section => ({ id: section.id ?? "", label: section.id ? section.title : "未分组" }));
   const activePicker: PickerMode = picker?.kind === "replace" && taken.has(picker.itemId) ? picker : { kind: "add", sectionId: picker?.kind === "add" && structure.sections.some(section => section.id === picker.sectionId) ? picker.sectionId : null, band: "example" };
+
+  async function saveTemporaryQuestions(questions: Question[]) {
+    const updated = [...temporaryQuestions];
+    for (const question of questions) {
+      const index = updated.findIndex(item => item.id === question.id);
+      if (index < 0) updated.push(question); else updated[index] = question;
+    }
+    if (updated.length > 400) throw new Error("临时题库最多保存 400 道题，请先移除不再使用的临时题目");
+    onTemporaryQuestionsChange(updated);
+    return questions;
+  }
+
+  async function archiveTemporaryQuestions(ids: string[], categoryId: string) {
+    const moduleId = library.categories.find(item => item.id === categoryId)?.moduleId ?? categoryId;
+    const questions = temporaryQuestions.filter(question => ids.includes(question.id) && !library.questions.some(item => item.id === question.id));
+    const result = await saveQuestionImportBatch(questions, async question => (await createCloudQuestion({ ...question, categoryId, moduleId })).question);
+    const saved = result.saved.map(item => item.question);
+    if (saved.length) {
+      await saveTemporaryQuestions(saved);
+      onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
+    }
+    onNotice(`已将 ${saved.length} 道题加入正式题库${result.failed.length ? `；${result.failed.length} 道失败，可重试：${result.failed[0].error}` : ""}`, result.failed.length ? "error" : "success");
+    return saved.map(question => question.id);
+  }
 
   useEffect(() => {
     if (!end.current) return;
@@ -192,6 +223,7 @@ export default function BasketEditor({ user, library, pool, structure, title, di
     }
   };
   return <main className="toolbox handouts handout-editor basket-editor">
+    {confirmNode}
     <header className="handout-bar">
       <button className="handout-brand" onClick={onBack} aria-label="返回题库" title="返回题库"><BrandWordmark /></button>
       <span className="handout-location">组卷篮<span aria-hidden="true">/</span>练习卷</span>
@@ -201,7 +233,17 @@ export default function BasketEditor({ user, library, pool, structure, title, di
       <PaperMoreMenu label="练习卷更多操作"><button disabled={disabled || !ids.length && !structure.sections.length} onClick={() => onChange({ sections: [], unassignedIds: [] })}>清空组卷篮</button></PaperMoreMenu>
     </header>
     <QuestionWorkspace {...workspace} outlineLabel="试卷" draftLabel="练习卷编辑" bank={
-      <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} treeOpen={treeOpen} onTreeOpenChange={setTreeOpen} mode={activePicker} sheet="practice" disabled={disabled} taken={taken} usedIn={usedIn} onPick={pick} sections={options} onModeChange={setPicker} onNotice={onNotice} />
+      <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} treeOpen={treeOpen} onTreeOpenChange={setTreeOpen} mode={activePicker} sheet="practice" disabled={disabled} taken={taken} usedIn={usedIn} onPick={pick} sections={options} onModeChange={setPicker} onNotice={onNotice}
+        source={source} onSourceChange={setSource} temporaryQuestions={temporaryQuestions} onArchive={archiveTemporaryQuestions}
+        onImport={() => {
+          const targetModule = library.modules[0];
+          if (!targetModule) { onNotice("请先到题库创建一个模块，再导入题目", "error"); return; }
+          setEntry(newQuestionDraft(targetModule, targetModule.id));
+        }} onEdit={question => setEntry(editableQuestionDraft(question, library.modules.find(item => item.id === question.moduleId)))}
+        onRemove={async id => {
+          if (taken.has(id)) { onNotice("请先从练习卷中移出这道题，再从临时题库删除"); return; }
+          if (await confirm({ title: "删除临时题", body: "从当前组卷篮的临时题库删除这道题，无法恢复。已保存到正式题库的内容不受影响。", confirmLabel: "删除临时题", danger: true })) onTemporaryQuestionsChange(current => current.filter(question => question.id !== id));
+        }} />
     } outline={<>
       <header><h2>试卷结构</h2><span>{count} 题</span></header>
       <button className="handout-outline-title" onClick={() => document.getElementById("basket-heading")?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}>{title || "未命名练习卷"}</button>
@@ -246,5 +288,10 @@ export default function BasketEditor({ user, library, pool, structure, title, di
       </section>)}
       {count > limit && <div ref={end} className="basket-list-end"><button className="text-button" onClick={() => setLimit(current => current + 40)}>继续显示题目</button></div>}
     </QuestionWorkspace>
+    {entry && <QuestionEntry initial={entry} modules={library.modules} categories={library.categories} moduleIds={library.modules.map(item => item.id)}
+      saveTemporaryQuestions={saveTemporaryQuestions} startWithFile={!entry.id} onClose={() => setEntry(null)} onNotice={onNotice}
+      onSaved={saved => {
+        if (!entry.id) onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
+      }} />}
   </main>;
 }

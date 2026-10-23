@@ -111,7 +111,7 @@ type QuestionEntryProps = {
   onSaved: (questions: Question[]) => void;
   onClose: () => void;
   onNotice: (message: string, tone?: "success" | "error") => void;
-  // Handout imports reuse the same parser/editor, but save to the handout instead of the library.
+  // Handouts and the basket keep their own snapshots after new questions join the library.
   saveTemporaryQuestions?: (questions: Question[]) => Promise<Question[]>;
   startWithFile?: boolean;
   // A wrong-book question joining the library: saved as a new library question that keeps its ID.
@@ -352,7 +352,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   async function saveImportedQuestions() {
     if (fileImportSavingRef.current) return;
-    const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && (item.categoryId || saveTemporaryQuestions));
+    const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && item.categoryId);
     if (!selected.length) { setNotice("请至少选择一道题，并确认题干和分类", "error"); return; }
     const incompleteIndex = selected.findIndex((item) => { if (!isAlevelCategory(item.categoryId)) return false; const versions = alevelTagVersions(item); return versions.zh.length !== versions.en.length; });
     if (incompleteIndex >= 0) { setNotice(`第 ${incompleteIndex + 1} 道已选题目的中英文知识点数量不一致，请按顺序配对`, "error"); return; }
@@ -364,22 +364,20 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     });
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true); setFileImportErrors([]);
     try {
-      if (saveTemporaryQuestions) {
-        const uploaded = await saveTemporaryQuestions(saved);
-        onSaved(uploaded); setFileImportOpen(false); setNotice(`已加入 ${uploaded.length} 道临时题目，尚未加入正式题库`); onClose();
-        return;
-      }
       const result = await saveQuestionImportBatch(saved, async (question) => (await createCloudQuestion(question)).question);
       const uploaded = result.saved.map((item) => item.question);
       const savedIds = new Set(result.saved.map((item) => item.draft.id));
-      if (uploaded.length) onSaved(uploaded);
+      if (uploaded.length) {
+        if (saveTemporaryQuestions) await saveTemporaryQuestions(uploaded);
+        onSaved(uploaded);
+      }
       setFileImportDrafts((current) => current.filter((item) => !savedIds.has(item.id)));
       if (result.failed.length) {
         const errors = [...new Set(result.failed.map((item) => item.error))];
         setFileImportErrors([`已保存 ${uploaded.length} 道，剩余 ${result.failed.length} 道保存失败。可再次保存剩余题目。`, ...errors]);
         setNotice(`已保存 ${uploaded.length} 道题，剩余 ${result.failed.length} 道请重试`, "error");
       } else {
-        setFileImportOpen(false); setNotice(`已从文件录入 ${uploaded.length} 道云端试题`); onClose();
+        setFileImportOpen(false); setNotice(saveTemporaryQuestions ? `已导入 ${uploaded.length} 道题，已分配 ID 并加入正式题库` : `已从文件录入 ${uploaded.length} 道云端试题`); onClose();
       }
     } catch (error) { setFileImportErrors([error instanceof Error ? error.message : "临时题目保存失败，请重试"]); }
     finally { fileImportSavingRef.current = false; setIsSavingImportedQuestions(false); }
@@ -553,7 +551,10 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     const saved: Question = { ...questionDraft, id: questionDraft.id || uid("q"), moduleId: questionDraftModule?.id || questionDraft.moduleId, examYear: questionDraft.examYear?.trim(), stem: questionDraft.stem.trim(), options: questionDraft.options.map((item) => item.trim()).filter(Boolean), ...(questionDraftIsAlevel ? { tags: tagVersions.zh, tagsZh: tagVersions.zh, tagsEn: tagVersions.en } : {}), createdAt: questionDraft.createdAt || timestamp, updatedAt: timestamp };
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true);
     try {
-      if (saveTemporaryQuestions) { onSaved(await saveTemporaryQuestions([saved])); setNotice("临时题目已保存"); onClose(); return; }
+      if (saveTemporaryQuestions) {
+        const question = questionDraft.id ? saved : (await createCloudQuestion(saved)).question;
+        onSaved(await saveTemporaryQuestions([question])); setNotice(questionDraft.id ? "临时题目已保存" : "题目已分配 ID 并加入正式题库"); onClose(); return;
+      }
       const result = questionDraft.id && !addToLibrary ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
       onSaved([result.question]); setNotice(addToLibrary ? `已加入题库${result.question.code ? `，ID ${result.question.code} 不变` : ""}` : questionDraft.id ? "云端试题已更新" : "试题已保存到云端"); onClose();
     } catch (error) { setNotice(error instanceof Error ? error.message : "试题保存失败", "error"); }
@@ -606,7 +607,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     </div>}
 
     {fileImportOpen && <div className="modal-backdrop"><section className="modal file-import-modal" role="dialog" aria-modal="true" aria-label="文件批量录入" aria-busy={isSavingImportedQuestions}>
-      <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "当前讲义 · 临时题库" : "智能录题"}</span><h2>PDF / Word / 图片批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
+      <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "临时题库" : "智能录题"}</span><h2>PDF / Word / 图片批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
       {fileImportStep === "choose" && <>
         <div className="entry-mode" role="tablist" aria-label="录题方式"><button onClick={backToScreenshotEntry}><b>AI 截图录入</b><span>识别单道题目截图</span></button><button className="active"><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>
         <div className="file-import-intro"><div><b>整份文件导入</b><p>能读出结构的 Word 直接进入校对；PDF、图片和读不出结构的 Word 交给 AI 在后台逐页识别，上传完就可以关闭窗口，识别完在下面的识别任务里打开校对。</p></div></div>
@@ -616,7 +617,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
         {fileImportNotice && <div className={fileImportNotice.error ? "recognition-error" : "recognition-warning"} role="status"><b>{fileImportNotice.error ? "操作未完成" : "已转入后台"}</b><span>{fileImportNotice.text}</span></div>}
         <RecognitionJobTable kind="import" jobs={imports.jobs} openJobId={openImportJobId} busy={false} cancellingJobId={imports.cancellingJobId} canOpen={(job) => job.status === "done" || job.status === "failed" && job.processedCount > 0}
           onOpen={(job) => void openImportJob(job)} onResume={(job) => void imports.resume(job)} onCancel={(job) => void imports.cancel(job)} onRemove={(job) => void imports.remove(job)} />
-        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对后保存到当前讲义的临时题库，不自动进入正式题库；可稍后勾选入库。" : "正式题库只保存你确认过的题目内容。"}交给 AI 识别的页面会上传到服务器，删除识别任务时一并删除。</div>
+        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对确认后自动分配 ID 并加入正式题库，同时保留在当前临时题库中供选题。" : "正式题库只保存你确认过的题目内容。"}交给 AI 识别的页面会上传到服务器，删除识别任务时一并删除。</div>
       </>}
       {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{fileImportStep === "rendering" ? "读取文件" : "整理题目"}</span></div><h3>{fileImportProgress.label}</h3><div className="progress-track"><i style={{ width: `${fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div><p>{fileImportStep === "rendering" ? "完成后自动进入下一步" : "正在拆分题干、选项、答案和配图"}</p><button className="secondary" onClick={closeFileImport}>取消导入</button></div>}
       {fileImportStep === "review" && <>

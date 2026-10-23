@@ -458,6 +458,7 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal(temporary.response.status, 201);
     const temp = temporary.payload.handout;
     assert.equal(temp.temporaryQuestions.length, 1);
+    assert.equal(temp.temporaryQuestions[0].code, undefined, "unarchived legacy snapshots have no invented library ID");
     assert.match(temp.temporaryQuestions[0].contentImages[0], /^\/api\/assets\//);
     assert.deepEqual(temp.temporaryQuestions[0].stemDocxXml, tempQuestion.stemDocxXml);
     assert.ok(!(await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.some((q) => q.id === tempQuestion.id), "temporary questions never leak into the formal library");
@@ -466,6 +467,14 @@ test("course and topic handouts are shared, student handouts stay with the stude
     assert.equal((await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.find((h) => h.id === temp.id).temporaryQuestions, undefined);
     const legacyUpdate = await jsonRequest(base, `/api/handouts/${temp.id}`, { cookie: one, method: "PUT", body: { handout: { title: temp.title, items: temp.items } } });
     assert.deepEqual(legacyUpdate.payload.handout.temporaryQuestions, temp.temporaryQuestions, "updates by older clients retain the temporary library");
+    const formal = (await jsonRequest(base, "/api/questions", { cookie: one, method: "POST", body: { question: { ...tempQuestion, id: "temp-formal", moduleId: mediaModule.id, categoryId: mediaModule.id } } })).payload.question;
+    assert.match(formal.code, /^\d{4,}$/);
+    const importedHandout = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "自动入库编号验证", items: [], temporaryQuestions: [{ ...formal, code: "9999" }, { ...tempQuestion, id: "unarchived-forged-code", code: "9999" }] } } })).payload.handout;
+    assert.equal(importedHandout.temporaryQuestions[0].code, formal.code, "handout snapshots retain the server-assigned code, never the submitted code");
+    assert.equal(importedHandout.temporaryQuestions[1].code, undefined, "a fabricated code cannot turn an unarchived snapshot into a formal question");
+    const correctedHandout = (await jsonRequest(base, `/api/handouts/${importedHandout.id}`, { cookie: one, method: "PUT", body: { handout: { title: importedHandout.title, items: [], temporaryQuestions: [{ ...importedHandout.temporaryQuestions[0], stem: "仅修改临时快照", code: "8888" }] } } })).payload.handout;
+    assert.equal(correctedHandout.temporaryQuestions[0].code, formal.code, "correcting a snapshot preserves its permanent code");
+    assert.notEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions.find(question => question.id === formal.id).stem, "仅修改临时快照");
     const copy = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "副本", items: temp.items, temporaryQuestions: temp.temporaryQuestions } } })).payload.handout;
     assert.equal(copy.temporaryQuestions[0].id, tempQuestion.id);
     for (const temporaryQuestions of [[{ ...tempQuestion, stem: "" }], [tempQuestion, tempQuestion], {}, Array.from({ length: 401 }, (_, i) => ({ ...tempQuestion, id: `many-${i}` }))]) {

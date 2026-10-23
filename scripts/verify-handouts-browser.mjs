@@ -103,6 +103,7 @@ async function verifyTemporaryLibrary() {
     await picker.getByRole('button', { name: '导入文件', exact: true }).first().click();
     await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
     await page.locator('.file-draft').first().waitFor();
+    for (const select of await page.locator('.file-draft-fields label.wide select').all()) await select.selectOption(target.id);
   };
   await temporary();
   await chooseFile(join(out, 'fixture.docx'));
@@ -119,9 +120,13 @@ async function verifyTemporaryLibrary() {
   await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
   await saved();
   await page.unroute(`**/api/handouts/${handout.id}`);
-  assert.equal((await api('/api/library')).questions.length, 0, 'temporary import does not create formal questions');
+  assert.equal((await api('/api/library')).questions.length, 2, 'temporary imports automatically join the formal library, including after a handout save retry');
   assert.equal((await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions.length, 2, 'retry is idempotent');
   const imported = (await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions;
+  for (const question of imported) {
+    assert.match(question.code, /^\d{4,}$/);
+    assert.equal((await api('/api/library')).questions.find(item => item.id === question.id).code, question.code);
+  }
   assert.equal(imported[0].type, '多选题');
   assert.equal(imported[0].answer, 'BD', 'all choice letters survive answer-section pairing');
   assert.match(imported[0].stem, /^（多选）/);
@@ -136,7 +141,7 @@ async function verifyTemporaryLibrary() {
   await page.waitForFunction(() => [...document.querySelectorAll('.picker-item img')].every(img => img.complete && img.naturalWidth > 0));
   assert.ok(await cards.nth(1).locator('img').count() > 0);
   await page.screenshot({ path: join(out, 'temporary-import.png'), fullPage: true });
-  step('temporary DOCX: 2 questions with native formula/table/figure, no formal records; failed save and retry preserve drafts');
+  step('temporary DOCX: native formula/table/figure and permanent IDs; failed handout save and retry do not duplicate library records');
 
   await cards.first().getByRole('button', { name: '＋ 选择', exact: true }).click();
   await cards.nth(1).getByRole('button', { name: '＋ 选择', exact: true }).click();
@@ -161,35 +166,21 @@ async function verifyTemporaryLibrary() {
   await page.locator('.handout-draft-head').getByRole('tab', { name: /讲义/ }).click();
   step('temporary selection survives reload; the same question can serve handout, quiz and homework, never twice within a sheet');
 
-  // Archive selections are independent of placement; a lost success response can be retried without another question.
-  await cards.first().getByRole('checkbox').check();
-  await picker.getByLabel('入库分类').selectOption(target.id);
-  let loseResponse = true;
-  await page.route('**/api/questions', async route => {
-    if (route.request().method() === 'POST' && loseResponse) { loseResponse = false; await route.fetch(); return route.abort('failed'); }
-    return route.continue();
-  });
-  await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).click();
-  await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).waitFor();
-  await page.unroute('**/api/questions');
-  await page.locator('.app-toast.error .toast-close').click();
-  await picker.getByRole('button', { name: '保存勾选 1 题', exact: true }).click();
-  await cards.first().getByText('已存入正式题库', { exact: true }).waitFor();
-  assert.equal((await api('/api/library')).questions.length, 1);
   assert.equal(await cards.first().getByRole('checkbox').isDisabled(), true);
+  assert.equal(await cards.nth(1).getByRole('checkbox').isDisabled(), true);
   await cards.first().getByRole('button', { name: '校对', exact: true }).click();
   await page.getByRole('textbox', { name: '题干', exact: true }).fill('临时校对：方程 $\\frac{x}{2}=3$ 的解是（　　）');
   await page.getByRole('button', { name: '确认并保存', exact: true }).click();
   await page.locator('.question-modal').waitFor({ state: 'hidden' });
   await saved();
   assert.match((await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions[0].stem, /临时校对/);
-  assert.doesNotMatch((await api('/api/library')).questions[0].stem, /临时校对/, 'editing the temporary snapshot never edits an archived original');
+  assert.doesNotMatch((await api('/api/library')).questions.find(item => item.id === imported[0].id).stem, /临时校对/, 'editing the temporary snapshot never edits the formal original');
   await picker.getByRole('tab', { name: '正式题库', exact: true }).click();
   await choosePickerModule(picker, target.name);
   await cards.first().waitFor();
-  assert.equal(await cards.count(), 1);
+  assert.equal(await cards.count(), 2);
   await temporary();
-  step('archive is opt-in and idempotent after a lost response; later temporary edits leave the formal original intact');
+  step('imports already show archived status; later temporary edits leave the formal original intact');
 
   // One-page real PDF and an existing image traverse the browser page reader and the background import job; only the
   // job service is substituted: it checks what was uploaded and answers as if the AI had read each page.
@@ -231,7 +222,7 @@ async function verifyTemporaryLibrary() {
   await page.unroute(jobsUrl);
   assert.equal(recognizedFiles.length, 2);
   assert.equal(await cards.count(), 4);
-  assert.equal((await api('/api/library')).questions.length, 1);
+  assert.equal((await api('/api/library')).questions.length, 4, 'PDF and image imports also join the formal library');
   await picker.getByLabel('来源文件').selectOption('temporary-input.pdf');
   assert.equal(await cards.count(), 1);
   await cards.first().getByRole('button', { name: '删除', exact: true }).click();
@@ -241,7 +232,7 @@ async function verifyTemporaryLibrary() {
   assert.equal(await cards.count(), 3);
   step('PDF and PNG rendering/recognition-review/save wiring verified with stubbed AI; file filter and unused-question deletion work');
 
-  // Export before archiving the second question proves temporary-only content needs no formal question row.
+  // Exports use the corrected temporary snapshot and retain native Word structures.
   for (const [label, key] of [['附答案', 'end'], ['教师版', 'each'], ['学生版', 'none']]) {
     await page.getByRole('button', { name: '快速排版', exact: true }).click();
     const modal = page.locator('.handout-typeset');
@@ -276,6 +267,119 @@ async function verifyTemporaryLibrary() {
   assert.equal(copied.items.filter(item => item.kind === 'quiz').length, 1);
   assert.equal(copied.items.filter(item => item.kind === 'homework').length, 1);
   step('copying a handout preserves the temporary bank and all three sheets');
+
+  // The basket reuses the same file review and picker, and saves unselected imports in its local draft.
+  const originalLibrary = (await api('/api/library')).questions;
+  await page.goto(base + '/library?view=selected');
+  const basketSaved = () => page.locator('.handout-save').filter({ hasText: '已保存在本机' }).waitFor();
+  await basketSaved();
+  await temporary();
+  await chooseFile(join(out, 'fixture.docx'));
+  let lostId = '';
+  const attempts = [];
+  await page.route('**/api/questions', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const { question } = route.request().postDataJSON();
+    attempts.push(question.id);
+    if (question.type === '解答题' && !lostId) {
+      lostId = question.id;
+      await route.fetch();
+      return route.abort('failed');
+    }
+    return route.continue();
+  });
+  await page.getByRole('button', { name: '保存所选 2 道题', exact: true }).click();
+  await page.locator('.file-import-modal .recognition-warning').filter({ hasText: '保存失败' }).waitFor();
+  assert.equal(await page.locator('.file-draft').count(), 1, 'only the unsuccessful draft remains after a partial import');
+  assert.equal((await api('/api/library')).questions.length, originalLibrary.length + 2, 'the lost reply still created its formal question');
+  await page.getByRole('button', { name: '保存所选 1 道题', exact: true }).click();
+  await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
+  await page.unroute('**/api/questions');
+  await basketSaved();
+  assert.equal(attempts.length, 3);
+  assert.equal(attempts.filter(id => id === lostId).length, 2);
+  assert.equal((await api('/api/library')).questions.length, originalLibrary.length + 2, 'a lost response retry reuses the same permanent ID');
+  assert.equal(await cards.count(), 2);
+  assert.equal(await page.locator('.handout-draft .handout-question').count(), 0, 'importing never places a question automatically');
+  const owner = (await api('/api/auth/me')).user.id;
+  const localDraft = await page.evaluate(owner => new Promise((resolve, reject) => {
+    const request = indexedDB.open('mathpilot-paper-basket', 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, tx = db.transaction('drafts', 'readonly'), read = tx.objectStore('drafts').get(owner);
+      tx.oncomplete = () => { db.close(); resolve(read.result); };
+      tx.onabort = () => { db.close(); reject(tx.error); };
+    };
+  }), owner);
+  assert.equal(localDraft.temporaryQuestions.length, 2);
+  assert.equal(localDraft.structure.unassignedIds.length, 0);
+  for (const question of localDraft.temporaryQuestions) {
+    assert.match(question.code, /^\d{4,}$/);
+    assert.equal((await api('/api/library')).questions.find(item => item.id === question.id).code, question.code);
+  }
+  await page.reload();
+  await basketSaved();
+  await temporary();
+  await cards.nth(1).waitFor();
+  assert.equal(await cards.count(), 2, 'refresh retains even the unselected temporary questions');
+  step('basket DOCX import assigns permanent IDs; partial/lost-response retry saves only the remaining draft; unselected imports survive reload');
+
+  await picker.getByLabel('来源文件').selectOption('fixture.docx');
+  await picker.getByLabel('题型', { exact: true }).selectOption('多选题');
+  assert.equal(await cards.count(), 1);
+  await picker.getByLabel('题型', { exact: true }).selectOption('全部');
+  await picker.getByRole('searchbox', { name: '搜索', exact: true }).fill(localDraft.temporaryQuestions[0].code);
+  assert.equal(await cards.count(), 1);
+  await picker.getByRole('searchbox', { name: '搜索', exact: true }).fill('');
+  await cards.first().getByRole('button', { name: '校对', exact: true }).click();
+  await page.getByRole('textbox', { name: '题干', exact: true }).fill('组卷临时校对：方程 $\\frac{x}{2}=3$ 的解是（　　）');
+  await page.getByRole('button', { name: '确认并保存', exact: true }).click();
+  await page.locator('.question-modal').waitFor({ state: 'hidden' });
+  await basketSaved();
+  assert.doesNotMatch((await api('/api/library')).questions.find(item => item.id === localDraft.temporaryQuestions[0].id).stem, /组卷临时校对/);
+  await page.getByRole('button', { name: '＋ 大标题', exact: true }).click();
+  await page.getByRole('textbox', { name: '大标题 1', exact: true }).fill('导入练习');
+  await picker.getByLabel('加入分组').selectOption({ label: '导入练习' });
+  await cards.first().getByRole('button', { name: '＋ 选择', exact: true }).click();
+  await cards.nth(1).getByRole('button', { name: '＋ 选择', exact: true }).click();
+  await picker.getByRole('button', { name: '加入练习卷', exact: true }).click();
+  await basketSaved();
+  assert.equal(await page.locator('.handout-draft .handout-question').count(), 2);
+  assert.match(await page.locator('.handout-draft').innerText(), /组卷临时校对/);
+  assert.equal(await picker.getByText('已在练习卷中', { exact: true }).count(), 2);
+  await cards.first().getByRole('button', { name: '删除', exact: true }).click();
+  assert.equal(await page.getByRole('dialog', { name: '删除临时题' }).count(), 0, 'a placed question must first leave the paper');
+  assert.equal(await cards.count(), 2);
+  await page.getByRole('textbox', { name: '练习标题', exact: true }).fill('临时题库组卷验收');
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: '生成 Word', exact: true }).click();
+  const file = join(out, 'temporary-basket.docx');
+  await (await downloading).saveAs(file);
+  const docx = await inspectDocx(file);
+  assert.match(docx.text, /组卷临时校对/);
+  assert.match(docx.text, /导入练习/);
+  assert.match(docx.text, /根据下表/);
+  assert.ok(docx.songti && docx.timesNewRoman && docx.formulas >= 2 && docx.tables >= 1 && docx.images >= 1);
+  result.exports['temporary-basket'] = { formulas: docx.formulas, tables: docx.tables, images: docx.images };
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  await page.screenshot({ path: join(out, 'temporary-basket-desktop.png'), fullPage: true });
+  await page.reload();
+  await basketSaved();
+  await page.locator('.handout-draft .handout-question').nth(1).waitFor();
+  assert.match(await page.locator('.handout-draft').innerText(), /组卷临时校对/);
+  await temporary();
+  await page.locator('.handout-draft .handout-question').first().getByRole('button', { name: '移除第 1 题', exact: true }).click();
+  assert.equal(await cards.count(), 2, 'removing from the paper leaves the temporary bank intact');
+  await cards.first().getByRole('button', { name: '删除', exact: true }).click();
+  await page.getByRole('dialog', { name: '删除临时题' }).getByRole('button', { name: '删除临时题', exact: true }).click();
+  await basketSaved();
+  assert.equal(await cards.count(), 1);
+  assert.equal((await api('/api/library')).questions.length, originalLibrary.length + 2, 'deleting a temporary snapshot never deletes the formal question');
+  await picker.getByRole('tab', { name: '正式题库', exact: true }).click();
+  await picker.getByRole('searchbox', { name: '搜索', exact: true }).fill(localDraft.temporaryQuestions[0].code);
+  assert.equal(await cards.count(), 1);
+  assert.doesNotMatch(await cards.first().innerText(), /组卷临时校对/);
+  step('basket filters, correction, grouped selection, duplicate prevention, used-question deletion guard and local persistence work; browser Word export retains formula/table/figure and corrected snapshot');
 }
 
 // The UI, image decoding/cropping/uploads and D1 saves are real; only AI replies are held and supplied here.
