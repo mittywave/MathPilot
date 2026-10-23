@@ -522,6 +522,40 @@ test("course and topic handouts are shared, student handouts stay with the stude
       assert.equal((await course({ name: "已删除位置", parentId: middle })).response.status, 400);
     }
     assert.deepEqual((await jsonRequest(base, "/api/library", { cookie: one })).payload.questions, formalBefore, "formal questions survive directory deletion");
+
+    // Sparse lesson numbers reuse position for both course units and topic groups.
+    for (const topicShelf of [false, true]) {
+      const root = (await course({ name: "任意讲次", parentId: topicShelf ? "topic-library" : null })).payload.id;
+      const middle = (await course({ name: "讲次大纲", parentId: root })).payload.id;
+      const leaf = (await course({ name: "讲次分组", parentId: middle })).payload.id;
+      const group = topicShelf ? { domain: leaf } : { courseUnitId: leaf };
+      const create = (position, cookie = one) => jsonRequest(base, "/api/handouts", { cookie, method: "POST", body: { handout: { ...group, title: "任意讲次内容", items: diy.items, position } } });
+      const eight = await create(7);
+      const three = await create(2, two);
+      const nine = await create(undefined);
+      for (const created of [eight, three, nine]) assert.equal(created.response.status, 201);
+      assert.deepEqual([eight, three, nine].map((item) => item.payload.handout.position), [7, 2, 8], "create lesson 8 first, backfill 3, then append 9");
+      for (const position of [-1, 1.5, "8", null, Number.MAX_SAFE_INTEGER]) assert.equal((await create(position)).response.status, 400);
+      const duplicate = await create(7, two);
+      assert.equal(duplicate.response.status, 409);
+      assert.match(duplicate.payload.error, /第8讲已存在/);
+      const concurrent = await Promise.all([create(11), create(11, two)]);
+      assert.deepEqual(concurrent.map((item) => item.response.status).sort(), [201, 409], "a concurrent duplicate never creates a second lesson 12");
+      const ids = [nine, eight, three].map((item) => item.payload.handout.id);
+      assert.equal((await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { ...group, ids } })).response.status, 200);
+      const reordered = await Promise.all(ids.map((id) => jsonRequest(base, `/api/handouts/${id}`, { cookie: two })));
+      assert.deepEqual(reordered.map((item) => item.payload.handout.position), [2, 7, 8], "reorder preserves the occupied lesson slots, including gaps");
+      assert.deepEqual(reordered[0].payload.handout.items, diy.items);
+      const incoming = (await jsonRequest(base, "/api/handouts", { cookie: one, method: "POST", body: { handout: { title: "移入讲义", items: [] } } })).payload.handout;
+      await jsonRequest(base, "/api/handouts", { cookie: one, method: "PATCH", body: { ...group, ids: [incoming.id] } });
+      assert.equal((await jsonRequest(base, `/api/handouts/${incoming.id}`, { cookie: two })).payload.handout.position, 12, "a partial move appends after lesson 12 without overwriting existing slots");
+      assert.equal((await jsonRequest(base, `/api/handouts/${ids[0]}`, { cookie: admin, method: "DELETE", body: {} })).response.status, 200);
+      assert.equal((await jsonRequest(base, `/api/handouts/${ids[1]}`, { cookie: two })).payload.handout.position, 7, "deleting an earlier lesson leaves later numbers unchanged");
+      const filled = await create(2);
+      assert.equal(filled.response.status, 201, "a deleted lesson number can be filled again");
+      const listed = (await jsonRequest(base, "/api/handouts", { cookie: two })).payload.handouts.filter((item) => topicShelf ? item.domain === leaf : item.courseUnitId === leaf);
+      assert.deepEqual(listed.map((item) => item.position), [2, 7, 8, 11, 12]);
+    }
   } finally {
     worker.kill("SIGINT");
     await Promise.race([new Promise((done) => worker.once("exit", done)), new Promise((done) => setTimeout(done, 3_000))]);

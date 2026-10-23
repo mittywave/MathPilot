@@ -314,8 +314,10 @@ async function verifyCourses() {
   await page.getByRole('heading', { name: 'DIY 数学', exact: true }).waitFor();
   step('create an empty system, custom stage and custom unit; reload retains names and active location; old grade links still select the original course');
 
-  await page.getByRole('button', { name: '＋ 添加第1讲', exact: true }).click();
+  await page.getByRole('button', { name: '＋ 添加讲次', exact: true }).click();
   let dialog = page.getByRole('dialog', { name: '新建一讲' });
+  assert.equal(await dialog.getByLabel('讲次', { exact: true }).inputValue(), '1');
+  await dialog.getByLabel('讲次', { exact: true }).fill('8');
   await dialog.getByLabel('本讲标题').fill('代数基础');
   await dialog.getByLabel('模块大纲', { exact: false }).fill('整式的概念\n合并同类项');
   let fail = true;
@@ -326,22 +328,49 @@ async function verifyCourses() {
   await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
   await dialog.getByRole('alert').filter({ hasText: '暂时无法保存' }).waitFor();
   assert.equal(await dialog.getByLabel('本讲标题').inputValue(), '代数基础');
+  assert.equal(await dialog.getByLabel('讲次', { exact: true }).inputValue(), '8');
   await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   await page.unroute('**/api/handouts');
   await page.locator('.handout-entry').filter({ hasText: '代数基础' }).waitFor();
   assert.equal((await api('/api/handouts')).handouts.length, 1);
-  await page.getByRole('button', { name: '＋ 添加第2讲', exact: true }).click();
+  assert.deepEqual(await page.locator('.handout-entry-no').allTextContents(), ['8']);
+  await page.getByRole('button', { name: '＋ 添加讲次', exact: true }).click();
   dialog = page.getByRole('dialog', { name: '新建一讲' });
+  assert.equal(await dialog.getByLabel('讲次', { exact: true }).inputValue(), '9');
+  await dialog.getByLabel('讲次', { exact: true }).fill('3');
   await dialog.getByLabel('本讲标题').fill('函数初步');
+  await dialog.getByRole('button', { name: '保存并编写讲义', exact: true }).click();
+  await page.locator('.handout-title').waitFor();
+  assert.equal(await page.locator('.handout-title').inputValue(), '函数初步');
+  assert.equal((await api(`/api/handouts/${new URL(page.url()).searchParams.get('id')}`)).handout.position, 2);
+  await page.getByRole('link', { name: '返回讲义书架', exact: true }).click();
+  await page.locator('.handout-entry').nth(1).waitFor();
+  assert.deepEqual(await page.locator('.handout-entry strong').allTextContents(), ['函数初步', '代数基础']);
+  assert.deepEqual(await page.locator('.handout-entry-no').allTextContents(), ['3', '8']);
+  await page.getByRole('button', { name: '＋ 添加讲次', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '新建一讲' });
+  await dialog.getByLabel('本讲标题').fill('讲次校验');
+  for (const invalid of ['', '0', '-2', '1.5']) {
+    await dialog.getByLabel('讲次', { exact: true }).fill(invalid);
+    await dialog.getByRole('button', { name: '保存并编写讲义', exact: true }).click();
+    await dialog.getByRole('alert').filter({ hasText: '讲次请填写正整数' }).waitFor();
+  }
+  await dialog.getByLabel('讲次', { exact: true }).fill('8');
   await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
-  await dialog.waitFor({ state: 'hidden' });
-  await (await lessonMenu('函数初步')).getByRole('button', { name: '上移', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.handout-entry strong')?.textContent === '函数初步');
+  await dialog.getByRole('alert').filter({ hasText: '第8讲已存在' }).waitFor();
+  assert.equal(await dialog.getByLabel('本讲标题').inputValue(), '讲次校验');
+  assert.equal((await api('/api/handouts')).handouts.length, 2);
+  await page.screenshot({ path: join(out, 'lesson-number-dialog.png'), fullPage: true });
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await (await lessonMenu('代数基础')).getByRole('button', { name: '上移', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.handout-entry strong')?.textContent === '代数基础');
   await page.reload();
-  await page.locator('.handout-entry').first().waitFor();
-  assert.equal(await page.locator('.handout-entry strong').first().innerText(), '函数初步');
-  step('write lesson outlines without opening editor; failed save retains input; retry and lesson ordering persist');
+  await page.locator('.handout-entry').nth(1).waitFor();
+  assert.equal(await page.locator('.handout-entry strong').first().innerText(), '代数基础');
+  assert.deepEqual(await page.locator('.handout-entry-no').allTextContents(), ['3', '8']);
+  await page.screenshot({ path: join(out, 'lesson-numbers-desktop.png'), fullPage: true });
+  step('create lesson 8 directly, backfill lesson 3 and open its editor; failed save retains number and outline; invalid/duplicate numbers are refused; reorder and reload retain sparse lesson slots');
 
   await page.locator('.handout-entry').filter({ hasText: '代数基础' }).getByRole('link').click();
   await page.locator('.handout-module').nth(1).waitFor();
@@ -455,6 +484,21 @@ async function verifyCourses() {
   }
   await page.goto(`${base}/tools/handouts?shelf=topic&topic=${outline.id}`);
   await page.locator('.handout-entry').filter({ hasText: '专题第一讲' }).waitFor();
+  const topicColumn = page.getByRole('region', { name: '专题删除验收 / 专题大纲 / 待删除专题', exact: true });
+  await topicColumn.getByRole('button', { name: '＋ 添加讲次', exact: true }).click();
+  dialog = page.getByRole('dialog', { name: '新建一讲' });
+  await dialog.getByLabel('讲次', { exact: true }).fill('12');
+  await dialog.getByLabel('本讲标题').fill('专题第十二讲');
+  await dialog.getByRole('button', { name: '保存大纲', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await page.reload();
+  await topicColumn.locator('.handout-entry').nth(2).waitFor();
+  assert.deepEqual(await topicColumn.locator('.handout-entry-no').allTextContents(), ['1', '2', '12']);
+  await (await lessonMenu('专题第二讲')).getByRole('button', { name: '删除…', exact: true }).click();
+  await page.getByRole('dialog', { name: '删除讲义「专题第二讲」' }).getByRole('button', { name: '删除讲义', exact: true }).click();
+  await topicColumn.locator('.handout-entry').filter({ hasText: '专题第二讲' }).waitFor({ state: 'detached' });
+  assert.deepEqual(await topicColumn.locator('.handout-entry-no').allTextContents(), ['1', '12']);
+  step('topic groups also accept arbitrary lesson numbers; deleting an earlier lesson keeps lesson 12 unchanged');
   for (const [name, children, lectures] of [['待删除专题', 0, 2], ['专题大纲', 1, 1], ['专题删除验收', 0, 1]]) {
     await page.getByRole('button', { name: `${name} 目录操作`, exact: true }).click();
     await page.getByRole('group', { name: `${name} 目录操作`, exact: true }).getByRole('button', { name: '删除目录…', exact: true }).click();
@@ -598,8 +642,8 @@ try {
   await nav.getByRole('link', { name: '讲义编撰', exact: true }).click();
   await page.waitForURL(/\/tools\/handouts/);
   assert.equal(await nav.locator('.nav-item.active').innerText(), '讲义编撰');
-  // A 讲义 starts as a lesson in the course outline: 添加第1讲, then 保存并编写讲义 opens the editor.
-  await page.getByRole('button', { name: '＋ 添加第1讲', exact: true }).first().click();
+  // A 讲义 starts as a lesson in the course outline: 添加讲次, then 保存并编写讲义 opens the editor.
+  await page.getByRole('button', { name: '＋ 添加讲次', exact: true }).first().click();
   const newLesson = page.getByRole('dialog', { name: '新建一讲' });
   await newLesson.getByLabel('本讲标题').fill('一元一次方程');
   await newLesson.getByRole('button', { name: '保存并编写讲义', exact: true }).click();

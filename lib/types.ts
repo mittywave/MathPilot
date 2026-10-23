@@ -231,7 +231,7 @@ export type Handout = HandoutGroup & {
   temporaryQuestions: Question[];
   // Only the student's own teacher ever receives a student handout, so the name travels with it.
   studentName: string | null;
-  // position orders lessons in a unit, topics in a domain, or a student's handouts.
+  // Zero-based lesson number within a unit/topic (gaps allowed); also orders student handouts.
   position: number;
   createdAt: number;
   updatedAt: number;
