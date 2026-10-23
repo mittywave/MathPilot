@@ -21,15 +21,15 @@ export async function loadStudioImage(source:string):Promise<HTMLImageElement> {
 /** Read only the pixels around the box, then let a tight model box grow to the figure's blank edges. */
 function growStudioBox(image:HTMLImageElement,box:StudioBox,bounds:StudioBox):StudioBox {
   const max=Math.round(Math.max(image.width,image.height)*0.04);
-  const x0=Math.max(0,Math.floor(image.width*box.x/1000)-max,Math.ceil(image.width*bounds.x/1000)),y0=Math.max(0,Math.floor(image.height*box.y/1000)-max,Math.ceil(image.height*bounds.y/1000));
-  const x1=Math.min(image.width,Math.ceil(image.width*(box.x+box.width)/1000)+max,Math.floor(image.width*(bounds.x+bounds.width)/1000)),y1=Math.min(image.height,Math.ceil(image.height*(box.y+box.height)/1000)+max,Math.floor(image.height*(bounds.y+bounds.height)/1000));
+  const x0=Math.max(0,Math.floor(image.width*box.x/1000)-max),y0=Math.max(0,Math.floor(image.height*box.y/1000)-max);
+  const x1=Math.min(image.width,Math.ceil(image.width*(box.x+box.width)/1000)+max),y1=Math.min(image.height,Math.ceil(image.height*(box.y+box.height)/1000)+max);
   const canvas=document.createElement("canvas");canvas.width=x1-x0;canvas.height=y1-y0;
   const ctx=canvas.getContext("2d",{willReadFrequently:true})!;ctx.drawImage(image,x0,y0,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
   const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);canvas.width=0;canvas.height=0;
   const r=growStudioRectToBlankEdges(pixels,{
     left:Math.max(0,Math.floor(image.width*box.x/1000)-x0),top:Math.max(0,Math.floor(image.height*box.y/1000)-y0),
     right:Math.min(pixels.width-1,Math.ceil(image.width*(box.x+box.width)/1000)-x0-1),bottom:Math.min(pixels.height-1,Math.ceil(image.height*(box.y+box.height)/1000)-y0-1),
-  },max);
+  },max,{left:Math.max(0,Math.ceil(image.width*bounds.x/1000)-x0),top:Math.max(0,Math.ceil(image.height*bounds.y/1000)-y0),right:Math.min(pixels.width-1,Math.floor(image.width*(bounds.x+bounds.width)/1000)-x0-1),bottom:Math.min(pixels.height-1,Math.floor(image.height*(bounds.y+bounds.height)/1000)-y0-1)});
   return {x:(r.left+x0)*1000/image.width,y:(r.top+y0)*1000/image.height,width:(r.right-r.left+1)*1000/image.width,height:(r.bottom-r.top+1)*1000/image.height};
 }
 export async function cropStudioImage(source:string,cropBox:StudioBox,width=600,bounds:StudioBox={x:0,y:0,width:1000,height:1000}) {

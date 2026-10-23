@@ -131,7 +131,26 @@ export function fillStudioDocumentTemplate(template:StudioDocumentPage,value:unk
   const evidence=documentEvidence(hint);
   for(const part of result.parts)for(const section of part.sections)for(const q of section.questions)for(const block of q.blocks){
     const entry=filled.get(block.id)!;
-    if(block.role==='figure'){if(entry.text.trim()||entry.rows.length)throw new Error(`配图 ${block.id} 不得混入正文`);block.text='';block.rows=[];continue;}
+    if(block.role==='figure'){
+      if(entry.text.trim()||entry.rows.length)throw new Error(`配图 ${block.id} 不得混入正文`);
+      // Model boxes may extend into an adjacent paragraph. Its native text must
+      // remain prose in both the whole-page check and the eventual picture crop.
+      // Keep the existing four-unit membership tolerance outside the figure.
+      for(const neighbor of slots.filter(b=>b.role!=='figure')){
+        const b=neighbor.box,f=block.box;
+        const shared=evidence.filter(p=>chinese(p.text)&&insideDocumentBox(p,b)&&insideDocumentBox(p,f));
+        if(!shared.length)continue;
+        const end=f.y+f.height;
+        if(b.y>f.y&&b.y+b.height>=end){
+          const bottom=Math.min(b.y,...shared.map(p=>p.y-5));
+          if(bottom>f.y)f.height=bottom-f.y;
+        }else if(b.y<f.y&&b.y+b.height<end){
+          const top=Math.max(b.y+b.height,...shared.map(p=>p.y+5));
+          if(top<end){f.y=top;f.height=end-top;}
+        }
+      }
+      block.text='';block.rows=[];continue;
+    }
     if(block.role==='table'){block.text='';block.rows=validateStudioTables([{rows:entry.rows,warnings:[]}])[0].rows.map(row=>row.map(normalizeStudioMathEscapes));}
     else{if(!entry.text.trim()||entry.rows.length)throw new Error(`第 ${q.number} 题 ${block.id} 正文为空或混入表格`);block.text=entry.text;block.rows=[];}
     if(block.role==='stem'&&!q.continuation&&q.blocks.find(b=>b.role==='stem')===block&&/^\d{1,3}$/.test(q.number)){

@@ -51,7 +51,7 @@ type StudioPixels = { width: number; height: number; data: ArrayLike<number> };
 type StudioRect = { left: number; top: number; right: number; bottom: number };
 /** Model figure boxes are often a little tight and cut a circle or label. Grow each side
  * while the three lines just outside it still hold ink, at most `max` pixels per side. */
-export function growStudioRectToBlankEdges(image: StudioPixels, rect: StudioRect, max: number): StudioRect {
+export function growStudioRectToBlankEdges(image: StudioPixels, rect: StudioRect, max: number, limits?:StudioRect): StudioRect {
   const dark = (x: number, y: number) => { const i = (y * image.width + x) * 4; return image.data[i] + image.data[i + 1] + image.data[i + 2] < 510; };
   const column = (x: number, r: StudioRect) => { for (let y = r.top; y <= r.bottom; y++) if (dark(x, y)) return true; return false; };
   const row = (y: number, r: StudioRect) => { for (let x = r.left; x <= r.right; x++) if (dark(x, y)) return true; return false; };
@@ -59,13 +59,29 @@ export function growStudioRectToBlankEdges(image: StudioPixels, rect: StudioRect
     for (let n = from, k = 0; k < 3 && n >= 0 && n < limit; n += step, k++) if (test(n)) return true;
     return false;
   };
-  const r = { ...rect };
+  const area=limits?{...limits}:{left:0,top:0,right:image.width-1,bottom:image.height-1};
+  if(limits){
+    // A model boundary can bisect a neighbouring label. Both crops must meet
+    // at the nearest blank band, rather than keeping complementary fragments.
+    const blank=(value:number,length:number,test:(n:number)=>boolean)=>{
+      for(let distance=0;distance<=max;distance++)for(const n of distance?[value-distance,value+distance]:[value]){
+        if(n<1||n+2>=length)continue;
+        if(![n-1,n,n+1,n+2].some(test))return n;
+      }
+      return value;
+    };
+    if(area.left>0)area.left=blank(area.left,image.width,x=>column(x,rect));
+    if(area.right<image.width-1)area.right=blank(area.right,image.width,x=>column(x,rect));
+    if(area.top>0)area.top=blank(area.top,image.height,y=>row(y,rect));
+    if(area.bottom<image.height-1)area.bottom=blank(area.bottom,image.height,y=>row(y,rect));
+  }
+  const r = {left:Math.max(rect.left,area.left),top:Math.max(rect.top,area.top),right:Math.min(rect.right,area.right),bottom:Math.min(rect.bottom,area.bottom)};
   for (let grew = true; grew;) {
     grew = false;
-    if (rect.left - r.left < max && near(r.left - 1, -1, image.width, x => column(x, r))) { r.left--; grew = true; }
-    if (r.right - rect.right < max && near(r.right + 1, 1, image.width, x => column(x, r))) { r.right++; grew = true; }
-    if (rect.top - r.top < max && near(r.top - 1, -1, image.height, y => row(y, r))) { r.top--; grew = true; }
-    if (r.bottom - rect.bottom < max && near(r.bottom + 1, 1, image.height, y => row(y, r))) { r.bottom++; grew = true; }
+    if (r.left>area.left && rect.left - r.left < max && near(r.left - 1, -1, image.width, x => column(x, r))) { r.left--; grew = true; }
+    if (r.right<area.right && r.right - rect.right < max && near(r.right + 1, 1, image.width, x => column(x, r))) { r.right++; grew = true; }
+    if (r.top>area.top && rect.top - r.top < max && near(r.top - 1, -1, image.height, y => row(y, r))) { r.top--; grew = true; }
+    if (r.bottom<area.bottom && r.bottom - rect.bottom < max && near(r.bottom + 1, 1, image.height, y => row(y, r))) { r.bottom++; grew = true; }
   }
   return r;
 }

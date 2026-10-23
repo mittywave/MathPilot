@@ -51,6 +51,30 @@ test('document filling requires every template slot exactly once and retains nat
   assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[content.blocks[0],{...content.blocks[1],id:'unknown'}]}),/未知/);
   assert.throws(()=>normalizeStudioDocumentTemplate({...template,parts:[{...template.parts[0],sections:[{...template.parts[0].sections[0],questions:[{number:'1',continuation:false,blocks:[{id:'b1',role:'figure',box:{x:0,y:0,width:1000,height:1000},continuation:false}]}]}]}]}),/整页正文/);
 });
+test('native paragraph text overlapping a figure edge remains complete prose and is excluded from the picture',async t=>{
+  const {normalizeStudioDocumentTemplate,fillStudioDocumentTemplate}=await moduleFixture(t);
+  for(const [figureBox,stemBox,baseline] of [
+    [{x:100,y:100,width:600,height:110},{x:90,y:200,width:800,height:40},205],
+    [{x:100,y:130,width:600,height:120},{x:90,y:100,width:800,height:40},135],
+    [{x:100,y:100,width:600,height:100},{x:90,y:300,width:800,height:40},315],
+  ]){
+    const text='7．（3分）这是相邻题目的完整正文，不能因图框偏大而被误判为多余文字。';
+    const figure={id:'figure',role:'figure',box:figureBox,continuation:false},stem={id:'stem',role:'stem',box:stemBox,continuation:false};
+    const blocks=figureBox.y<stemBox.y?[figure,stem]:[stem,figure];
+    const raw={printed:true,parts:[{kind:'questions',title:'图文边界',heading:'',continuation:false,sections:[{title:'',continuation:false,questions:[{number:'7',continuation:false,blocks}]}]}],warnings:[]};
+    const figureY=figureBox.y<stemBox.y?figureBox.y+20:figureBox.y+70;
+    const hint=[[200,40,15,'图文边界'],[90,baseline,10.5,'7．'],[120,baseline,10.5,text.slice(2)],[200,figureY,10.5,'水池']].map(JSON.stringify).join('\n');
+    const template=normalizeStudioDocumentTemplate(raw,hint),before=structuredClone(template),content={blocks:[{id:'figure',text:'',rows:[]},{id:'stem',text,rows:[]}],warnings:[]};
+    const result=fillStudioDocumentTemplate(template,content,hint),filled=result.parts[0].sections[0].questions[0].blocks;
+    const box=filled.find(b=>b.role==='figure').box;
+    assert.equal(filled.find(b=>b.role==='stem').text,text);
+    assert.ok(baseline<box.y-4||baseline>box.y+box.height+4,'native prose must remain outside figure membership, including its tolerance');
+    assert.ok(figureY>=box.y&&figureY<=box.y+box.height,'native labels belonging only to the figure stay inside it');
+    assert.deepEqual(template,before,'calibration cannot mutate the cached template');
+    assert.throws(()=>fillStudioDocumentTemplate(template,{...content,blocks:[content.blocks[0],{...content.blocks[1],text:text.replace('完整正文','正文')}]},hint),/印刷文字不完整/,'genuinely missing prose must still fail');
+    if(figureBox.y+figureBox.height<stemBox.y)assert.deepEqual(box,figureBox,'well separated source boxes stay unchanged');
+  }
+});
 test('digital PDF prose preserves source typos and rejects omitted paragraphs, wrong numbers and wrong marks',async t=>{
   const {normalizeStudioDocumentTemplate,fillStudioDocumentTemplate}=await moduleFixture(t);
   const raw={printed:true,parts:[{kind:'questions',title:'标准试卷',heading:'',continuation:false,sections:[{title:'填空题',continuation:false,questions:[{number:'1',continuation:false,blocks:[{id:'b1',role:'stem',box,continuation:false}]}]}]}],warnings:[]};

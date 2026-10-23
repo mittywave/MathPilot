@@ -22,6 +22,18 @@ test('a tight figure box grows to the figure’s blank edges but not into separa
   assert.deepEqual(growStudioRectToBlankEdges(image,{left:28,top:28,right:72,bottom:72},20),{left:28,top:28,right:72,bottom:72},'a clean box is unchanged');
   assert.equal(growStudioRectToBlankEdges(image,{left:35,top:35,right:65,bottom:60},3).bottom,63,'growth is capped');
 });
+test('adjacent picture crops meet at a blank band and retain a label straddling the model boundary',()=>{
+  const width=80,height=110,data=new Uint8ClampedArray(width*height*4).fill(255);
+  const ink=(x,y)=>data.fill(0,(y*width+x)*4,(y*width+x)*4+3);
+  for(let y=20;y<=40;y++)for(let x=10;x<=60;x++)ink(x,y);
+  for(let y=60;y<=90;y++)for(let x=10;x<=60;x++)ink(x,y);
+  for(let y=54;y<=57;y++)for(let x=30;x<=35;x++)ink(x,y);
+  const image={width,height,data};
+  const first=growStudioRectToBlankEdges(image,{left:10,top:15,right:60,bottom:55},15,{left:0,top:0,right:79,bottom:55});
+  const second=growStudioRectToBlankEdges(image,{left:10,top:60,right:60,bottom:95},15,{left:0,top:55,right:79,bottom:109});
+  assert.ok(first.bottom>=40&&first.bottom<54,'the first picture cannot retain a fragment of its neighbour’s label');
+  assert.ok(second.top<=54&&second.top>40&&second.bottom>=90,'the next picture retains the complete label and drawing');
+});
 test('duplicate pages collapse only within their source role',()=>{assert.equal(deduplicateStudioPages([{role:'question',hash:'a'},{role:'question',hash:'a'},{role:'answer',hash:'a'}]).length,2);});
 test('same numbers across sections cannot steal one another’s answers',()=>{assert.deepEqual(matchStudioAnswers(question(),[record('other','知识拼接'),record('a')]).map(x=>x.id),['a']);});
 test('conflicting starts block matching and continuations preserve independent evidence',()=>{assert.equal(matchStudioAnswers(question(),[record('a'),record('b')]).length,0);assert.deepEqual(matchStudioAnswers(question(),[record('a'),record('b','例题精练',{continuation:true,stem:''})]).map(x=>x.id),['a','b']);assert.equal(matchStudioAnswers(question(),[record('b','例题精练',{continuation:true,stem:''})]).length,0);});

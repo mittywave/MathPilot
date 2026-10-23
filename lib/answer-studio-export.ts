@@ -294,14 +294,14 @@ async function buildStudioDocumentWord(draft:StudioDraft,withFigures:boolean,wit
             if(!withFigures)continue;
             const page=draft.pages.find(p=>p.id===block.pageId);if(!page?.image)throw new Error(`第 ${question.number} 题配图原件缺失`);
             const {cropStudioImage}=await import('./answer-studio-images');
-            // Grow to preserve edge labels, but never cross into an allocated text block.
+            // Grow to preserve edge labels, but never cross into another allocated block.
             // Use the blank gap between blocks as the boundary, not a paper-specific crop.
             let left=0,top=0,right=1000,bottom=1000;const box=block.box,evidence=documentEvidence(page.textHint||'');
             for(const neighbor of page.document!.parts.flatMap(p=>p.sections.flatMap(s=>s.questions.flatMap(q=>q.blocks)))){
-              if(neighbor.role==='figure')continue;const b=neighbor.box;
+              if(neighbor.role==='figure'&&neighbor.id===block.id)continue;const b=neighbor.box;
               // Native PDF points are baselines. The reference A4 font height also
               // covers glyphs that slightly overhang the model's paragraph box.
-              const points=evidence.filter(p=>p.x>=b.x-4&&p.x<=b.x+b.width+4&&p.y>=b.y-4&&p.y<=b.y+b.height+4);
+              const points=neighbor.role==='figure'?[]:evidence.filter(p=>p.x>=b.x-4&&p.x<=b.x+b.width+4&&p.y>=b.y-4&&p.y<=b.y+b.height+4);
               const textTop=points.length?Math.min(...points.map(p=>p.y-p.size*20000/PAGE.height)):(b.y+box.y+box.height)/2,textBottom=points.length?Math.max(...points.map(p=>p.y+p.size*5000/PAGE.height)):(b.y+b.height+box.y)/2;
               if(b.x<box.x+box.width&&b.x+b.width>box.x){if(b.y+b.height<=box.y)top=Math.max(top,textBottom);if(b.y>=box.y+box.height)bottom=Math.min(bottom,textTop);}
               if(b.y<box.y+box.height&&b.y+b.height>box.y){if(b.x+b.width<=box.x)left=Math.max(left,(b.x+b.width+box.x)/2);if(b.x>=box.x+box.width)right=Math.min(right,(b.x+box.x+box.width)/2);}
