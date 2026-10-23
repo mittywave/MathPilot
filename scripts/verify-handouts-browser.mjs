@@ -11,6 +11,7 @@ import { loopbackFetch as fetch } from '../tests/helpers/loopback-fetch.mjs';
 // Run after npm run build. The compiled app, D1 and the browser are real; no AI
 // service is configured, so only the manual and Word-structure entry paths run.
 // Usage: PLAYWRIGHT_PACKAGE=<package.json beside playwright> CHROMIUM_PATH=<chrome> node scripts/verify-handouts-browser.mjs
+// Add --notes for screenshot queue/concurrency regression with controlled AI replies.
 const require = createRequire(process.env.PLAYWRIGHT_PACKAGE || import.meta.url);
 const { chromium } = require('playwright');
 const root = process.cwd();
@@ -274,6 +275,128 @@ async function verifyTemporaryLibrary() {
   assert.equal(copied.items.filter(item => item.kind === 'quiz').length, 1);
   assert.equal(copied.items.filter(item => item.kind === 'homework').length, 1);
   step('copying a handout preserves the temporary bank and all three sheets');
+}
+
+// The UI, image decoding/cropping/uploads and D1 saves are real; only AI replies are held and supplied here.
+async function verifyNoteQueue(pngUrl) {
+  const { handout } = await api('/api/handouts', { handout: { title: '知识点识别队列验收', items: ['a', 'b', 'c', 'd'].map(id => ({ id, kind: 'section', title: `知识模块 ${id}`, note: `原有知识 ${id}` })) } });
+  await page.goto(`${base}/tools/handouts?id=${handout.id}`);
+  await page.getByRole('textbox', { name: '模块四知识点', exact: true }).waitFor();
+  const fixtures = await page.evaluate(async source => {
+    const img = new Image(); img.src = source; await img.decode();
+    return Object.fromEntries(['a1', 'a2', 'a3', 'b1', 'c1', 'd1', 'd2', 'c2'].map(label => {
+      const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0); ctx.fillStyle = '#111'; ctx.font = '16px sans-serif'; ctx.fillText(label, 4, 20);
+      return [label, canvas.toDataURL('image/png')];
+    }));
+  }, pngUrl);
+  const calls = new Map(); const active = new Set(); let peak = 0;
+  await page.route('**/api/recognize-note', route => {
+    const image = route.request().postDataJSON().image;
+    const label = Object.keys(fixtures).find(key => fixtures[key] === image);
+    assert.ok(label, 'each request carries the submitted screenshot');
+    assert.ok(!calls.has(label), 'a screenshot is submitted only once');
+    calls.set(label, route); active.add(label); peak = Math.max(peak, active.size);
+  });
+  const lane = id => page.locator(`#knowledge-${id}`);
+  const editor = id => lane(id).getByRole('textbox');
+  const call = async label => {
+    for (let i = 0; i < 300 && !calls.has(label); i++) await delay(20);
+    assert.ok(calls.has(label), `recognition starts for ${label}`);
+    assert.ok(peak <= 2, 'at most two recognition requests run together');
+    return calls.get(label);
+  };
+  const submit = async (id, label, method = 'paste') => {
+    if (method === 'file') {
+      const chooser = page.waitForEvent('filechooser');
+      await lane(id).getByRole('button', { name: '截图识别', exact: true }).click();
+      await (await chooser).setFiles({ name: `${label}.png`, mimeType: 'image/png', buffer: Buffer.from(fixtures[label].split(',')[1], 'base64') });
+    } else await editor(id).evaluate((target, { source, label, method }) => {
+      const bytes = Uint8Array.from(atob(source.split(',')[1]), c => c.charCodeAt(0));
+      const data = new DataTransfer(); data.items.add(new File([bytes], `${label}.png`, { type: 'image/png' }));
+      target.focus();
+      target.dispatchEvent(method === 'paste' ? new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }) : new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+    }, { source: fixtures[label], label, method });
+  };
+  const finish = async (label, failed = false, figure = false) => {
+    const route = await call(label); active.delete(label);
+    await route.fulfill({ status: failed ? 503 : 200, contentType: 'application/json', body: JSON.stringify(failed ? { error: '验收：模型繁忙' } : { result: { warnings: [], blocks: [
+      { type: 'paragraph', text: `识别结果 ${label}：$y=\\frac{k}{x}$` },
+      ...(figure ? [{ type: 'figures', side: '', sideBox: null, figures: [{ bbox: { x: 0, y: 0, width: 1000, height: 1000 }, caption: '识别配图', captionBox: null }] }] : []),
+    ] } }) });
+  };
+  const pasteText = async id => {
+    await editor(id).press('ControlOrMeta+A');
+    await editor(id).evaluate((target, id) => {
+      const data = new DataTransfer(); data.setData('text/plain', `原有知识 ${id}\n手动补充`);
+      target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+    }, id);
+    assert.match(await editor(id).innerText(), /手动补充/, 'normal text paste works while recognition is pending');
+  };
+  await submit('a', 'a1', 'file'); await call('a1');
+  // These two pastes share a browser turn, exercising synchronous enqueue protection.
+  await editor('a').evaluate((target, sources) => {
+    for (const [label, source] of sources) {
+      const data = new DataTransfer(); data.items.add(new File([Uint8Array.from(atob(source.split(',')[1]), c => c.charCodeAt(0))], `${label}.png`, { type: 'image/png' }));
+      target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+    }
+  }, [['a2', fixtures.a2], ['a3', fixtures.a3]]);
+  await submit('b', 'b1'); await call('b1');
+  await submit('c', 'c1', 'drop'); await submit('d', 'd1', 'file');
+  await lane('a').getByRole('status').filter({ hasText: '正在识别… · 排队 2 张' }).waitFor();
+  await lane('c').getByRole('status').filter({ hasText: '排队 1 张' }).waitFor();
+  assert.deepEqual([...calls.keys()], ['a1', 'b1'], 'other modules queue without losing pasted or dropped screenshots');
+  for (const id of ['a', 'b', 'c', 'd']) assert.equal(await lane(id).getByRole('button', { name: '截图识别', exact: true }).isEnabled(), true);
+  await pasteText('a'); await pasteText('c');
+  assert.equal(await page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; }), true);
+  await page.locator('.handout-draft-head').getByRole('tab', { name: /小测/ }).click();
+  await finish('b1'); await call('c1');
+  await page.locator('.handout-draft-head').getByRole('tab', { name: /讲义/ }).click();
+  await editor('b').getByText(/识别结果 b1/).waitFor();
+  await lane('a').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, 'note-queue-desktop.png'), fullPage: true });
+  step('continuous file/paste/drop submissions: two modules run concurrently, same-module images queue in order, text stays editable and sheet switches preserve jobs');
+
+  await finish('c1', true); await call('d1');
+  await page.locator('.app-toast.error').filter({ hasText: 'c1.png：验收：模型繁忙' }).waitFor();
+  await submit('d', 'd2');
+  await page.locator('#module-d').getByRole('button', { name: '模块更多操作', exact: true }).click();
+  await page.getByRole('button', { name: '删除模块…', exact: true }).click();
+  await page.getByRole('dialog', { name: '删除知识模块「知识模块 d」', exact: true }).getByRole('button', { name: '删除知识模块', exact: true }).click();
+  await finish('d1');
+  await finish('a1', false, true); await call('a2');
+  await finish('a2', true); await call('a3');
+  await finish('a3');
+  await lane('a').getByRole('status').waitFor({ state: 'detached' });
+  await page.locator('.handout-save.saved').waitFor();
+  assert.deepEqual([...calls.keys()], ['a1', 'b1', 'c1', 'd1', 'a2', 'a3'], 'failed jobs release slots and deleted-module screenshots never start');
+  assert.equal(peak, 2);
+  const saved = (await api(`/api/handouts/${handout.id}`)).handout;
+  assert.deepEqual(saved.items.map(item => item.id), ['a', 'b', 'c']);
+  assert.match(saved.items[0].note, /^原有知识 a\n手动补充\n识别结果 a1：[\s\S]*识别结果 a3：/);
+  assert.doesNotMatch(saved.items[0].note, /结果 a2|结果 b1|结果 c1|结果 d1/);
+  assert.match(saved.items[1].note, /^原有知识 b\n识别结果 b1：/);
+  assert.equal(saved.items[2].note, '原有知识 c\n手动补充');
+  await page.reload();
+  await editor('a').getByText(/识别结果 a3/).waitFor();
+  assert.ok(await editor('a').locator('.katex').count() > 0);
+  await editor('a').locator('.note-figure img:not(.ProseMirror-separator)').evaluate(async img => { await img.decode(); if (!img.naturalWidth) throw Error('figure did not load'); });
+  assert.equal(await page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; }), false);
+  await lane('a').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, 'note-queue-saved.png'), fullPage: true });
+  step('out-of-order replies save to their own modules; failures continue the queue, deleted targets stay deleted; manual text, formulas and cropped figures survive reload');
+
+  // A decoding failure before any request also frees its slot; the next valid screenshot still succeeds.
+  const brokenChooser = page.waitForEvent('filechooser');
+  await lane('c').getByRole('button', { name: '截图识别', exact: true }).click();
+  await (await brokenChooser).setFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.from('not a valid image') });
+  await page.locator('.app-toast.error').filter({ hasText: '无法读取这张图片' }).waitFor();
+  await submit('c', 'c2'); await finish('c2');
+  await lane('c').getByRole('status').waitFor({ state: 'detached' });
+  await page.locator('.handout-save.saved').waitFor();
+  assert.match((await api(`/api/handouts/${handout.id}`)).handout.items[2].note, /手动补充\n识别结果 c2/);
+  await page.unroute('**/api/recognize-note');
+  step('invalid-image decoding does not stall later submissions; pending work warns before leaving and a completed queue removes the warning');
 }
 
 // Real browser + isolated D1: custom outlines share the existing handout editor.
@@ -543,7 +666,9 @@ try {
   const png = Buffer.from(pngUrl.split(',')[1], 'base64');
   await writeFile(join(out, 'diagram.png'), png);
   await writeFile(join(out, 'fixture.docx'), await wordFixture(png));
-  if (process.argv.includes('--courses')) {
+  if (process.argv.includes('--notes')) {
+    await verifyNoteQueue(pngUrl);
+  } else if (process.argv.includes('--courses')) {
     await verifyCourses();
   } else if (process.argv.includes('--temporary')) {
     await verifyTemporaryLibrary();

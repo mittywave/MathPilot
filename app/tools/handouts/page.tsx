@@ -514,7 +514,8 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const latest = useRef<Pick<Handout, "title" | "items" | "temporaryQuestions"> | null>(null);
   const saving = useRef<Promise<void> | null>(null);
   const pending = useRef(false);
-  const [noteImport, setNoteImport] = useState<string | null>(null);
+  const [noteImports, setNoteImports] = useState<{ sectionId: string; file: File; running: boolean }[]>([]);
+  const noteQueue = useRef(noteImports);
   const [dropNote, setDropNote] = useState<string | null>(null);
   // A question dragged by its handle lands beside another question or at the end of a 讲义 lane.
   const [dragging, setDragging] = useState<string | null>(null);
@@ -522,6 +523,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   const noteFile = useRef<HTMLInputElement>(null);
   const noteTarget = useRef<string | null>(null);
 
+  useEffect(() => () => { noteQueue.current = []; }, []);
 
   useEffect(() => {
     void fetchHandout(id).then(({ handout }) => { setHome({ courseUnitId: handout.courseUnitId, coursePath: handout.coursePath, domain: handout.domain, domainName: handout.domainName, studentId: handout.studentId, studentName: handout.studentName }); latest.current = { title: handout.title, items: ensureLeadingModule(handout.items, newId()), temporaryQuestions: handout.temporaryQuestions }; setDoc(latest.current); }).catch(() => setMissing(true));
@@ -547,13 +549,13 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     if (opened && focusModule) document.getElementById(`module-${focusModule}`)?.scrollIntoView({ block: "start" });
   }, [opened, focusModule]);
 
-  // Unsaved text or a failed save would be lost on leaving.
+  // Unsaved text and screenshots still being recognized would be lost on leaving.
   useEffect(() => {
-    if (saveState === "saved") return;
+    if (saveState === "saved" && !noteImports.length) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [saveState]);
+  }, [saveState, noteImports.length]);
 
   // Items saved before the two libraries merged may still say scope "mine"; the id alone finds the question.
   const questionIndex = useMemo(() => new Map([...(library?.questions ?? []), ...(doc?.temporaryQuestions ?? [])].map((question) => [question.id, question])), [library, doc?.temporaryQuestions]);
@@ -706,12 +708,29 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
   }
 
   // 知识点截图 → AI 转录成小标题、段落、要点和配图，追加到这个模块的知识点里。
-  async function importNoteScreenshot(sectionId: string, file: File) {
-    if (noteImport) return;
-    setNoteImport(sectionId);
+  function importNoteScreenshot(sectionId: string, file: File) {
+    noteQueue.current = [...noteQueue.current, { sectionId, file, running: false }];
+    setNoteImports(noteQueue.current);
+    void recognizeNextNote();
+  }
+
+  // Two modules can run together; each module keeps its own screenshots in paste order.
+  async function recognizeNextNote() {
+    const running = noteQueue.current.filter((task) => task.running);
+    if (running.length >= 2) return;
+    const next = noteQueue.current.find((task) => !task.running && !running.some((active) => active.sectionId === task.sectionId));
+    if (!next) return;
+    const task = { ...next, running: true };
+    const { sectionId, file } = task;
+    noteQueue.current = noteQueue.current.map((item) => item === next ? task : item);
+    setNoteImports(noteQueue.current);
+    void recognizeNextNote();
     try {
+      if (!latest.current?.items.some((item) => item.kind === "section" && item.id === sectionId)) return;
       const image = await readScreenshot(file);
+      if (!noteQueue.current.includes(task)) return;
       const result = await recognizeScreenshot<NoteRecognitionResult>("/api/recognize-note", image);
+      if (!noteQueue.current.includes(task) || !latest.current?.items.some((item) => item.kind === "section" && item.id === sectionId)) return;
       // Every figure is cut from one analysis of the screenshot: its own strokes only, on clean white.
       const { extractNoteFigures } = await import("../../../lib/note-figures");
       const cuts = await extractNoteFigures(image, result.blocks);
@@ -725,14 +744,25 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
       }
       const text = noteFromBlocks(result.blocks, (figure) => figures.get(figure) ?? null);
       if (!text.trim()) throw new Error("截图里没有识别到知识点文字");
+      if (!noteQueue.current.includes(task) || !latest.current?.items.some((item) => item.kind === "section" && item.id === sectionId)) return;
       setItems(latest.current!.items.map((item) => item.id === sectionId && item.kind === "section" ? { ...item, note: item.note.trim() ? `${item.note.trimEnd()}\n${text}` : text } : item));
       const checks = [...(missedFigures ? [`${missedFigures} 张配图未能裁剪`] : []), ...result.warnings.slice(0, 2)];
       onNotice(checks.length ? `已识别，请核对：${checks.join("；")}` : "已识别并加入知识点");
-    } catch (error) { onNotice(error instanceof Error ? error.message : "识别失败，请重试", "error"); }
-    finally { setNoteImport(null); }
+    } catch (error) { if (noteQueue.current.includes(task)) onNotice(`${file.name}：${error instanceof Error ? error.message : "识别失败，请重试"}`, "error"); }
+    finally {
+      if (noteQueue.current.includes(task)) {
+        noteQueue.current = noteQueue.current.filter((item) => item !== task);
+        setNoteImports(noteQueue.current);
+        void recognizeNextNote();
+      }
+    }
   }
 
-  function chooseNoteScreenshot(sectionId: string) { noteTarget.current = sectionId; noteFile.current?.click(); }
+  function chooseNoteScreenshot(sectionId: string) {
+    noteTarget.current = sectionId;
+    document.getElementById(`knowledge-${sectionId}`)?.focus({ preventScroll: true });
+    noteFile.current?.click();
+  }
 
   async function openTypeset() {
     if (!doc || openingTypeset) return;
@@ -926,6 +956,8 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     </section> : <>
     {modules.map(({ section, bands }, moduleIndex) => {
       const heading = moduleHeading(section.title, moduleIndex); const badge = `模块${heading.numeral}`;
+      const noteRunning = noteImports.some((task) => task.sectionId === section.id && task.running);
+      const noteWaiting = noteImports.filter((task) => task.sectionId === section.id && !task.running).length;
       return <section className="handout-module" key={section.id} id={`module-${section.id}`} tabIndex={-1} aria-label={badge}>
         <div className="handout-module-head">
           <span className="handout-module-no" aria-hidden="true">{heading.numeral}</span>
@@ -945,7 +977,10 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropNote(null); }}
           onDrop={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); setDropNote(null); const file = droppedImage(event); if (file) void importNoteScreenshot(section.id, file); else onNotice("请选择图片文件"); }}>
           <div className="handout-lane-head"><b>{HANDOUT_PARTS.knowledge.label}</b>
-            {dropNote === section.id ? <em>松开即可识别截图</em> : <button className="text-button" title="选择、拖入或粘贴知识点截图" disabled={Boolean(noteImport)} onClick={() => chooseNoteScreenshot(section.id)}>{noteImport === section.id ? "正在识别截图…" : "截图识别"}</button>}
+            <div className="handout-lane-add">
+              {(noteRunning || noteWaiting > 0) && <em role="status">{noteRunning ? "正在识别…" : ""}{noteWaiting > 0 ? `${noteRunning ? " · " : ""}排队 ${noteWaiting} 张` : ""}</em>}
+              {dropNote === section.id ? <em>松开即可识别截图</em> : <button className="text-button" title="选择、拖入或粘贴知识点截图，可连续提交" onMouseDown={(event) => event.preventDefault()} onClick={() => chooseNoteScreenshot(section.id)}>截图识别</button>}
+            </div>
           </div>
           <Suspense fallback={<div className="note-editor"><div className="note-editor-body"><NotePreview note={section.note} /></div></div>}>
             <NoteEditor value={section.note} label={`${badge}知识点`} placeholder={HANDOUT_PARTS.knowledge.hint} onChange={(note) => updateSection(section.id, { note })} onCommit={() => void flush().catch(() => {})} />
