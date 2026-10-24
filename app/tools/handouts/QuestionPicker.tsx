@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent } from "react";
 import { CategoryTree } from "../../components/CategoryTree";
 import { PaperCenter, PaperDirectory } from "../../components/PaperCenter";
 import { QuestionBody } from "../../components/QuestionBody";
@@ -39,7 +39,8 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   source?: "library" | "temporary";
   onSourceChange?: (source: "library" | "temporary") => void;
   temporaryQuestions?: Question[];
-  onImport?: () => void;
+  // Opens the import, with the files when they were pasted or dropped on the 临时题库.
+  onImport?: (files?: File[]) => void;
   onNotice: (message: string, tone?: "success" | "error") => void;
 }) {
   const replacing = mode.kind === "replace";
@@ -103,6 +104,26 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const temporary = source === "temporary";
   const papersOpen = !temporary && paperLocation.view === "papers";
   const paperOpen = !temporary && paperLocation.view === "paper";
+  // The 临时题库 imports what is pasted or dropped on it; before anything is imported only its entry shows.
+  const importing = temporary && Boolean(onImport) && !disabled;
+  const emptyTemporary = temporary && !temporaryQuestions.length;
+  const [dropping, setDropping] = useState(false);
+  const importRef = useRef(onImport);
+  useEffect(() => { importRef.current = onImport; });
+  useEffect(() => {
+    if (!importing) return;
+    // A field, an editor or an open dialog keeps its own paste.
+    const paste = (event: ClipboardEvent) => {
+      const files = [...(event.clipboardData?.files ?? [])], target = event.target instanceof Element ? event.target : null;
+      if (event.defaultPrevented || !files.length || !resultsPane.current || resultsPane.current.closest("[inert]") || document.querySelector(".modal-backdrop") || target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault(); importRef.current?.(files);
+    };
+    document.addEventListener("paste", paste);
+    return () => document.removeEventListener("paste", paste);
+  }, [importing]);
+  const carriesFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
+  const sourceFiles = [...new Set(temporaryQuestions.flatMap((question) => question.importFileName ? [question.importFileName] : []))];
+  const fileFilter = sourceFiles.length > 1 ? fileName : "";
 
   const modules = library?.modules ?? [];
   const categories = library?.categories ?? [];
@@ -130,7 +151,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   };
   const search = keyword.trim().toLowerCase();
   const byCode = library?.questions.find((question) => question.code === search);
-  const results = temporary ? temporaryQuestions.filter((question) => (!fileName || question.importFileName === fileName)
+  const results = temporary ? temporaryQuestions.filter((question) => (!fileFilter || question.importFileName === fileFilter)
     && (type === "全部" || question.type === type) && (!search || questionMatchesKeyword(question, search, question.importFileName ?? ""))) : byCode ? [byCode] : moduleQuestions.filter((question) => (!allowed || allowed.has(question.categoryId))
     && (!search || questionMatchesKeyword(question, search, pathOf(question.categoryId))));
   const visibleIds = new Set((temporary ? temporaryQuestions : library?.questions ?? []).map((question) => question.id));
@@ -178,7 +199,10 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     .filter(item => !paperSearch || (item.question && questionMatchesKeyword(item.question, paperSearch, pathOf(item.question.categoryId))))
     : results.map((question, index) => ({ questionId: question.id, number: String(index + 1), section: "", question }));
 
-  return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题" data-paper-flipping={paperFlipping || undefined}>
+  return <section className={`handout-bank${treeOpen ? " with-tree" : ""}`} aria-label="题库选题" data-paper-flipping={paperFlipping || undefined} data-dropping={importing && dropping || undefined}
+    onDragOver={(event) => { if (!importing || !carriesFiles(event)) return; event.preventDefault(); setDropping(true); }}
+    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }}
+    onDrop={(event) => { if (!importing || !carriesFiles(event)) return; event.preventDefault(); setDropping(false); onImport?.([...event.dataTransfer.files]); }}>
     <aside className="picker-tree" id="picker-directory" aria-label={papersOpen ? "试卷目录" : "知识目录"} inert={!treeOpen} aria-hidden={!treeOpen}>
       {temporary && <><header><h2>临时题库</h2><button className="icon-button" type="button" title="收起目录" aria-label="收起知识目录" aria-expanded={treeOpen} aria-controls="picker-directory" onClick={() => toggleTree(false)}>←</button></header><div className="picker-temporary-help"><p>{practice ? "随当前组卷篮保存在本机，刷新后仍保留。" : "当前讲义、小测和作业共用，随讲义保存。"}</p><p>导入时自动分配 ID 并加入正式题库，可在其他资料中复用。</p></div></>}
       <div className={`paper-directory-flip${papersOpen ? " is-papers" : ""}`} hidden={temporary}>
@@ -201,7 +225,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         <button role="tab" aria-selected={!temporary} onClick={() => { onSourceChange?.("library"); setSelected([]); }}>正式题库</button>
         {onImport && <button role="tab" aria-selected={temporary} onClick={() => { onSourceChange?.("temporary"); setSelected([]); }}>临时题库 <span>{temporaryQuestions.length}</span></button>}
       </div>
-      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : <div ref={target} className={`picker-target${list ? " list" : ""}`}>
+      {mode.kind === "replace" ? <div className="picker-replacing"><strong>{mode.label} · 选一道题替换</strong><button className="text-button" onClick={() => onModeChange(null)}>取消替换</button></div> : !emptyTemporary && <div ref={target} className={`picker-target${list ? " list" : ""}`}>
         <header><span>{practice ? "加入到" : list ? `加入${list}，考查` : "加入到"}</span></header>
         <div className="picker-target-fields">
         <select aria-label={practice ? "加入分组" : list ? "考查模块" : "加入模块"} title={targetLabel} value={mode.sectionId ?? ""} onChange={(event) => onModeChange({ ...mode, sectionId: event.target.value })} disabled={!sections.length}>
@@ -213,24 +237,26 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         </select>}
         </div>
       </div>}
-      {temporary && <button className="secondary" disabled={disabled} onClick={onImport}>导入文件</button>}
       </div>
-      <div className="picker-filters">
+      {!emptyTemporary && <div className="picker-filters">
         {papersOpen && <input type="search" aria-label="搜索试卷" placeholder="搜索试卷标题…" value={paperQuery} onChange={(event) => setPaperQuery(event.target.value)} />}
         {paperOpen && <input type="search" aria-label="搜索本卷题目" placeholder="本卷搜索：题目 ID、知识点、题干" value={paperKeyword} onChange={(event) => { setPaperKeyword(event.target.value); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); }} />}
         {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
         {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={disabled || !availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
         {temporary && <>
-          <select aria-label="来源文件" value={fileName} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源文件</option>{[...new Set(temporaryQuestions.map((question) => question.importFileName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}</select>
+          {sourceFiles.length > 1 && <select aria-label="来源文件" value={fileFilter} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源</option>{sourceFiles.map((name) => <option key={name}>{name}</option>)}</select>}
           <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
         </>}
-      </div>
+      </div>}
       <div className="picker-results" ref={resultsPane}>
+      {temporary && onImport && <button type="button" className={`drop-entry picker-import${emptyTemporary ? "" : " compact"}${importing && dropping ? " dragging" : ""}`} disabled={disabled} onClick={() => onImport()}>
+        <kbd>⌘V</kbd>{emptyTemporary ? <span><b>粘贴题目截图，或拖入 Word</b><small>可一次放入多张，每张可含多道题</small></span> : <span><b>继续导入</b><small>粘贴截图或拖入 Word</small></span>}
+      </button>}
       {paperVisited && <div className="picker-paper-center" hidden={!papersOpen} inert={!papersOpen}><PaperCenter readOnly searchQuery={paperQuery} folderId={paperLocation.folder} folders={paperFolders} refresh={paperRefresh} user={user} modules={modules} onOpen={id => navigatePapers("paper", id)} onAdd={replacing ? undefined : selectPaper} addLabel="整卷选择" onNotice={onNotice} onFolders={setPaperFolders} onLibraryChanged={() => void onLibraryChanged().catch(error => onNotice(error instanceof Error ? error.message : "题库更新失败", "error"))} /></div>}
       {paperOpen && <header className="paper-detail-header"><button className="text-button" onClick={() => navigatePapers("papers")}>← 试卷中心</button><h1>{activePaper?.title || (paperError ? "试卷暂不可用" : "正在读取试卷…")}</h1>{activePaper && <div className="paper-detail-actions"><span>{activePaper.items.length} 题</span>{!replacing && <button onClick={() => void selectPaper(activePaper)}>整卷选择</button>}<a href={`/api/papers/${activePaper.id}?source=1`}>下载原件</a></div>}</header>}
       {!temporary && paperError && <p className="paper-error" role="alert">{paperError}<button onClick={() => setPaperRefresh(value => value + 1)}>重试</button></p>}
       {!temporary && !papersOpen && !paperOpen && paperLocation.returnId && <div className="paper-return"><button className="text-button" onClick={() => navigatePapers("paper", paperLocation.returnId)}>← 返回刚才的试卷</button></div>}
-      {papersOpen ? null : temporary && !temporaryQuestions.length ? <div className="picker-empty"><b>导入外部题目，开始编撰</b><p>支持 Word（.docx）、PDF 和图片。</p><p>校对确认后自动分配 ID 并加入正式题库，再选择题目加入{practice ? "练习卷" : "讲义、小测或作业"}。</p><button className="secondary" disabled={disabled} onClick={onImport}>导入文件</button></div> : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">{paperOpen ? "本卷没有符合条件的题目。" : "没有符合条件的题目。"}</p> : <>
+      {papersOpen || emptyTemporary ? null : paperOpen && !activePaper ? null : !library && !temporary ? <p className="picker-empty">正在读取题库…</p> : !modules.length && !temporary && !paperOpen ? <p className="picker-empty">题库还没有模块。</p> : !displayed.length ? <p className="picker-empty">{paperOpen ? "本卷没有符合条件的题目。" : "没有符合条件的题目。"}</p> : <>
         <p className="picker-count">{paperOpen && paperSearch ? `本卷找到 ${displayed.length} 道（共 ${activePaper?.items.length ?? 0} 道）` : `共 ${displayed.length} 道`}</p>
         <ol className="picker-list">{displayed.slice(0, paperOpen ? displayed.length : limit).map((item, index) => {
           const question = item.question;

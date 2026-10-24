@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, PointerEvent as ReactPointerEvent, Suspense, useRef, useState } from "react";
+import { lazy, PointerEvent as ReactPointerEvent, Suspense, useEffect, useRef, useState } from "react";
 import { MathText } from "./MathText";
 import { DocxOptions } from "./DocxContent";
 
@@ -13,7 +13,7 @@ function TextField({ value, label, placeholder = "", singleLine = false, onChang
   </Suspense>;
 }
 import { renderImportFile, structuredDocxQuestions, type ImportPage } from "../../lib/file-import";
-import { jobPageImage, jobsApi, postJson, RecognitionJobTable, uploadJobPage, useRecognitionJobs } from "./RecognitionJobs";
+import { jobLive, jobPageImage, jobsApi, postJson, RecognitionJobTable, uploadJobPage, useRecognitionJobs } from "./RecognitionJobs";
 import { readStudioFilesInBatches } from "../../lib/answer-studio-images";
 import { contentFingerprint } from "../../lib/content-fingerprint.mjs";
 import type { LibraryImportDraft, LibraryImportSource, StudioJob } from "../../lib/server/answer-studio-jobs";
@@ -111,14 +111,17 @@ type QuestionEntryProps = {
   onSaved: (questions: Question[]) => void;
   onClose: () => void;
   onNotice: (message: string, tone?: "success" | "error") => void;
-  // Handouts and the basket keep their own snapshots after new questions join the library.
+  // Handouts and the basket keep their own snapshots after new questions join the library. Their imports take
+  // one Word file or several screenshots, each of which may hold several questions.
   saveTemporaryQuestions?: (questions: Question[]) => Promise<Question[]>;
   startWithFile?: boolean;
+  // Files pasted or dropped on the 临时题库 before the dialog opened.
+  initialFiles?: File[];
   // A wrong-book question joining the library: saved as a new library question that keeps its ID.
   addToLibrary?: boolean;
 };
 
-export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice, saveTemporaryQuestions, startWithFile = false, addToLibrary = false }: QuestionEntryProps) {
+export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved, onClose, onNotice: setNotice, saveTemporaryQuestions, startWithFile = false, initialFiles, addToLibrary = false }: QuestionEntryProps) {
   const [questionDraft, setQuestionDraft] = useState<Question | null>(initial);
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isReconstructingDiagram, setIsReconstructingDiagram] = useState(false);
@@ -142,6 +145,11 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   const [fileImportErrors, setFileImportErrors] = useState<string[]>([]);
   const [fileImportNotice, setFileImportNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [openImportJobId, setOpenImportJobId] = useState("");
+  // Screenshots wait here in paste order until one job reads them all; that job is then followed until its review opens.
+  const [importPictures, setImportPictures] = useState<{ id: string; file: File; src: string }[]>([]);
+  const [watchJobId, setWatchJobId] = useState("");
+  const [picturePages, setPicturePages] = useState(false);
+  const [openedAt] = useState(() => Date.now());
   const [isSavingImportedQuestions, setIsSavingImportedQuestions] = useState(false);
   const fileImportSavingRef = useRef(false);
   const questionImageRef = useRef<HTMLInputElement>(null);
@@ -182,12 +190,17 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   function closeFileImport() { if (fileImportSavingRef.current) return; fileImportAbortRef.current?.abort(); fileImportAbortRef.current = null; setFileImportOpen(false); onClose(); }
 
-  async function handleImportDocument(file: File) {
-    if (file.size > 80 * 1024 * 1024) { setFileImportErrors(["文件超过 80MB，请拆分后再导入"]); return; }
+  // One Word or PDF file, or pictures read together as the pages of one job.
+  async function handleImportDocument(files: File[]) {
+    const [file] = files;
+    if (files.some((item) => item.size > 80 * 1024 * 1024)) { setFileImportErrors(["文件超过 80MB，请拆分后再导入"]); return; }
     const docx = /\.docx$/i.test(file.name) || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     if (/\.doc$/i.test(file.name)) { setFileImportErrors(["暂不支持旧版 .doc，请在 Word 中另存为 .docx 后导入"]); return; }
-    if (!docx && !/\.pdf$/i.test(file.name) && !/^image\/(png|jpeg|webp)$/.test(file.type)) { setFileImportErrors(["请选择 PDF、.docx 或 PNG / JPEG / WebP 图片"]); return; }
-    const controller = new AbortController(); fileImportAbortRef.current = controller; setFileImportName(file.name); setFileImportDrafts([]); setFileImportErrors([]); setFileImportNotice(null); setOpenImportJobId(""); setFileImportStep("rendering");
+    const pictures = files.every((item) => /^image\/(png|jpeg|webp)$/.test(item.type));
+    if (!docx && !/\.pdf$/i.test(file.name) && !pictures) { setFileImportErrors(["请选择 PDF、.docx 或 PNG / JPEG / WebP 图片"]); return; }
+    // Pasted screenshots are all called image.png, so they are named by when they came in.
+    const title = files.length > 1 || /^image\.(png|jpe?g|webp)$/i.test(file.name) ? `截图 ${new Date().toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : file.name;
+    const controller = new AbortController(); fileImportAbortRef.current = controller; setFileImportName(title); setFileImportDrafts([]); setFileImportErrors([]); setFileImportNotice(null); setOpenImportJobId(""); setFileImportStep("rendering");
     let unfinished = "";
     try {
       // A Word file whose structure can be read goes straight to the review; nothing is sent to the AI.
@@ -209,22 +222,24 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       }
       // Everything else is read page by page by the AI in a background job: pages are uploaded in order, then the
       // teacher may close this window and open the job's result here later.
-      const { job } = await jobsApi<{ job: StudioJob }>("/api/answer-studio/jobs", postJson({ kind: "import", title: file.name, categories: recognitionCategories, notes: pages[0]?.renderNotes ?? [], source: wordSource(pages[0]) }));
+      const { job } = await jobsApi<{ job: StudioJob }>("/api/answer-studio/jobs", postJson({ kind: "import", title, categories: recognitionCategories, notes: pages[0]?.renderNotes ?? [], source: wordSource(pages[0]) }));
       unfinished = job.id; imports.setJobs((current) => [job, ...current]);
       let uploaded = 0;
       const upload = async (page: { id: string; page: number; name: string; hash: string; image: string; textHint?: string; documentSection?: "questions" | "answers" }) => {
         if (controller.signal.aborted) throw new DOMException("文件录入已取消", "AbortError");
-        setFileImportProgress({ current: uploaded, total: pages.length || uploaded + 1, label: `正在上传第 ${uploaded + 1} 页，上传完成前请勿关闭窗口` });
+        setFileImportProgress({ current: uploaded, total: pages.length || Math.max(files.length, uploaded + 1), label: `正在上传第 ${uploaded + 1} ${pictures ? "张" : "页"}，上传完成前请勿关闭窗口` });
         await uploadJobPage(job.id, page); uploaded += 1;
       };
-      // Answer pages whose analyses the Word file already gives need no AI.
+      // Answer pages whose analyses the Word file already gives need no AI. Pictures are numbered in the order they came.
       if (docx) for (const page of pages) { if (!(page.documentSection === "answers" && page.sourceAnalyses)) await upload({ id: randomClientId(), page: page.pageNumber, name: file.name, hash: await contentFingerprint(page.image), image: page.image, textHint: page.textHint, documentSection: page.documentSection }); }
-      else await readStudioFilesInBatches([file], "question", "", (label) => setFileImportProgress((current) => ({ ...current, label })), async (batch) => { for (const page of batch) await upload({ id: page.id, page: page.page, name: page.name, hash: page.hash, image: page.image }); });
+      else await readStudioFilesInBatches(files, "question", "", (label) => setFileImportProgress((current) => ({ ...current, label })), async (batch) => { for (const page of batch) await upload({ id: page.id, page: uploaded + 1, name: page.name, hash: page.hash, image: page.image }); });
       if (!uploaded) throw new Error("文件里没有需要识别的页面");
       await jobsApi(`/api/answer-studio/jobs/${job.id}`, { method: "POST" });
-      unfinished = "";
-      setFileImportNotice({ text: `「${file.name}」已转入后台识别（${uploaded} 页），可以关闭窗口；识别完成后在下面的识别任务里打开校对。`, error: false });
-      setFileImportStep("choose"); void imports.refresh();
+      unfinished = ""; void imports.refresh();
+      // A 临时题库 import waits for its job and opens the review itself.
+      if (saveTemporaryQuestions) { setWatchJobId(job.id); setFileImportStep("recognizing"); return; }
+      setFileImportNotice({ text: `「${title}」已转入后台识别（${uploaded} 页），可以关闭窗口；识别完成后在下面的识别任务里打开校对。`, error: false });
+      setFileImportStep("choose");
     } catch (error) {
       // Without the file a half-uploaded job can never start, so it does not stay in the list.
       if (unfinished) { await jobsApi(`/api/answer-studio/jobs/${unfinished}`, { method: "DELETE" }).catch(() => undefined); imports.setJobs((current) => current.filter((item) => item.id !== unfinished)); }
@@ -239,6 +254,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     setFileImportProgress({ current: 0, total: job.pageCount, label: "正在读取识别结果…" });
     try {
       const { draft } = await jobsApi<{ draft: LibraryImportDraft }>(`/api/answer-studio/jobs/${job.id}`);
+      setPicturePages(draft.pages.every((page) => /\.(png|jpe?g|webp)$/i.test(page.name)));
       const recognizedPages: RecognizedImportPage[] = [];
       for (const [index, page] of draft.pages.entries()) {
         setFileImportProgress({ current: index, total: draft.pages.length, label: `正在读取第 ${index + 1}/${draft.pages.length} 页原件` });
@@ -339,6 +355,56 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       if (!isUsableImportedAnswer(target.answer)) target.answer = explicitChoiceFromAnalysis(target.analysis);
     }
     setFileImportDrafts(imported); setFileImportErrors(pageErrors); setFileImportStep("review");
+  }
+
+  // The 临时题库 takes one Word file, read at once, or screenshots, which wait to be read together.
+  async function addImportFiles(files: File[]) {
+    const word = files.find((file) => /\.docx?$/i.test(file.name) || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    if (word) { await handleImportDocument([word]); return; }
+    const pictures = files.filter((file) => /^image\/(png|jpeg|webp)$/.test(file.type));
+    if (!pictures.length) { setFileImportErrors(["请放入 Word（.docx）或 PNG / JPEG / WebP 截图"]); return; }
+    setFileImportErrors([]); setFileImportNotice(null);
+    try {
+      const added = await Promise.all(pictures.map(async (file) => ({ id: randomClientId(), file, src: await fileToDataUrl(file) })));
+      setImportPictures((current) => [...current, ...added]);
+    } catch { setFileImportErrors(["无法读取这张截图，请换一张重试"]); }
+  }
+  const addFilesRef = useRef(addImportFiles);
+  useEffect(() => { addFilesRef.current = addImportFiles; });
+  // Files pasted or dropped on the 临时题库 arrive with the dialog; later ones may be pasted anywhere while it waits for them.
+  useEffect(() => {
+    const timer = setTimeout(() => { if (startWithFile && initialFiles?.length) void addFilesRef.current(initialFiles); }, 0);
+    return () => clearTimeout(timer);
+  }, [startWithFile, initialFiles]);
+  useEffect(() => {
+    if (!fileImportOpen || !saveTemporaryQuestions || fileImportStep !== "choose") return;
+    const paste = (event: ClipboardEvent) => {
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (event.defaultPrevented || !files.length) return;
+      event.preventDefault(); void addFilesRef.current(files);
+    };
+    document.addEventListener("paste", paste);
+    return () => document.removeEventListener("paste", paste);
+  }, [fileImportOpen, saveTemporaryQuestions, fileImportStep]);
+
+  // The job read for the 临时题库 opens its review when done; a failed one stays listed below to continue.
+  const watchedJob = imports.jobs.find((job) => job.id === watchJobId);
+  useEffect(() => {
+    if (!watchedJob || watchedJob.status === "uploading" || jobLive(watchedJob)) return;
+    const timer = setTimeout(() => {
+      setWatchJobId("");
+      if (watchedJob.status === "done") { setImportPictures([]); void openImportJob(watchedJob); }
+      else { setFileImportNotice({ text: watchedJob.stalled ? "识别中断了，可以在下面继续" : watchedJob.error || "识别没有完成，可以在下面继续", error: true }); setFileImportStep("choose"); }
+    }, 0);
+    return () => clearTimeout(timer);
+  });
+
+  // Back to the screenshots as they were, to change them and read again; the job and its uploaded pages are dropped.
+  async function cancelRecognition() {
+    const id = watchJobId; setWatchJobId(""); setFileImportStep("choose"); imports.setJobs((current) => current.filter((item) => item.id !== id));
+    try { await jobsApi(`/api/answer-studio/jobs/${id}`, { method: "DELETE" }); }
+    catch (error) { setFileImportNotice({ text: error instanceof Error ? error.message : "取消失败", error: true }); }
+    void imports.refresh();
   }
 
   function updateImportDraft(importId: string, changes: Partial<FileImportDraft>) {
@@ -621,25 +687,43 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
       </section>
     </div>}
 
-    {fileImportOpen && <div className="modal-backdrop"><section className="modal file-import-modal" role="dialog" aria-modal="true" aria-label="文件批量录入" aria-busy={isSavingImportedQuestions}>
-      <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "临时题库" : "智能录题"}</span><h2>PDF / Word / 图片批量录入</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
+    {fileImportOpen && <div className="modal-backdrop"><section className="modal file-import-modal" role="dialog" aria-modal="true" aria-label={saveTemporaryQuestions ? "导入题目" : "文件批量录入"} aria-busy={isSavingImportedQuestions}>
+      <div className="modal-head"><div><span className="eyebrow">{saveTemporaryQuestions ? "临时题库" : "智能录题"}</span><h2>{saveTemporaryQuestions ? "导入题目" : "PDF / Word / 图片批量录入"}</h2></div><button className="close" disabled={isSavingImportedQuestions} onClick={closeFileImport}>×</button></div>
       {fileImportStep === "choose" && <>
-        <div className="entry-mode" role="tablist" aria-label="录题方式"><button onClick={backToScreenshotEntry}><b>AI 截图录入</b><span>识别单道题目截图</span></button><button className="active"><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>
-        <div className="file-import-intro"><div><b>整份文件导入</b><p>能读出结构的 Word 直接进入校对；PDF、图片和读不出结构的 Word 交给 AI 在后台逐页识别，上传完就可以关闭窗口，识别完在下面的识别任务里打开校对。</p></div></div>
-        <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void handleImportDocument(file); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) handleImportDocument(file); }}><strong>选择、拖入文件或粘贴图片</strong><span>支持 PDF、Word（.docx）、PNG / JPEG / WebP，单个文件最多 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
-        <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) handleImportDocument(file); event.target.value = ""; }} />
+        {saveTemporaryQuestions ? <>
+          <button type="button" className={`drop-entry${importPictures.length ? " compact" : ""}`} onClick={() => fileImportRef.current?.click()}
+            onDragOver={(event) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); event.currentTarget.classList.add("dragging"); }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.classList.remove("dragging"); }}
+            onDrop={(event) => { event.preventDefault(); event.currentTarget.classList.remove("dragging"); void addImportFiles([...event.dataTransfer.files]); }}>
+            <kbd>⌘V</kbd>
+            {importPictures.length ? <span><b>继续粘贴或拖入截图</b><small>已放入 {importPictures.length} 张，一起识别</small></span> : <span><b>粘贴题目截图，或拖入 Word</b><small>可一次放入多张，每张可含多道题</small></span>}
+          </button>
+          <input ref={fileImportRef} hidden multiple type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp" onChange={(event) => { void addImportFiles([...(event.target.files ?? [])]); event.target.value = ""; }} />
+          {!!importPictures.length && <ol className="import-pictures">{importPictures.map((picture, index) => <li key={picture.id}><img src={picture.src} alt={`第 ${index + 1} 张截图`} /><span>{index + 1}</span><button type="button" title="移除" aria-label={`移除第 ${index + 1} 张截图`} onClick={() => setImportPictures((current) => current.filter((item) => item.id !== picture.id))}>×</button></li>)}</ol>}
+        </> : <>
+          <div className="entry-mode" role="tablist" aria-label="录题方式"><button onClick={backToScreenshotEntry}><b>AI 截图录入</b><span>识别单道题目截图</span></button><button className="active"><b>文件批量录入</b><span>PDF / Word 整份导入</span></button></div>
+          <div className="file-import-intro"><div><b>整份文件导入</b><p>能读出结构的 Word 直接进入校对；PDF、图片和读不出结构的 Word 交给 AI 在后台逐页识别，上传完就可以关闭窗口，识别完在下面的识别任务里打开校对。</p></div></div>
+          <button className="file-dropzone" onClick={() => fileImportRef.current?.click()} onPaste={(event) => { const file = clipboardImage(event); if (file) { event.preventDefault(); void handleImportDocument([file]); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void handleImportDocument([file]); }}><strong>选择、拖入文件或粘贴图片</strong><span>支持 PDF、Word（.docx）、PNG / JPEG / WebP，单个文件最多 80MB</span><small>旧版 .doc 请先在 Word 中另存为 .docx</small></button>
+          <input ref={fileImportRef} hidden type="file" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleImportDocument([file]); event.target.value = ""; }} />
+        </>}
         {!!fileImportErrors.length && <div className="recognition-error"><b>文件未能读取</b><span>{fileImportErrors.join("；")}</span></div>}
         {fileImportNotice && <div className={fileImportNotice.error ? "recognition-error" : "recognition-warning"} role="status"><b>{fileImportNotice.error ? "操作未完成" : "已转入后台"}</b><span>{fileImportNotice.text}</span></div>}
-        <RecognitionJobTable kind="import" jobs={imports.jobs} openJobId={openImportJobId} busy={false} cancellingJobId={imports.cancellingJobId} canOpen={(job) => job.status === "done" || job.status === "failed" && job.processedCount > 0}
+        {/* The 临时题库 lists the last day's jobs: older ones were imported long ago, and opening one again would add its questions twice. */}
+        <RecognitionJobTable kind="import" jobs={saveTemporaryQuestions ? imports.jobs.filter((job) => jobLive(job) || openedAt - job.createdAt < 86_400_000) : imports.jobs} openJobId={openImportJobId} busy={false} cancellingJobId={imports.cancellingJobId} canOpen={(job) => job.status === "done" || job.status === "failed" && job.processedCount > 0}
           onOpen={(job) => void openImportJob(job)} onResume={(job) => void imports.resume(job)} onCancel={(job) => void imports.cancel(job)} onRemove={(job) => void imports.remove(job)} />
-        <div className="file-privacy-note">{saveTemporaryQuestions ? "校对确认后自动分配 ID 并加入正式题库，同时保留在当前临时题库中供选题。" : "正式题库只保存你确认过的题目内容。"}交给 AI 识别的页面会上传到服务器，删除识别任务时一并删除。</div>
+        {saveTemporaryQuestions ? <div className="modal-actions"><span className="save-note">保存后自动分配 ID，并加入正式题库</span>{!!importPictures.length && <button className="primary-button" onClick={() => void handleImportDocument(importPictures.map((picture) => picture.file))}>识别 {importPictures.length} 张截图</button>}</div>
+          : <div className="file-privacy-note">正式题库只保存你确认过的题目内容。交给 AI 识别的页面会上传到服务器，删除识别任务时一并删除。</div>}
       </>}
-      {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{fileImportStep === "rendering" ? "读取文件" : "整理题目"}</span></div><h3>{fileImportProgress.label}</h3><div className="progress-track"><i style={{ width: `${fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div><p>{fileImportStep === "rendering" ? "完成后自动进入下一步" : "正在拆分题干、选项、答案和配图"}</p><button className="secondary" onClick={closeFileImport}>取消导入</button></div>}
+      {(fileImportStep === "rendering" || fileImportStep === "recognizing") && <div className="file-processing"><div className="file-spinner"><i></i><span>{watchJobId ? "识别中" : fileImportStep === "rendering" ? "读取文件" : "整理题目"}</span></div>
+        <h3>{watchJobId ? `正在识别 ${watchedJob?.processedCount ?? 0} / ${watchedJob?.pageCount ?? 0}` : fileImportProgress.label}</h3>
+        <div className="progress-track"><i style={{ width: `${watchJobId ? Math.max(8, watchedJob?.pageCount ? watchedJob.processedCount / watchedJob.pageCount * 100 : 0) : fileImportProgress.total ? fileImportProgress.current / fileImportProgress.total * 100 : 8}%` }}></i></div>
+        <p>{watchJobId ? "识别完自动进入校对，关闭窗口也会继续" : fileImportStep === "rendering" ? "完成后自动进入下一步" : "正在拆分题干、选项、答案和配图"}</p>
+        <button className="secondary" onClick={watchJobId ? () => void cancelRecognition() : closeFileImport}>{watchJobId ? "取消识别" : "取消导入"}</button></div>}
       {fileImportStep === "review" && <>
         <div className="file-review-summary"><div><strong>{fileImportDrafts.length}</strong><span>道待校对题目</span></div><p>{fileImportName} · 已选择 {fileImportDrafts.filter((item) => item.selected).length} 道</p><button className="secondary" disabled={isSavingImportedQuestions} onClick={() => setFileImportDrafts((current) => current.map((item) => ({ ...item, selected: !current.every((entry) => entry.selected) })))}>{fileImportDrafts.every((item) => item.selected) ? "取消全选" : "全部选择"}</button></div>
         {!!fileImportErrors.length && <div className="recognition-warning"><b>导入提示</b><span>{fileImportErrors.join("；")}</span></div>}
         {!fileImportDrafts.length ? <div className="file-empty-result"><b>没有识别到完整题目</b><p>请确认文件页面清晰且包含题号，再重新选择文件。</p><button className="secondary" onClick={() => setFileImportStep("choose")}>重新选择</button></div> : <div className="file-draft-list" inert={isSavingImportedQuestions}>{fileImportDrafts.map((item, index) => <article className={`file-draft ${item.selected ? "selected" : ""}`} key={item.importId}>
-          <div className="file-draft-head"><label><input type="checkbox" checked={item.selected} onChange={(event) => updateImportDraft(item.importId, { selected: event.target.checked })} /><b>第 {index + 1} 题</b></label><span>{item.sourcePage ? `文件第 ${item.sourcePage} 页` : `Word 原题 ${item.documentNumber || index + 1}`} · 可信度 {Math.round((item.recognitionConfidence ?? 0) * 100)}%</span><button onClick={() => setFileImportDrafts((current) => current.filter((entry) => entry.importId !== item.importId))}>移除</button></div>
+          <div className="file-draft-head"><label><input type="checkbox" checked={item.selected} onChange={(event) => updateImportDraft(item.importId, { selected: event.target.checked })} /><b>第 {index + 1} 题</b></label><span>{item.sourcePage ? picturePages ? `第 ${item.sourcePage} 张截图` : `文件第 ${item.sourcePage} 页` : `Word 原题 ${item.documentNumber || index + 1}`} · 可信度 {Math.round((item.recognitionConfidence ?? 0) * 100)}%</span><button onClick={() => setFileImportDrafts((current) => current.filter((entry) => entry.importId !== item.importId))}>移除</button></div>
           <div className="file-draft-fields"><label>题型<select value={item.type} onChange={(event) => updateImportDraft(item.importId, { type: event.target.value as QuestionType })}>{questionTypes.map((type) => <option key={type}>{type}</option>)}</select></label><label>难度<select value={item.difficulty} onChange={(event) => updateImportDraft(item.importId, { difficulty: event.target.value as Difficulty })}>{difficulties.map((difficulty) => <option key={difficulty}>{difficulty}</option>)}</select></label><label className="wide">分类<select value={item.categoryId} onChange={(event) => updateImportDraft(item.importId, { categoryId: event.target.value })}><option value="">请选择</option>{categoryOptions}</select></label></div>
           <div className="field"><span>题干</span><TextField value={item.stem} label={`第 ${index + 1} 题题干`} onChange={(stem) => updateImportDraft(item.importId, { stem })} /></div>
           {!!(questionImages(item).length || item.optionsImage) && <div className="file-draft-media"><div className="file-draft-images">{[...questionImages(item), ...(item.optionsImage ? [item.optionsImage] : [])].map((image, imageIndex) => <img src={image} alt={`第 ${index + 1} 题配图 ${imageIndex + 1}`} key={`${item.importId}-preview-${imageIndex}`} />)}</div><span>{item.diagramSource === "svg-ai" ? `高清矢量重绘 · 视觉匹配度 ${Math.round((item.diagramVisualFitScore ?? 0) * 100)}%` : `已保留 ${questionImages(item).length} 张原始配图`}</span></div>}
