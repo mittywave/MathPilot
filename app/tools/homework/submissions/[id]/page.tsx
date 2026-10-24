@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { SiteHeader } from "../../../../components/SiteHeader";
 import { PaperMoreMenu } from "../../../../components/PaperMoreMenu";
+import { useToast } from "../../../../components/Toast";
 import { fetchMe } from "../../../../../lib/api-client";
 import { AssignedHomeworkSheet, confirmGivingUp, dayNote, resultState, uploadNote, VerdictTally } from "../../../../components/AssignedHomeworkSheet";
 import HomeworkPagePicker, { releaseHomeworkPages, type HomeworkPage } from "../../../../components/HomeworkPagePicker";
@@ -224,7 +225,8 @@ export default function TeacherSubmissionPage() {
   const [dayEvidence, setDayEvidence] = useState<{ day: number; submission: HomeworkSubmission; uploads: HomeworkSubmission[]; error: string } | null>(null);
   const [split, setSplit] = useState(70);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState({ text: "", tone: "success" as "success" | "error" });
+  const [toastNode, show] = useToast();
+  const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const orientationRequests = useRef(new Set<string>());
   const [orienting, setOrienting] = useState(0);
@@ -242,7 +244,7 @@ export default function TeacherSubmissionPage() {
     const frame = requestAnimationFrame(() => {
       const submissionId = decodeURIComponent(location.pathname.split("/").filter(Boolean).at(-1) ?? "");
       setId(submissionId);
-      void load(submissionId).catch((error) => setMessage({ text: error instanceof Error ? error.message : "提交记录读取失败", tone: "error" })).finally(() => setLoading(false));
+      void load(submissionId).catch((error) => setLoadError(error instanceof Error ? error.message : "提交记录读取失败")).finally(() => setLoading(false));
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -270,10 +272,10 @@ export default function TeacherSubmissionPage() {
         // Only display metadata changes; a poll, replacement or unsaved judgment edit keeps its current data.
         setSubmission(current => current && apply(current));
         setDayEvidence(current => current && { ...current, uploads: current.uploads.map(apply) });
-      }).catch(error => setMessage({ text: error instanceof Error ? error.message : "图片方向检查失败，请刷新后重试", tone: "error" }))
+      }).catch(error => show({ text: error instanceof Error ? error.message : "图片方向检查失败，请刷新后重试", tone: "error" }))
         .finally(() => setOrienting(count => count - 1));
     }
-  }, [submission, dayEvidence]);
+  }, [submission, dayEvidence, show]);
 
   // A day's latest answers can span the original upload, later additions and corrections. Read their existing evidence on demand.
   useEffect(() => {
@@ -294,17 +296,17 @@ export default function TeacherSubmissionPage() {
 
   async function repairCoverage(){
     if(!submission)return;setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);setMessage({ text: "已开始逐页补全与重批，修复前记录已保留。", tone: "success" });}catch(error){setMessage({ text: error instanceof Error?error.message:"补全失败", tone: "error" });}finally{setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"rebuild-coverage"});setSubmission(result.submission);setItems(result.submission.gradingItems);show({ text: "已开始逐页补全与重批，修复前记录已保留。", tone: "success" });}catch(error){show({ text: error instanceof Error?error.message:"补全失败", tone: "error" });}finally{setBusy(false);}
   }
   async function attachFigures(){
-    if(!submission)return;setBusy(true);setMessage({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "success" });
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;setMessage({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: "error" });}catch(error){setMessage({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
+    if(!submission)return;setBusy(true);show({ text: "正在逐页重新校对原卷配图，检查共用题图及手写覆盖，页数多时需要几分钟，请勿关闭本页…", tone: "progress" });
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"attach-figures"});setSubmission(result.submission);setItems(result.submission.gradingItems);const left=result.submission.figuresPending??0;show({ text: left?`仍有 ${left} 道题配图待核对，请检查原卷后再次校对`:"原卷配图已校对，错题本已同步", tone: left ? "error" : "success" });}catch(error){show({ text: error instanceof Error?error.message:"配图校对失败", tone: "error" });}finally{setBusy(false);}
   }
   // A new upload: the whole sheet, one day not handed in yet, or one day's mistakes. A failed latest upload gives way once the teacher agrees.
   async function newVersion(scope: { correctionDay?: number; uploadDay?: number }, next: string) {
     if (!submission || !confirmGivingUp(submission.assigned?.uploads.at(-1), next)) return;
     setBusy(true);
-    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version",...scope});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){setMessage({ text: error instanceof Error?error.message:"创建上传失败", tone: "error" });setBusy(false);}
+    try{const result=await homeworkApi.updateSubmission(submission.id,{action:"new-version",...scope});location.href=`/tools/homework/submissions/${result.submission.id}`;}catch(error){show({ text: error instanceof Error?error.message:"创建上传失败", tone: "error" });setBusy(false);}
   }
   async function changeProfile(profile: boolean) {
     if (!submission || busy || submission.assigned) return;
@@ -314,22 +316,22 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "profile", profile });
       setSubmission(result.submission);
-      setMessage({ text: profile ? "已计入定档" : "已从定档移出", tone: "success" });
+      show({ text: profile ? "已计入定档" : "已从定档移出", tone: "success" });
     } catch (error) {
       setSubmission((current) => current && { ...current, outputs: { ...current.outputs, profile: previous } });
       const reason = error instanceof TypeError ? "网络连接中断" : error instanceof Error ? error.message : "定档设置保存失败，请重试";
-      setMessage({ text: reason, tone: "error" });
+      show({ text: reason, tone: "error" });
       // A lost response can follow a committed transaction; read the saved flag without replacing an editing draft.
       try {
         const saved = (await homeworkApi.submission(submission.id)).submission;
         setSubmission(saved);
-        setMessage({ text: `${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`, tone: "error" });
+        show({ text: `${reason}；已核对当前状态：${saved.outputs.profile ? "已计入定档" : "未计入定档"}。`, tone: "error" });
       } catch { /* Keep the previous flag and the error. */ }
     } finally { setBusy(false); }
   }
   async function reprocessPending() {
     if (!submission) return;
-    setBusy(true); setMessage({ text: "正在补充待处理题目的材料…", tone: "success" });
+    setBusy(true); show({ text: "正在补充待处理题目的材料…", tone: "progress" });
     try {
       const replacements=[];
       if(supplementPages.length) {
@@ -339,8 +341,8 @@ export default function TeacherSubmissionPage() {
       }
       await uploadReferences();
       const result=await homeworkApi.updateSubmission(submission.id,{action:"reprocess-pending",pages:replacements});
-      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);setMessage({ text: "已重新处理待处理题，原始页面仍保留在历史原件中", tone: "success" });
-    } catch(error){setMessage({ text: error instanceof Error?error.message:"重新处理失败", tone: "error" });}finally{setBusy(false);}
+      releaseHomeworkPages(supplementPages);setSubmission(result.submission);setItems(result.submission.gradingItems);setSupplementPages([]);show({ text: "已重新处理待处理题，原始页面仍保留在历史原件中", tone: "success" });
+    } catch(error){show({ text: error instanceof Error?error.message:"重新处理失败", tone: "error" });}finally{setBusy(false);}
   }
 
   // Reference answer pages are appended to the homework in the order they are chosen.
@@ -357,7 +359,7 @@ export default function TeacherSubmissionPage() {
   async function uploadAndSubmit() {
     if (!submission || !pages.length) return;
     setBusy(true);
-    setMessage({ text: "正在上传作业原件…", tone: "success" });
+    show({ text: "正在上传作业原件…", tone: "progress" });
     try {
       for (const file of sourceDocuments) await uploadHomeworkAsset({blob:file,fileName:file.name,role:"submission_document",submissionId:submission.id});
       setSourceDocuments([]);
@@ -365,7 +367,7 @@ export default function TeacherSubmissionPage() {
       for (const [index, page] of pages.entries()) {
         const asset = await uploadHomeworkAsset({ blob: page.blob, fileName: `${submission.studentName}-第${index + 1}页.jpg`, role: "submission_original", submissionId: submission.id });
         saved.push({ assetId: asset.id });
-        setMessage({ text: `正在上传第 ${index + 1}/${pages.length} 页…`, tone: "success" });
+        show({ text: `正在上传第 ${index + 1}/${pages.length} 页…`, tone: "progress" });
       }
       await uploadReferences();
       await homeworkApi.updateSubmission(submission.id, { action: "save-pages", pages: saved });
@@ -373,9 +375,9 @@ export default function TeacherSubmissionPage() {
       releaseHomeworkPages(pages); setPages([]);
       setSubmission(result.submission);
       setItems(result.submission.gradingItems);
-      setMessage({ text: "作业已提交，后台会自动批改并发布结果", tone: "success" });
+      show({ text: "作业已提交，后台会自动批改并发布结果", tone: "success" });
     } catch (error) {
-      setMessage({ text: error instanceof Error ? error.message : "作业提交失败", tone: "error" });
+      show({ text: error instanceof Error ? error.message : "作业提交失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -424,9 +426,9 @@ export default function TeacherSubmissionPage() {
       setItems(result.submission.gradingItems);
       setEditingId("");
       await load(submission.id);
-      setMessage({ text: result.submission.failureReason || "判定已修正，错题本和作业报告已同步更新", tone: result.submission.failureReason ? "error" : "success" });
+      show({ text: result.submission.failureReason || "判定已修正，错题本和作业报告已同步更新", tone: result.submission.failureReason ? "error" : "success" });
     } catch (error) {
-      setMessage({ text: error instanceof Error ? error.message : "修正失败", tone: "error" });
+      show({ text: error instanceof Error ? error.message : "修正失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -445,9 +447,9 @@ export default function TeacherSubmissionPage() {
       setSubmission(result);
       setItems(result.gradingItems);
       await load(submission.id);
-      setMessage({ text: result.failureReason || "结果已同步发布", tone: result.failureReason ? "error" : "success" });
+      show({ text: result.failureReason || "结果已同步发布", tone: result.failureReason ? "error" : "success" });
     } catch (error) {
-      setMessage({ text: error instanceof Error ? error.message : "旧提交处理失败", tone: "error" });
+      show({ text: error instanceof Error ? error.message : "旧提交处理失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -457,9 +459,9 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "retry" });
       setSubmission(result.submission);
-      setMessage({ text: "已重新提交后台批改任务", tone: "success" });
+      show({ text: "已重新提交后台批改任务", tone: "success" });
     } catch (error) {
-      setMessage({ text: error instanceof Error ? error.message : "重试失败", tone: "error" });
+      show({ text: error instanceof Error ? error.message : "重试失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -470,9 +472,9 @@ export default function TeacherSubmissionPage() {
     try {
       const result = await homeworkApi.updateSubmission(submission.id, { action: "cancel" });
       setSubmission(result.submission); setItems(result.submission.gradingItems);
-      setMessage({ text: "已回到待上传，请重新选页面提交", tone: "success" });
+      show({ text: "已回到待上传，请重新选页面提交", tone: "success" });
     } catch (error) {
-      setMessage({ text: error instanceof Error ? error.message : "停止批改失败", tone: "error" });
+      show({ text: error instanceof Error ? error.message : "停止批改失败", tone: "error" });
     } finally { setBusy(false); }
   }
 
@@ -484,13 +486,13 @@ export default function TeacherSubmissionPage() {
       const { buildHomeworkReportLatex, HOMEWORK_REPORT_MAIN } = await import("../../../../../lib/homework-report-latex");
       const tex = buildHomeworkReportLatex(submission);
       const name = `${submission.studentName}-${submission.assignmentTitle}-批改报告`;
-      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); setMessage({ text: "TeX 源文件已下载", tone: "success" }); return; }
+      if (kind === "tex") { saveBlob(new Blob([tex], { type: "application/x-tex" }), `${name}.tex`); show({ text: "TeX 源文件已下载", tone: "success" }); return; }
       const { compileLatexPdf, latexCompilerStatus } = await import("../../../../../lib/handout-latex-files");
-      if (!(await latexCompilerStatus()).available) { setMessage({ text: "这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页", tone: "error" }); return; }
+      if (!(await latexCompilerStatus()).available) { show({ text: "这台设备无法排版 PDF，请下载 TeX 源文件，或在运行 MathPilot 的电脑上打开本页", tone: "error" }); return; }
       const { pdf, issues } = await compileLatexPdf({ main: HOMEWORK_REPORT_MAIN, files: { [HOMEWORK_REPORT_MAIN]: new TextEncoder().encode(tex) }, missingFigures: 0 });
       saveBlob(pdf, `${name}.pdf`);
-      setMessage({ text: issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成", tone: "success" });
-    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "报告生成失败", tone: "error" }); }
+      show({ text: issues ? `报告 PDF 已生成，${issues} 处公式需要检查` : "报告 PDF 已生成", tone: issues ? "error" : "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "报告生成失败", tone: "error" }); }
     finally { setBusy(false); }
   }
 
@@ -498,7 +500,7 @@ export default function TeacherSubmissionPage() {
     if (!submission || busy || !questions.length) return;
     const format = kind === "word" ? "Word" : "PDF";
     const content = includeAnalysis ? "作业解析" : "当前错题";
-    setBusy(true); setMessage({ text: `正在导出${content} ${format}…`, tone: "success" });
+    setBusy(true); show({ text: `正在导出${content} ${format}…`, tone: "progress" });
     try {
       const title = [includeAnalysis ? "" : submission.studentName, titleWithoutStudent(submission.assignmentTitle, submission.studentName), content].filter(Boolean).join("-");
       let issues = 0;
@@ -515,14 +517,14 @@ export default function TeacherSubmissionPage() {
         issues = result.issues;
         saveBlob(result.pdf, `${title}.pdf`);
       }
-      setMessage({ text: `${includeAnalysis ? `已导出整份作业 ${questions.length} 道题的答案与解析` : `已导出 ${questions.length} 道当前错题`}（${format}${includeAnalysis ? "" : "，不含答案"}）${issues ? `，${issues} 处公式需要检查` : ""}`, tone: issues ? "error" : "success" });
-    } catch (error) { setMessage({ text: error instanceof Error ? error.message : `${content}导出失败，请重试`, tone: "error" }); }
+      show({ text: `${includeAnalysis ? `已导出整份作业 ${questions.length} 道题的答案与解析` : `已导出 ${questions.length} 道当前错题`}（${format}${includeAnalysis ? "" : "，不含答案"}）${issues ? `，${issues} 处公式需要检查` : ""}`, tone: issues ? "error" : "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : `${content}导出失败，请重试`, tone: "error" }); }
     finally { setBusy(false); }
   }
 
   async function refresh() {
     setBusy(true);
-    try { await load(); setMessage({ text: "状态已刷新", tone: "success" }); }
+    try { await load(); show({ text: "状态已刷新", tone: "success" }); }
     finally { setBusy(false); }
   }
 
@@ -531,7 +533,7 @@ export default function TeacherSubmissionPage() {
     let exportHost: HTMLDivElement | undefined;
     let exportRoot: import("react-dom/client").Root | undefined;
     let scopeName = dayTask ? dayTask.title || `第${selectedDay! + 1}天` : `第${submission.version}次上传`;
-    setBusy(true); setMessage({ text: "正在导出批改 PDF…", tone: "success" });
+    setBusy(true); show({ text: "正在导出批改 PDF…", tone: "progress" });
     try {
       const [{ drawPage }, { fileToDataUrl }, { compileLatexPdf, latexCompilerStatus }] = await Promise.all([
         import("../../../../../lib/file-import"), import("../../../../../lib/image-tools"), import("../../../../../lib/handout-latex-files"),
@@ -548,7 +550,7 @@ export default function TeacherSubmissionPage() {
           return { title: day.title || `第 ${index + 1} 天`, index, questions };
         }).filter(day => scope === "all" || day.index === scope);
         scopeName = scope === "all" ? "全部天数" : days[0]?.title ?? "当天";
-        setMessage({ text: `正在读取${scopeName}的批改记录…`, tone: "success" });
+        show({ text: `正在读取${scopeName}的批改记录…`, tone: "progress" });
         const questions = days.flatMap(day => day.questions);
         const ids = [...new Set(questions.flatMap(question => question.result ? [question.result.submissionId] : []))];
         const uploads = await Promise.all(ids.map(async uploadId => {
@@ -612,7 +614,7 @@ export default function TeacherSubmissionPage() {
       const files: Record<string, Uint8Array> = {};
       const pages: string[] = [];
       for (const [index, figure] of figures.entries()) {
-        setMessage({ text: `正在导出批改 PDF（${index + 1}/${figures.length} 页）…`, tone: "success" });
+        show({ text: `正在导出批改 PDF（${index + 1}/${figures.length} 页）…`, tone: "progress" });
         const width = 800;
         // A fixed print width keeps notes readable on A4 regardless of the viewport, splitter or zoom.
         const host = document.createElement("div"); host.className = "review-shell review-pages"; host.setAttribute("aria-hidden", "true");
@@ -663,13 +665,13 @@ export default function TeacherSubmissionPage() {
       const { pdf } = await compileLatexPdf({ main, files, missingFigures: 0 });
       const name = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-${scopeName}-批改.pdf`.replace(/[\\/:*?"<>|]/g, "_");
       saveBlob(pdf, name);
-      setMessage({ text: `已导出${scopeName}的批改 PDF，共 ${figures.length} 页，包含原卷、批改标记和错误原因`, tone: "success" });
-    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "批改导出失败，请重试", tone: "error" }); }
+      show({ text: `已导出${scopeName}的批改 PDF，共 ${figures.length} 页，包含原卷、批改标记和错误原因`, tone: "success" });
+    } catch (error) { show({ text: error instanceof Error ? error.message : "批改导出失败，请重试", tone: "error" }); }
     finally { exportRoot?.unmount(); exportHost?.remove(); setBusy(false); }
   }
 
   if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
-  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{message.text || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
+  if (!submission) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading"><p>{loadError || "提交记录不存在"}</p><a href="/tools/homework">返回作业批改</a></main></>;
 
   const report = submission.report;
   const live = ["submitted", "processing", "failed"].includes(submission.status);
@@ -723,7 +725,7 @@ export default function TeacherSubmissionPage() {
   return <><SiteHeader active="students" user={user ?? null} loading={user === undefined}
     trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:submission.studentName,href:`${archiveLink}&tab=homework`},{label:titleWithoutStudent(submission.assignmentTitle, submission.studentName)}]}
     trailActions={<>{submission.outputs.report && international && report?.details && <button className="secondary" disabled={busy} onClick={() => downloadReport("pdf")}>下载批改报告</button>}<PaperMoreMenu label="作业维护操作"><button disabled={busy} onClick={refresh}>刷新</button>{!assigned && ["published","ready"].includes(submission.status) && <button onClick={attachFigures} disabled={busy}>校对原卷配图{submission.figuresPending ? `（${submission.figuresPending}题待核对）` : ""}</button>}{submission.status === "published" && !assigned && <button disabled={busy} onClick={() => void newVersion({}, "上传新版本")}>上传新版本</button>}{submission.outputs.report && international && report?.details && <button disabled={busy} onClick={() => downloadReport("tex")}>下载 TeX</button>}</PaperMoreMenu></>} /><main className="review-shell">
-    {message.text && <div className={`homework-notice${message.tone === "error" ? " inline-error" : ""}`} role={message.tone === "error" ? "alert" : "status"}>{message.text}<button onClick={() => setMessage({ text: "", tone: "success" })} aria-label="关闭提示">×</button></div>}
+    {toastNode}
     <section className="homework-panel review-overview" aria-label="作业概览">
 
     {assigned ? <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} actions={gradingExport} onExport={(questions, kind, includeAnalysis) => void exportHomework(questions, kind, includeAnalysis)}

@@ -342,7 +342,6 @@ html[data-theme="dark"] .answer-box { border-left-color:color-mix(in srgb, var(-
 .homework-shell input:focus,.homework-shell textarea:focus,.homework-shell select:focus,.review-shell input:focus,.review-shell textarea:focus,.review-shell select:focus { border-color:var(--green); box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 13%,transparent); }
 .homework-shell textarea,.review-shell textarea { resize:vertical; }
 .homework-notice,.studio-notice,.observation-notice { grid-column:1/-1; display:flex; align-items:center; gap:12px; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:var(--surface-soft); color:var(--ink); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
-.homework-notice button { width:25px; height:25px; flex:0 0 auto; padding:0; border:0; background:transparent; color:var(--muted); }
 
 .homework-panel { min-width:0; padding:20px; border:1px solid var(--line); border-radius:calc(15px*var(--radius-scale)); background:var(--surface); box-shadow:0 8px 25px color-mix(in srgb, color-mix(in srgb, var(--shadow-tint) 21%, var(--inverse)) 4%, transparent); }
 
@@ -1466,6 +1465,8 @@ body:has(.kgl-dock.open){--kgl-col:var(--kgl-full)}
 .app-toast.error{background:var(--danger-soft);color:var(--ink);border-color:var(--danger-strong)}
 .app-toast>.toast-symbol{flex:none}
 .app-toast.error>.toast-symbol{color:var(--danger-strong)}
+.app-toast.progress>.toast-symbol{animation:spin .8s linear infinite}
+@media (prefers-reduced-motion:reduce){.app-toast.progress>.toast-symbol{animation:none}}
 .app-toast>span{min-width:0}
 .app-toast>button{flex:none;min-height:32px;padding:0 8px;border:0;border-radius:calc(6px*var(--radius-scale));background:transparent;color:inherit;font-size:13px;white-space:nowrap}
 .app-toast>.toast-action{font-weight:600;text-decoration:underline;text-underline-offset:3px}
