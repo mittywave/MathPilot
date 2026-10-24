@@ -526,17 +526,68 @@ export default function TeacherSubmissionPage() {
     finally { setBusy(false); }
   }
 
-  async function exportGrading() {
+  async function exportGrading(scope?: number | "all") {
     if (!submission || busy || editingId) return;
-    const figures = Array.from(document.querySelectorAll<HTMLElement>("#review-originals>figure"));
-    if (!figures.length) return;
+    let exportHost: HTMLDivElement | undefined;
+    let exportRoot: import("react-dom/client").Root | undefined;
+    let scopeName = dayTask ? dayTask.title || `第${selectedDay! + 1}天` : `第${submission.version}次上传`;
     setBusy(true); setMessage({ text: "正在导出批改 PDF…", tone: "success" });
     try {
       const [{ drawPage }, { fileToDataUrl }, { compileLatexPdf, latexCompilerStatus }] = await Promise.all([
         import("../../../../../lib/file-import"), import("../../../../../lib/image-tools"), import("../../../../../lib/handout-latex-files"),
       ]);
       if (!(await latexCompilerStatus()).available) throw new Error("当前服务无法生成 PDF，请使用本地 MathPilot 导出。");
+      let figures = Array.from(document.querySelectorAll<HTMLElement>("#review-originals>figure"));
+      if (scope != null && submission.assigned) {
+        // Export the chosen days' latest evidence, independently of the upload/day currently on screen.
+        const sheet = (await homeworkApi.submission(submission.id)).submission.assigned;
+        if (!sheet) throw new Error("打卡作业读取失败，请刷新后重试");
+        let from = 0;
+        const days = sheet.days.map((day, index) => {
+          const questions = sheet.questions.slice(from, from + day.size); from += day.size;
+          return { title: day.title || `第 ${index + 1} 天`, index, questions };
+        }).filter(day => scope === "all" || day.index === scope);
+        scopeName = scope === "all" ? "全部天数" : days[0]?.title ?? "当天";
+        setMessage({ text: `正在读取${scopeName}的批改记录…`, tone: "success" });
+        const questions = days.flatMap(day => day.questions);
+        const ids = [...new Set(questions.flatMap(question => question.result ? [question.result.submissionId] : []))];
+        const uploads = await Promise.all(ids.map(async uploadId => {
+          let upload = (await homeworkApi.submission(uploadId)).submission;
+          if (upload.pages.some(page => page.rotation == null)) upload = (await homeworkApi.updateSubmission(uploadId, { action: "orient-pages" })).submission;
+          return upload;
+        }));
+        const latestItems = questions.flatMap(question => {
+          if (!question.result) return [];
+          const upload = uploads.find(upload => upload.id === question.result!.submissionId);
+          const item = upload?.gradingItems.find(item => item.assignmentQuestionId === question.id);
+          if (!item || !upload?.pages.some(page => page.id === item.pageId)) throw new Error("部分题目的原卷批改读取不完整，请刷新后重试");
+          return [item];
+        });
+        const pages = uploads.flatMap(upload => upload.pages.flatMap(page => {
+          const items = latestItems.filter(item => item.pageId === page.id);
+          if (!items.length) return [];
+          const pageDays = days.filter(day => day.questions.some(question => items.some(item => item.assignmentQuestionId === question.id)));
+          return [{ page, items, day: pageDays[0].index, version: upload.version,
+            caption: `${pageDays.map(day => day.title).join("、")} · 第 ${upload.version} 次上传 · 第 ${page.pageOrder + 1} 页` }];
+        })).sort((a, b) => a.day - b.day || a.version - b.version || a.page.pageOrder - b.page.pageOrder);
+        if (!pages.length) throw new Error(`${scopeName}暂无可导出的原卷批改`);
+        if (pages.some(({ page }) => page.rotation == null)) throw new Error("图片方向检查尚未完成，请稍后重试导出");
+        // Reuse the on-screen annotations, including pixel rotation, without changing the user's current view.
+        const [{ createRoot }, { flushSync }] = await Promise.all([import("react-dom/client"), import("react-dom")]);
+        exportHost = document.createElement("div"); exportHost.className = "review-shell review-pages";
+        exportHost.setAttribute("aria-hidden", "true"); exportHost.inert = true;
+        Object.assign(exportHost.style, { position: "fixed", left: "-12000px", top: "0", width: "800px", maxWidth: "none", display: "block" });
+        document.body.appendChild(exportHost);
+        exportRoot = createRoot(exportHost);
+        flushSync(() => exportRoot!.render(<>{pages.map(({ page, items, caption }) => <GradedHomeworkPage key={page.id} page={page} items={items}
+          caption={caption} studentName={submission.studentName} activeItemId="" international={international} onFocus={() => {}} />)}</>));
+        figures = Array.from(exportHost.querySelectorAll<HTMLElement>(":scope>figure"));
+      }
+      if (!figures.length) throw new Error("当前暂无可导出的原卷批改");
       await Promise.all(figures.flatMap(figure => Array.from(figure.querySelectorAll("img"), async image => {
+        // Rotation replaces src after the first load, so wait for that render before the final decode.
+        try { await image.decode(); } catch { /* A src change can interrupt decoding; validate the final image below. */ }
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (image.dataset.orienting) throw new Error("图片方向正在纠正，请稍后再导出");
         try { await image.decode(); } catch { throw new Error("原卷图片读取失败，请刷新页面后重试导出"); }
       })));
@@ -610,12 +661,11 @@ export default function TeacherSubmissionPage() {
         "\\pagestyle{empty}", "\\setlength{\\parindent}{0pt}", "\\begin{document}", pages.join("\n\\newpage\n"), "\\end{document}",
       ].join("\n"));
       const { pdf } = await compileLatexPdf({ main, files, missingFigures: 0 });
-      const scope = dayTask ? dayTask.title || `第${selectedDay! + 1}天` : `第${submission.version}次上传`;
-      const name = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-${scope}-批改.pdf`.replace(/[\\/:*?"<>|]/g, "_");
+      const name = `${submission.studentName}-${titleWithoutStudent(submission.assignmentTitle, submission.studentName)}-${scopeName}-批改.pdf`.replace(/[\\/:*?"<>|]/g, "_");
       saveBlob(pdf, name);
-      setMessage({ text: `已导出批改 PDF，共 ${figures.length} 页，包含原卷、批改标记和错误原因`, tone: "success" });
+      setMessage({ text: `已导出${scopeName}的批改 PDF，共 ${figures.length} 页，包含原卷、批改标记和错误原因`, tone: "success" });
     } catch (error) { setMessage({ text: error instanceof Error ? error.message : "批改导出失败，请重试", tone: "error" }); }
-    finally { setBusy(false); }
+    finally { exportRoot?.unmount(); exportHost?.remove(); setBusy(false); }
   }
 
   if (loading) return <><SiteHeader active="students" user={user ?? null} loading={user === undefined} trail={[{label:"学生档案",href:"/library?view=wrong-book"},{label:"批改详情"}]} /><main className="homework-loading">正在读取学生作业…</main></>;
@@ -650,7 +700,17 @@ export default function TeacherSubmissionPage() {
   const uploadDay = !correctionQuestions.length && scoped.length ? assigned!.days.find((entry) => (dayEnd += entry.size) > assigned!.questions.indexOf(scoped[0])) : undefined;
   const archiveLink = `/library?view=wrong-book&studentId=${encodeURIComponent(submission.studentId)}`;
   const canExportGrading = !!evidencePages.length && evidencePages.every(page => page.rotation != null) && !!evidenceItems.length && (Boolean(dayTask) || ["review_required", "ready", "published"].includes(submission.status));
-  const gradingExport = <button type="button" disabled={busy || !!editingId || !canExportGrading} onClick={() => void exportGrading()}
+  const gradingExport = assigned && assigned.days.length > 1 ? <select className="secondary" aria-label="导出批改" defaultValue=""
+    disabled={busy || !!editingId || !assigned.questions.some(question => question.result)}
+    title={editingId ? "请先保存或取消判定修正" : "选择某一天或全部天数，导出各题最新的原卷批改（PDF）"}
+    onChange={event => { const scope = event.currentTarget.value; event.currentTarget.value = ""; if (scope) void exportGrading(scope === "all" ? "all" : Number(scope)); }}>
+    <option value="" disabled>导出批改</option><option value="all">全部批改（所有天数）</option>
+    {assigned.days.map((day, index) => {
+      const from = assigned.days.slice(0, index).reduce((sum, entry) => sum + entry.size, 0);
+      const available = assigned.questions.slice(from, from + day.size).some(question => question.result);
+      return <option key={index} value={index} disabled={!available}>{day.title || `第 ${index + 1} 天`}{available ? "" : "（暂无批改）"}</option>;
+    })}
+  </select> : <button type="button" disabled={busy || !!editingId || !canExportGrading} onClick={() => void exportGrading()}
     title={editingId ? "请先保存或取消判定修正" : evidencePages.some(page => page.rotation == null) ? "图片方向检查尚未完成，请稍后再导出；检查失败时请刷新重试" : canExportGrading ? `导出下方原卷标记的全部 ${evidencePages.length} 页，包含批改痕迹和错误原因（PDF）` : "当前暂无可导出的原卷批改"}>导出批改</button>;
   const overview = <><div><span className={`review-status ${submission.status}`}>{status}</span><h1>{titleWithoutStudent(submission.assignmentTitle, submission.studentName)} · {submission.studentName}</h1>{submission.submittedAt != null && <p>提交日期：{new Date(submission.submittedAt).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }).replaceAll("/", ".")}</p>}</div>
       {!live && marks && <div className="review-score" aria-label="得分"><b>{marks.score}</b><span>/ {marks.maxScore}</span><small>{marks.percentage == null ? `${marks.pending} 题待定分` : `${marks.percentage}%`}</small></div>}
