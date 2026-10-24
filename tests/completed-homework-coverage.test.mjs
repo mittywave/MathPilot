@@ -11,6 +11,31 @@ test('a selected day accepts bare correction numbers while ambiguous days and ou
  const ambiguous=normalizePageExtraction(receipt(1,[question('1',[1])]),1,[1],1,'school',new Set(['D1-1','D2-1']));
  assert.deepEqual(ambiguous.questions,[]);
 });
+test('one upload matches mixed days by printed ID first, then normalized stem and options, without guessing repeated numbers',()=>{
+ const known=[
+  {question_number:'D1-1',label:'第1天第1题',type:'解答题',stem:'计算 $1+2$。',printed_id:'1511'},
+  {question_number:'D2-1',label:'第2天第1题',type:'解答题',stem:'计算 $1-2$。',printed_id:'1512'},
+  {question_number:'D3-1',label:'第3天第1题',type:'单选题',stem:'下列说法正确的是（　　）',options:['$a+b$','$a-b$'],printed_id:'1513'},
+  {question_number:'D4-1',label:'第4天第1题',type:'单选题',stem:'下列说法正确的是（　　）',options:['$a+b$','$a\\times b$'],printed_id:'1514'},
+ ];
+ const idReading=normalizePageExtraction(receipt(1,[{...question('1',[1]),stem:'',printed_id:'ID 1512'},{...question('1',[1]),stem:'',printed_id:'1511'}]),1,[1],1,'school',known);
+ assert.deepEqual(idReading.questions.map(item=>item.question_number),['D2-1','D1-1'],'restarted printed numbers on a mixed page stay separate');
+ const byStem=normalizePageExtraction(receipt(1,[{...question('1',[1]),stem:'1．计算 1－2'},{...question('1',[1]),stem:'下列说法正确的是（ ）',options:['a+b','a\\times b']}]),1,[1],1,'school',known);
+ assert.deepEqual(byStem.questions.map(item=>item.question_number),['D2-1','D4-1']);
+ const priority=normalizePageExtraction(receipt(1,[{...question('D1-1',[1]),printed_id:'1512',stem:''}]),1,[1],1,'school',known);
+ assert.equal(priority.questions[0].question_number,'D2-1');
+ for(const raw of [{...question('1',[1]),stem:''},{...question('1',[1]),stem:'下列说法正确的是（ ）'},{...question('D1-1',[1]),printed_id:'9999',stem:known[0].stem}]){
+  const ambiguous=normalizePageExtraction(receipt(1,[raw]),1,[1],1,'school',known);
+  assert.equal(ambiguous.kind,'unreadable');assert.equal(ambiguous.questions.length,0);assert.match(ambiguous.reason,/唯一匹配/);
+ }
+ const duplicated=[known[0],{...known[0],question_number:'D2-1'}];
+ const outside=normalizePageExtraction(receipt(1,[{...question('D9-9',[1]),stem:'另一份练习',printed_id:'9999'}]),1,[1],1,'school',known);
+ assert.equal(outside.kind,'blank','a page clearly outside the inventory stays distinct from an ambiguous match');
+ assert.equal(normalizePageExtraction(receipt(1,[{...question('1',[1]),printed_id:'1511',stem:''}]),1,[1],1,'school',duplicated).questions.length,0,'a repeated library question still needs a day to identify its occurrence');
+ assert.equal(normalizePageExtraction(receipt(1,[{...question('D2-1',[1]),printed_id:'1511',stem:''}]),1,[1],1,'school',duplicated).questions[0].question_number,'D2-1');
+ const prompt=completedPageExtractionPrompt(1,[1],1,'school',known);
+ assert.match(prompt,/ID 1511/);assert.match(prompt,/先核对印刷 ID/);assert.match(prompt,/混有多天/);
+});
 test('page identity comes from the supplied primary image, not a neighbouring worksheet',()=>{
  const prompt=completedPageExtractionPrompt(13,[13],27);
  assert.match(prompt,/输入按顺序有 1 页/);assert.match(prompt,/整份 PDF 共 27 页/);

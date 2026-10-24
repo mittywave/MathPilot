@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import jpeg from "jpeg-js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -131,11 +132,13 @@ test("daily upload scopes allow other days and fence duplicate, stale and concur
   assert.deepEqual((await api.readTeacherSubmission(first.id, user)).questionScope, scope);
   const conflict = error => error instanceof Response && error.status === 409;
   await assert.rejects(api.createSubmissionVersion(first.id, user, undefined, 1), conflict, "the latest draft cannot hide the earlier active day");
-  await assert.rejects(api.createSubmissionVersion(first.id, user), conflict, "an unscoped upload conflicts with any active day");
+  const unified = await api.createSubmissionVersion(first.id, user);
+  assert.equal(unified.id, third.id);
+  assert.deepEqual(unified.questionScope, [], "the unified entry reuses the draft and matches its scope after recognition");
   const { AssignedHomeworkSheet } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
   const html = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { submission: third, busy: false, onFocus() {}, onContinue() {}, onCorrect() {}, onUpload() {} }));
-  assert.match(html, /class="assigned-upload" disabled="" aria-label="第 2 天上传这天"/);
-  assert.match(html, /class="assigned-upload" aria-label="第 3 天上传这天"/);
+  assert.doesNotMatch(html, /上传这天|去订正/);
+  assert.match(html, /上传作业 \/ 订正/);
   assert.match(html, /提交 · 批改中/);
   await addPage(third.id);
   await api.submitHomeworkSubmission(third.id, user);
@@ -155,6 +158,39 @@ test("daily upload scopes allow other days and fence duplicate, stale and concur
   const attempts = await Promise.allSettled([api.submitHomeworkSubmission(first.id, user), api.submitHomeworkSubmission(third.id, user)]);
   assert.equal(attempts.filter(result => result.status === "fulfilled").length, 1);
   assert.equal(attempts.filter(result => result.status === "rejected" && conflict(result.reason)).length, 1);
+});
+
+test("unified uploads may wait for matching together, then atomically claim only their recognized questions", { timeout: 120_000 }, async t => {
+  const { db, api, user, question } = await writeFixture(t);
+  const [assigned] = await api.createAssignedHomework({ studentIds: ["s1"], title: "统一上传",
+    groups: [{title:"第 1 天",size:2},{title:"第 2 天",size:2}],
+    questions: [1,2,3,4].map(n=>({...question,id:`auto-${n}`,stem:`计算 $${n}+2$`,answer:String(n+2)})),
+  },user);
+  const addPage=async id=>{
+    await db.prepare("INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,role,upload_submission_id,created_at) VALUES(?,'u',?,'image/jpeg',1,?,'submission_original',?,0)").bind(id,id,id,id).run();
+    await db.prepare("INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at) VALUES(?,?,?,?,0,0)").bind(id,id,id,id).run();
+  };
+  const first=await api.createSubmissionVersion(assigned.id,user,undefined,0);
+  await addPage(first.id);await api.submitHomeworkSubmission(first.id,user,true);
+  assert.deepEqual((await api.readTeacherSubmission(first.id,user)).questionScope,[],"the unified submit clears a legacy day restriction");
+  const second=await api.createSubmissionVersion(first.id,user);
+  await addPage(second.id);await api.submitHomeworkSubmission(second.id,user,true);
+  const row=async id=>db.prepare("SELECT s.*,a.sheet_json FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id WHERE s.id=?").bind(id).first();
+  const claim=async(id,ids)=>api.writeSubmissionScope(await row(id),ids,[db.prepare("UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?").bind(JSON.stringify(ids),id)],true);
+  const questions=first.assigned.questions;
+  await claim(first.id,[questions[2].id]);
+  await claim(second.id,[questions[0].id,questions[3].id]);
+  assert.deepEqual((await api.readTeacherSubmission(second.id,user)).questionScope,[questions[0].id,questions[3].id],"one upload can cover multiple days");
+  const third=await api.createSubmissionVersion(first.id,user);
+  await addPage(third.id);await api.submitHomeworkSubmission(third.id,user,true);
+  const conflict=error=>error instanceof Response&&error.status===409;
+  await assert.rejects(claim(third.id,[questions[2].id]),conflict);
+  assert.deepEqual((await api.readTeacherSubmission(third.id,user)).questionScope,[],"a conflicting claim makes no partial scope change");
+  const fourth=await api.createSubmissionVersion(first.id,user);
+  await addPage(fourth.id);await api.submitHomeworkSubmission(fourth.id,user,true);
+  const raced=await Promise.allSettled([claim(third.id,[questions[1].id]),claim(fourth.id,[questions[1].id])]);
+  assert.equal(raced.filter(result=>result.status==='fulfilled').length,1);
+  assert.equal(raced.filter(result=>result.status==='rejected'&&conflict(result.reason)).length,1,"matching cannot race two graders onto the same question");
 });
 
 test("MP-03 D1 page replacement rolls back an intermediate insert and fences a concurrent submit", { timeout: 120_000 }, async t => {
@@ -1325,7 +1361,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.assignedAnswers={"D1-1":"2","D1-2":"5"};mock.state.assignedVerdicts={"D1-1":"correct","D1-2":"incorrect"};
     await submitPages(base,teacherOne,firstUpload,[await uploadPage(base,teacherOne,firstUpload,bytes)]);
     sheet=await waitForSubmission(base,teacherOne,firstUpload,["published"],worker);
-    assert.match(mock.state.assignedPrompts.at(-1),/D2-1｜第 2 天 第 1 题｜解答题｜计算 \$3\\times 3\$/);
+    assert.match(mock.state.assignedPrompts.at(-1),/D2-1｜ID \d+｜第 2 天 第 1 题｜解答题｜计算 \$3\\times 3\$/);
     assert.deepEqual(sheet.gradingItems.map(i=>[i.questionNumber,i.verdict]),[["D1-1","correct"],["D1-2","incorrect"]],"a stray question is left out and 1-2 is read as D1-2");
     assert.deepEqual(mock.state.referenceNumbers,[],"answers handed out with the sheet are not solved again");
     assert.deepEqual(sheet.assigned.questions.map(q=>q.result?.verdict??null),["correct","incorrect",null,null]);
@@ -1494,9 +1530,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     const correctionHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:correctionAfter,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{}}));
     assert.match(correctionHtml,/<li class="corrected"[^>]*title="第 1 天 第 1 题 · 已订正/);
     assert.match(correctionHtml,/<li class="incorrect"[^>]*title="第 1 天 第 2 题 · 错/,"a still-partial correction remains red");
-    assert.match(correctionHtml,/<button[^>]*class="assigned-correct incorrect"[^>]*aria-label="第 1 天去订正"[^>]*>去订正<\/button>/);
-    assert.match(correctionHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 2 天无错题"[^>]*>无错题<span aria-hidden="true"> ✅<\/span><\/button>/);
-    assert.equal((correctionHtml.match(/class="assigned-correct(?: [^"]*)?"/g)??[]).length,2,"every day has a correction button");
+    assert.match(correctionHtml,/上传作业 \/ 订正/);
+    assert.doesNotMatch(correctionHtml,/class="assigned-correct/,'multi-day corrections use the same unified entry');
     const correctionAgain=(await jsonRequest(base,`/api/submissions/${correctionOriginal}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version",correctionDay:0}})).payload.submission;
     assert.deepEqual(correctionAgain.questionScope,correctionIds.slice(1),"already corrected work is excluded from the next correction");
     mock.state.assignedPage=[{question_number:"D1-2",student_answer:"4"}];mock.state.assignedAnswers={"D1-2":"4"};mock.state.assignedVerdicts={"D1-2":"correct"};
@@ -1515,7 +1550,7 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.match(completedHtml,/首交对 0\/3/);
     assert.match(completedHtml,/首交对 1\/1/);
     assert.deepEqual(allCorrected.assigned.days.reduce((total,day)=>[total[0]+day.firstAttempt.correct,total[1]+day.firstAttempt.incorrect],[0,0]),[1,3],"per-day captions retain the original whole-sheet counts");
-    assert.match(completedHtml,/<button[^>]*class="assigned-correct correct"[^>]*disabled=""[^>]*aria-label="第 1 天已订正"[^>]*>已订正<span aria-hidden="true"> ✅<\/span><\/button>/,"only fully confirmed corrections show the completed state");
+    assert.match(completedHtml,/<li class="corrected"/,'completed corrections remain visible in the question states');
     const correctionMistakes=(await jsonRequest(base,`/api/students/${studentTwoId}/wrong-questions`,{cookie:teacherOne})).payload.entries.filter(entry=>entry.assignmentId===correctionBefore.assignmentId);
     assert.equal(correctionMistakes.length,3,"successful corrections retain the original wrong-book evidence");
     mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
@@ -1590,8 +1625,8 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"cancel"}})).response.status,409,"a published upload is not emptied");
     assert.equal((await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:0}})).response.status,409,"a day handed in is not uploaded again");
     const dailyHtml=renderToStaticMarkup(createElement(AssignedHomeworkSheet,{submission:dayOne,busy:false,onFocus:()=>{},onContinue:()=>{},onCorrect:()=>{},onUpload:()=>{}}));
-    assert.match(dailyHtml,/<button type="button" class="assigned-upload" aria-label="第 2 天上传这天"[^>]*>上传这天<\/button>/);
-    assert.equal((dailyHtml.match(/class="assigned-correct(?: [^"]*)?"/g)??[]).length,1,"a day not handed in has no correction button");
+    assert.match(dailyHtml,/上传作业 \/ 订正/);
+    assert.doesNotMatch(dailyHtml,/上传这天|class="assigned-correct/,'daily rows keep progress without separate upload or correction controls');
     const dayTwo=(await jsonRequest(base,dailyUrl,{cookie:teacherOne,method:"PUT",body:{action:"new-version",uploadDay:1}})).payload.submission;
     assert.deepEqual([dayTwo.version,dayTwo.status,dayTwo.questionScope],[2,"draft",[dailyIds[1]]]);
     const setDayTwo=(sql)=>command(['d1','execute','DB','--local','--persist-to',stateDir,'--config',join(ROOT,'wrangler.jsonc'),'--command',`UPDATE homework_submissions SET ${sql} WHERE id='${dayTwo.id}'`]);
@@ -1669,6 +1704,53 @@ test("completed homework is graded, archives only incorrect work, preserves pend
     mock.state.failAll = false;
     assert.equal((await jsonRequest(base, `/api/submissions/${failedId}`, { cookie: teacherOne, method: "PUT", body: { action: "retry" } })).response.status, 200);
     const recoveredFailure = await waitForSubmission(base, teacherOne, failedId, ["published"], worker);
+
+    // One entry mixes a correction from day one with a first submission from day two, even when both print number 1.
+    const mixed=(await jsonRequest(base,"/api/submissions",{cookie:teacherOne,method:"POST",body:{studentIds:[studentTwoId],title:"跨天统一上传验收",groups:[{title:"第 1 天",size:2},{title:"第 2 天",size:2}],questions:[1,2,3,4].map(n=>sheetQuestion(`mixed-${n}`,`计算 $${n}+${n}$`,String(n+n)))}})).payload.assigned[0];
+    mock.state.assignedPage=[{question_number:"D1-1",student_answer:"0"},{question_number:"D1-2",student_answer:"4"}];
+    mock.state.assignedAnswers={"D1-1":"0","D1-2":"4"};mock.state.assignedVerdicts={"D1-1":"incorrect","D1-2":"correct"};
+    await submitPages(base,teacherOne,mixed.id,[await uploadPage(base,teacherOne,mixed.id,bytes)]);
+    const mixedBefore=await waitForSubmission(base,teacherOne,mixed.id,["published"],worker);
+    mock.state.assignedPage=[{question_number:"1",printed_id:mixedBefore.assigned.questions[0].question.code,student_answer:"2"},{question_number:"1",stem:"计算 3＋3",student_answer:"6"}];
+    mock.state.assignedAnswers={"D1-1":"2","D2-1":"6"};mock.state.assignedVerdicts={"D1-1":"correct","D2-1":"correct"};mock.state.gradedNumbers=[];
+    let mixedId;
+    let browser, browserPage;
+    try {
+      if(process.env.PLAYWRIGHT_PACKAGE){
+        const {chromium}=createRequire(process.env.PLAYWRIGHT_PACKAGE)('playwright');
+        browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
+        browserPage=await browser.newPage({viewport:{width:1920,height:1080},extraHTTPHeaders:{Cookie:teacherOne}});
+        const errors=[];browserPage.on('pageerror',error=>errors.push(String(error)));
+        await browserPage.goto(`${base}/tools/homework/submissions/${mixed.id}`);
+        await browserPage.getByRole('button',{name:'上传作业 / 订正',exact:true}).click();
+        await browserPage.waitForURL(url=>url.pathname!==`/tools/homework/submissions/${mixed.id}`);
+        mixedId=new URL(browserPage.url()).pathname.split('/').at(-1);
+        assert.equal(await browserPage.getByRole('button',{name:/上传这天|去订正/}).count(),0);
+        await browserPage.locator('.review-upload input[type=file]').first().setInputFiles({name:'混合两天与订正.jpg',mimeType:'image/jpeg',buffer:bytes});
+        const submit=browserPage.locator('.upload-submit');await submit.waitFor();
+        await browserPage.waitForFunction(()=>!document.querySelector('.upload-submit')?.disabled);
+        await (await import('node:fs/promises')).mkdir(join(ROOT,'artifacts/homework-unified-verification'),{recursive:true});
+        await browserPage.screenshot({path:join(ROOT,'artifacts/homework-unified-verification/unified-upload.png'),fullPage:true});
+        const request=browserPage.waitForRequest(request=>request.method()==='PUT'&&request.url().endsWith(`/api/submissions/${mixedId}`)&&request.postDataJSON()?.action==='submit');
+        await submit.click();assert.equal((await request).postDataJSON().autoMatch,true);
+        assert.deepEqual(errors,[]);
+      }else{
+        mixedId=(await jsonRequest(base,`/api/submissions/${mixed.id}`,{cookie:teacherOne,method:"PUT",body:{action:"new-version"}})).payload.submission.id;
+        await submitPages(base,teacherOne,mixedId,[await uploadPage(base,teacherOne,mixedId,bytes)]);
+      }
+      const mixedAfter=await waitForSubmission(base,teacherOne,mixedId,["published"],worker);
+      assert.deepEqual(mock.state.gradedNumbers.sort(),["D1-1","D2-1"]);
+      assert.deepEqual(mixedAfter.questionScope,[mixedBefore.assigned.questions[0].id,mixedBefore.assigned.questions[2].id]);
+      assert.equal(mixedAfter.assigned.questions[0].result.wasIncorrect,true);
+      assert.equal(mixedAfter.assigned.questions[0].result.verdict,'correct');
+      assert.deepEqual(mixedAfter.assigned.questions[1].result,mixedBefore.assigned.questions[1].result,'untouched work keeps its original result');
+      assert.equal(mixedAfter.assigned.questions[2].result.verdict,'correct');
+      assert.equal(mixedAfter.assigned.questions[3].result,null,'unsubmitted work is not graded as wrong');
+      assert.deepEqual(mixedAfter.assigned.days[0].firstAttempt,mixedBefore.assigned.days[0].firstAttempt);
+      assert.deepEqual(mixedAfter.assigned.days.map(day=>day.done),[2,1]);
+      if(browserPage){await browserPage.reload();await browserPage.locator('.assigned-day li.corrected').waitFor();await browserPage.screenshot({path:join(ROOT,'artifacts/homework-unified-verification/matched-results.png'),fullPage:true});}
+    }finally{await browser?.close();}
+    mock.state.assignedPage=[];mock.state.assignedAnswers={};mock.state.assignedVerdicts={};
 
     assert.equal((await jsonRequest(base, `/api/students/${studentTwoId}`, { cookie: teacherOne, method: "DELETE", body: {} })).response.status, 200);
     const cleanupDeadline = Date.now() + 10_000; let cleanupStatus = "";
