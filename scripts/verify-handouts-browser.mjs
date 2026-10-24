@@ -90,7 +90,7 @@ async function choosePickerModule(picker, name) {
 }
 
 // --temporary exercises the current two-pane editor against a real isolated Worker.
-// DOCX extraction/storage/export are real. PDF/image AI responses are deterministic fixtures, not OCR accuracy evidence.
+// DOCX extraction/storage/export are real. Screenshot AI responses are deterministic fixtures, not OCR accuracy evidence.
 async function verifyTemporaryLibrary() {
   const { module: target } = await api('/api/modules', { module: { name: '临时题库验收', subtitle: '' } });
   const { handout } = await api('/api/handouts', { handout: { title: '临时题库验收', items: [{ id: 'section-one', kind: 'section', title: '方程与图表', note: '' }] } });
@@ -113,7 +113,7 @@ async function verifyTemporaryLibrary() {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ questions: body.questions.map(question => ({ ...question, categoryId: classifiedCategory.id, tags: ['一元一次方程'], difficulty: '中等' })), categories }) });
   });
   const chooseFile = async file => {
-    await picker.getByRole('button', { name: '导入文件', exact: true }).first().click();
+    await picker.locator('button.picker-import').click();
     await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
     await page.locator('.file-draft').first().waitFor();
     for (const select of await page.locator('.file-draft-fields label.wide select').all()) await select.selectOption(target.id);
@@ -201,8 +201,9 @@ async function verifyTemporaryLibrary() {
   await temporary();
   step('temporary cards only select questions; editing from the handout body still preserves the formal original');
 
-  // One-page real PDF and an existing image traverse the browser page reader and the background import job; only the
-  // job service is substituted: it checks what was uploaded and answers as if the AI had read each page.
+  // A real PDF is refused; two screenshots pasted on the panel wait in the dialog and one background job reads both,
+  // then the review opens by itself. Only the job service is substituted: it checks what was uploaded and answers as if
+  // the AI had read each picture.
   const pdfPage = await browser.newPage();
   await pdfPage.setContent('<h1>1. Solve x + 2 = 5.</h1>');
   await pdfPage.pdf({ path: join(out, 'temporary-input.pdf') });
@@ -225,30 +226,41 @@ async function verifyTemporaryLibrary() {
     if (pages) { const input = request.postDataJSON(); assert.match(input.image, /^data:image\/jpeg;base64,/); assert.match(input.recognizeImage, /^data:image\/jpeg;base64,/); entry.pages.push(input.page); entry.images[input.page.id] = input.image; return json({ job: entry.job }); }
     if (request.method() === 'POST') { recognizedFiles.push(entry.job.title); Object.assign(entry.job, { status: 'done', pageCount: entry.pages.length, processedCount: entry.pages.length, questionCount: entry.pages.length }); return json({ job: entry.job }); }
     if (request.method() === 'DELETE') { importJobs.delete(id); return json({ deleted: true }); }
-    const question = { question_number: '1', type: '填空题', difficulty: '基础', stem: `流程样本 ${entry.job.title}：$x+2=5$，则 $x=$____。`, options: [], answer: '3', analysis: '移项。', source: '', tags: ['方程'], diagram_bbox: null, options_bbox: null, diagram_quality: null, confidence: 1, warnings: [], suggested_category_id: null };
-    return json({ job: entry.job, draft: { version: 1, fileName: entry.job.title, categories: [], pages: entry.pages, results: Object.fromEntries(entry.pages.map(page => [page.id, { result: { questions: [question], answers: [] } }])), notes: [], updatedAt: Date.now() } });
+    const question = page => ({ question_number: String(page.page), type: '填空题', difficulty: '基础', stem: `流程样本第 ${page.page} 张：$x+${page.page}=5$，则 $x=$____。`, options: [], answer: String(5 - page.page), analysis: '移项。', source: '', tags: ['方程'], diagram_bbox: null, options_bbox: null, diagram_quality: null, confidence: 1, warnings: [], suggested_category_id: null });
+    return json({ job: entry.job, draft: { version: 1, fileName: entry.job.title, categories: [], pages: entry.pages, results: Object.fromEntries(entry.pages.map(page => [page.id, { result: { questions: [question(page)], answers: [] } }])), notes: [], updatedAt: Date.now() } });
   });
-  for (const file of [join(out, 'temporary-input.pdf'), join(root, 'tests/fixtures/screenshot-number-line.png')]) {
-    await picker.getByRole('button', { name: '导入文件', exact: true }).first().click();
-    await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
-    await page.getByRole('status').filter({ hasText: '已转入后台' }).waitFor();
-    await page.locator('.file-import-modal .studio-jobs tr').first().getByRole('button', { name: '打开', exact: true }).click();
-    await page.locator('.file-draft').first().waitFor();
-    for (const select of await page.locator('.file-draft-fields label.wide select').all()) await select.selectOption(target.id);
-    await page.getByRole('button', { name: '保存所选 1 道题', exact: true }).click();
-    await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
-    await saved();
-  }
+  // Files as the browser hands them over on a paste or a drop.
+  const handOver = async (kind, selector, files) => page.evaluate(({ kind, selector, files }) => {
+    const data = new DataTransfer();
+    for (const file of files) data.items.add(new File([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))], file.name, { type: file.type }));
+    const target = document.querySelector(selector);
+    if (kind === 'paste') target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    else for (const type of ['dragenter', 'dragover', 'drop']) target.dispatchEvent(new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }));
+  }, { kind, selector, files: await Promise.all(files.map(async ([path, name, type]) => ({ name, type, data: (await readFile(path)).toString('base64') }))) });
+  await handOver('drop', '.handout-bank .picker-main', [[join(out, 'temporary-input.pdf'), 'temporary-input.pdf', 'application/pdf']]);
+  await page.locator('.file-import-modal .recognition-error').filter({ hasText: '请放入 Word' }).waitFor();
+  await page.locator('.file-import-modal .close').click();
+  await handOver('paste', 'body', ['screenshot-number-line.png', 'screenshot-picture-options.png'].map(name => [join(root, 'tests/fixtures', name), 'image.png', 'image/png']));
+  await page.locator('.file-import-modal .import-pictures li').nth(1).waitFor();
+  await page.getByRole('button', { name: '识别 2 张截图', exact: true }).click();
+  await page.locator('.file-draft').nth(1).waitFor();
+  assert.deepEqual(await page.locator('.file-draft-head span').allInnerTexts(), ['第 1 张截图 · 可信度 100%', '第 2 张截图 · 可信度 100%']);
+  for (const select of await page.locator('.file-draft-fields label.wide select').all()) await select.selectOption(target.id);
+  await page.getByRole('button', { name: '保存所选 2 道题', exact: true }).click();
+  await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
+  await saved();
   await page.unroute(jobsUrl);
-  assert.equal(recognizedFiles.length, 2);
+  assert.equal(recognizedFiles.length, 1, 'both screenshots were read by one job');
+  assert.match(recognizedFiles[0], /^截图 /);
+  assert.deepEqual([...importJobs.values()][0].pages.map(item => item.page), [1, 2]);
   assert.equal(await cards.count(), 4);
-  assert.equal((await api('/api/library')).questions.length, 4, 'PDF and image imports also join the formal library');
-  await picker.getByLabel('来源文件').selectOption('temporary-input.pdf');
-  assert.equal(await cards.count(), 1);
+  assert.equal((await api('/api/library')).questions.length, 4, 'screenshot imports also join the formal library');
+  await picker.getByLabel('来源文件').selectOption(recognizedFiles[0]);
+  assert.equal(await cards.count(), 2);
   assert.equal(await cards.getByRole('button', { name: /^(校对|删除)$/ }).count(), 0);
   await picker.getByLabel('来源文件').selectOption('');
   assert.equal(await cards.count(), 4);
-  step('PDF and PNG rendering/recognition-review/save wiring verified with stubbed AI; file filtering retains all imports without extra card actions');
+  step('a PDF is refused; two pasted screenshots are read by one stubbed job whose review opens by itself; source filtering retains all imports');
 
   // Exports use the corrected temporary snapshot and retain native Word structures.
   for (const [label, key] of [['附答案', 'end'], ['教师版', 'each'], ['学生版', 'none']]) {
@@ -340,7 +352,7 @@ async function verifyTemporaryLibrary() {
     assert.deepEqual(question.tags, ['一元一次方程']);
     assert.equal((await api('/api/library')).questions.find(item => item.id === question.id).code, question.code);
   }
-  assert.equal(classificationCalls, 5, 'Word, PDF and image imports classify once each; failed saves never reclassify successful drafts');
+  assert.equal(classificationCalls, 4, 'each Word file and each screenshot job classifies once; failed saves never reclassify successful drafts');
   await page.reload();
   await basketSaved();
   await temporary();
@@ -348,7 +360,7 @@ async function verifyTemporaryLibrary() {
   assert.equal(await cards.count(), 2, 'refresh retains even the unselected temporary questions');
   step('basket DOCX import assigns permanent IDs; partial/lost-response retry saves only the remaining draft; unselected imports survive reload');
 
-  await picker.getByLabel('来源文件').selectOption('fixture.docx');
+  assert.equal(await picker.getByLabel('来源文件').count(), 0, 'a single source needs no source filter');
   await picker.getByLabel('题型', { exact: true }).selectOption('多选题');
   assert.equal(await cards.count(), 1);
   await picker.getByLabel('题型', { exact: true }).selectOption('全部');

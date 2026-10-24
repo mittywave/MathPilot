@@ -25,7 +25,8 @@ import "./handouts.css";
 import "../../components/note-editor.css";
 
 type SaveState = "saved" | "editing" | "saving" | "failed";
-type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand; sheet: HandoutSheet; temporary?: boolean };
+// files: what was pasted or dropped on the 临时题库 to import.
+type EntryState = { draft: Question; sectionId: string | null; band: HandoutBand; sheet: HandoutSheet; temporary?: boolean; files?: File[] };
 type SectionItem = Extract<HandoutItem, { kind: "section" }>;
 type QuestionItem = Extract<HandoutItem, { kind: "question" }>;
 type ListSheet = Exclude<HandoutSheet, "handout">;
@@ -666,11 +667,11 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     setEntry({ draft: editableQuestionDraft(question, questionModule), sectionId: null, band: "example", sheet, temporary: latest.current!.temporaryQuestions.some((item) => item.id === question.id) });
   }
 
-  function openTemporaryImport() {
+  function openTemporaryImport(files?: File[]) {
     const targetModule = library?.modules[0];
     if (!targetModule) { onNotice("请先到题库创建一个模块，再导入题目", "error"); return; }
     const draft = newQuestionDraft(targetModule, targetModule.id);
-    setEntry({ draft, sectionId: null, band: "example", sheet, temporary: true });
+    setEntry({ draft, sectionId: null, band: "example", sheet, temporary: true, files });
   }
 
   async function saveTemporaryQuestions(questions: Question[]) {
@@ -999,7 +1000,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     <input ref={noteFile} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file && noteTarget.current) void importNoteScreenshot(noteTarget.current, file); event.target.value = ""; }} />
     {entry && library && <QuestionEntry initial={entry.draft} modules={library.modules} categories={library.categories}
       moduleIds={entry.draft.id && !entry.temporary ? [entry.draft.moduleId ?? ""] : library.modules.map((item) => item.id)}
-      saveTemporaryQuestions={entry.temporary ? saveTemporaryQuestions : undefined} startWithFile={entry.temporary && !entry.draft.id}
+      saveTemporaryQuestions={entry.temporary ? saveTemporaryQuestions : undefined} startWithFile={entry.temporary && !entry.draft.id} initialFiles={entry.files}
       onSaved={(saved) => entrySaved(entry, saved)} onClose={() => setEntry(null)} onNotice={onNotice} />}
   </main>{typeset && <div className="handout-typeset" role="dialog" aria-modal="true" aria-label="快速排版">
     <Suspense fallback={<p role="status">正在打开快速排版…</p>}><Typesetter basket={typeset} /></Suspense>

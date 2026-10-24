@@ -136,7 +136,8 @@ export default function BasketEditor({ user, library, pool, structure, title, di
 }) {
   const [treeOpen, setTreeOpen] = useState(false);
   const [source, setSource] = useState<"library" | "temporary">("library");
-  const [entry, setEntry] = useState<Question | null>(null);
+  // An import into the 临时题库, with the files pasted or dropped on it.
+  const [entry, setEntry] = useState<{ draft: Question; files?: File[] } | null>(null);
   const workspace = useQuestionWorkspace("mathpilot-basket-panels", treeOpen);
   const [picker, setPicker] = useState<PickerMode | null>(null);
   const [activeId, setActiveId] = useState("");
@@ -218,10 +219,10 @@ export default function BasketEditor({ user, library, pool, structure, title, di
     <QuestionWorkspace {...workspace} outlineLabel="试卷" draftLabel="练习卷编辑" bank={
       <QuestionPicker library={library} user={user} onLibraryChanged={refreshLibrary} treeOpen={treeOpen} onTreeOpenChange={setTreeOpen} mode={activePicker} sheet="practice" disabled={disabled} taken={taken} usedIn={usedIn} onPick={pick} sections={options} onModeChange={setPicker} onNotice={onNotice}
         source={source} onSourceChange={setSource} temporaryQuestions={temporaryQuestions}
-        onImport={() => {
+        onImport={files => {
           const targetModule = library.modules[0];
           if (!targetModule) { onNotice("请先到题库创建一个模块，再导入题目", "error"); return; }
-          setEntry(newQuestionDraft(targetModule, targetModule.id));
+          setEntry({ draft: newQuestionDraft(targetModule, targetModule.id), files });
         }} />
     } outline={<>
       <header><h2>试卷结构</h2><span>{count} 题</span></header>
@@ -267,13 +268,11 @@ export default function BasketEditor({ user, library, pool, structure, title, di
       </section>)}
       {count > limit && <div ref={end} className="basket-list-end"><button className="text-button" onClick={() => setLimit(current => current + 40)}>继续显示题目</button></div>}
     </QuestionWorkspace>
-    {entry && <QuestionEntry initial={entry} modules={library.modules} categories={library.categories} moduleIds={library.modules.map(item => item.id)}
-      saveTemporaryQuestions={saveTemporaryQuestions} startWithFile={!entry.id} onClose={() => setEntry(null)} onNotice={onNotice}
+    {entry && <QuestionEntry initial={entry.draft} modules={library.modules} categories={library.categories} moduleIds={library.modules.map(item => item.id)}
+      saveTemporaryQuestions={saveTemporaryQuestions} startWithFile initialFiles={entry.files} onClose={() => setEntry(null)} onNotice={onNotice}
       onSaved={saved => {
-        if (!entry.id) {
-          onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
-          void refreshLibrary().catch(error => onNotice(error instanceof Error ? error.message : "分类目录更新失败", "error"));
-        }
+        onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
+        void refreshLibrary().catch(error => onNotice(error instanceof Error ? error.message : "分类目录更新失败", "error"));
       }} />}
   </main>;
 }
