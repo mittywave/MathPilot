@@ -26,7 +26,8 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   const assignment=await db.prepare('SELECT template_confirmed,owner_user_id,curriculum,sheet_json FROM homework_assignments WHERE id=?').bind(assignmentId).first<{template_confirmed:number;owner_user_id:string;curriculum:string;sheet_json:string}>();
   const curriculum=homeworkCurriculum(assignment?.curriculum);
   // An old template flag is never proof that every uploaded page was examined.
-  if(assignment?.template_confirmed){try{await assertCompletePageCoverage(submissionId);return;}catch{ /* Backfill missing coverage rather than accepting an old partial extraction. */ }}
+  // Different days may finish independently; the shared template flag cannot complete another day's preparation.
+  if(assignment?.template_confirmed&&!assignment.sheet_json){try{await assertCompletePageCoverage(submissionId);return;}catch{ /* Backfill missing coverage rather than accepting an old partial extraction. */ }}
   type StoredRow={id:string;question_number:string;type:QuestionType;stem:string;options_json:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string;reference_verified:number;source_json:string};
   const storedResult=await db.prepare('SELECT id,question_number,type,stem,options_json,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source,reference_verified,source_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<StoredRow>();
   const stored=storedResult.results as StoredRow[];

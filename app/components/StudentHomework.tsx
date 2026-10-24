@@ -167,7 +167,7 @@ export function StudentHomework({ student, progress, onProgressChange }: { stude
             {item.assigned && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
           {item.assigned && item.done < item.total && <button type="button" className="homework-cancel"
-            disabled={Boolean(cancelling) || !["draft", "published", "failed"].includes(item.latest.status)}
+            disabled={Boolean(cancelling) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
             title={cancelling === item.assignmentId ? "正在取消作业…" : busy(item) ? "请先停止批改，再取消这份作业" : "取消这份作业，已有批改记录保留"}
             aria-busy={cancelling === item.assignmentId}
             aria-label={`取消作业：${titleWithoutStudent(item.title, student.name)}`} onClick={() => void cancelHomework(item)}>

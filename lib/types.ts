@@ -423,7 +423,7 @@ export type HomeworkDay = HomeworkSheetGroup & {
 export type AssignedHomework = {
   days: HomeworkDay[];
   questions: Array<{ id: string; number: string; question: Question; result: (Pick<GradingItem, "verdict" | "requiresReview" | "teacherMark" | "standardAnswer" | "standardAnalysis" | "referenceVerified"> & { submissionId: string; wasIncorrect: boolean }) | null }>;
-  uploads: Array<{ id: string; version: number; status: SubmissionStatus; pageCount: number; createdAt: number; submittedAt: number | null }>;
+  uploads: Array<{ id: string; version: number; status: SubmissionStatus; questionScope?: string[]; pageCount: number; createdAt: number; submittedAt: number | null }>;
 };
 
 /** One homework of a student as the archive lists it: assigned ones count the whole sheet, uploaded ones their last upload. */
@@ -431,6 +431,8 @@ export type StudentHomework = {
   assignmentId: string; title: string; assigned: boolean; createdAt: number;
   total: number; done: number; correct: number; incorrect: number; pending: number;
   latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
+  /** An earlier day's upload may still be grading after the latest one finishes. */
+  grading?: boolean;
   /** An assigned homework's days, and the 快速排版 record it was assigned from; null for an uploaded one. */
   days: HomeworkDay[] | null; recordId: string | null;
 };
