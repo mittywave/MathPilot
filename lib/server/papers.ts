@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
-import type { AuthUser, ExamPaper, PaperDetail, PaperFolder, PaperItem, PaperMetadata, Question } from "../types";
+import type { AuthUser, Category, ExamPaper, PaperDetail, PaperFolder, PaperItem, PaperMetadata, Question } from "../types";
 import { paperDraftIssues, paperFolderDescendants, inferPaperFolder, paperMetadata, paperPagePrompt, paperPageSchema, normalizePaperPage, paperQuestionIdentity, type PaperDraft, type PaperPage } from "../papers";
-import { categoryInsertStatement, hashBytes, hashText, moduleInsertStatement, prepareQuestion, questionInsertStatement, readLibrary, requireAdmin, resolveLibraryContext } from "./library";
+import { categoryInsertStatement, hashBytes, hashText, moduleInsertStatement, prepareQuestion, questionInsertStatement, readLibrary, requireAdmin, resolveLibraryContext, type LibraryContext } from "./library";
 import { createStudioJob, deleteStudioJob, startStudioJob, cancelStudioJob, type LibraryImportDraft, type LibraryImportPage } from "./answer-studio-jobs";
 import { callStructuredAi } from "./ai-gateway";
 import { parseRecognitionModelText } from "./recognition-model";
@@ -142,7 +142,7 @@ export async function deletePaper(user:AuthUser,id:string) {
 }
 
 const metadataSchema={type:"object",additionalProperties:false,properties:{kind:{type:"string",enum:["school","mock","admission","custom"]},year:{type:"string"},school:{type:"string"},district:{type:"string"},grade:{type:"string"},term:{type:"string"},examType:{type:"string"}},required:["kind","year","school","district","grade","term","examType"]};
-export async function classifyPaper(id:string,draft:PaperDraft,user:AuthUser,signal:AbortSignal,touch:(message:string)=>Promise<void>) {
+export async function classifyPaper(id:string|null,draft:PaperDraft,user:AuthUser,signal:AbortSignal,touch:(message:string)=>Promise<void>) {
   if(draft.classified)return;
   const library=await readLibrary(user), graph=await loadPublishedKnowledgeGraph(), nodes=graph.document.nodes.filter(n=>n.status==="active");
   for(let offset=0;offset<draft.questions.length;offset+=20) {
@@ -157,10 +157,43 @@ export async function classifyPaper(id:string,draft:PaperDraft,user:AuthUser,sig
     const seen=new Set<number>();
     for(const q of parsed.questions??[]){if(!Number.isInteger(q.index)||q.index<offset||q.index>=offset+batch.length||seen.has(q.index)||!q.categoryPath?.length||q.categoryPath.length>3||q.categoryPath.some(n=>!clean(n,100)))throw new Error("分类结果未完整对应原题，请重试");seen.add(q.index);const item=draft.questions[q.index];if(!item.categoryPath.length)item.categoryPath=q.categoryPath.map(n=>clean(n,100));item.question.tags=q.tags.map(n=>clean(n,120));item.question.difficulty=q.difficulty;}
     if(seen.size!==batch.length)throw new Error("部分题目未返回知识分类，请重试");
-    await writePaperDraft(id,draft);
+    if(id)await writePaperDraft(id,draft);
   }
   if(draft.metadata.kind==="custom"&&!draft.metadata.moduleId)throw new Error("自定义考试请在修正窗口选择目标题库模块");
-  draft.classified=true;await writePaperDraft(id,draft);
+  draft.classified=true;if(id)await writePaperDraft(id,draft);
+}
+
+// Both whole papers and temporary imports reuse existing directories and stable IDs for missing paths.
+async function categoryDestination(path:string[],moduleId:string,categories:Category[],user:AuthUser,context:LibraryContext,statements:Awaited<ReturnType<typeof categoryInsertStatement>>[]) {
+  const normalized=(value:string)=>value.normalize("NFKC").replace(/\s+/g,"").toLocaleLowerCase();
+  let parent=moduleId;
+  for(const name of path){
+    let category=categories.find(item=>item.moduleId===moduleId&&item.parentId===parent&&normalized(item.name)===normalized(name));
+    if(!category){category={id:`paper-category-${await hashText(`${moduleId}|${parent}|${normalized(name)}`)}`,name,parentId:parent,moduleId,createdAt:Date.now(),createdBy:user.id};categories.push(category);statements.push(await categoryInsertStatement(category,user,context,categories.length,true));}
+    parent=category.id;
+  }
+  return parent;
+}
+
+export async function classifyImportedQuestions(raw:unknown,user:AuthUser,signal:AbortSignal) {
+  if(!Array.isArray(raw)||!raw.length||raw.length>300||raw.some(question=>!question||typeof question.stem!=="string"||!question.stem.trim()||!Array.isArray(question.options)||question.options.some((option:unknown)=>typeof option!=="string")))throw fail("请选择 1–300 道有题干的导入题目");
+  const library=await readLibrary(user),context=await resolveLibraryContext(user),categories=[...library.categories],statements:Awaited<ReturnType<typeof categoryInsertStatement>>[]=[];
+  const questions=(raw as Question[]).map(question=>({...question}));
+  for(const question of questions){
+    const targetModule=library.modules.find(item=>item.id===(question.moduleId||question.categoryId));
+    if(!targetModule||question.categoryId!==targetModule.id&&!categories.some(item=>item.id===question.categoryId&&item.moduleId===targetModule.id))throw fail("请为导入题目选择有效的模块和分类");
+    question.moduleId=targetModule.id;
+  }
+  for(const moduleId of new Set(questions.map(question=>question.moduleId!))){
+    const pending=questions.filter(question=>question.moduleId===moduleId&&question.categoryId===moduleId);
+    if(!pending.length)continue;
+    const draft:PaperDraft={title:pending[0].importFileName||"导入题目",metadata:paperMetadata({kind:"custom",moduleId}),issues:[],questions:pending.map((question,index)=>({number:String(index+1),section:"",page:question.sourcePage||1,question,categoryPath:[],warnings:[]}))};
+    await classifyPaper(null,draft,user,signal,async()=>{});
+    for(const entry of draft.questions)entry.question.categoryId=await categoryDestination(entry.categoryPath,moduleId,categories,user,context,statements);
+  }
+  signal.throwIfAborted();
+  if(statements.length)await db().batch(statements);
+  return {questions,categories};
 }
 
 /** Everything below becomes visible together. Asset preparation is outside D1, but no question row is. */
@@ -174,17 +207,11 @@ export async function commitPaper(id:string,draft:PaperDraft,user:AuthUser,runId
   const moduleName=draft.metadata.kind==="admission"?"自主招生":"初中数学";
   let targetModule=draft.metadata.moduleId?library.modules.find(m=>m.id===draft.metadata.moduleId):library.modules.find(m=>m.name===moduleName);
   if(draft.metadata.moduleId&&!targetModule)throw new Error("目标模块不存在，请重新选择");
-  const categories=[...library.categories], normalized=(s:string)=>s.normalize("NFKC").replace(/\s+/g,"").toLocaleLowerCase();
+  const categories=[...library.categories];
   // Only genuinely new questions need directories. Reusing a question never creates an unused module.
   async function destination(path:string[]) {
     if(!targetModule){targetModule={id:`paper-module-${await hashText(moduleName)}`,name:moduleName,subtitle:"",sortOrder:library.modules.length,createdAt:now,updatedAt:now};statements.push(await moduleInsertStatement(targetModule,user,context,true));}
-    let parent=targetModule.id;
-    for(const name of path){
-      let category=categories.find(c=>c.moduleId===targetModule!.id&&c.parentId===parent&&normalized(c.name)===normalized(name));
-      if(!category){category={id:`paper-category-${await hashText(`${targetModule.id}|${parent}|${normalized(name)}`)}`,name,parentId:parent,moduleId:targetModule.id,createdAt:now,createdBy:user.id};categories.push(category);statements.push(await categoryInsertStatement(category,user,context,categories.length,true));}
-      parent=category.id;
-    }
-    return {moduleId:targetModule.id,categoryId:parent};
+    return {moduleId:targetModule.id,categoryId:await categoryDestination(path,targetModule.id,categories,user,context,statements)};
   }
   const prepared:Question[]=[];
   for(const entry of draft.questions)prepared.push(await prepareQuestion({...entry.question,id:crypto.randomUUID(),moduleId:"",categoryId:"",examYear:draft.metadata.year,source:draft.title,importFileName:row.file_name,sourcePage:entry.page,recognitionWarnings:entry.warnings,createdAt:now,updatedAt:now},user,context));

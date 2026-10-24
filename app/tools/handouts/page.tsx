@@ -689,7 +689,7 @@ function HandoutEditor({ id, user, onNotice }: { id: string; user: AuthUser; onN
     // Temporary edits only change this handout's snapshot; imports already have permanent IDs.
     if (current.temporary && current.draft.id) return;
     setLibrary((value) => value && { ...value, questions: [...saved, ...value.questions.filter((item) => !saved.some((entryQuestion) => entryQuestion.id === item.id))] });
-    if (current.temporary) return;
+    if (current.temporary) { void refreshLibrary().catch((error) => onNotice(error instanceof Error ? error.message : "分类目录更新失败", "error")); return; }
     // Editing an existing question only refreshes it; anything newly created joins the handout.
     const created = saved.filter((question) => question.id !== current.draft.id);
     if (!created.length) return;

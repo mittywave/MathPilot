@@ -43,6 +43,49 @@ async function fixture() {
 const question=(stem="计算 $2+3$ 的值。",extra={})=>({id:"",categoryId:"",type:"填空题",difficulty:"基础",stem,options:[],answer:"5",analysis:"",source:"",createdAt:0,updatedAt:0,...extra});
 function draft(questions){return{title:"2025 深圳七年级期末试卷",metadata:{kind:"school",year:"2025",school:"深圳中学",district:"深圳",grade:"七年级",term:"上",examType:"期末",moduleId:""},issues:[],classified:true,questions:questions.map((q,i)=>({number:String(i+1),section:"一、填空题",page:1,question:q,categoryPath:["有理数","有理数的加减"],warnings:[]}))};}
 
+test("temporary imports reuse whole-paper classification, preserve identities and create only missing knowledge directories",async()=>{
+ const f=await fixture(),previousFetch=globalThis.fetch;
+ try{
+  f.env.AI_PROVIDER_ENCRYPTION_KEY="synthetic-classification-key";
+  const repo=await loadSource("lib/server/ai/provider-repository.ts",f.env),presets=await loadSource("lib/ai-provider-presets.ts");
+  const provider=await repo.saveProvider(null,{...presets.newProvider("custom"),name:"Classifier fixture",baseUrl:"https://classification.invalid",wireApi:"responses",credential:{action:"replace",value:"synthetic-test-credential"},enabled:true});
+  await repo.saveManualModel(provider.id,{id:"classifier",expectedRevision:provider.revision,expectedConfigurationRevision:(await repo.readCenter()).routing.revision,capabilities:{text:"supported",structured:"supported"}});
+  const routing=structuredClone((await repo.readCenter()).routing);routing.routes.find(route=>route.role==="text").primary={providerId:provider.id,modelId:"classifier"};await repo.saveRouting(routing);
+  const module=await f.lib.createScopedModule({name:"初中数学"},f.user);
+  const broad=await f.lib.createScopedCategory({id:"existing-geometry",name:"图形与几何",moduleId:module.id,parentId:module.id},f.user);
+  const original=await f.lib.createScopedQuestion(question("线段 AB=12，C 为中点，求 AC。",{id:"already-imported",moduleId:module.id,categoryId:module.id,importFileName:"线的计算.docx",stemDocxXml:["<w:p>原题结构</w:p>"]}),f.user);
+  const raw=[original,...Array.from({length:30},(_,i)=>question(`第 ${i+2} 道线段计算题`,{id:`temporary-${i}`,moduleId:module.id,categoryId:module.id,importFileName:"线的计算.docx"}))],snapshot=structuredClone(raw),requests=[];
+  const metadata={kind:"custom",year:"",school:"",district:"",grade:"",term:"",examType:""};
+  globalThis.fetch=async(url,init)=>{
+   assert.ok(String(url).startsWith("https://classification.invalid/")&&String(url).endsWith("/responses"));
+   const body=JSON.parse(init.body),prompt=body.input[0].content[0].text;
+   const items=JSON.parse(prompt.split("原题：").at(-1).split("\n")[0]);requests.push(items);
+   return Response.json({output_text:JSON.stringify({metadata,questions:items.map(item=>({index:item.index,categoryPath:["图形与几何","几何图形初步","线段的计算"],tags:["线段的计算"],difficulty:"基础"}))})});
+  };
+  const classified=await f.api.classifyImportedQuestions(raw,f.user,new AbortController().signal);
+  assert.deepEqual(requests.map(batch=>batch.length),[20,11]);
+  assert.deepEqual(classified.questions.map(item=>[item.id,item.code,item.stem,item.stemDocxXml]),raw.map(item=>[item.id,item.code,item.stem,item.stemDocxXml]));
+  assert.deepEqual(raw,snapshot,"classification never mutates the supplied draft");
+  assert.ok(classified.questions.every(item=>item.categoryId!==module.id&&item.tags[0]==="线段的计算"));
+  const categories=classified.categories.filter(item=>item.moduleId===module.id);
+  assert.equal(categories.length,3);assert.equal(categories.find(item=>item.name==="图形与几何").id,broad.id);
+  assert.equal(f.count(),1,"classification alone never allocates another question or permanent ID");assert.equal(f.files.size,0,"temporary imports do not create hidden paper documents");
+  const repeated=await f.api.classifyImportedQuestions(raw,f.user,new AbortController().signal);
+  assert.deepEqual(repeated.categories.map(item=>item.id).sort(),classified.categories.map(item=>item.id).sort());
+  const before=requests.length;
+  assert.deepEqual((await f.api.classifyImportedQuestions(classified.questions,f.user,new AbortController().signal)).questions,classified.questions);
+  assert.equal(requests.length,before,"explicit leaf classifications are retained without another model call");
+  const corrected=await f.lib.updateScopedQuestion(original.id,classified.questions[0],f.user);
+  assert.equal(corrected.code,original.code);assert.equal(corrected.stem,original.stem);assert.deepEqual(corrected.stemDocxXml,original.stemDocxXml);
+  const countBefore=f.sqlite.prepare("SELECT COUNT(*) AS n FROM library_categories_v2").get().n;
+  globalThis.fetch=async()=>Response.json({output_text:JSON.stringify({metadata,questions:[{index:99,categoryPath:["错误目录"],tags:[],difficulty:"基础"}]})});
+  await assert.rejects(f.api.classifyImportedQuestions([raw[1]],f.user,new AbortController().signal),/分类结果未完整/);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM library_categories_v2").get().n,countBefore,"invalid model output cannot create an empty classification tree");
+  assert.equal(f.count(),1);
+  await assert.rejects(f.api.classifyImportedQuestions([{...raw[1],moduleId:"missing"}],f.user,new AbortController().signal),error=>error instanceof Response&&error.status===400);
+ }finally{globalThis.fetch=previousFetch;f.sqlite.close();}
+});
+
 test("paper folders preserve descendants, reject cycles and only delete empty folders",async()=>{
   const f=await fixture();try{let folders=await f.api.readPaperFolders();assert.equal(folders.length,12);await f.api.savePaperFolder({name:"自定义",parentId:"paper-g7a"});folders=await f.api.readPaperFolders();const added=folders.find(x=>x.name==="自定义");await assert.rejects(f.api.savePaperFolder({id:"paper-school",name:"期中期末与统考",parentId:added.id}),e=>e.status===400);await f.api.savePaperFolder({id:added.id,name:"改名",parentId:"paper-mock"});assert.equal((await f.api.readPaperFolders()).find(x=>x.id===added.id).parentId,"paper-mock");f.paper("p1");await assert.rejects(f.api.deletePaperFolder(f.user,"paper-g7a"),e=>e.status===400);await assert.rejects(f.api.deletePaperFolder({...f.user,role:"member"},added.id),e=>e.status===403);await f.api.deletePaperFolder(f.user,added.id);assert.ok(!(await f.api.readPaperFolders()).some(x=>x.id===added.id));}finally{f.sqlite.close();}
 });

@@ -99,6 +99,19 @@ async function verifyTemporaryLibrary() {
   const cards = picker.locator('.picker-item');
   const saved = () => page.locator('.handout-save.saved').waitFor();
   const temporary = () => picker.getByRole('tab', { name: /临时题库/ }).click();
+  let classificationCalls = 0, failClassification = true, classifiedCategory = null;
+  // Only the model result is controlled here; the classification service and directory identities also have SQLite tests.
+  await page.route('**/api/questions', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const body = route.request().postDataJSON();
+    if (body.action !== 'classify') return route.continue();
+    classificationCalls++;
+    if (failClassification) { failClassification = false; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '验收注入：自动归类失败' }) }); }
+    assert.ok(body.questions.every(question => question.moduleId === target.id && question.categoryId === target.id));
+    if (!classifiedCategory) classifiedCategory = (await api('/api/categories', { category: { id: 'temporary-auto-equations', name: '一元一次方程', moduleId: target.id, parentId: target.id, createdAt: Date.now() } })).category;
+    const { categories } = await api('/api/library');
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ questions: body.questions.map(question => ({ ...question, categoryId: classifiedCategory.id, tags: ['一元一次方程'], difficulty: '中等' })), categories }) });
+  });
   const chooseFile = async file => {
     await picker.getByRole('button', { name: '导入文件', exact: true }).first().click();
     await page.locator('.file-import-modal input[type=file]').setInputFiles(file);
@@ -108,6 +121,10 @@ async function verifyTemporaryLibrary() {
   await temporary();
   await chooseFile(join(out, 'fixture.docx'));
   assert.equal(await page.locator('.file-draft').count(), 2);
+  await page.getByRole('button', { name: '保存所选 2 道题', exact: true }).click();
+  await page.locator('.file-import-modal .recognition-warning').filter({ hasText: '自动归类失败' }).waitFor();
+  assert.equal(await page.locator('.file-draft').count(), 2);
+  assert.equal((await api('/api/library')).questions.length, 0, 'a classification failure cannot silently save unclassified questions to the root');
   let fail = true;
   await page.route(`**/api/handouts/${handout.id}`, route => {
     if (route.request().method() === 'PUT' && fail) { fail = false; return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '验收注入：保存失败' }) }); }
@@ -125,8 +142,11 @@ async function verifyTemporaryLibrary() {
   const imported = (await api(`/api/handouts/${handout.id}`)).handout.temporaryQuestions;
   for (const question of imported) {
     assert.match(question.code, /^\d{4,}$/);
+    assert.equal(question.categoryId, classifiedCategory.id);
+    assert.deepEqual(question.tags, ['一元一次方程']);
     assert.equal((await api('/api/library')).questions.find(item => item.id === question.id).code, question.code);
   }
+  assert.equal(classificationCalls, 2, 'retrying a failed handout save reuses the already classified draft');
   assert.equal(imported[0].type, '多选题');
   assert.equal(imported[0].answer, 'BD', 'all choice letters survive answer-section pairing');
   assert.match(imported[0].stem, /^（多选）/);
@@ -214,6 +234,7 @@ async function verifyTemporaryLibrary() {
     await page.getByRole('status').filter({ hasText: '已转入后台' }).waitFor();
     await page.locator('.file-import-modal .studio-jobs tr').first().getByRole('button', { name: '打开', exact: true }).click();
     await page.locator('.file-draft').first().waitFor();
+    for (const select of await page.locator('.file-draft-fields label.wide select').all()) await select.selectOption(target.id);
     await page.getByRole('button', { name: '保存所选 1 道题', exact: true }).click();
     await page.locator('.file-import-modal').waitFor({ state: 'hidden' });
     await saved();
@@ -277,7 +298,9 @@ async function verifyTemporaryLibrary() {
   const attempts = [];
   await page.route('**/api/questions', async route => {
     if (route.request().method() !== 'POST') return route.continue();
-    const { question } = route.request().postDataJSON();
+    const body = route.request().postDataJSON();
+    if (body.action === 'classify') return route.fallback();
+    const { question } = body;
     attempts.push(question.id);
     if (question.type === '解答题' && !lostId) {
       lostId = question.id;
@@ -313,8 +336,11 @@ async function verifyTemporaryLibrary() {
   assert.equal(localDraft.structure.unassignedIds.length, 0);
   for (const question of localDraft.temporaryQuestions) {
     assert.match(question.code, /^\d{4,}$/);
+    assert.equal(question.categoryId, classifiedCategory.id);
+    assert.deepEqual(question.tags, ['一元一次方程']);
     assert.equal((await api('/api/library')).questions.find(item => item.id === question.id).code, question.code);
   }
+  assert.equal(classificationCalls, 5, 'Word, PDF and image imports classify once each; failed saves never reclassify successful drafts');
   await page.reload();
   await basketSaved();
   await temporary();

@@ -270,7 +270,10 @@ export default function BasketEditor({ user, library, pool, structure, title, di
     {entry && <QuestionEntry initial={entry} modules={library.modules} categories={library.categories} moduleIds={library.modules.map(item => item.id)}
       saveTemporaryQuestions={saveTemporaryQuestions} startWithFile={!entry.id} onClose={() => setEntry(null)} onNotice={onNotice}
       onSaved={saved => {
-        if (!entry.id) onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
+        if (!entry.id) {
+          onLibrary({ ...library, questions: [...saved, ...library.questions.filter(item => !saved.some(question => question.id === item.id))] });
+          void refreshLibrary().catch(error => onNotice(error instanceof Error ? error.message : "分类目录更新失败", "error"));
+        }
       }} />}
   </main>;
 }

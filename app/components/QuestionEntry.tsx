@@ -138,6 +138,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
   const [fileImportCategory, setFileImportCategory] = useState(initial.categoryId);
   const [fileImportProgress, setFileImportProgress] = useState({ current: 0, total: 0, label: "" });
   const [fileImportDrafts, setFileImportDrafts] = useState<FileImportDraft[]>([]);
+  const [importCategories, setImportCategories] = useState<Category[]>([]);
   const [fileImportErrors, setFileImportErrors] = useState<string[]>([]);
   const [fileImportNotice, setFileImportNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [openImportJobId, setOpenImportJobId] = useState("");
@@ -153,9 +154,9 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
 
   const moduleById = (id: string | null | undefined) => modules.find((item) => item.id === id);
   const entryModules = moduleIds.flatMap((id) => moduleById(id) ?? []);
-  const entryCategories = categories.filter((item) => moduleIds.includes(item.moduleId ?? ""));
-  const pathOf = (id: string) => categoryPath(modules, categories, id);
-  const moduleOf = (categoryId: string) => moduleById(categoryId) ?? moduleById(categories.find((item) => item.id === categoryId)?.moduleId);
+  const entryCategories = [...categories, ...importCategories.filter((item) => !categories.some((existing) => existing.id === item.id))].filter((item) => moduleIds.includes(item.moduleId ?? ""));
+  const pathOf = (id: string) => categoryPath(modules, entryCategories, id);
+  const moduleOf = (categoryId: string) => moduleById(categoryId) ?? moduleById(entryCategories.find((item) => item.id === categoryId)?.moduleId);
   const isAlevelCategory = (categoryId: string) => isAlevel9709ModuleName(moduleOf(categoryId)?.name);
   const recognitionCategories = entryCategories.map((item) => ({ id: item.id, path: pathOf(item.id) }));
   const categoryOptions = entryModules.flatMap((module) => [
@@ -350,13 +351,25 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     } : item));
   }
 
+  async function classifyTemporaryQuestions(questions: Question[]) {
+    const unclassified = saveTemporaryQuestions ? questions.filter((question) => question.categoryId === question.moduleId && !isAlevelCategory(question.categoryId)) : [];
+    if (!unclassified.length) return questions;
+    const classified = await jobsApi<{ questions: Question[]; categories: Category[] }>("/api/questions", postJson({ action: "classify", questions: unclassified }));
+    setImportCategories(classified.categories);
+    setFileImportDrafts((current) => current.map((draft) => {
+      const question = classified.questions.find((item) => item.id === draft.id);
+      return question ? { ...draft, categoryId: question.categoryId, moduleId: question.moduleId, tags: question.tags, difficulty: question.difficulty } : draft;
+    }));
+    return questions.map((question) => classified.questions.find((item) => item.id === question.id) ?? question);
+  }
+
   async function saveImportedQuestions() {
     if (fileImportSavingRef.current) return;
     const selected = fileImportDrafts.filter((item) => item.selected && item.stem.trim() && item.categoryId);
     if (!selected.length) { setNotice("请至少选择一道题，并确认题干和分类", "error"); return; }
     const incompleteIndex = selected.findIndex((item) => { if (!isAlevelCategory(item.categoryId)) return false; const versions = alevelTagVersions(item); return versions.zh.length !== versions.en.length; });
     if (incompleteIndex >= 0) { setNotice(`第 ${incompleteIndex + 1} 道已选题目的中英文知识点数量不一致，请按顺序配对`, "error"); return; }
-    const saved: Question[] = selected.map((item) => {
+    let saved: Question[] = selected.map((item) => {
       const question = { ...item } as Partial<FileImportDraft>;
       delete question.importId; delete question.selected; delete question.documentNumber;
       const tagVersions = alevelTagVersions(item);
@@ -364,6 +377,7 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     });
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true); setFileImportErrors([]);
     try {
+      saved = await classifyTemporaryQuestions(saved);
       const result = await saveQuestionImportBatch(saved, async (question) => (await createCloudQuestion(question)).question);
       const uploaded = result.saved.map((item) => item.question);
       const savedIds = new Set(result.saved.map((item) => item.draft.id));
@@ -552,7 +566,8 @@ export function QuestionEntry({ initial, modules, categories, moduleIds, onSaved
     fileImportSavingRef.current = true; setIsSavingImportedQuestions(true);
     try {
       if (saveTemporaryQuestions) {
-        const question = questionDraft.id ? saved : (await createCloudQuestion(saved)).question;
+        const [classified] = questionDraft.id ? [saved] : await classifyTemporaryQuestions([saved]);
+        const question = questionDraft.id ? saved : (await createCloudQuestion(classified)).question;
         onSaved(await saveTemporaryQuestions([question])); setNotice(questionDraft.id ? "临时题目已保存" : "题目已分配 ID 并加入正式题库"); onClose(); return;
       }
       const result = questionDraft.id && !addToLibrary ? await updateCloudQuestion(saved) : await createCloudQuestion(saved);
