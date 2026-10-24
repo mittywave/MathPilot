@@ -72,8 +72,8 @@ export const uploadNote = (upload: AssignedHomework["uploads"][number]) => [uplo
  * An assigned homework as a whole: every question of the sheet, day by day, with its latest result over all uploads
  * (未交 until an upload finds it), actual submission dates, and the next step — upload more, or open the waiting upload.
  */
-export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onUpload, onExport, actions, children }: {
-  submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void; onUpload: (day: number) => void;
+export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, onFocus, onContinue, onCorrect, onExport, actions, children }: {
+  submission: HomeworkSubmission & { assigned: AssignedHomework }; busy: boolean; onFocus: (assignmentQuestionId: string) => void; onContinue: () => void; onCorrect: (day: number) => void;
   selectedDay: number | null; onDay: (day: number) => void; onExport: (questions: Question[], kind: "word" | "pdf", includeAnalysis?: boolean) => void;
   actions?: ReactNode; children?: ReactNode;
 }) {
@@ -87,9 +87,13 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     return { ...item, state: dayState(item), items: assigned.questions.slice(from, from + item.size) };
   });
   const several = days.length > 1;
+  const unifiedUpload = latest?.status === "draft" && latest.id !== submission.id
+    ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>上传作业 / 订正</a>
+    : <button className="primary" disabled={busy} onClick={onContinue}>上传作业 / 订正</button>;
   const nextUpload = latest && latest.status !== "published" && latest.id !== submission.id && (latest.status !== "draft" || several || !mistakes.length) ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
     : latest?.status === "published" && days.some((group) => group.state !== "done") && (several || !mistakes.length) ? <button className="primary" disabled={busy || Boolean(wait)} onClick={onContinue} title={wait || "上传学生后来交的部分"}>继续上传</button> : null;
   const corrections = days.map((group, index) => {
+    if (several) return null;
     const mistakeIds = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).map(item => item.id);
     const mistakes = mistakeIds.length, wait = uploadWait(assigned.uploads, mistakeIds);
     const allCorrect = group.done === group.size && group.correct === group.size;
@@ -121,11 +125,10 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
       </div>
     </section>
     <section className="assigned-sheet" aria-label="整份作业">
-    {several && <header><div className="assigned-sheet-actions">{originalToggle}{nextUpload}</div></header>}
+    {several && <header><small>作业和订正从这里统一上传，自动匹配对应天和题目。</small><div className="assigned-sheet-actions">{originalToggle}{unifiedUpload}</div></header>}
     {days.map((group, index) => {
-      const wait = uploadWait(assigned.uploads, group.items.filter(item => !item.result).map(item => item.id));
       const grading = assigned.uploads.find(upload => GRADING.includes(upload.status)
-        && (!upload.questionScope?.length || upload.questionScope.some(id => id.startsWith("page:") || group.items.some(item => item.id === id))));
+        && ((!several && !upload.questionScope?.length) || upload.questionScope?.some(id => id.startsWith("page:") || group.items.some(item => item.id === id))));
       const note = grading ? [group.done ? dayNote(group) : grading.submittedAt == null ? "" : `${day(grading.submittedAt)} 提交`, "批改中"].filter(Boolean).join(" · ") : dayNote(group);
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
       return <div className={`assigned-day ${group.state}`} key={index}>
@@ -141,10 +144,7 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
               : <span aria-label={label}>{number}</span>}
           </li>;
         })}</ol>
-        {/* A day not handed in yet is uploaded on its own; corrections only make sense for what has been handed in. */}
-        {several && group.state !== "done" && <button type="button" className="assigned-upload" disabled={busy || Boolean(wait)} onClick={() => onUpload(index)} aria-label={`${group.title || dayName}上传这天`}
-          title={wait || `上传${dayName}还没交的 ${group.size - group.done} 道题的照片或 PDF，只批改这几道`}>上传这天</button>}
-        {several ? corrections[index] : <div className="assigned-sheet-actions">{nextUpload}{originalToggle}{corrections[index]}</div>}
+        {!several && <div className="assigned-sheet-actions">{nextUpload}{originalToggle}{corrections[index]}</div>}
       </div>;
     })}
     {assigned.uploads.length > 1 && <nav className="assigned-uploads" aria-label="上传记录">{assigned.uploads.map((upload) => upload.id === submission.id

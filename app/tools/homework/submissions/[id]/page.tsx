@@ -369,7 +369,7 @@ export default function TeacherSubmissionPage() {
       }
       await uploadReferences();
       await homeworkApi.updateSubmission(submission.id, { action: "save-pages", pages: saved });
-      const result = await homeworkApi.updateSubmission(submission.id, { action: "submit" });
+      const result = await homeworkApi.updateSubmission(submission.id, { action: "submit", autoMatch: (submission.assigned?.days.length ?? 0) > 1 });
       releaseHomeworkPages(pages); setPages([]);
       setSubmission(result.submission);
       setItems(result.submission.gradingItems);
@@ -728,9 +728,13 @@ export default function TeacherSubmissionPage() {
 
     {assigned ? <AssignedHomeworkSheet submission={{ ...submission, assigned }} busy={busy} selectedDay={selectedDay} actions={gradingExport} onExport={(questions, kind, includeAnalysis) => void exportHomework(questions, kind, includeAnalysis)}
       onDay={(day) => { setSelectedDay(day); setEditingId(""); setActiveItemId(""); requestAnimationFrame(() => document.getElementById("day-results")?.scrollIntoView({ block: "start", behavior: "instant" })); }}
-      onContinue={() => void newVersion({}, "继续上传这份作业")}
+      onContinue={() => {
+        if (submission.status === "draft" && !submission.questionScope?.length) {
+          setSelectedDay(null);
+          requestAnimationFrame(() => document.querySelector(".review-upload")?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" }));
+        } else void newVersion({}, "上传作业或订正");
+      }}
       onCorrect={(day) => void newVersion({ correctionDay: day }, assigned.days.length > 1 ? `订正第 ${day + 1} 天的错题` : "订正错题")}
-      onUpload={(day) => void newVersion({ uploadDay: day }, `上传第 ${day + 1} 天的作业`)}
       onFocus={(questionId) => {
         const item = evidenceItems.find((entry) => entry.assignmentQuestionId === questionId) ?? items.find((entry) => entry.assignmentQuestionId === questionId);
         if (!item) return;
@@ -753,7 +757,7 @@ export default function TeacherSubmissionPage() {
     {!dayTask && !binary && submission.status === "published" && (pending.length>0 || pendingPages.length>0) && <details className="homework-panel pending-homework"><summary>{pending.length} 道题{pendingPages.length ? `、${pendingPages.length} 页` : ""}待处理 · 补充材料或修正判定</summary><p>看不清或判定待复核。补图或确认判定之后，才会计入错题本和定档。</p>{pending.length > 0 && <div className="student-panel-actions" role="list" aria-label="待处理题目">{pending.map((item) => <div role="listitem" key={item.id}><button type="button" onClick={() => focusEvidence(item, true)}>{homeworkQuestionLabel(item.questionNumber)}</button></div>)}</div>}<label>补图对应原页<select value={supplementPageId} disabled={busy} onChange={e=>setSupplementPageId(e.target.value)}><option value="">选择原页</option>{submission.pages.map((page,index)=><option key={page.id} value={page.id}>第 {index+1} 页</option>)}</select></label><HomeworkPagePicker pages={supplementPages} onChange={setSupplementPages} disabled={busy} limit={1} label="粘贴或拖入补充的一页" /><label>补充参考答案（选填）<input type="file" aria-label="待处理题参考答案" multiple accept="image/*,application/pdf" disabled={busy} onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></label><button className="primary" onClick={reprocessPending} disabled={busy || (supplementPages.length>0 && (!supplementPageId || supplementPages.length!==1))}>{busy?"正在处理…":"重新处理待处理题"}</button><p>也可以在下方对应题目中补充参考答案并修正判定。</p></details>}
 
 
-    {!dayTask && submission.status === "draft" && <section className="review-upload"><div><h2>{correctionQuestions.length ? "上传错题订正" : scoped.length ? `上传${uploadDay?.title || "这一天"}的作业` : "上传学生作业"}</h2><p>{correctionQuestions.length ? `本次订正：${correctionQuestions.map((question) => homeworkQuestionLabel(question.number)).join("、")}。上传订正照片或 PDF，只更新本次找到的错题，其他题保留原状态。` : scoped.length ? `本次只批改这一天还没交的 ${scoped.length} 道题：${scoped.map((question) => homeworkQuestionLabel(question.number)).join("、")}。` : assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页${correctionQuestions.length ? "订正" : "作业"}`}</button></section>}
+    {!dayTask && submission.status === "draft" && <section className="review-upload"><div><h2>{assigned && assigned.days.length > 1 ? "上传作业 / 订正" : correctionQuestions.length ? "上传错题订正" : scoped.length ? `上传${uploadDay?.title || "这一天"}的作业` : "上传学生作业"}</h2><p>{assigned && assigned.days.length > 1 ? "可一次上传不同天的作业和订正照片或 PDF，无需选择天数。优先按题目 ID 匹配，缺少 ID 时核对题干，自动归到对应天并批改；本次没有上传的题目保留原结果。" : correctionQuestions.length ? `本次订正：${correctionQuestions.map((question) => homeworkQuestionLabel(question.number)).join("、")}。上传订正照片或 PDF，只更新本次找到的错题，其他题保留原状态。` : scoped.length ? `本次只批改这一天还没交的 ${scoped.length} 道题：${scoped.map((question) => homeworkQuestionLabel(question.number)).join("、")}。` : assigned ? "学生拍好的照片或 PDF，可以只传交来的部分，按这份作业的题目清单批改，没交的题之后再传。" : "看不清的题目单独待处理，其余正常批改。"}</p></div><HomeworkPagePicker pages={pages} onChange={setPages} disabled={busy} onSourceFile={file=>setSourceDocuments(current=>[...current,file])} />{!assigned && <details className="completed-reference"><summary>参考答案（选填）</summary><input aria-label="补充参考答案" type="file" multiple accept="image/*,application/pdf" onChange={e=>setReferenceFiles([...(e.target.files??[])])} /></details>}<button className="primary upload-submit" disabled={busy || !pages.length} onClick={uploadAndSubmit}>{busy ? "正在上传…" : `提交 ${pages.length} 页${correctionQuestions.length ? "订正" : "作业"}`}</button></section>}
 
 
     {!dayTask && ["review_required", "ready"].includes(submission.status) && <section className="legacy-result-banner"><div><b>{submission.failureReason.startsWith("修正已保存") ? "修正已保存，结果同步待完成" : "这是启用自动发布前产生的旧提交"}</b><p>{submission.failureReason || "保留旧流程兼容，不会被后台自动发布。"}</p></div><button className="primary" onClick={finishLegacySubmission} disabled={busy}>{submission.failureReason.startsWith("修正已保存") ? "重试同步" : "确认并发布"}</button></section>}

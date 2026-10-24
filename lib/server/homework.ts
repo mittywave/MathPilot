@@ -595,14 +595,15 @@ export async function readHomeworkProgress(user: AuthUser) {
   return progress;
 }
 
-/** Keep overlapping uploads out in the same transaction that reserves their scope. Empty/page scopes cover the sheet. */
-async function writeSubmissionScope(row: Record<string, unknown>, questionIds: string[], changes: D1PreparedStatement[]) {
-  const db = appEnv().DB, scope = JSON.stringify(questionIds);
+/** Reserve known scopes atomically; multi-day uploads may wait together until their actual questions are matched. */
+export async function writeSubmissionScope(row: Record<string, unknown>, questionIds: string[], changes: D1PreparedStatement[], allowUnmatched = false) {
+  const db = homeworkDb(), scope = JSON.stringify(questionIds);
+  const automatic = allowUnmatched && (parseJson<HomeworkSheet>(row.sheet_json, {}).groups?.length ?? 0) > 1;
   const conflictSql = `SELECT s.version FROM homework_submissions s WHERE s.assignment_id=? AND s.student_id=? AND s.id<>?
     AND s.status IN ('submitted','processing','ready','review_required')
-    AND (json_array_length(?)=0 OR json_array_length(s.reprocess_question_ids_json)=0
+    AND (${automatic ? "json_array_length(?)>0 AND (json_array_length(s.reprocess_question_ids_json)=0 AND s.status IN ('ready','review_required')" : "json_array_length(?)=0 OR json_array_length(s.reprocess_question_ids_json)=0"}
       OR EXISTS (SELECT 1 FROM json_each(?) WHERE value LIKE 'page:%')
-      OR EXISTS (SELECT 1 FROM json_each(s.reprocess_question_ids_json) WHERE value LIKE 'page:%' OR value IN (SELECT value FROM json_each(?))))
+      OR EXISTS (SELECT 1 FROM json_each(s.reprocess_question_ids_json) WHERE value LIKE 'page:%' OR value IN (SELECT value FROM json_each(?)))${automatic ? ")" : ""})
     ORDER BY s.version LIMIT 1`;
   const bindings = [row.assignment_id, row.student_id, row.id, scope, scope, scope] as string[];
   const conflict = () => db.prepare(conflictSql).bind(...bindings).first<{ version: number }>();
@@ -639,11 +640,11 @@ export async function createSubmissionVersion(submissionId: string, user: AuthUs
   if (latest?.status === "failed" && latest.published_at != null) throw responseError(`第 ${latest.version} 次上传重新批改失败，先打开它点“重新批改”，完成后再上传`, 409);
   if (latest && (latest.status === "draft" || latest.status === "failed")) {
     if (latest.status === "failed") {
-      await writeSubmissionScope({ ...current, id: latest.id }, questionIds, []);
+      await writeSubmissionScope({ ...current, id: latest.id }, questionIds, [], true);
       await resetUpload(latest.id, user.id);
     }
     const saved = await writeSubmissionScope({ ...current, id: latest.id }, questionIds, [appEnv().DB.prepare("UPDATE homework_submissions SET reprocess_question_ids_json = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
-      .bind(JSON.stringify(questionIds), Date.now(), latest.id)]);
+      .bind(JSON.stringify(questionIds), Date.now(), latest.id)], true);
     if (!saved[0].meta.changes) throw responseError("这次上传已提交，请刷新后重试", 409);
     return readTeacherSubmission(latest.id, user);
   }
@@ -651,7 +652,7 @@ export async function createSubmissionVersion(submissionId: string, user: AuthUs
   await writeSubmissionScope({ ...current, id }, questionIds, [appEnv().DB.prepare(`INSERT INTO homework_submissions
     (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, reprocess_question_ids_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'draft', 'teacher', ?, ?, ?, ?)`)
-    .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, JSON.stringify(questionIds), now, now)]);
+      .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, JSON.stringify(questionIds), now, now)], true);
   return readTeacherSubmission(id, user);
 }
 
@@ -736,18 +737,19 @@ async function markDispatchFailure(id: string, error: unknown) {
     .bind(error instanceof Error ? error.message.slice(0, 500) : "批改任务提交失败", Date.now(), id).run();
 }
 
-export async function submitHomeworkSubmission(id: string, user: AuthUser) {
+export async function submitHomeworkSubmission(id: string, user: AuthUser, autoMatch = false) {
   const row = await teacherSubmissionRow(id, user);
   if (row.status !== "draft") throw responseError("当前提交不能再次提交", 409);
   const pageCount = await appEnv().DB.prepare("SELECT COUNT(*) AS count FROM submission_pages WHERE submission_id = ?").bind(id).first<{ count: number }>();
   if (!Number(pageCount?.count ?? 0)) throw responseError("请先上传作业页面", 400);
   const now = Date.now();
-  const submitted = await writeSubmissionScope(row, parseJson<string[]>(row.reprocess_question_ids_json, []), [
+  const scope = autoMatch && (parseJson<HomeworkSheet>(row.sheet_json, {}).groups?.length ?? 0) > 1 ? "[]" : String(row.reprocess_question_ids_json);
+  const submitted = await writeSubmissionScope(row, parseJson<string[]>(scope, []), [
     appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=? AND status <> 'archived'").bind(row.assignment_id),
-    appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'draft'
+    appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, grading_run_id = '', failure_reason = '', reprocess_question_ids_json = ?, updated_at = ? WHERE id = ? AND status = 'draft'
       AND reprocess_question_ids_json = ?
-      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, now, id, row.reprocess_question_ids_json),
-  ]);
+      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, scope, now, id, row.reprocess_question_ids_json),
+  ], true);
   if (!submitted[1].meta.changes) throw responseError("这份作业已取消或当前提交已经锁定", 409);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id, user);
@@ -757,7 +759,7 @@ export async function retryHomeworkSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   if (row.status !== "failed") throw responseError("只有处理失败的提交可以重试", 409);
   const claimed = await writeSubmissionScope(row, parseJson<string[]>(row.reprocess_question_ids_json, []), [appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'failed' AND grading_run_id = ''")
-    .bind(Date.now(), id)]);
+    .bind(Date.now(), id)], row.published_at == null);
   if (!claimed[0].meta.changes) throw responseError("这份作业已开始重试或状态已变化", 409);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id, user);
@@ -944,7 +946,7 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   return readTeacherSubmission(id,user);
 }
 
-export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown; uploadDay?: unknown }, user: AuthUser) {
+export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown; uploadDay?: unknown; autoMatch?: boolean }, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   if (row.assignment_status === "archived") throw responseError("这份作业已取消，不能继续上传或批改", 409);
   if (body.action === "end-homework" || body.action === "reopen-homework") {
@@ -998,7 +1000,7 @@ export async function updateSubmission(id: string, body: { action?: string; page
     await (await import("./homework-assets")).orientHomeworkPages(id);
     return readTeacherSubmission(id, user);
   }
-  if (body.action === "submit") return submitHomeworkSubmission(id, user);
+  if (body.action === "submit") return submitHomeworkSubmission(id, user, body.autoMatch === true);
   if (body.action === "retry") return retryHomeworkSubmission(id, user);
   if (body.action === "new-version") return createSubmissionVersion(id, user, body.correctionDay, body.uploadDay);
   if (body.action === "cancel") return cancelSubmissionGrading(id, user);

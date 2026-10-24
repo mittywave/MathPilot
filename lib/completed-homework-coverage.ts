@@ -1,4 +1,5 @@
-import { completedExtractionSchema, completedExtractionPrompt, normalizeCompletedQuestions, type CompletedQuestion, type KnownSheetQuestion, type TeacherMark } from './completed-homework-contract';
+import { completedExtractionSchema, completedExtractionPrompt, normalizeCompletedQuestions, printedQuestionId, type CompletedQuestion, type KnownSheetQuestion, type TeacherMark } from './completed-homework-contract';
+import { questionFingerprint } from './question-identity';
 import { homeworkFigureRules, mergeHomeworkFigures } from './homework-figures';
 import type { HomeworkCurriculum } from './types';
 
@@ -27,26 +28,57 @@ export function knownSheetNumber(raw:string,known:Set<string>){
 }
 // An assigned sheet's reading keeps only the sheet's own questions under their listed numbers; anything else on the page
 // (another sheet, scrap work) is left out, and parts the model listed apart are one question again.
-function knownPageReading(value:Record<string,unknown>,page:Record<string,unknown>,known:Set<string>){
+function knownPageReading(value:Record<string,unknown>,page:Record<string,unknown>,known:Set<string>,inventory?:KnownSheetQuestion[]){
+  const byCode=new Map<string,string[]>(),byText=new Map<string,string[]>(),byStem=new Map<string,string[]>();
+  const textKey=(stem:unknown,options:string[]=[])=>{
+    const text=typeof stem==='string'?stem.normalize('NFKC').replace(/^\s*\((?:单选|多选)\)\s*/,'').replace(/^\s*\d{1,3}\s*[.、:](?!\d)\s*/,'').trim().replace(/[，,。.;；:：!?！？]+$/,''):'';
+    return text?questionFingerprint({stem:`#${text}`,options}):'';
+  };
+  for(const question of inventory??[]){
+    for(const [map,key]of [[byCode,printedQuestionId(question.printed_id)],[byText,textKey(question.stem,question.options)],[byStem,textKey(question.stem)]] as const){
+      if(key)map.set(key,[...map.get(key)??[],question.question_number]);
+    }
+  }
+  const identify=(question:Record<string,unknown>)=>{
+    const named=knownSheetNumber(String(question.question_number??''),known);
+    if(!inventory)return named;
+    const code=printedQuestionId(question.printed_id)||printedQuestionId(question.question_number);
+    const options=Array.isArray(question.options)?question.options.filter((item):item is string=>typeof item==='string'):[];
+    const key=textKey(question.stem,options);
+    const matches=code?byCode.get(code)??[]:key?(options.length?byText:byStem).get(key)??[]:[];
+    if(matches.length===1)return matches[0];
+    if(named&&matches.includes(named))return named;
+    const explicit=/^(?:D\d|第\d+天|\d+-\d+)/i.test(String(question.question_number??'').replace(/\s+/g,''));
+    return code||matches.length||(key&&!explicit)?null:named;
+  };
   const merged=new Map<string,Record<string,unknown>>();
+  const remapped=new Map<string,Set<string>>();
+  let ambiguous=false;
   for(const item of Array.isArray(value.questions)?value.questions:[]){
     const question=item&&typeof item==='object'?item as Record<string,unknown>:{};
-    const number=knownSheetNumber(String(question.question_number??''),known);
-    if(!number)continue;
+    const rawNumber=String(question.question_number??'').trim(),number=identify(question);
+    const mapped=remapped.get(rawNumber)??new Set<string>();
+    if(number)mapped.add(number);
+    remapped.set(rawNumber,mapped);
+    if(!number){
+      const bare=rawNumber.replace(/[（(][^（()）]*[)）]/g,'').match(/^第?(\d+)题?$/);
+      if(inventory&&(knownSheetNumber(rawNumber,known)||(bare&&[...known].some(candidate=>candidate===bare[1]||candidate.endsWith(`-${bare[1]}`)))||byCode.has(printedQuestionId(question.printed_id)||printedQuestionId(rawNumber))||byStem.has(textKey(question.stem))))ambiguous=true;
+      continue;
+    }
     const previous=merged.get(number);
     merged.set(number,previous?{...previous,student_answer:[previous.student_answer,question.student_answer].filter(Boolean).join('；'),
       answer_state:[previous.answer_state,question.answer_state].includes('readable')?'readable':[previous.answer_state,question.answer_state].includes('unreadable')?'unreadable':'blank',
       teacher_mark:strictestMark(previous.teacher_mark as TeacherMark,question.teacher_mark as TeacherMark)}
       :{...question,question_number:number,stem:'',options:[],figures:[],figure_notes:'',question_complete:true,max_score:null});
   }
-  const numbers=[...new Set((Array.isArray(page.question_numbers)?page.question_numbers:[]).map(n=>knownSheetNumber(String(n),known)).filter((n):n is string=>Boolean(n)))];
-  const kind=!merged.size&&['questions','continuation'].includes(String(page.kind))?'blank':page.kind;
-  const reason=kind!==page.kind?'本页没有这份作业的题目':page.reason;
+  const numbers=[...new Set((Array.isArray(page.question_numbers)?page.question_numbers:[]).flatMap(n=>remapped.has(String(n).trim())?[...remapped.get(String(n).trim())!]:knownSheetNumber(String(n),known)??[]))];
+  const kind=!merged.size&&['questions','continuation'].includes(String(page.kind))?ambiguous?'unreadable':'blank':page.kind;
+  const reason=kind!==page.kind?ambiguous?'本页题目无法通过 ID、题干或天数唯一匹配，请核对原件':'本页没有这份作业的题目':page.reason;
   return {...value,questions:[...merged.values()],page:{...page,kind,reason,question_numbers:numbers}};
 }
-export function normalizePageExtraction(raw:unknown,pageNumber:number,contextPages:number[],totalPages:number,curriculum:HomeworkCurriculum='school',known?:Set<string>):PageExtraction {
+export function normalizePageExtraction(raw:unknown,pageNumber:number,contextPages:number[],totalPages:number,curriculum:HomeworkCurriculum='school',known?:Set<string>|KnownSheetQuestion[]):PageExtraction {
   if(!raw || typeof raw!=='object' || Array.isArray(raw))invalid('缺少页面回执');
-  if(known&&(raw as Record<string,unknown>).page&&typeof (raw as Record<string,unknown>).page==='object')raw=knownPageReading(raw as Record<string,unknown>,(raw as Record<string,unknown>).page as Record<string,unknown>,known);
+  if(known&&(raw as Record<string,unknown>).page&&typeof (raw as Record<string,unknown>).page==='object')raw=knownPageReading(raw as Record<string,unknown>,(raw as Record<string,unknown>).page as Record<string,unknown>,Array.isArray(known)?new Set(known.map(question=>question.question_number)):known,Array.isArray(known)?known:undefined);
   const value=raw as Record<string,unknown>,page=value.page as Record<string,unknown>|undefined;
   if(!page || Number(page.page_number)!==pageNumber)invalid(`应返回第 ${pageNumber} 页的回执`);
   if(!['questions','continuation','blank','unreadable'].includes(String(page.kind)))invalid('页面类型无效');
@@ -78,9 +110,9 @@ function knownSheetPagePrompt(pageNumber:number,contextPages:number[],totalPages
   const days=known.some(q=>q.question_number.startsWith('D'));
   return completedExtractionPrompt(contextPages.length,curriculum,known)+`\n整份 PDF 共 ${totalPages} 页。本次仅处理 PDF 第 ${pageNumber} 页，即输入的第 ${contextPages.indexOf(pageNumber)+1} 张图片。学生交上来的页面可能乱序、缺页，也可能夹着草稿或别的练习。
 必须完整列出第 ${pageNumber} 页上能看到的、题目清单里的每一道题，包括接着上一页写的作答。返回 page 回执：page_number=${pageNumber}，question_numbers 与 questions 中的题号一一对应。kind 只能是 questions、continuation、blank、unreadable；本页没有清单里的题（空白页、草稿、别的练习）时写 blank 并说明，unreadable 用于整页无法可靠辨认，并具体说明原因。
-question_number 照抄清单里的编号${days?'（纸上每天另起一页，每天题号从 1 开始；每天第一页的标题和每一页的页眉都印着“第 N 天”。第 2 天的第 3 题编号是 D2-3）':''}，不能自造编号，也不能按书本页脚推算。${days?'先看页眉或当天标题确定是第几天，再按题号对应；':''}看不清题号或天数时，按印刷的题干内容在清单里找到对应的题。含小问的题整题作为一项，不拆小问，student_answer 依次写各小问的最终答案。清单里没有的题（老师另加的题、别的练习）不要列出。本次只有当前页图片，page_numbers 只能包含当前 PDF 页码。figures 返回空数组，figure_notes 写空字符串。不能因输出较长省略后半页或题目。
-题目清单（编号｜印在纸上的位置｜题型｜题干开头）：
-${known.map(q=>`${q.question_number}｜${q.label}｜${q.type}｜${q.stem}`).join('\n')}`;
+question_number 优先照抄清单里的编号${days?'（每天题号从 1 开始，第 2 天的第 3 题编号是 D2-3）':''}，不能按上传顺序或书本页脚推算天数。先核对印刷 ID；缺少 ID 时，使用明确的页眉天数和题号，或者按印刷题干匹配。一个文件可以混有多天的首次作答和订正，不能预设只属于一天。ID 或题干相同的题在多天重复出现时，必须结合可确认的天数，不能任意分配。确实无法确定清单编号时保留纸上原题号，并在 stem、options 照录题干及选项供匹配，不能编造天数或根据学生答案选题。含小问的题整题作为一项，不拆小问，student_answer 依次写各小问的最终答案。清单里没有的题（老师另加的题、别的练习）不要列出。本次只有当前页图片，page_numbers 只能包含当前 PDF 页码。figures 返回空数组，figure_notes 写空字符串。不能因输出较长省略后半页或题目。
+题目清单（编号｜印刷 ID｜印在纸上的位置｜题型｜题干开头及选项）：
+${known.map(q=>`${q.question_number}｜${q.printed_id?`ID ${q.printed_id}`:'无 ID'}｜${q.label}｜${q.type}｜${q.stem.slice(0,180)}${q.options?.length?` 选项：${q.options.join(' | ')}`:''}`).join('\n')}`;
 }
 export function completedPageExtractionPrompt(pageNumber:number,contextPages:number[],totalPages:number,curriculum:HomeworkCurriculum='school',known?:KnownSheetQuestion[]){
   if(known)return knownSheetPagePrompt(pageNumber,contextPages,totalPages,curriculum,known);

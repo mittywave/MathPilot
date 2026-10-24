@@ -3,7 +3,7 @@ import { boundedMap, completedPageExtractionPrompt, conflictingPages, completedP
 import { homeworkQuestionLabel } from '../homework-grading-rules.mjs';
 import type { QuestionType } from '../types';
 import { AiQueueFailure } from './ai/queue-policy';
-import { homeworkCurriculum, homeworkDb } from './homework';
+import { homeworkCurriculum, homeworkDb, writeSubmissionScope } from './homework';
 import { homeworkAssetDataUrl } from './homework-assets';
 import { callHomeworkModel, parseHomeworkModelText } from './homework-model';
 import { assertCompletePageCoverage, coverageFingerprint, type ExtractionPage } from './homework-page-coverage';
@@ -28,8 +28,8 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   // An old template flag is never proof that every uploaded page was examined.
   // Different days may finish independently; the shared template flag cannot complete another day's preparation.
   if(assignment?.template_confirmed&&!assignment.sheet_json){try{await assertCompletePageCoverage(submissionId);return;}catch{ /* Backfill missing coverage rather than accepting an old partial extraction. */ }}
-  type StoredRow={id:string;question_number:string;type:QuestionType;stem:string;options_json:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string;reference_verified:number;source_json:string};
-  const storedResult=await db.prepare('SELECT id,question_number,type,stem,options_json,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source,reference_verified,source_json FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order').bind(assignmentId).all<StoredRow>();
+  type StoredRow={id:string;question_number:string;type:QuestionType;stem:string;options_json:string;input_evidence_json:string;answer:string;analysis:string;reference_fingerprint:string;reference_evidence:string;reference_source:string;reference_verified:number;source_json:string;code:string|null};
+  const storedResult=await db.prepare("SELECT id,question_number,type,stem,options_json,input_evidence_json,answer,analysis,reference_fingerprint,reference_evidence,reference_source,reference_verified,source_json,(SELECT printf('%04d',number) FROM question_codes WHERE question_id=COALESCE(NULLIF(question_key,''),json_extract(NULLIF(source_json,''),'$.id'))) AS code FROM assignment_questions WHERE assignment_id=? ORDER BY sort_order").bind(assignmentId).all<StoredRow>();
   const stored=storedResult.results as StoredRow[];
   const oldByNumber=new Map(stored.map(q=>[q.question_number,q]));
   // An assigned homework already holds its questions: the pages are only searched for the answers to them.
@@ -37,8 +37,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   // A new correction upload only reads its selected mistakes. A published upload's pending-item recovery still reads
   // its full inventory so the other results in that same upload stay visible.
   const scopedSheet=sheet&&pendingIds.length&&submission?.published_at==null?sheet.filter(q=>pendingIds.includes(q.id)):sheet;
-  const knownNumbers=scopedSheet?new Set(scopedSheet.map(q=>q.question_number)):undefined;
-  const inventory:KnownSheetQuestion[]|undefined=scopedSheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem.replace(/\s+/g,' ').slice(0,80)}));
+  const inventory:KnownSheetQuestion[]|undefined=scopedSheet?.map(q=>({question_number:q.question_number,label:homeworkQuestionLabel(q.question_number),type:q.type,stem:q.stem,options:JSON.parse(q.options_json||'[]') as string[],printed_id:q.code??''}));
   const originals=await db.prepare("SELECT asset_id FROM assignment_assets WHERE assignment_id=? AND role='question' ORDER BY page_order").bind(assignmentId).all<{asset_id:string}>();
   if(originals.results.length>30)throw new Error('学校作业原件最多30页');
   const originalImages=await Promise.all((originals.results as Array<{asset_id:string}>).map(row=>homeworkAssetDataUrl(row.asset_id)));
@@ -51,7 +50,7 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
     const context=curriculum==='school'?[page]:pages.slice(Math.max(0,index-1),index+2),contextNumbers=context.map(p=>p.page_order+1);
     try{
       const images=await Promise.all(context.map(p=>homeworkAssetDataUrl(p.processed_asset_id)));
-      const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum,inventory),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum,knownNumbers);
+      const read=normalizePageExtraction(await model({images,prompt:completedPageExtractionPrompt(page.page_order+1,contextNumbers,pages.length,curriculum,inventory),schema:completedPageExtractionSchema,schemaName:'completed_homework_page_extraction',upperAttempt}),page.page_order+1,contextNumbers,pages.length,curriculum,inventory);
       const incomplete=read.questions.filter(q=>!q.question_complete);
       if(!sheet && read.questions.length && (originalImages.length || (curriculum==='school' && incomplete.length && pages.length>1))){
         const targets=originalImages.length?read.questions:incomplete;
@@ -114,7 +113,12 @@ export async function prepareCompletedHomework(submissionId:string,assignmentId:
   if(pendingIds.length)questions=questions.filter(q=>pendingIds.includes(recordId(q.question_number)??'')||q.page_numbers.some(p=>pendingPages.includes(p)));
   if(!questions.length)invalid(new Error('上传的页面里没有找到本次需要处理的题目，请核对题号和原件'));
   const ids=new Map(questions.map(q=>[q.question_number,recordId(q.question_number)??crypto.randomUUID()]));
-  if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
+  if(sheet){
+    try{
+      const claimed=await writeSubmissionScope({id:submissionId,assignment_id:assignmentId,student_id:submission?.student_id,sheet_json:assignment?.sheet_json},[...ids.values()],[db.prepare("UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=? AND status IN ('submitted','processing')").bind(JSON.stringify([...ids.values()]),submissionId)],true);
+      if(!claimed[0].meta.changes)throw new Error('这次批改已停止，请刷新后重试');
+    }catch(error){if(error instanceof Response){const result=await error.json() as {error?:string};invalid(new Error(result.error||'本次匹配到的题目正在其他上传中批改'));}throw error;}
+  }else if(pendingIds.length)await db.prepare('UPDATE homework_submissions SET reprocess_question_ids_json=? WHERE id=?').bind(JSON.stringify([...ids.values()]),submissionId).run();
   // A question read beside a printed ID naming it is that question, handed in on paper: it keeps that question's content,
   // as an assigned one does, and only where and how it was answered comes from the page.
   const known=await (await import('./homework-wrong-book')).printedQuestions({id:String(assignment?.owner_user_id),email:'',role:'member'},String(submission?.student_id),sheet?[]:questions);
