@@ -9,6 +9,7 @@ import type { StudentHomework as Homework, HomeworkSheetGroup, Question, Student
 import { AssignHomework } from "./AssignHomework";
 import { dayState, type DayState } from "./AssignedHomeworkSheet";
 import { useConfirm } from "./ConfirmDialog";
+import { DoneCheck } from "./DoneCheck";
 
 // An assigned homework goes by task completion; an uploaded one goes by its grading.
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
@@ -155,6 +156,9 @@ export function StudentHomework({ student, progress, onProgressChange }: { stude
       : <ol className="homework-rows">{rows.map(({ item, states }) => {
         const state = homeworkState(item, states); const graded = item.correct + item.incorrect + item.pending;
         const days = item.days ?? [];
+        // Grading or awaiting confirmation locks the homework's state; a save in flight shows its outcome at once.
+        const locked = busy(item) || !["draft", "published", "failed"].includes(item.latest.status);
+        const saving = changing?.id === item.assignmentId && changing.action !== "cancel";
         return <li key={item.assignmentId} className={state.tone}>
           <a href={`/tools/homework/submissions/${encodeURIComponent(item.latest.id)}`}>
             <span className="homework-state">{state.label}</span>
@@ -168,16 +172,13 @@ export function StudentHomework({ student, progress, onProgressChange }: { stude
             </span>}
             {item.assigned && !item.endedAt && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
-          {item.assigned && (item.endedAt || item.done < item.total) && <button type="button" className="homework-end"
-            disabled={Boolean(changing) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
-            title={item.endedAt ? "恢复提交进度，继续跟进这份作业" : "课堂已完成，不再提醒补交，已有批改记录保留"}
-            aria-busy={changing?.id === item.assignmentId && changing.action !== "cancel"}
-            aria-label={`${item.endedAt ? "重新开启" : "标记已结束"}：${titleWithoutStudent(item.title, student.name)}`}
-            onClick={() => void changeHomework(item, item.endedAt ? "reopen" : "end")}>
-            {changing?.id === item.assignmentId && changing.action !== "cancel" ? "保存中…" : item.endedAt ? "重新开启" : "标记已结束"}
-          </button>}
+          {item.assigned && (item.endedAt || item.done < item.total) && <DoneCheck checked={saving ? changing.action === "end" : Boolean(item.endedAt)} busy={saving}
+            disabled={locked} label={`已结束：${titleWithoutStudent(item.title, student.name)}`}
+            title={locked ? "批改或确认完成后，才能更改结束状态"
+              : item.endedAt ? "重新开启：恢复提交进度，继续跟进这份作业" : "标记已结束：课堂已完成，不再提醒补交，已有批改记录保留"}
+            onToggle={() => void changeHomework(item, item.endedAt ? "reopen" : "end")} />}
           {item.assigned && !item.endedAt && item.done < item.total && <button type="button" className="homework-cancel"
-            disabled={Boolean(changing) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
+            disabled={Boolean(changing) || locked}
             title={changing?.id === item.assignmentId && changing.action === "cancel" ? "正在取消作业…" : busy(item) ? "请先停止批改，再取消这份作业" : "取消这份作业，已有批改记录保留"}
             aria-busy={changing?.id === item.assignmentId && changing.action === "cancel"}
             aria-label={`取消作业：${titleWithoutStudent(item.title, student.name)}`} onClick={() => void changeHomework(item, "cancel")}>

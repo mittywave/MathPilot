@@ -606,13 +606,11 @@ html[data-theme="dark"] .module-manage-list .module-select { background:transpar
 .student-panel-empty b { color:var(--ink); font-size:14px; }
 .student-panel-empty p { max-width:520px; margin:8px auto 0; line-height:1.7; }
 .homework-rows { margin:0; padding:0; list-style:none; border:1px solid var(--line); border-radius:calc(12px*var(--radius-scale)); background:var(--surface); overflow:hidden; }
-.homework-rows>li { display:grid; grid-template-columns:minmax(0,1fr) 100px 40px; align-items:center; }
+.homework-rows>li { display:grid; grid-template-columns:minmax(0,1fr) 44px 40px; align-items:center; }
 .homework-rows>li + li { border-top:1px solid var(--line); }
 .homework-rows>li>a { min-width:0; display:grid; grid-template-columns:100px minmax(0,1fr) minmax(150px,230px) 84px; align-items:center; gap:14px; padding:11px 16px; color:inherit; text-decoration:none; }
 .homework-rows>li>a:hover { background:color-mix(in srgb, var(--green-soft) 50%, var(--surface)); }
-.homework-end { grid-column:2; justify-self:center; padding:6px 10px; border:1px solid var(--line); border-radius:calc(8px*var(--radius-scale)); background:transparent; color:var(--green); font-family:inherit; font-size:12px; font-weight:600; white-space:nowrap; cursor:pointer; }
-.homework-end:hover:not(:disabled) { border-color:var(--green); background:var(--green-soft); }
-.homework-end:disabled { opacity:.5; cursor:not-allowed; }
+.homework-rows>li>.done-check { grid-column:2; justify-self:center; }
 .homework-cancel { grid-column:3; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; margin-right:16px; padding:0; border:0; border-radius:4px; background:transparent; color:var(--danger); cursor:pointer; }
 .homework-cancel:hover:not(:disabled) { background:var(--danger-soft); }
 .homework-cancel:disabled { opacity:.5; cursor:not-allowed; }
@@ -638,6 +636,38 @@ html[data-theme="dark"] .module-manage-list .module-select { background:transpar
   .homework-rows a { grid-template-columns:auto minmax(0,1fr); gap:8px 12px; padding:11px 12px; }
   .homework-tally { grid-column:1 / -1; }
   .homework-go { grid-column:1 / -1; justify-self:start; }
+}
+/* 勾掉一项任务（DoneCheck）：空心圆，悬停时预览勾，完成后是实心勾；亲手勾上时，勾旁散开几颗星星。 */
+.done-check { position:relative; display:inline-grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:50%; background:transparent; cursor:pointer; }
+.done-check svg { width:24px; height:24px; overflow:visible; }
+.done-check circle { fill:transparent; stroke:color-mix(in srgb, var(--success) 38%, var(--line)); stroke-width:1.5; transition:fill .2s, stroke .2s; }
+.done-check path { fill:none; stroke:var(--surface); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:14; stroke-dashoffset:14; transition:stroke-dashoffset .22s ease-out, stroke .2s; }
+.done-check:hover:not(:disabled) circle { stroke:var(--success); }
+.done-check:hover:not(:disabled):not([aria-checked="true"]) path { stroke:color-mix(in srgb, var(--success) 45%, transparent); stroke-dashoffset:0; }
+.done-check[aria-checked="true"] circle { fill:var(--success); stroke:var(--success); }
+.done-check[aria-checked="true"] path { stroke-dashoffset:0; }
+.done-check[aria-checked="true"]:hover:not(:disabled) circle { fill:color-mix(in srgb, var(--success) 82%, var(--surface)); }
+.done-check:disabled { opacity:.45; cursor:not-allowed; }
+.done-check:focus-visible { outline:2px solid var(--green); outline-offset:1px; }
+.done-check[data-burst] svg { animation:done-pop .42s cubic-bezier(.3,1.5,.6,1); }
+.done-check[data-burst] path { animation:done-draw .3s .06s ease-out both; }
+.done-burst { position:absolute; left:50%; top:50%; pointer-events:none; animation:done-burst .8s both; }
+.done-burst::before { content:""; position:absolute; left:-12px; top:-12px; width:24px; height:24px; box-sizing:border-box; border:1.5px solid var(--success); border-radius:50%; animation:done-ring .5s ease-out both; }
+.done-burst i { position:absolute; left:calc(var(--size) / -2); top:calc(var(--size) / -2); width:var(--size); height:var(--size); background:var(--warn); clip-path:polygon(50% 0,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); animation:done-star .72s cubic-bezier(.2,.8,.3,1) both; }
+.done-burst i:nth-child(even) { background:var(--success); clip-path:polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%); animation-delay:.05s; }
+@keyframes done-pop { 0% { transform:scale(.8); } 55% { transform:scale(1.14); } 100% { transform:scale(1); } }
+@keyframes done-draw { from { stroke-dashoffset:14; } to { stroke-dashoffset:0; } }
+@keyframes done-ring { from { opacity:.7; transform:scale(.9); } to { opacity:0; transform:scale(1.9); } }
+@keyframes done-star {
+  0% { opacity:0; transform:rotate(var(--angle)) translateX(9px) rotate(0deg) scale(.2); }
+  30% { opacity:1; transform:rotate(var(--angle)) translateX(calc(var(--distance) * .78)) rotate(35deg) scale(1); }
+  100% { opacity:0; transform:rotate(var(--angle)) translateX(var(--distance)) rotate(80deg) scale(.45); }
+}
+@keyframes done-burst { 0%,85% { opacity:1; } 100% { opacity:0; } }
+@media (prefers-reduced-motion:reduce) {
+  .done-check circle,.done-check path { transition:none; }
+  .done-check[data-burst] svg,.done-check[data-burst] path { animation:none; }
+  .done-burst { display:none; }
 }
 .student-panel-actions { display:flex; flex-wrap:wrap; gap:8px; }
 button.student-panel-action { font-family:inherit; cursor:pointer; }
