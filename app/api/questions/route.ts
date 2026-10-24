@@ -1,6 +1,7 @@
 import type { Question } from "../../../lib/types";
 import { requireSameOrigin, requireUser } from "../../../lib/server/auth";
 import { createScopedQuestion, ensureLibraryQuestions, readDeletedQuestions } from "../../../lib/server/library";
+import { classifyImportedQuestions } from "../../../lib/server/papers";
 
 /** 回收站：已删除、可恢复的试题。 */
 export async function GET(request: Request) {
@@ -17,7 +18,8 @@ export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
     const user = await requireUser(request);
-    const body = await request.json() as { question?: Question; questions?: unknown };
+    const body = await request.json() as { question?: Question; questions?: unknown; action?: unknown };
+    if (body.action === "classify") return Response.json(await classifyImportedQuestions(body.questions, user, request.signal));
     if (body.questions !== undefined) return Response.json({ questions: await ensureLibraryQuestions(body.questions, user) }, { status: 201 });
     if (!body.question?.stem?.trim() || !body.question.categoryId) return Response.json({ error: "请填写题干并选择分类" }, { status: 400 });
     const question = await createScopedQuestion(body.question, user);
