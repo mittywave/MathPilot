@@ -361,9 +361,7 @@ async function verifyTemporaryLibrary() {
   step('basket DOCX import assigns permanent IDs; partial/lost-response retry saves only the remaining draft; unselected imports survive reload');
 
   assert.equal(await picker.getByLabel('来源文件').count(), 0, 'a single source needs no source filter');
-  await picker.getByLabel('题型', { exact: true }).selectOption('多选题');
-  assert.equal(await cards.count(), 1);
-  await picker.getByLabel('题型', { exact: true }).selectOption('全部');
+  assert.equal(await picker.getByLabel('题型', { exact: true }).count(), 0, 'temporary questions have no type filter');
   await picker.getByRole('searchbox', { name: '搜索', exact: true }).fill(localDraft.temporaryQuestions[0].code);
   assert.equal(await cards.count(), 1);
   await picker.getByRole('searchbox', { name: '搜索', exact: true }).fill('');

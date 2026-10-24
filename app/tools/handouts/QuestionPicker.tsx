@@ -7,11 +7,10 @@ import { QuestionBody } from "../../components/QuestionBody";
 import { jobsApi } from "../../components/RecognitionJobs";
 import { HANDOUT_BANDS, HANDOUT_PARTS, sheetLabel } from "../../../lib/handout-rules.mjs";
 import { categoryDescendants, categoryPath, questionMatchesKeyword } from "../../../lib/library-tree";
-import type { AuthUser, HandoutBand, HandoutSheet, LibraryData, PaperDetail, PaperFolder, Question, QuestionType } from "../../../lib/types";
+import type { AuthUser, HandoutBand, HandoutSheet, LibraryData, PaperDetail, PaperFolder, Question } from "../../../lib/types";
 
 export type PickerMode = { kind: "add"; sectionId: string | null; band: HandoutBand } | { kind: "replace"; itemId: string; label: string };
 
-const QUESTION_TYPES: QuestionType[] = ["单选题", "多选题", "填空题", "判断题", "解答题"];
 const PAGE_SIZE = 30;
 
 function pickerPaperLocation(practice = false) {
@@ -96,7 +95,6 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
     update(); wide.addEventListener("change", update);
     return () => wide.removeEventListener("change", update);
   }, [setTreeOpen]);
-  const [type, setType] = useState<"全部" | QuestionType>("全部");
   const [keyword, setKeyword] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState<string[]>([]);
@@ -152,7 +150,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
   const search = keyword.trim().toLowerCase();
   const byCode = library?.questions.find((question) => question.code === search);
   const results = temporary ? temporaryQuestions.filter((question) => (!fileFilter || question.importFileName === fileFilter)
-    && (type === "全部" || question.type === type) && (!search || questionMatchesKeyword(question, search, question.importFileName ?? ""))) : byCode ? [byCode] : moduleQuestions.filter((question) => (!allowed || allowed.has(question.categoryId))
+    && (!search || questionMatchesKeyword(question, search, question.importFileName ?? ""))) : byCode ? [byCode] : moduleQuestions.filter((question) => (!allowed || allowed.has(question.categoryId))
     && (!search || questionMatchesKeyword(question, search, pathOf(question.categoryId))));
   const visibleIds = new Set((temporary ? temporaryQuestions : library?.questions ?? []).map((question) => question.id));
   const availableSelection = selected.filter((id) => visibleIds.has(id) && !taken.has(id));
@@ -243,10 +241,7 @@ export function QuestionPicker({ library, user, onLibraryChanged, treeOpen, onTr
         {paperOpen && <input type="search" aria-label="搜索本卷题目" placeholder="本卷搜索：题目 ID、知识点、题干" value={paperKeyword} onChange={(event) => { setPaperKeyword(event.target.value); resultsPane.current?.scrollTo({ top: 0, behavior: "instant" }); }} />}
         {!papersOpen && !paperOpen && <input type="search" aria-label="搜索" value={keyword} onChange={(event) => { setKeyword(event.target.value); setLimit(PAGE_SIZE); }} placeholder={temporary ? "搜索临时题目、知识点、文件名" : "搜索四位 ID（全库）、题干、知识点"} />}
         {mode.kind === "add" && <div className="picker-actions"><span>已选 {availableSelection.length} 道</span><button className="text-button" disabled={!availableSelection.length} onClick={() => setSelected([])}>清空选择</button><button className="secondary" disabled={disabled || !availableSelection.length || (!list && !mode.sectionId)} onClick={() => { onPick(availableSelection); setSelected([]); }}>加入{list ?? HANDOUT_PARTS[mode.band].label}</button></div>}
-        {temporary && <>
-          {sourceFiles.length > 1 && <select aria-label="来源文件" value={fileFilter} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源</option>{sourceFiles.map((name) => <option key={name}>{name}</option>)}</select>}
-          <select aria-label="题型" value={type} onChange={(event) => { setType(event.target.value as "全部" | QuestionType); setLimit(PAGE_SIZE); }}><option value="全部">全部题型</option>{QUESTION_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
-        </>}
+        {temporary && sourceFiles.length > 1 && <select aria-label="来源文件" value={fileFilter} onChange={(event) => { setFileName(event.target.value); setLimit(PAGE_SIZE); }}><option value="">全部来源</option>{sourceFiles.map((name) => <option key={name}>{name}</option>)}</select>}
       </div>}
       <div className="picker-results" ref={resultsPane}>
       {temporary && onImport && <button type="button" className={`drop-entry picker-import${emptyTemporary ? "" : " compact"}${importing && dropping ? " dragging" : ""}`} disabled={disabled} onClick={() => onImport()}>
