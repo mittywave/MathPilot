@@ -47,6 +47,70 @@ async function writeFixture(t) {
   return f;
 }
 
+test("manual homework completion persists without inventing submissions and can be reopened", { timeout: 120_000 }, async t => {
+  const { db, api, user, question } = await writeFixture(t);
+  const { homeworkProgress } = await import("../lib/homework-grading-rules.mjs");
+  const [first, other] = await api.createAssignedHomework({ studentIds: ["s1", "s2"], title: "整式复习",
+    questions: Array.from({ length: 35 }, (_, index) => ({ ...question, id: `end-${index}`, stem: `计算 $${index}+1$`, answer: String(index + 1) })),
+  }, user);
+  const detail = await api.readTeacherSubmission(first.id, user);
+  await db.batch([
+    db.prepare("UPDATE homework_submissions SET status='published',submitted_at=1,published_at=1 WHERE id=?").bind(first.id),
+    ...detail.assigned.questions.slice(0, 30).map((entry, index) => db.prepare(`INSERT INTO grading_items
+      (id,submission_id,assignment_question_id,verdict,requires_review,student_answer,created_at,updated_at) VALUES(?,?,?,?,0,'fixture',1,1)`)
+      .bind(`end-grade-${index}`, first.id, entry.id, index < 22 ? "correct" : "incorrect")),
+  ]);
+  const summary = async () => (await api.readStudentHomework("s1", user)).find(item => item.assignmentId === detail.assignmentId);
+  const progress = async expected => {
+    assert.equal(homeworkProgress(await api.readStudentHomework("s1", user)), expected);
+    assert.equal((await api.readHomeworkProgress(user)).s1 ?? null, expected);
+  };
+  const before = await summary(), evidence = await api.readTeacherSubmission(first.id, user);
+  assert.deepEqual([before.done, before.total, before.correct, before.incorrect], [30, 35, 22, 8]);
+  await progress("assigned");
+  await assert.rejects(api.updateSubmission(first.id, { action: "end-homework" }, { ...user, id: "another-owner" }), error => error.status === 404);
+  for (const action of ["end-homework", "reopen-homework"]) await assert.rejects(api.updateSubmission("s", { action }, user), error => error.status === 400);
+  await api.updateSubmission(first.id, { action: "end-homework" }, user);
+  const ended = await summary();
+  assert.ok(ended.endedAt > 0);
+  assert.deepEqual({ ...ended, endedAt: null }, before, "only task completion changes; actual submission and grading counts stay intact");
+  assert.deepEqual(await api.readTeacherSubmission(first.id, user), evidence, "grading, uploads and question originals are preserved");
+  await progress(null);
+  assert.equal((await api.readStudentHomework("s2", user))[0].endedAt, null, "another student's copy is unaffected");
+  assert.equal((await api.readHomeworkProgress(user)).s2, "assigned");
+  await api.updateSubmission(first.id, { action: "end-homework" }, user);
+  assert.equal((await summary()).endedAt, ended.endedAt, "retries preserve the original end time");
+  await api.updateSubmission(first.id, { action: "reopen-homework" }, user);
+  assert.deepEqual(await summary(), before);
+  await progress("assigned");
+  await api.updateSubmission(other.id, { action: "end-homework" }, user);
+  assert.equal((await api.readHomeworkProgress(user)).s2, undefined, "even a never-uploaded task can be ended after class");
+  await api.updateSubmission(first.id, { action: "end-homework" }, user);
+  const extra = await api.createSubmissionVersion(first.id, user);
+  assert.ok((await summary()).endedAt, "supplementary uploads do not silently reopen the task");
+  await db.prepare("UPDATE homework_submissions SET status='processing' WHERE id=?").bind(first.id).run();
+  await progress("grading");
+  for (const status of ["submitted", "processing", "ready", "review_required"]) {
+    await db.prepare("UPDATE homework_submissions SET status=? WHERE id=?").bind(status, first.id).run();
+    for (const action of ["end-homework", "reopen-homework"]) await assert.rejects(api.updateSubmission(extra.id, { action }, user), error => error.status === 409,
+      "an earlier upload still in progress cannot be hidden by the latest draft");
+  }
+  await db.prepare("UPDATE homework_submissions SET status='published' WHERE id=?").bind(first.id).run();
+  await progress(null);
+  const [daily] = await api.createAssignedHomework({ studentIds: ["s1"], title: "三天打卡", questions: [1, 2, 3].map(day => ({ ...question, id: `day-${day}` })),
+    groups: [1, 2, 3].map(day => ({ title: `第 ${day} 天`, size: 1 })),
+  }, user);
+  const daysBefore = (await api.readTeacherSubmission(daily.id, user)).assigned;
+  await progress("assigned");
+  await api.updateSubmission(daily.id, { action: "end-homework" }, user);
+  await progress(null);
+  assert.deepEqual((await api.readTeacherSubmission(daily.id, user)).assigned, daysBefore, "ending a multi-day task retains every day's progress");
+  await api.updateSubmission(daily.id, { action: "reopen-homework" }, user);
+  await progress("assigned");
+  await api.updateSubmission(daily.id, { action: "cancel-homework" }, user);
+  for (const action of ["end-homework", "reopen-homework"]) await assert.rejects(api.updateSubmission(daily.id, { action }, user), error => error.status === 409);
+});
+
 test("daily upload scopes allow other days and fence duplicate, stale and concurrent submissions", { timeout: 120_000 }, async t => {
   const { db, api, user, question, queued } = await writeFixture(t);
   const [assigned] = await api.createAssignedHomework({ studentIds: ["s1"], title: "连续打卡",

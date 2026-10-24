@@ -253,7 +253,7 @@ async function uploadResults(submissionIds: string[], bodies = false) {
 }
 
 // Task groups and the 快速排版 record they were assigned from. Legacy start dates are ignored.
-type HomeworkSheet = { groups?: HomeworkSheetGroup[]; recordId?: string; requestHash?: string };
+type HomeworkSheet = { groups?: HomeworkSheetGroup[]; recordId?: string; requestHash?: string; endedAt?: number };
 
 // How the results so far add up: graded ones as right or wrong, and those a teacher still has to look at.
 function tally(results: Array<Parameters<typeof isPendingGradingItem>[0]>) {
@@ -530,13 +530,14 @@ async function teacherHomework(user: AuthUser, studentId?: string) {
   const [assignedById, uploads] = await Promise.all([assignedHomework(latest, false), uploadResults(latest.filter(row => !row.sheet_json && row.status === "published").map(row => String(row.id)))]);
   return latest.map((row): { studentId: string; homework: StudentHomework } => {
     const assigned = assignedById.get(String(row.id));
+    const sheet = parseJson<HomeworkSheet>(row.sheet_json, {});
     const results = assigned ? assigned.questions.flatMap(question => question.result ?? []) : uploads.get(String(row.id)) ?? [];
     return { studentId: String(row.student_id), homework: {
       assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
       latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
       grading: assigned?.uploads.some(upload => ["submitted", "processing"].includes(upload.status)) ?? ["submitted", "processing"].includes(String(row.status)),
-      days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
+      days: assigned?.days ?? null, recordId: assigned ? sheet.recordId ?? null : null, endedAt: assigned ? sheet.endedAt ?? null : null,
     } };
   });
 }
@@ -549,16 +550,17 @@ export async function readStudentHomework(studentId: string, user: AuthUser): Pr
 /** The badges beside every student in 学生档案 in one read; students with neither 批改中 nor 作业中 are left out. */
 export async function readHomeworkProgress(user: AuthUser) {
   const db = appEnv().DB;
-  const rows = await db.prepare(`SELECT s.id,s.assignment_id,s.student_id,s.status,a.curriculum,a.sheet_json<>'' AS assigned
+  const rows = await db.prepare(`SELECT s.id,s.assignment_id,s.student_id,s.status,a.curriculum,a.sheet_json<>'' AS assigned,
+      CASE WHEN a.sheet_json<>'' THEN json_extract(a.sheet_json,'$.endedAt') END AS ended_at
     FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
     WHERE a.owner_user_id=? AND a.input_mode='completed_homework' AND a.status<>'archived'
       AND (s.status IN ('submitted','processing') OR NOT EXISTS
         (SELECT 1 FROM homework_submissions newer WHERE newer.assignment_id=s.assignment_id AND newer.student_id=s.student_id AND newer.version>s.version))`)
-    .bind(user.id).all<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>();
+    .bind(user.id).all<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number; ended_at: number | null }>();
   const progress: Record<string, "grading" | "assigned"> = {};
-  const latestRows = rows.results as Array<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>;
+  const latestRows = rows.results as Array<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number; ended_at: number | null }>;
   for (const row of latestRows) if (["submitted", "processing"].includes(row.status)) progress[row.student_id] = "grading";
-  const pending = latestRows.filter(row => row.assigned && progress[row.student_id] !== "grading");
+  const pending = latestRows.filter(row => row.assigned && !row.ended_at && progress[row.student_id] !== "grading");
   for (const row of pending) if (row.status !== "published") progress[row.student_id] = "assigned";
   const candidates = pending.filter(row => row.status === "published" && !progress[row.student_id]);
   if (!candidates.length) return progress;
@@ -945,6 +947,19 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
 export async function updateSubmission(id: string, body: { action?: string; pages?: Array<{ assetId: string; replacePageId?: string }>; items?: Array<Partial<GradingItem> & { id: string }>; profile?: boolean; correctionDay?: unknown; uploadDay?: unknown }, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   if (row.assignment_status === "archived") throw responseError("这份作业已取消，不能继续上传或批改", 409);
+  if (body.action === "end-homework" || body.action === "reopen-homework") {
+    if (!row.sheet_json) throw responseError("只有布置给学生的作业可以标记结束或重新开启", 400);
+    const now = Date.now(), ending = body.action === "end-homework";
+    // Keep task completion separate from uploaded evidence and from the grading lifecycle's 'closed' status.
+    const changed = await appEnv().DB.prepare(`UPDATE homework_assignments SET sheet_json = ${ending
+      ? "json_set(sheet_json, '$.endedAt', COALESCE(json_extract(sheet_json, '$.endedAt'), ?))"
+      : "json_remove(sheet_json, '$.endedAt')"}, updated_at = ?
+      WHERE id = ? AND owner_user_id = ? AND status <> 'archived' AND NOT EXISTS
+        (SELECT 1 FROM homework_submissions WHERE assignment_id = homework_assignments.id AND status IN ('submitted', 'processing', 'ready', 'review_required'))`)
+      .bind(...(ending ? [now] : []), now, row.assignment_id, user.id).run();
+    if (!changed.meta.changes) throw responseError("这份作业正在批改或等待确认，请处理完成后再调整结束状态", 409);
+    return submissionDetails(row);
+  }
   if (body.action === "cancel-homework") {
     if (!row.sheet_json) throw responseError("只有布置给学生的作业可以取消", 400);
     // Archive the whole homework, including a multi-day sheet, without deleting its earlier results or evidence.

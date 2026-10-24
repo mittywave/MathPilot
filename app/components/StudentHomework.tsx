@@ -14,6 +14,7 @@ import { useConfirm } from "./ConfirmDialog";
 function homeworkState(item: Homework, states: DayState[]): { label: string; tone: "waiting" | "busy" | "failed" | "partial" | "done" } {
   const status = item.latest.status;
   if (busy(item)) return { label: "批改中", tone: "busy" };
+  if (item.endedAt) return { label: "已结束", tone: "done" };
   if (status === "failed") return { label: "处理失败", tone: "failed" };
   if (!item.days) return status === "draft" ? { label: "待上传", tone: "waiting" } : { label: "已批改", tone: "done" };
   if (states.every((state) => state === "done")) return { label: "已交齐", tone: "done" };
@@ -86,7 +87,7 @@ export function AssignPlan({ student, className, handedOut, onClose, onAssigned 
 /** 学生档案 · 作业: the student's assigned and uploaded homework, newest first; each row opens its grading page. */
 export function StudentHomework({ student, progress, onProgressChange }: { student: StudentSummary; progress?: ReturnType<typeof homeworkProgress>; onProgressChange?: (studentId: string, progress: ReturnType<typeof homeworkProgress>) => void }) {
   const [confirmNode, confirm] = useConfirm();
-  const [cancelling, setCancelling] = useState("");
+  const [changing, setChanging] = useState<{ id: string; action: "cancel" | "end" | "reopen" } | null>(null);
   // What was read, and for whom: switching students shows the loading state until that student's list arrives.
   const [loaded, setLoaded] = useState<{ studentId: string; homework: Homework[] | null; error: string } | null>(null);
   // Read again after a homework is assigned here.
@@ -121,21 +122,22 @@ export function StudentHomework({ student, progress, onProgressChange }: { stude
   const assigned = useCallback(() => { setAssigning(false); setReads((count) => count + 1); }, []);
   const [handedOut, setHandedOut] = useState<string[]>([]);
   const rows = homework?.map((item) => ({ item, states: item.days?.map(dayState) ?? [] })) ?? [];
-  const waiting = rows.filter(({ item }) => item.assigned && item.done < item.total && !busy(item));
+  const waiting = rows.filter(({ item }) => item.assigned && !item.endedAt && item.done < item.total && !busy(item));
 
-  async function cancelHomework(item: Homework) {
-    if (cancelling || !await confirm({ title: "取消这份作业", items: [student.name, titleWithoutStudent(item.title, student.name)],
+  async function changeHomework(item: Homework, action: "cancel" | "end" | "reopen") {
+    if (changing) return;
+    if (action === "cancel" && !await confirm({ title: "取消这份作业", items: [student.name, titleWithoutStudent(item.title, student.name)],
       body: "取消后不再要求提交，并从作业列表移除。已有批改、错题和定档记录保留。", confirmLabel: "确认取消作业", danger: true })) return;
-    setCancelling(item.assignmentId);
+    setChanging({ id: item.assignmentId, action });
     try {
-      await homeworkApi.updateSubmission(item.latest.id, { action: "cancel-homework" });
-      const remaining = homework?.filter((entry) => entry.assignmentId !== item.assignmentId) ?? [];
-      setLoaded((current) => current?.studentId === student.id ? { ...current, homework: remaining, error: "" } : current);
-      onProgressChange?.(student.id, homeworkProgress(remaining));
+      await homeworkApi.updateSubmission(item.latest.id, { action: `${action}-homework` });
+      const result = await homeworkApi.studentHomework(student.id);
+      setLoaded((current) => current?.studentId === student.id ? { ...current, homework: result.homework, error: "" } : current);
+      onProgressChange?.(student.id, homeworkProgress(result.homework));
       setReads((count) => count + 1);
     } catch (reason) {
-      setLoaded((current) => current?.studentId === student.id ? { ...current, error: reason instanceof Error ? reason.message : "取消作业失败" } : current);
-    } finally { setCancelling(""); }
+      setLoaded((current) => current?.studentId === student.id ? { ...current, error: reason instanceof Error ? reason.message : "更新作业状态失败" } : current);
+    } finally { setChanging(null); }
   }
 
   return <section className="student-homework" aria-label={`${student.name}的作业`}>
@@ -164,13 +166,21 @@ export function StudentHomework({ student, progress, onProgressChange }: { stude
                 <small>对 {item.correct} · 错 {item.incorrect}{item.pending ? ` · 待处理 ${item.pending}` : ""}</small>
               </span>}
             </span>}
-            {item.assigned && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
+            {item.assigned && !item.endedAt && days.length <= 1 && item.done < item.total && !busy(item) && <span className="homework-go">上传作业</span>}
           </a>
-          {item.assigned && item.done < item.total && <button type="button" className="homework-cancel"
-            disabled={Boolean(cancelling) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
-            title={cancelling === item.assignmentId ? "正在取消作业…" : busy(item) ? "请先停止批改，再取消这份作业" : "取消这份作业，已有批改记录保留"}
-            aria-busy={cancelling === item.assignmentId}
-            aria-label={`取消作业：${titleWithoutStudent(item.title, student.name)}`} onClick={() => void cancelHomework(item)}>
+          {item.assigned && (item.endedAt || item.done < item.total) && <button type="button" className="homework-end"
+            disabled={Boolean(changing) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
+            title={item.endedAt ? "恢复提交进度，继续跟进这份作业" : "课堂已完成，不再提醒补交，已有批改记录保留"}
+            aria-busy={changing?.id === item.assignmentId && changing.action !== "cancel"}
+            aria-label={`${item.endedAt ? "重新开启" : "标记已结束"}：${titleWithoutStudent(item.title, student.name)}`}
+            onClick={() => void changeHomework(item, item.endedAt ? "reopen" : "end")}>
+            {changing?.id === item.assignmentId && changing.action !== "cancel" ? "保存中…" : item.endedAt ? "重新开启" : "标记已结束"}
+          </button>}
+          {item.assigned && !item.endedAt && item.done < item.total && <button type="button" className="homework-cancel"
+            disabled={Boolean(changing) || busy(item) || !["draft", "published", "failed"].includes(item.latest.status)}
+            title={changing?.id === item.assignmentId && changing.action === "cancel" ? "正在取消作业…" : busy(item) ? "请先停止批改，再取消这份作业" : "取消这份作业，已有批改记录保留"}
+            aria-busy={changing?.id === item.assignmentId && changing.action === "cancel"}
+            aria-label={`取消作业：${titleWithoutStudent(item.title, student.name)}`} onClick={() => void changeHomework(item, "cancel")}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg>
           </button>}
         </li>;

@@ -429,6 +429,8 @@ export type AssignedHomework = {
 /** One homework of a student as the archive lists it: assigned ones count the whole sheet, uploaded ones their last upload. */
 export type StudentHomework = {
   assignmentId: string; title: string; assigned: boolean; createdAt: number;
+  /** Manually ended in class; actual submission and grading counts stay unchanged. */
+  endedAt?: number | null;
   total: number; done: number; correct: number; incorrect: number; pending: number;
   latest: { id: string; status: SubmissionStatus; version: number; updatedAt: number };
   /** An earlier day's upload may still be grading after the latest one finishes. */
