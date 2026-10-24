@@ -247,11 +247,13 @@ export default function TeacherSubmissionPage() {
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  const gradingUploads = Boolean(submission && (["submitted", "processing"].includes(submission.status)
+    || submission.assigned?.uploads.some(upload => ["submitted", "processing"].includes(upload.status))));
   useEffect(() => {
-    if (!submission || !["submitted", "processing"].includes(submission.status)) return;
+    if (!submission || !gradingUploads) return;
     const timer = setInterval(() => { void load(submission.id).catch(()=>{}); }, 4000);
     return () => clearInterval(timer);
-  }, [submission?.id, submission?.status]);
+  }, [submission?.id, gradingUploads]);
 
   useEffect(() => {
     for (const upload of [submission, ...dayEvidence?.uploads ?? []]) {

@@ -55,9 +55,11 @@ export function dayNote(task: HomeworkDay) {
 
 type LatestUpload = { version: number; status: SubmissionStatus } | undefined;
 const GRADING: SubmissionStatus[] = ["submitted", "processing", "ready", "review_required"];
-/** One upload of a homework is graded at a time: why a new upload has to wait, or "" when it can start now. */
-export function uploadWait(latest: LatestUpload) {
-  return latest && GRADING.includes(latest.status) ? `第 ${latest.version} 次上传还在批改，完成或停止批改后再上传` : "";
+/** Independent days may be uploaded together; an unknown scope covers the whole sheet. */
+export function uploadWait(uploads: AssignedHomework["uploads"], questionIds: string[] = []) {
+  const active = uploads.find(upload => GRADING.includes(upload.status)
+    && (!questionIds.length || !upload.questionScope?.length || upload.questionScope.some(id => id.startsWith("page:") || questionIds.includes(id))));
+  return active ? `第 ${active.version} 次上传还在批改，完成或停止批改后再上传` : "";
 }
 /** A new upload takes the place of a failed latest upload, so the teacher is asked first. */
 export function confirmGivingUp(latest: LatestUpload, next: string) {
@@ -79,16 +81,17 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
   const [showOriginals, setShowOriginals] = useState(false);
   const [expandedAnalyses, setExpandedAnalyses] = useState<string[]>([]);
   const mistakes = assigned.questions.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict));
-  const latest = assigned.uploads.at(-1), wait = uploadWait(latest);
+  const latest = assigned.uploads.at(-1), wait = uploadWait(assigned.uploads);
   const days = assigned.days.map((item, index) => {
     const from = assigned.days.slice(0, index).reduce((sum, entry) => sum + entry.size, 0);
     return { ...item, state: dayState(item), items: assigned.questions.slice(from, from + item.size) };
   });
   const several = days.length > 1;
   const nextUpload = latest && latest.status !== "published" && latest.id !== submission.id && (latest.status !== "draft" || several || !mistakes.length) ? <a className="primary" href={`/tools/homework/submissions/${encodeURIComponent(latest.id)}`}>{latest.status === "draft" ? "去上传" : latest.status === "failed" ? "去处理" : "查看批改进度"}</a>
-    : latest?.status === "published" && days.some((group) => group.state !== "done") && (several || !mistakes.length) ? <button className="primary" disabled={busy} onClick={onContinue} title="上传学生后来交的部分">继续上传</button> : null;
+    : latest?.status === "published" && days.some((group) => group.state !== "done") && (several || !mistakes.length) ? <button className="primary" disabled={busy || Boolean(wait)} onClick={onContinue} title={wait || "上传学生后来交的部分"}>继续上传</button> : null;
   const corrections = days.map((group, index) => {
-    const mistakes = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).length;
+    const mistakeIds = group.items.filter(({ result }) => result && !isPendingGradingItem(result) && ["incorrect", "partial"].includes(result.verdict)).map(item => item.id);
+    const mistakes = mistakeIds.length, wait = uploadWait(assigned.uploads, mistakeIds);
     const allCorrect = group.done === group.size && group.correct === group.size;
     const correctionLabel = mistakes ? "去订正" : allCorrect ? group.items.some(({ result }) => result?.wasIncorrect) ? "已订正" : "无错题" : "订正";
     return (mistakes > 0 || group.state === "done") && <button key={index} type="button" className={`assigned-correct${mistakes ? " incorrect" : allCorrect ? " correct" : ""}`} disabled={busy || !mistakes || Boolean(wait)} onClick={() => onCorrect(index)} aria-label={`${group.title || "本次作业"}${correctionLabel}`}
@@ -120,7 +123,10 @@ export function AssignedHomeworkSheet({ submission, busy, selectedDay, onDay, on
     <section className="assigned-sheet" aria-label="整份作业">
     {several && <header><div className="assigned-sheet-actions">{originalToggle}{nextUpload}</div></header>}
     {days.map((group, index) => {
-      const note = dayNote(group);
+      const wait = uploadWait(assigned.uploads, group.items.filter(item => !item.result).map(item => item.id));
+      const grading = assigned.uploads.find(upload => GRADING.includes(upload.status)
+        && (!upload.questionScope?.length || upload.questionScope.some(id => id.startsWith("page:") || group.items.some(item => item.id === id))));
+      const note = grading ? [group.done ? dayNote(group) : grading.submittedAt == null ? "" : `${day(grading.submittedAt)} 提交`, "批改中"].filter(Boolean).join(" · ") : dayNote(group);
       const dayName = several ? `第 ${index + 1} 天` : "这份作业";
       return <div className={`assigned-day ${group.state}`} key={index}>
         {several && <div className="assigned-day-head"><button type="button" onClick={() => onDay(index)} aria-pressed={selectedDay === index}

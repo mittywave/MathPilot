@@ -224,7 +224,7 @@ async function submissionDetails(row: Record<string, unknown>): Promise<Homework
   };
 }
 
-type UploadRow = { id: string; assignment_id: string; student_id: string; version: number; status: SubmissionStatus; created_at: number; submitted_at: number | null; page_count: number };
+type UploadRow = { id: string; assignment_id: string; student_id: string; version: number; status: SubmissionStatus; reprocess_question_ids_json: string; created_at: number; submitted_at: number | null; page_count: number };
 type ResultRow = { submission_id: string; assignment_question_id: string; question_number: string; verdict: GradingVerdict; requires_review: number; standard_answer: string; standard_analysis: string; reference_verified: number; question_evidence_json: string };
 
 // The published results of one upload, without questions a later reading of its pages no longer finds.
@@ -283,7 +283,7 @@ async function assignedHomework(input: Record<string, unknown> | Record<string, 
     appEnv().DB.prepare(`SELECT assignment_id,id,question_number${bodies ? ",source_json,(SELECT printf('%04d',number) FROM question_codes WHERE question_id=NULLIF(question_key,'')) AS code" : ""}
       FROM assignment_questions WHERE assignment_id IN (SELECT value FROM json_each(?)) AND source_json<>'' ORDER BY sort_order`)
       .bind(ids).all<{ assignment_id: string; id: string; question_number: string; source_json?: string; code?: string | null }>(),
-    appEnv().DB.prepare(`SELECT assignment_id,student_id,id,version,status,created_at,submitted_at${bodies ? ",(SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id=s.id) AS page_count" : ""}
+    appEnv().DB.prepare(`SELECT assignment_id,student_id,id,version,status,reprocess_question_ids_json,created_at,submitted_at${bodies ? ",(SELECT COUNT(*) FROM submission_pages p WHERE p.submission_id=s.id) AS page_count" : ""}
       FROM homework_submissions s WHERE assignment_id IN (SELECT value FROM json_each(?)) ORDER BY version`).bind(ids).all<UploadRow>(),
   ]);
   const questionRows = questions.results as Array<{ assignment_id: string; id: string; question_number: string; source_json?: string; code?: string | null }>;
@@ -315,7 +315,7 @@ async function assignedHomework(input: Record<string, unknown> | Record<string, 
       return { title: group.title, size: group.size, ...tally(day.flatMap(item => item.result ?? [])), firstAttempt: { correct, incorrect, pending }, handedInAt: first.length ? Math.min(...first.map(item => item.at)) : null };
     });
     result.set(String(row.id), { days, questions: items,
-      uploads: handedIn.map(upload => ({ id: upload.id, version: Number(upload.version), status: upload.status, pageCount: Number(upload.page_count ?? 0), createdAt: Number(upload.created_at), submittedAt: upload.submitted_at == null ? null : Number(upload.submitted_at) })),
+      uploads: handedIn.map(upload => ({ id: upload.id, version: Number(upload.version), status: upload.status, questionScope: parseJson<string[]>(upload.reprocess_question_ids_json, []), pageCount: Number(upload.page_count ?? 0), createdAt: Number(upload.created_at), submittedAt: upload.submitted_at == null ? null : Number(upload.submitted_at) })),
     });
   }
   return Array.isArray(input) ? result : result.get(String(input.id)) ?? null;
@@ -535,6 +535,7 @@ async function teacherHomework(user: AuthUser, studentId?: string) {
       assignmentId: String(row.assignment_id), title: String(row.assignment_title), assigned: Boolean(assigned), createdAt: Number(row.assignment_created_at),
       total: assigned ? assigned.questions.length : results.length, ...tally(results),
       latest: { id: String(row.id), status: row.status as SubmissionStatus, version: Number(row.version), updatedAt: Number(row.updated_at) },
+      grading: assigned?.uploads.some(upload => ["submitted", "processing"].includes(upload.status)) ?? ["submitted", "processing"].includes(String(row.status)),
       days: assigned?.days ?? null, recordId: assigned ? parseJson<HomeworkSheet>(row.sheet_json, {}).recordId ?? null : null,
     } };
   });
@@ -551,7 +552,8 @@ export async function readHomeworkProgress(user: AuthUser) {
   const rows = await db.prepare(`SELECT s.id,s.assignment_id,s.student_id,s.status,a.curriculum,a.sheet_json<>'' AS assigned
     FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
     WHERE a.owner_user_id=? AND a.input_mode='completed_homework' AND a.status<>'archived'
-      AND NOT EXISTS (SELECT 1 FROM homework_submissions newer WHERE newer.assignment_id=s.assignment_id AND newer.student_id=s.student_id AND newer.version>s.version)`)
+      AND (s.status IN ('submitted','processing') OR NOT EXISTS
+        (SELECT 1 FROM homework_submissions newer WHERE newer.assignment_id=s.assignment_id AND newer.student_id=s.student_id AND newer.version>s.version))`)
     .bind(user.id).all<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>();
   const progress: Record<string, "grading" | "assigned"> = {};
   const latestRows = rows.results as Array<{ id: string; assignment_id: string; student_id: string; status: SubmissionStatus; curriculum: string; assigned: number }>;
@@ -591,11 +593,31 @@ export async function readHomeworkProgress(user: AuthUser) {
   return progress;
 }
 
-/**
- * A new upload keeps the earlier ones and their results untouched. For an assigned homework it covers the whole sheet,
- * one day's questions not handed in yet, or one day's mistakes to correct. One upload is graded at a time: the latest
- * takes the new scope while it is still 待上传, or when its grading failed (the teacher agreed to give it up first).
- */
+/** Keep overlapping uploads out in the same transaction that reserves their scope. Empty/page scopes cover the sheet. */
+async function writeSubmissionScope(row: Record<string, unknown>, questionIds: string[], changes: D1PreparedStatement[]) {
+  const db = appEnv().DB, scope = JSON.stringify(questionIds);
+  const conflictSql = `SELECT s.version FROM homework_submissions s WHERE s.assignment_id=? AND s.student_id=? AND s.id<>?
+    AND s.status IN ('submitted','processing','ready','review_required')
+    AND (json_array_length(?)=0 OR json_array_length(s.reprocess_question_ids_json)=0
+      OR EXISTS (SELECT 1 FROM json_each(?) WHERE value LIKE 'page:%')
+      OR EXISTS (SELECT 1 FROM json_each(s.reprocess_question_ids_json) WHERE value LIKE 'page:%' OR value IN (SELECT value FROM json_each(?))))
+    ORDER BY s.version LIMIT 1`;
+  const bindings = [row.assignment_id, row.student_id, row.id, scope, scope, scope] as string[];
+  const conflict = () => db.prepare(conflictSql).bind(...bindings).first<{ version: number }>();
+  const reject = (upload: { version: number }) => responseError(`第 ${upload.version} 次上传还在批改，完成或停止批改后再上传`, 409);
+  const waiting = await conflict();
+  if (waiting) throw reject(waiting);
+  try {
+    return (await db.batch([db.prepare(`SELECT CASE WHEN NOT EXISTS (${conflictSql}) THEN 1
+      ELSE json_extract('overlapping homework upload', '$') END AS available`).bind(...bindings), ...changes])).slice(1);
+  } catch (error) {
+    const waiting = await conflict();
+    if (waiting) throw reject(waiting);
+    throw error;
+  }
+}
+
+/** A new upload keeps earlier evidence intact. Independent days may grade together; drafts reuse the selected scope. */
 export async function createSubmissionVersion(submissionId: string, user: AuthUser, correctionDay?: unknown, uploadDay?: unknown) {
   const current = await teacherSubmissionRow(submissionId, user);
   const dayIndex = uploadDay ?? correctionDay;
@@ -614,17 +636,20 @@ export async function createSubmissionVersion(submissionId: string, user: AuthUs
   // An upload published before keeps its results even when grading it again failed.
   if (latest?.status === "failed" && latest.published_at != null) throw responseError(`第 ${latest.version} 次上传重新批改失败，先打开它点“重新批改”，完成后再上传`, 409);
   if (latest && (latest.status === "draft" || latest.status === "failed")) {
-    if (latest.status === "failed") await resetUpload(latest.id, user.id);
-    if (latest.reprocess_question_ids_json !== JSON.stringify(questionIds)) await appEnv().DB.prepare("UPDATE homework_submissions SET reprocess_question_ids_json = ?, updated_at = ? WHERE id = ?")
-      .bind(JSON.stringify(questionIds), Date.now(), latest.id).run();
+    if (latest.status === "failed") {
+      await writeSubmissionScope({ ...current, id: latest.id }, questionIds, []);
+      await resetUpload(latest.id, user.id);
+    }
+    const saved = await writeSubmissionScope({ ...current, id: latest.id }, questionIds, [appEnv().DB.prepare("UPDATE homework_submissions SET reprocess_question_ids_json = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
+      .bind(JSON.stringify(questionIds), Date.now(), latest.id)]);
+    if (!saved[0].meta.changes) throw responseError("这次上传已提交，请刷新后重试", 409);
     return readTeacherSubmission(latest.id, user);
   }
-  if (latest && latest.status !== "published") throw responseError(`第 ${latest.version} 次上传还在批改，完成或停止批改后再上传`, 409);
   const id = crypto.randomUUID(); const now = Date.now();
-  await appEnv().DB.prepare(`INSERT INTO homework_submissions
+  await writeSubmissionScope({ ...current, id }, questionIds, [appEnv().DB.prepare(`INSERT INTO homework_submissions
     (id, assignment_id, student_id, version, status, submitted_by_type, submitted_by_id, reprocess_question_ids_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'draft', 'teacher', ?, ?, ?, ?)`)
-    .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, JSON.stringify(questionIds), now, now).run();
+    .bind(id, current.assignment_id, current.student_id, Number(latest?.version ?? 0) + 1, user.id, JSON.stringify(questionIds), now, now)]);
   return readTeacherSubmission(id, user);
 }
 
@@ -715,10 +740,11 @@ export async function submitHomeworkSubmission(id: string, user: AuthUser) {
   const pageCount = await appEnv().DB.prepare("SELECT COUNT(*) AS count FROM submission_pages WHERE submission_id = ?").bind(id).first<{ count: number }>();
   if (!Number(pageCount?.count ?? 0)) throw responseError("请先上传作业页面", 400);
   const now = Date.now();
-  const submitted = await appEnv().DB.batch([
+  const submitted = await writeSubmissionScope(row, parseJson<string[]>(row.reprocess_question_ids_json, []), [
     appEnv().DB.prepare("UPDATE homework_assignments SET status='closed',template_confirmed=0 WHERE id=? AND status <> 'archived'").bind(row.assignment_id),
     appEnv().DB.prepare(`UPDATE homework_submissions SET status = 'submitted', submitted_at = ?, grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'draft'
-      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, now, id),
+      AND reprocess_question_ids_json = ?
+      AND EXISTS (SELECT 1 FROM homework_assignments WHERE id = homework_submissions.assignment_id AND status <> 'archived')`).bind(now, now, id, row.reprocess_question_ids_json),
   ]);
   if (!submitted[1].meta.changes) throw responseError("这份作业已取消或当前提交已经锁定", 409);
   await dispatchSubmissionGrading(id);
@@ -728,9 +754,9 @@ export async function submitHomeworkSubmission(id: string, user: AuthUser) {
 export async function retryHomeworkSubmission(id: string, user: AuthUser) {
   const row = await teacherSubmissionRow(id, user);
   if (row.status !== "failed") throw responseError("只有处理失败的提交可以重试", 409);
-  const claimed = await appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'failed' AND grading_run_id = ''")
-    .bind(Date.now(), id).run();
-  if (!claimed.meta.changes) throw responseError("这份作业已开始重试或状态已变化", 409);
+  const claimed = await writeSubmissionScope(row, parseJson<string[]>(row.reprocess_question_ids_json, []), [appEnv().DB.prepare("UPDATE homework_submissions SET status = 'submitted', grading_run_id = '', failure_reason = '', updated_at = ? WHERE id = ? AND status = 'failed' AND grading_run_id = ''")
+    .bind(Date.now(), id)]);
+  if (!claimed[0].meta.changes) throw responseError("这份作业已开始重试或状态已变化", 409);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id, user);
 }
@@ -794,7 +820,7 @@ export async function correctPublishedSubmission(id: string, items: Array<Partia
     questions.push(question); grades.push(next);
     revisions.push({ id: crypto.randomUUID(), itemId: patch.id, before: JSON.stringify(existing), after: JSON.stringify({ ...next, question }) });
   }
-  try { await db.batch([
+  try { await writeSubmissionScope(row, questions.map(question => String(question.id)), [
     db.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM homework_submissions s JOIN homework_assignments a ON a.id=s.assignment_id
       WHERE s.id=? AND s.status='published' AND s.grading_run_id='' AND s.updated_at=? AND a.owner_user_id=? AND a.status<>'archived')
       AND NOT EXISTS (SELECT 1 FROM json_each(?) expected LEFT JOIN assignment_questions q ON q.id=json_extract(expected.value,'$.assignment_question_id')
@@ -880,8 +906,8 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
   const pending=await appEnv().DB.prepare(`SELECT g.assignment_question_id FROM grading_items g JOIN assignment_questions q ON q.id=g.assignment_question_id
     WHERE g.submission_id=? AND (g.requires_review=1 OR g.verdict IN ('unreadable','review_required') OR (g.verdict IN ('incorrect','partial') AND ((trim(q.answer)='' AND trim(q.analysis)='') OR q.reference_verified=0)))`).bind(id).all<{assignment_question_id:string}>();
   const coverage=await (await import("./homework-page-coverage")).readPageCoverage(id);
-  const pendingPages=coverage.pages.filter(p=>p.kind==='unreadable').map(p=>`page:${p.pageNumber}`);
-  if(!pending.results.length && !pendingPages.length)throw responseError("没有待处理的题目",409);
+  const questionIds=[...pending.results.map((p: { assignment_question_id: string })=>p.assignment_question_id),...coverage.pages.filter(p=>p.kind==='unreadable').map(p=>`page:${p.pageNumber}`)];
+  if(!questionIds.length)throw responseError("没有待处理的题目",409);
   if(replacements.length)await ownedPageAssets(id,user,replacements.map(replacement=>String(replacement.assetId)));
   const changes:D1PreparedStatement[]=[]; const now=Date.now();
   for(const replacement of replacements){
@@ -895,9 +921,9 @@ export async function reprocessPendingSubmission(id:string, replacements:Array<{
   changes.push(appEnv().DB.prepare(`UPDATE assignment_questions SET reference_fingerprint='' WHERE id IN
     (SELECT assignment_question_id FROM grading_items WHERE submission_id=? AND verdict IN ('incorrect','partial'))
     AND ((trim(answer)='' AND trim(analysis)='') OR reference_verified=0) AND reference_fingerprint NOT LIKE 'pending:%' AND reference_evidence NOT LIKE '教师补充并确认%'`).bind(id));
-  changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify([...pending.results.map(p=>p.assignment_question_id),...pendingPages]),now,id));
+  changes.push(appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json=?,updated_at=? WHERE id=?").bind(now,JSON.stringify(questionIds),now,id));
   changes.push(appEnv().DB.prepare('UPDATE homework_assignments SET template_confirmed=0 WHERE id=?').bind(row.assignment_id));
-  await appEnv().DB.batch(changes);
+  await writeSubmissionScope(row, questionIds, changes);
   await dispatchSubmissionGrading(id);
   return readTeacherSubmission(id,user);
 }
@@ -906,8 +932,8 @@ export async function rebuildSubmissionCoverage(id:string,user:AuthUser){
   const row=await teacherSubmissionRow(id,user);
   if(!["published","ready","failed"].includes(String(row.status)))throw responseError("请等待当前批改完成",409);
   const now=Date.now();
-  const claimed=await appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json='[]',failure_reason='',updated_at=? WHERE id=? AND status IN ('published','ready','failed')").bind(now,now,id).run();
-  if(!claimed.meta.changes)return readTeacherSubmission(id,user);
+  const claimed=await writeSubmissionScope(row, [], [appEnv().DB.prepare("UPDATE homework_submissions SET status='submitted',submitted_at=?,grading_run_id='',reprocess_question_ids_json='[]',failure_reason='',updated_at=? WHERE id=? AND status IN ('published','ready','failed')").bind(now,now,id)]);
+  if(!claimed[0].meta.changes)return readTeacherSubmission(id,user);
   const previous=await appEnv().DB.prepare('SELECT * FROM grading_items WHERE submission_id=?').bind(id).all<Record<string,unknown>>();
   for(const item of previous.results)await appEnv().DB.prepare('INSERT INTO grading_item_revisions(id,grading_item_id,submission_id,corrected_by,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)')
     .bind(crypto.randomUUID(),item.id,id,user.id,JSON.stringify(item),JSON.stringify({action:"rebuild-coverage",reason:"补全未处理页面，保留修复前记录"}),now).run();

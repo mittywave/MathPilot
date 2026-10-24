@@ -47,6 +47,52 @@ async function writeFixture(t) {
   return f;
 }
 
+test("daily upload scopes allow other days and fence duplicate, stale and concurrent submissions", { timeout: 120_000 }, async t => {
+  const { db, api, user, question, queued } = await writeFixture(t);
+  const [assigned] = await api.createAssignedHomework({ studentIds: ["s1"], title: "连续打卡",
+    groups: [1, 2, 3].map(day => ({ title: `第 ${day} 天`, size: 1 })),
+    questions: [1, 2, 3].map(day => ({ ...question, id: `daily-${day}`, stem: `计算 $${day}+1$`, answer: String(day + 1) })),
+  }, user);
+  const first = await api.createSubmissionVersion(assigned.id, user, undefined, 1);
+  const scope = first.questionScope;
+  const addPage = async id => {
+    await db.prepare("INSERT INTO homework_assets(id,owner_user_id,r2_key,content_type,byte_size,content_hash,role,upload_submission_id,created_at) VALUES(?,'u',?,'image/jpeg',1,?,'submission_original',?,0)").bind(id, id, id, id).run();
+    await db.prepare("INSERT INTO submission_pages(id,submission_id,original_asset_id,processed_asset_id,page_order,created_at) VALUES(?,?,?,?,0,0)").bind(id, id, id, id).run();
+  };
+  await addPage(first.id);
+  await api.submitHomeworkSubmission(first.id, user);
+  const third = await api.createSubmissionVersion(first.id, user, undefined, 2);
+  assert.notEqual(third.id, first.id);
+  assert.deepEqual(third.questionScope, [first.assigned.questions[2].id]);
+  assert.deepEqual((await api.readTeacherSubmission(first.id, user)).questionScope, scope);
+  const conflict = error => error instanceof Response && error.status === 409;
+  await assert.rejects(api.createSubmissionVersion(first.id, user, undefined, 1), conflict, "the latest draft cannot hide the earlier active day");
+  await assert.rejects(api.createSubmissionVersion(first.id, user), conflict, "an unscoped upload conflicts with any active day");
+  const { AssignedHomeworkSheet } = await loadSource("app/components/AssignedHomeworkSheet.tsx");
+  const html = renderToStaticMarkup(createElement(AssignedHomeworkSheet, { submission: third, busy: false, onFocus() {}, onContinue() {}, onCorrect() {}, onUpload() {} }));
+  assert.match(html, /class="assigned-upload" disabled="" aria-label="第 2 天上传这天"/);
+  assert.match(html, /class="assigned-upload" aria-label="第 3 天上传这天"/);
+  assert.match(html, /提交 · 批改中/);
+  await addPage(third.id);
+  await api.submitHomeworkSubmission(third.id, user);
+  assert.equal(queued.filter(message => message.kind === "grade_submission").length, 2);
+  await db.prepare("UPDATE homework_submissions SET status='published',published_at=1 WHERE id=?").bind(third.id).run();
+  assert.equal((await api.readStudentHomework("s1", user)).find(item => item.assignmentId === first.assignmentId).grading, true);
+  assert.equal((await api.readHomeworkProgress(user)).s1, "grading");
+  assert.equal(await api.countGradingHomework(user), 1);
+  await assert.rejects(api.rebuildSubmissionCoverage(third.id, user), conflict, "whole-sheet reprocessing cannot race an earlier day");
+  // A stale draft with the same scope must be rejected again at submit, before it can reach the queue.
+  await db.prepare("UPDATE homework_submissions SET status='draft',reprocess_question_ids_json=? WHERE id=?").bind(JSON.stringify(scope), third.id).run();
+  await assert.rejects(api.submitHomeworkSubmission(third.id, user), conflict);
+  await db.prepare("UPDATE homework_submissions SET status='failed' WHERE id=?").bind(third.id).run();
+  await assert.rejects(api.retryHomeworkSubmission(third.id, user), conflict);
+  // Two stale drafts can pass the read check together; the transactional scope guard admits only one.
+  await db.prepare("UPDATE homework_submissions SET status='draft' WHERE id IN (?,?)").bind(first.id, third.id).run();
+  const attempts = await Promise.allSettled([api.submitHomeworkSubmission(first.id, user), api.submitHomeworkSubmission(third.id, user)]);
+  assert.equal(attempts.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(attempts.filter(result => result.status === "rejected" && conflict(result.reason)).length, 1);
+});
+
 test("MP-03 D1 page replacement rolls back an intermediate insert and fences a concurrent submit", { timeout: 120_000 }, async t => {
   const f = await writeFixture(t), { db, api, user } = f;
   for (const id of ["o1", "o2", "o3", "n1", "n2", "n3"]) {
@@ -490,6 +536,10 @@ function startMockModel(port) {
     }
     state.gradingCalls += 1;
     const numbers = [...prompt.matchAll(/题号 ([^\n]+)/g)].map((match) => match[1].trim());
+    if (state.gradingGate && numbers.includes(state.gradingGate.number)) {
+      state.gradingGate.entered.resolve();
+      await state.gradingGate.release.promise;
+    }
     assert.match(prompt,/最终答案规范[\s\S]*最简分数[\s\S]*不能先替学生约分/,"the grading pipeline checks the student's original final form");
     state.gradedNumbers.push(...numbers); if (prompt.includes("本作业只判对错")) state.verdictOnlyPrompts += 1;
     if (prompt.includes("本作业为 IGCSE / A Level")) {
@@ -532,6 +582,64 @@ async function submitPages(base, cookie, submissionId, pages) {
   assert.equal((await jsonRequest(base, `/api/submissions/${submissionId}`, { cookie, method: "PUT", body: { action: "save-pages", pages } })).response.status, 200);
   assert.equal((await jsonRequest(base, `/api/submissions/${submissionId}`, { cookie, method: "PUT", body: { action: "submit" } })).response.status, 200);
 }
+
+test("the next homework day can be uploaded and queued before the previous day finishes grading", { timeout: 120_000 }, async () => {
+  const [port, modelPort] = await Promise.all([freePort(), freePort()]), stateDir = await mkdtemp(join(tmpdir(), "zhiti-daily-concurrency-"));
+  command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
+  const mock = await startMockModel(modelPort), worker = startWorker(port, stateDir, {
+    LOCAL_ADMIN_MODE: "false", AI_PROVIDER_LOCAL_HTTP: "true", HOMEWORK_GRADING_ENABLED: "true", REGISTRATION_INVITE_CODE: INVITE,
+    OPENAI_API_KEY: "mock-key", OPENAI_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, OPENAI_API_MODE: "responses",
+    HOMEWORK_GRADING_MODEL: "mock-homework", HOMEWORK_AUTO_PUBLISH_ENABLED: "true",
+  });
+  const base = `http://localhost:${port}`, bytes = testJpeg();
+  try {
+    await waitForServer(`${base}/api/auth/me`, worker);
+    const registered = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: "days@homework.test", password: "password123", inviteCode: INVITE } });
+    const cookie = sessionCookie(registered.response);
+    const student = (await jsonRequest(base, "/api/students", { cookie, method: "POST", body: { student: { name: "分天并发验证" } } })).payload.student;
+    const assigned = await jsonRequest(base, "/api/submissions", { cookie, method: "POST", body: { studentIds: [student.id], title: "三天练习",
+      groups: [1, 2, 3].map(day => ({ title: `第 ${day} 天`, size: 1 })),
+      questions: [1, 2, 3].map(day => ({ id: `day-${day}`, type: "填空题", stem: `计算 $${day}+1$`, answer: String(day + 1), analysis: "", options: [], categoryId: "", difficulty: "基础", source: "", createdAt: 0, updatedAt: 0 })),
+    } });
+    assert.equal(assigned.response.status, 201, JSON.stringify(assigned.payload));
+    const firstId = assigned.payload.assigned[0].id;
+    const next = async day => {
+      const response = await jsonRequest(base, `/api/submissions/${firstId}`, { cookie, method: "PUT", body: { action: "new-version", uploadDay: day - 1 } });
+      assert.equal(response.response.status, 200, JSON.stringify(response.payload));
+      return response.payload.submission;
+    };
+    const select = day => { mock.state.assignedPage = [{ question_number: `D${day}-1`, student_answer: String(day + 1) }]; };
+    mock.state.assignedAnswers = { "D1-1": "2", "D2-1": "3", "D3-1": "4" };
+    mock.state.assignedVerdicts = { "D1-1": "correct", "D2-1": "correct", "D3-1": "correct" };
+    select(1); await next(1);
+    await submitPages(base, cookie, firstId, [await uploadPage(base, cookie, firstId, bytes)]);
+    const first = await waitForSubmission(base, cookie, firstId, ["published"], worker);
+    const second = await next(2); select(2);
+    mock.state.gradingGate = { number: "D2-1", entered: Promise.withResolvers(), release: Promise.withResolvers() };
+    await submitPages(base, cookie, second.id, [await uploadPage(base, cookie, second.id, bytes)]);
+    await Promise.race([mock.state.gradingGate.entered.promise, new Promise((_, reject) => setTimeout(() => reject(new Error("day two did not reach grading")), 20_000).unref())]);
+    const third = await next(3); select(3);
+    await submitPages(base, cookie, third.id, [await uploadPage(base, cookie, third.id, bytes)]);
+    // Local Miniflare delivers this queue serially; accepting the next upload must not wait for that delivery.
+    const queuedThird = await waitForSubmission(base, cookie, third.id, ["submitted"], worker);
+    assert.deepEqual(queuedThird.assigned.days.map(day => day.done), [1, 0, 0]);
+    assert.equal(queuedThird.assigned.uploads.find(upload => upload.id === second.id).status, "processing");
+    const list = (await jsonRequest(base, `/api/students/${student.id}/homework`, { cookie })).payload.homework;
+    assert.equal(list[0].latest.id, third.id); assert.equal(list[0].grading, true);
+    assert.equal((await jsonRequest(base, "/api/submissions?progress=students", { cookie })).payload.progress[student.id], "grading");
+    mock.state.gradingGate.release.resolve();
+    const finishedSecond = await waitForSubmission(base, cookie, second.id, ["published"], worker);
+    const finishedThird = await waitForSubmission(base, cookie, third.id, ["published"], worker);
+    assert.deepEqual(finishedThird.assigned.days.map(day => [day.done, day.correct]), [[1, 1], [1, 1], [1, 1]]);
+    assert.deepEqual((await jsonRequest(base, `/api/submissions/${firstId}`, { cookie })).payload.submission.gradingItems, first.gradingItems);
+    assert.deepEqual(finishedSecond.gradingItems.map(item => item.questionNumber), ["D2-1"]);
+    assert.deepEqual(finishedThird.gradingItems.map(item => item.questionNumber), ["D3-1"]);
+    assert.equal((await jsonRequest(base, "/api/submissions?progress=students", { cookie })).payload.progress[student.id], undefined);
+  } finally {
+    mock.state.gradingGate?.release.resolve();
+    await stopWorker(worker); mock.server.closeAllConnections(); await new Promise(resolveClose => mock.server.close(resolveClose));
+  }
+});
 
 test("homework orientation caches all quarter turns, protects original evidence and rejects unauthorized or invalid checks", { timeout: 120_000 }, async () => {
   const [port, modelPort] = await Promise.all([freePort(), freePort()]);
